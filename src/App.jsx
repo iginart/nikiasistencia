@@ -146,7 +146,7 @@ function TooltipHorario({ tooltip }) {
   );
 }
 
-function BloqueCalendario({ fecha, bloque, onChange, onDelete, bloqueado, onOpen, asistencia, manicuraNombre, onTooltip, onHideTooltip }) {
+function BloqueCalendario({ fecha, bloque, onChange, onDelete, bloqueado, onOpen, asistencia, manicuraNombre, onTooltip, onHideTooltip, readOnly = false }) {
   const { startSlot: ss, endSlot: es } = bloque;
   const top = calSlotY(ss), height = Math.max(calSlotY(es) - top, 24);
   const s = calFromSlot(ss), e = calFromSlot(es);
@@ -160,7 +160,7 @@ function BloqueCalendario({ fecha, bloque, onChange, onDelete, bloqueado, onOpen
   }, [onTooltip, fecha, bloque]);
 
   const drag = useCallback((ev, mode) => {
-    if (locked) return;
+    if (locked || readOnly) return;
     ev.preventDefault();
     ev.stopPropagation();
 
@@ -201,7 +201,7 @@ function BloqueCalendario({ fecha, bloque, onChange, onDelete, bloqueado, onOpen
     window.addEventListener("pointermove", mv, { passive:false });
     window.addEventListener("pointerup", up);
     window.addEventListener("pointercancel", up);
-  }, [ss, es, fecha, onChange, locked]);
+  }, [ss, es, fecha, onChange, locked, readOnly]);
 
   return (
     <div
@@ -214,16 +214,16 @@ function BloqueCalendario({ fecha, bloque, onChange, onDelete, bloqueado, onOpen
         e.stopPropagation();
         if (!dragState.current.moved && onOpen) onOpen(fecha);
       }}
-      style={{ position:"absolute",left:2,right:2,top,height,background:locked?"#f7f4f5":COLORS.pinkLight,border:`1.5px solid ${locked?(asistencia?ai.color:COLORS.gray):COLORS.pink}`,borderRadius:6,cursor:locked?"not-allowed":"grab",userSelect:"none",touchAction:"none",overflow:"hidden",display:"flex",flexDirection:"column",zIndex:1,opacity:locked&&asistencia?0.95:1 }}
+      style={{ position:"absolute",left:2,right:2,top,height,background:locked?"#f7f4f5":COLORS.pinkLight,border:`1.5px solid ${locked?(asistencia?ai.color:COLORS.gray):COLORS.pink}`,borderRadius:6,cursor:locked?"not-allowed":(readOnly?"pointer":"grab"),userSelect:"none",touchAction:"none",overflow:"hidden",display:"flex",flexDirection:"column",zIndex:1,opacity:locked&&asistencia?0.95:1 }}
     >
-      {!locked && <div onPointerDown={e=>drag(e,"top")} style={{ height:10,background:COLORS.pink,cursor:"ns-resize",flexShrink:0,borderRadius:"4px 4px 0 0",touchAction:"none" }}/>}      
+      {!locked && !readOnly && <div onPointerDown={e=>drag(e,"top")} style={{ height:10,background:COLORS.pink,cursor:"ns-resize",flexShrink:0,borderRadius:"4px 4px 0 0",touchAction:"none" }}/>}      
       {asistencia && <span style={{ position:"absolute",top:locked?4:12,right:4,width:18,height:18,borderRadius:"50%",background:ai.bg,color:ai.color,border:`1px solid ${ai.color}`,display:"flex",alignItems:"center",justifyContent:"center",fontSize:10,fontWeight:700,zIndex:2 }}>{ai.icon}</span>}
-      <div onPointerDown={e=>drag(e,"move")} style={{ flex:1,padding:"2px 6px",paddingRight:asistencia?24:6,minHeight:0,overflow:"hidden",touchAction:"none" }}>
+      <div onPointerDown={readOnly?undefined:e=>drag(e,"move")} style={{ flex:1,padding:"2px 6px",paddingRight:asistencia?24:6,minHeight:0,overflow:"hidden",touchAction:"none" }}>
         <p style={{ margin:0,fontSize:11,fontWeight:500,color:locked?"#555":COLORS.pinkDark,lineHeight:1.25,whiteSpace:"normal",wordBreak:"keep-all" }}>{calFmt(s.h,s.m)} – {calFmt(e.h,e.m)}</p>
         {height > 36 && <p style={{ margin:0,fontSize:10,color:locked?COLORS.gray:COLORS.pink }}>{calHoras(bloque).toFixed(1)}h</p>}
         {asistencia && height > 54 && <p style={{ margin:"1px 0 0",fontSize:9,color:ai.color,fontWeight:600,whiteSpace:"nowrap" }}>{ai.label}</p>}
       </div>
-      {!locked && <>
+      {!locked && !readOnly && <>
         <div onPointerDown={e=>drag(e,"bottom")} style={{ height:10,background:COLORS.pink,cursor:"ns-resize",flexShrink:0,borderRadius:"0 0 4px 4px",touchAction:"none" }}/>
         <button onClick={e=>{ e.stopPropagation(); onDelete(fecha); }} style={{ position:"absolute",top:10,right:3,background:"none",border:"none",cursor:"pointer",fontSize:10,color:COLORS.pink,padding:0,fontWeight:700 }}>✕</button>
       </>}
@@ -472,52 +472,68 @@ function CalendarioHorarios({ data, reloadData, user }) {
   const renderDiarioTodos = () => {
     const cols = esAdmin ? manicuras : manicuras.filter(m => m.id === user.id);
     const totalDia = cols.reduce((a,m)=>a+calHoras(getBloqueFor(m.id, diaVista)),0);
+    const minColW = isMobile ? 118 : 0;
+    const innerMinWidth = isMobile ? Math.max(cols.length * minColW, 1) : "100%";
+    const gridCols = isMobile
+      ? `repeat(${Math.max(cols.length,1)}, ${minColW}px)`
+      : `repeat(${Math.max(cols.length,1)}, minmax(0, 1fr))`;
+
     return <div style={{ display:"flex",flex:1,overflow:"hidden",flexDirection:"column" }}>
-      <div style={{ display:"flex",flexShrink:0,borderBottom:"0.5px solid var(--color-border-secondary)" }}>
-        <div style={{ width:44,flexShrink:0 }}/>
-        <div style={{ flex:1,display:"grid",gridTemplateColumns:`repeat(${Math.max(cols.length,1)}, minmax(92px, 1fr))`,overflow:"hidden" }}>
-          {cols.map(m=><div key={m.id} style={{ textAlign:"center",padding:"7px 4px",borderLeft:"0.5px solid var(--color-border-secondary)",background:"transparent" }}>
-            <p style={{ margin:0,fontSize:11,fontWeight:600,color:"var(--color-text-primary)",whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis" }}>{m.nombre}</p>
-            <p style={{ margin:"2px 0 0",fontSize:10,color:"var(--color-text-secondary)" }}>{data.locales.find(l=>l.id===m.localId)?.nombre||"Sin local"}</p>
-          </div>)}
+      <div style={{ display:"flex",flex:1,overflow:"hidden" }}>
+        <div style={{ width:44,flexShrink:0,borderRight:"0.5px solid var(--color-border-secondary)",display:"flex",flexDirection:"column" }}>
+          <div style={{ height:48,flexShrink:0,borderBottom:"0.5px solid var(--color-border-secondary)" }}/>
+          <div style={{ position:"relative",height:CAL_GRID_H,flexShrink:0 }}>
+            {CAL_LABEL_HOURS.map(h=>{
+              const top=(h-CAL_START)*CAL_SLOT_H;
+              return <span key={h} style={{ position:"absolute",right:6,top,transform:h===CAL_START?"translateY(1px)":h===CAL_END?"translateY(-100%)":"translateY(-50%)",fontSize:10,color:"var(--color-text-secondary)",lineHeight:1 }}>{String(h).padStart(2,"0")}:00</span>;
+            })}
+          </div>
         </div>
-        <div style={{ width:70,flexShrink:0,borderLeft:"0.5px solid var(--color-border-secondary)",display:"flex",alignItems:"center",justifyContent:"center" }}>
-          <span style={{ fontSize:11,color:"var(--color-text-secondary)",fontWeight:500 }}>{totalDia.toFixed(1)}h</span>
+
+        <div style={{ flex:1,overflowX:isMobile?"auto":"hidden",overflowY:"hidden" }}>
+          <div style={{ minWidth:innerMinWidth }}>
+            <div style={{ display:"grid",gridTemplateColumns:gridCols,height:48,borderBottom:"0.5px solid var(--color-border-secondary)" }}>
+              {cols.map(m=><div key={m.id} style={{ textAlign:"center",padding:"7px 6px",borderLeft:"0.5px solid var(--color-border-secondary)",background:"var(--color-background-primary)",minWidth:0 }}>
+                <p style={{ margin:0,fontSize:11,fontWeight:600,color:"var(--color-text-primary)",whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis" }}>{m.nombre}</p>
+                <p style={{ margin:"2px 0 0",fontSize:10,color:"var(--color-text-secondary)",whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis" }}>{data.locales.find(l=>l.id===m.localId)?.nombre||"Sin local"}</p>
+              </div>)}
+            </div>
+
+            <div style={{ display:"grid",gridTemplateColumns:gridCols,height:CAL_GRID_H }}>
+              {cols.map(m=>{
+                const b=getBloqueFor(m.id,diaVista), asis=getAsistenciaFor(m.id,diaVista), fer=feriados.has(diaVista);
+                const lockedByPeriod = periodoBloqueadoParaManicura(periodoKey,m.id) && !esAdmin;
+                const lockedForEdit = lockedByPeriod || !!asis;
+                return <div key={m.id}
+                  onClick={async e=>{
+                    if (!esAdmin) return;
+                    setManicuraId(m.id);
+                    if (b || lockedForEdit) { setModalDk(diaVista); return; }
+                    const rect=e.currentTarget.getBoundingClientRect();
+                    const slot=calYSlot(e.clientY-rect.top);
+                    const nb={startSlot:slot,endSlot:Math.min(CAL_TOTAL_SLOTS,slot+8)};
+                    const st=calFromSlot(nb.startSlot), en=calFromSlot(nb.endSlot);
+                    await api.upsertHorario({user_id:m.id,fecha:diaVista,entrada:calFmt(st.h,st.m),salida:calFmt(en.h,en.m),trabaja:true});
+                    await reloadData();
+                  }}
+                  style={{ position:"relative",height:CAL_GRID_H,borderLeft:"0.5px solid var(--color-border-secondary)",cursor:esAdmin&&!b&&!lockedForEdit?"cell":"default",background:fer?"rgba(186,117,23,0.05)":"transparent",minWidth:0 }}>
+                  {CAL_HOURS.map((_,hi)=><div key={hi} style={{ position:"absolute",top:hi*CAL_SLOT_H,left:0,right:0,height:CAL_SLOT_H,borderTop:"0.5px solid var(--color-border-secondary)",pointerEvents:"none" }}><div style={{ position:"absolute",top:"50%",left:0,right:0,borderTop:"1px dashed var(--color-border-tertiary)",opacity:0.5 }}/></div>)}
+                  <div style={{ position:"absolute",top:CAL_GRID_H,left:0,right:0,borderTop:"0.5px solid var(--color-border-secondary)",pointerEvents:"none" }}/>
+                  {b && <BloqueCalendario fecha={diaVista} bloque={b} onChange={()=>{}} onDelete={()=>{}} bloqueado={lockedByPeriod} readOnly={true} onOpen={()=>{ setManicuraId(m.id); setModalDk(diaVista); }} asistencia={asis} manicuraNombre={m.nombre} onTooltip={(ev,f,bl)=>showTooltip(ev,f,bl,m.nombre,asis)} onHideTooltip={hideTooltip}/>} 
+                  {!b && lockedByPeriod && <div style={{ position:"absolute",left:4,right:4,top:8,background:COLORS.amberLight,color:COLORS.amber,borderRadius:6,padding:"4px 6px",fontSize:10,fontWeight:600,textAlign:"center" }}>Bloqueado</div>}
+                </div>;
+              })}
+            </div>
+          </div>
         </div>
-      </div>
-      <div style={{ flex:1,overflow:"hidden",display:"flex" }}>
-        <div style={{ width:44,flexShrink:0,borderRight:"0.5px solid var(--color-border-secondary)",position:"relative",height:CAL_GRID_H }}>
-          {CAL_LABEL_HOURS.map(h=>{
-            const top=(h-CAL_START)*CAL_SLOT_H;
-            return <span key={h} style={{ position:"absolute",right:6,top,transform:h===CAL_START?"translateY(1px)":h===CAL_END?"translateY(-100%)":"translateY(-50%)",fontSize:10,color:"var(--color-text-secondary)",lineHeight:1 }}>{String(h).padStart(2,"0")}:00</span>;
-          })}
-        </div>
-        <div style={{ flex:1,display:"grid",gridTemplateColumns:`repeat(${Math.max(cols.length,1)}, minmax(92px, 1fr))`,overflowX:cols.length>5?"auto":"hidden" }}>
-          {cols.map(m=>{
-            const b=getBloqueFor(m.id,diaVista), asis=getAsistenciaFor(m.id,diaVista), fer=feriados.has(diaVista);
-            return <div key={m.id}
-              onClick={async e=>{
-                if (!esAdmin) return;
-                setManicuraId(m.id);
-                if (b || periodoBloqueadoParaManicura(periodoKey,m.id) || asis) { setModalDk(diaVista); return; }
-                const rect=e.currentTarget.getBoundingClientRect();
-                const slot=calYSlot(e.clientY-rect.top);
-                const uid=m.id;
-                const nb={startSlot:slot,endSlot:Math.min(CAL_TOTAL_SLOTS,slot+8)};
-                const st=calFromSlot(nb.startSlot), en=calFromSlot(nb.endSlot);
-                await api.upsertHorario({user_id:uid,fecha:diaVista,entrada:calFmt(st.h,st.m),salida:calFmt(en.h,en.m),trabaja:true});
-                await reloadData();
-              }}
-              style={{ position:"relative",height:CAL_GRID_H,borderLeft:"0.5px solid var(--color-border-secondary)",cursor:esAdmin&&!b&&!asis&&!periodoBloqueadoParaManicura(periodoKey,m.id)?"cell":"default",background:fer?"rgba(186,117,23,0.05)":"transparent" }}>
-              {CAL_HOURS.map((_,hi)=><div key={hi} style={{ position:"absolute",top:hi*CAL_SLOT_H,left:0,right:0,height:CAL_SLOT_H,borderTop:"0.5px solid var(--color-border-secondary)",pointerEvents:"none" }}><div style={{ position:"absolute",top:"50%",left:0,right:0,borderTop:"1px dashed var(--color-border-tertiary)",opacity:0.5 }}/></div>)}
-              <div style={{ position:"absolute",top:CAL_GRID_H,left:0,right:0,borderTop:"0.5px solid var(--color-border-secondary)",pointerEvents:"none" }}/>
-              {b && <BloqueCalendario fecha={diaVista} bloque={b} onChange={()=>{}} onDelete={()=>{}} bloqueado={true} onOpen={()=>{ setManicuraId(m.id); setModalDk(diaVista); }} asistencia={asis} manicuraNombre={m.nombre} onTooltip={(ev,f,bl)=>showTooltip(ev,f,bl,m.nombre,asis)} onHideTooltip={hideTooltip}/>}
-              {!b && periodoBloqueadoParaManicura(periodoKey,m.id) && <div style={{ position:"absolute",left:4,right:4,top:8,background:COLORS.amberLight,color:COLORS.amber,borderRadius:6,padding:"4px 6px",fontSize:10,fontWeight:600,textAlign:"center" }}>Bloqueado</div>}
-            </div>;
-          })}
-        </div>
-        <div style={{ width:70,flexShrink:0,borderLeft:"0.5px solid var(--color-border-secondary)",display:"flex",alignItems:"flex-start",justifyContent:"center",paddingTop:16 }}>
-          <span style={{ fontSize:16,fontWeight:500,color:totalDia>0?COLORS.success:"var(--color-text-secondary)" }}>{totalDia.toFixed(1)}h</span>
+
+        <div style={{ width:70,flexShrink:0,borderLeft:"0.5px solid var(--color-border-secondary)",display:"flex",flexDirection:"column" }}>
+          <div style={{ height:48,flexShrink:0,borderBottom:"0.5px solid var(--color-border-secondary)",display:"flex",alignItems:"center",justifyContent:"center" }}>
+            <span style={{ fontSize:11,color:"var(--color-text-secondary)",fontWeight:500 }}>{totalDia.toFixed(1)}h</span>
+          </div>
+          <div style={{ height:CAL_GRID_H,display:"flex",alignItems:"flex-start",justifyContent:"center",paddingTop:16 }}>
+            <span style={{ fontSize:16,fontWeight:500,color:totalDia>0?COLORS.success:"var(--color-text-secondary)" }}>{totalDia.toFixed(1)}h</span>
+          </div>
         </div>
       </div>
     </div>;
@@ -1283,7 +1299,7 @@ export default function App() {
             {nav.map(item=><button key={item.id} onClick={()=>{ setSeccion(item.id); setMenuOpen(false); }} style={{ display:"flex",alignItems:"center",gap:10,padding:"10px 12px",border:"none",borderRadius:8,cursor:"pointer",fontSize:14,textAlign:"left",background:seccion===item.id?COLORS.pinkLight:"transparent",color:seccion===item.id?COLORS.pinkDark:"var(--color-text-primary)",fontWeight:seccion===item.id?500:400 }}><span>{item.icon}</span>{item.label}</button>)}
           </div>
         </nav>
-        <main style={{ flex:1,padding:"20px 16px",maxWidth:760,width:"100%" }}>
+        <main style={{ flex:1,padding:"20px 16px",maxWidth:1120,width:"100%",margin:"0 auto" }}>
           {renderSeccion()}
         </main>
       </div>
