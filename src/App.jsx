@@ -13,17 +13,18 @@ if (!document.getElementById("niki-font")) {
 const SUPABASE_URL = "https://fomdnmnrxntoqdsxndxx.supabase.co";
 const SUPABASE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImZvbWRubW5yeG50b3Fkc3huZHh4Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3Nzk4MDczMjksImV4cCI6MjA5NTM4MzMyOX0.pxqz72fqHYph-WZm9R3QT5tPpG9kOQBNaZKreEftFVA";
 
+const HEADERS_BASE = {
+  apikey: SUPABASE_KEY,
+  Authorization: `Bearer ${SUPABASE_KEY}`,
+  "Content-Type": "application/json",
+};
+
 const sb = async (path, opts = {}) => {
-  const { headers: extraHeaders, prefer, ...restOpts } = opts;
+  const prefer = opts.prefer || "return=representation";
   const res = await fetch(`${SUPABASE_URL}/rest/v1/${path}`, {
-    headers: {
-      apikey: SUPABASE_KEY,
-      Authorization: `Bearer ${SUPABASE_KEY}`,
-      "Content-Type": "application/json",
-      Prefer: extraHeaders?.Prefer || prefer || "return=representation",
-      ...extraHeaders,
-    },
-    ...restOpts,
+    method: opts.method || "GET",
+    headers: { ...HEADERS_BASE, Prefer: prefer },
+    body: opts.body || undefined,
   });
   if (!res.ok) { const e = await res.text(); throw new Error(e); }
   const text = await res.text();
@@ -31,32 +32,21 @@ const sb = async (path, opts = {}) => {
 };
 
 const api = {
-  // users
   getUsers: () => sb("users?select=*&order=id"),
   createUser: (d) => sb("users", { method: "POST", body: JSON.stringify(d) }),
   updateUser: (id, d) => sb(`users?id=eq.${id}`, { method: "PATCH", body: JSON.stringify(d) }),
-
-  // locales
   getLocales: () => sb("locales?select=*&order=id"),
   createLocal: (d) => sb("locales", { method: "POST", body: JSON.stringify(d) }),
   updateLocal: (id, d) => sb(`locales?id=eq.${id}`, { method: "PATCH", body: JSON.stringify(d) }),
   deleteLocal: (id) => sb(`locales?id=eq.${id}`, { method: "DELETE", prefer: "" }),
-
-  // horarios
   getHorarios: () => sb("horarios?select=*"),
-  upsertHorario: (d) => sb("horarios", { method: "POST", body: JSON.stringify(d), headers: { Prefer: "resolution=merge-duplicates,return=representation" } }),
-
-  // asistencias
+  upsertHorario: (d) => sb("horarios", { method: "POST", body: JSON.stringify(d), prefer: "resolution=merge-duplicates,return=representation" }),
   getAsistencias: () => sb("asistencias?select=*"),
-  upsertAsistencia: (d) => sb("asistencias", { method: "POST", body: JSON.stringify(d), headers: { Prefer: "resolution=merge-duplicates,return=representation" } }),
+  upsertAsistencia: (d) => sb("asistencias", { method: "POST", body: JSON.stringify(d), prefer: "resolution=merge-duplicates,return=representation" }),
   deleteAsistencia: (userId, fecha) => sb(`asistencias?user_id=eq.${userId}&fecha=eq.${fecha}`, { method: "DELETE", prefer: "" }),
-
-  // periodos
   getPeriodos: () => sb("periodos_bloqueados?select=*"),
   createPeriodo: (periodo) => sb("periodos_bloqueados", { method: "POST", body: JSON.stringify({ periodo }) }),
-  deletePeriodo: (periodo) => sb(`periodos_bloqueados?periodo=eq.${periodo}`, { method: "DELETE", prefer: "" }),
-
-  // reset tokens
+  deletePeriodo: (periodo) => sb(`periodos_bloqueados?periodo=eq.${encodeURIComponent(periodo)}`, { method: "DELETE", prefer: "" }),
   getTokens: () => sb("reset_tokens?select=*"),
   createToken: (d) => sb("reset_tokens", { method: "POST", body: JSON.stringify(d) }),
   deleteToken: (token) => sb(`reset_tokens?token=eq.${encodeURIComponent(token)}`, { method: "DELETE", prefer: "" }),
