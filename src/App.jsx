@@ -49,8 +49,8 @@ const api = {
   upsertAsistencia: (d) => patchOrPost("asistencias", `user_id=eq.${d.user_id}&fecha=eq.${d.fecha}`, d),
   deleteAsistencia: (userId, fecha) => sb(`asistencias?user_id=eq.${userId}&fecha=eq.${fecha}`, { method: "DELETE", prefer: "" }),
   getPeriodos: () => sb("periodos_bloqueados?select=*"),
-  createPeriodo: (periodo) => sb("periodos_bloqueados", { method: "POST", body: JSON.stringify({ periodo }) }),
-  deletePeriodo: (periodo) => sb(`periodos_bloqueados?periodo=eq.${encodeURIComponent(periodo)}`, { method: "DELETE", prefer: "" }),
+  createPeriodo: (periodo, userId) => sb("periodos_bloqueados", { method: "POST", body: JSON.stringify({ periodo, user_id: userId }) }),
+  deletePeriodo: (periodo, userId) => sb(`periodos_bloqueados?periodo=eq.${encodeURIComponent(periodo)}&user_id=eq.${userId}`, { method: "DELETE", prefer: "" }),
   getTokens: () => sb("reset_tokens?select=*"),
   createToken: (d) => sb("reset_tokens", { method: "POST", body: JSON.stringify(d) }),
   deleteToken: (token) => sb(`reset_tokens?token=eq.${encodeURIComponent(token)}`, { method: "DELETE", prefer: "" }),
@@ -63,6 +63,7 @@ const api = {
 function normalizeUser(u) { return { id: u.id, nombre: u.nombre, usuario: u.usuario, password: u.password, email: u.email || "", rol: u.rol, localId: u.local_id, activo: u.activo }; }
 function normalizeHorario(h) { return { id: h.id, userId: h.user_id, fecha: h.fecha, entrada: h.entrada || "", salida: h.salida || "", trabaja: h.trabaja }; }
 function normalizeAsistencia(a) { return { id: a.id, userId: a.user_id, fecha: a.fecha, estado: a.estado, entradaReal: a.entrada_real || "", salidaReal: a.salida_real || "", motivo: a.motivo || "", certificado: a.certificado, tipoDoc: a.tipo_doc || "" }; }
+function normalizePeriodo(p) { return { id: p.id, periodo: p.periodo, userId: p.user_id ?? p.userId ?? null }; }
 
 const COLORS = {
   pink: "#d4537e", pinkLight: "#fbeaf0", pinkDark: "#72243e",
@@ -102,9 +103,9 @@ function ModalInput({ label, value, onChange, type="text" }) { return <div><labe
 function ModalSelect({ label, value, onChange, children }) { return <div><label style={{ fontSize:13,fontWeight:500,color:"#555",display:"block",marginBottom:6 }}>{label}</label><select value={value} onChange={e=>onChange(e.target.value)} style={{ width:"100%",border:"1.5px solid #e0e0e0",borderRadius:8,padding:"9px 12px",fontSize:14,background:"#fafafa",color:"#1a1a1a",outline:"none",boxSizing:"border-box" }}>{children}</select></div>; }
 
 // ── CALENDARIO ────────────────────────────────────────────────────
-const CAL_SLOT_H = 40;
-const CAL_START = 7;
-const CAL_END = 23;
+const CAL_SLOT_H = 48;
+const CAL_START = 10;
+const CAL_END = 20;
 const CAL_VIEW_START = 10;
 const CAL_HOURS = Array.from({ length: CAL_END - CAL_START }, (_, i) => CAL_START + i);
 const CAL_TOTAL_SLOTS = (CAL_END - CAL_START) * 2;
@@ -244,15 +245,28 @@ function CalendarioHorarios({ data, reloadData, user }) {
   const scrollRef = useRef(null);
   const didScroll = useRef(false);
   const tooltipTimer = useRef(null);
+  const saveTimers = useRef({});
   const [tooltip, setTooltip] = useState(null);
 
   const periodoKey = `${anio}-${String(mes+1).padStart(2,"0")}`;
-  const bloqueado = (data.periodosBloqueados||[]).includes(periodoKey) && !esAdmin;
+  const periodoBloqueadoParaManicura = useCallback((periodo, uid) =>
+    (data.periodosBloqueados || []).some(p => {
+      if (typeof p === "string") return p === periodo;
+      return p.periodo === periodo && parseInt(p.userId) === parseInt(uid);
+    }), [data.periodosBloqueados]
+  );
+  const bloqueado = periodoBloqueadoParaManicura(periodoKey, manicuraId) && !esAdmin;
   const feriados = new Set((data.feriados||[]).map(f=>f.fecha));
   const manicuras = data.users.filter(u=>u.rol==="manicura"&&u.activo);
   const selectedManicura = data.users.find(u=>u.id===parseInt(manicuraId));
   const getAsistencia = useCallback((f) => (data.asistencias||[]).find(a=>a.userId===parseInt(manicuraId)&&a.fecha===f), [data.asistencias, manicuraId]);
   const hasAsistencia = useCallback((f) => !!getAsistencia(f), [getAsistencia]);
+  const hasHorarioPersistido = useCallback((f) => (data.horarios||[]).some(h=>h.userId===parseInt(manicuraId)&&h.fecha===f&&h.trabaja&&h.entrada&&h.salida), [data.horarios, manicuraId]);
+  const confirmarCambioHorario = useCallback((f, accion) => {
+    if (!hasHorarioPersistido(f)) return true;
+    const dia = fechaLarga(f);
+    return window.confirm(`Este horario ya está guardado para ${dia}. ¿Confirmás que querés ${accion}?`);
+  }, [hasHorarioPersistido]);
 
   const bloques = useMemo(() => {
     const uid = parseInt(manicuraId); const res = {};
@@ -296,35 +310,41 @@ function CalendarioHorarios({ data, reloadData, user }) {
 
   const setScrollRef = useCallback(el => {
     scrollRef.current = el;
-    if (el && !didScroll.current) { el.scrollTop=(CAL_VIEW_START-CAL_START)*CAL_SLOT_H-8; didScroll.current=true; }
+    if (el && !didScroll.current) { el.scrollTop=0; didScroll.current=true; }
   }, []);
 
-  useEffect(() => () => clearTimeout(tooltipTimer.current), []);
+  useEffect(() => () => {
+    clearTimeout(tooltipTimer.current);
+    Object.values(saveTimers.current).forEach(clearTimeout);
+  }, []);
 
   const saveBloque = useCallback(async (f, b) => {
     if (hasAsistencia(f)) return;
+    if (!confirmarCambioHorario(f, "modificarlo")) return;
     const uid = parseInt(manicuraId);
     const bl = b || localH[f] || bloques[f]; if (!bl) return;
     const s = calFromSlot(bl.startSlot), e = calFromSlot(bl.endSlot);
     await api.upsertHorario({ user_id:uid, fecha:f, entrada:calFmt(s.h,s.m), salida:calFmt(e.h,e.m), trabaja:true });
     await reloadData();
     setLocalH(p => { const n={...p}; delete n[f]; return n; });
-  }, [manicuraId, localH, bloques, reloadData, hasAsistencia]);
+  }, [manicuraId, localH, bloques, reloadData, hasAsistencia, confirmarCambioHorario]);
 
   const onAddB = useCallback(async (f, b) => {
     if (hasAsistencia(f)) return;
+    if (!confirmarCambioHorario(f, "modificarlo")) return;
     const uid = parseInt(manicuraId);
     setLocalH(p => ({...p,[f]:b}));
     const s = calFromSlot(b.startSlot), e = calFromSlot(b.endSlot);
     await api.upsertHorario({ user_id:uid, fecha:f, entrada:calFmt(s.h,s.m), salida:calFmt(e.h,e.m), trabaja:true });
     await reloadData();
     setLocalH(p => { const n={...p}; delete n[f]; return n; });
-  }, [manicuraId, reloadData, hasAsistencia]);
+  }, [manicuraId, reloadData, hasAsistencia, confirmarCambioHorario]);
 
   const onDeleteB = useCallback(async (f) => {
     if (hasAsistencia(f)) return;
+    if (!confirmarCambioHorario(f, "eliminarlo")) return;
     await api.deleteHorario(parseInt(manicuraId), f); await reloadData();
-  }, [manicuraId, reloadData, hasAsistencia]);
+  }, [manicuraId, reloadData, hasAsistencia, confirmarCambioHorario]);
 
   const toggleFeriado = useCallback(async (f) => {
     if (!esAdmin) return;
@@ -334,10 +354,12 @@ function CalendarioHorarios({ data, reloadData, user }) {
   }, [esAdmin, feriados, reloadData]);
 
   const toggleBloqueo = useCallback(async () => {
-    if ((data.periodosBloqueados||[]).includes(periodoKey)) await api.deletePeriodo(periodoKey);
-    else await api.createPeriodo(periodoKey);
+    const uid = parseInt(manicuraId);
+    if (!uid) return;
+    if (periodoBloqueadoParaManicura(periodoKey, uid)) await api.deletePeriodo(periodoKey, uid);
+    else await api.createPeriodo(periodoKey, uid);
     await reloadData();
-  }, [periodoKey, data.periodosBloqueados, reloadData]);
+  }, [periodoKey, manicuraId, periodoBloqueadoParaManicura, reloadData]);
 
   const { totalHoras, diasCargados } = useMemo(() => {
     let fechas = [];
@@ -358,12 +380,12 @@ function CalendarioHorarios({ data, reloadData, user }) {
   const renderSemanal = () => (
     <div style={{ display:"flex",flex:1,overflow:"hidden",flexDirection:"column" }}>
       {/* Header días — divisiones verticales claras */}
-      <div style={{ display:"flex",flexShrink:0,borderBottom:"1px solid var(--color-border-secondary)" }}>
+      <div style={{ display:"flex",flexShrink:0,borderBottom:"0.5px solid var(--color-border-secondary)" }}>
         <div style={{ width:44,flexShrink:0 }}/>
         <div style={{ flex:1,display:"grid",gridTemplateColumns:"repeat(6,1fr)" }}>
           {weekDays.map((d,i)=>{
             const f=dateKey(d),isToday=f===todayDk,fer=feriados.has(f);
-            return <div key={i} onClick={()=>esAdmin&&toggleFeriado(f)} title={esAdmin?(fer?"Quitar feriado":"Marcar feriado"):""} style={{ textAlign:"center",padding:"6px 4px",borderLeft:"1px solid var(--color-border-secondary)",background:fer?COLORS.amberLight:"transparent",cursor:esAdmin?"pointer":"default" }}>
+            return <div key={i} onClick={()=>esAdmin&&toggleFeriado(f)} title={esAdmin?(fer?"Quitar feriado":"Marcar feriado"):""} style={{ textAlign:"center",padding:"6px 4px",borderLeft:"0.5px solid var(--color-border-secondary)",background:fer?COLORS.amberLight:"transparent",cursor:esAdmin?"pointer":"default" }}>
               <p style={{ margin:0,fontSize:10,color:fer?COLORS.amber:"var(--color-text-secondary)",fontWeight:fer?500:400 }}>{DIAS_SEMANA[i]}{fer?" 🗓️":""}</p>
               <div style={{ width:26,height:26,borderRadius:"50%",background:isToday?COLORS.pink:"transparent",margin:"2px auto 0",display:"flex",alignItems:"center",justifyContent:"center" }}>
                 <span style={{ fontSize:13,fontWeight:500,color:isToday?"#fff":fer?COLORS.amber:"var(--color-text-primary)" }}>{d.getDate()}</span>
@@ -372,13 +394,13 @@ function CalendarioHorarios({ data, reloadData, user }) {
             </div>;
           })}
         </div>
-        <div style={{ width:80,flexShrink:0,borderLeft:"1px solid var(--color-border-secondary)",display:"flex",alignItems:"center",justifyContent:"center" }}>
+        <div style={{ width:80,flexShrink:0,borderLeft:"0.5px solid var(--color-border-secondary)",display:"flex",alignItems:"center",justifyContent:"center" }}>
           <span style={{ fontSize:11,color:"var(--color-text-secondary)",fontWeight:500 }}>Sem.</span>
         </div>
       </div>
       {/* Cuerpo scrolleable: eje + grid juntos */}
-      <div ref={setScrollRef} style={{ flex:1,overflowY:"auto",display:"flex" }}>
-        <div style={{ width:44,flexShrink:0,borderRight:"1px solid var(--color-border-secondary)" }}>
+      <div ref={setScrollRef} style={{ flex:1,overflowY:"hidden",display:"flex" }}>
+        <div style={{ width:44,flexShrink:0,borderRight:"0.5px solid var(--color-border-secondary)" }}>
           {CAL_HOURS.map(h=><div key={h} style={{ height:CAL_SLOT_H,display:"flex",alignItems:"flex-start",justifyContent:"flex-end",paddingRight:6 }}><span style={{ fontSize:10,color:"var(--color-text-secondary)",marginTop:-5 }}>{String(h).padStart(2,"0")}:00</span></div>)}
         </div>
         <div style={{ flex:1,display:"grid",gridTemplateColumns:"repeat(6,1fr)" }}>
@@ -391,13 +413,13 @@ function CalendarioHorarios({ data, reloadData, user }) {
                 const slot = calYSlot(e.clientY - rect.top);
                 onAddB(f,{startSlot:slot,endSlot:Math.min(CAL_TOTAL_SLOTS,slot+8)});
               }}
-              style={{ position:"relative",height:CAL_GRID_H,borderLeft:"1px solid var(--color-border-secondary)",cursor:bloqueado?"default":(b?"default":"cell"),background:fer?"rgba(186,117,23,0.05)":"transparent" }}>
-              {CAL_HOURS.map((_,hi)=><div key={hi} style={{ position:"absolute",top:hi*CAL_SLOT_H,left:0,right:0,height:CAL_SLOT_H,borderTop:"1px solid var(--color-border-secondary)",pointerEvents:"none" }}><div style={{ position:"absolute",top:"50%",left:0,right:0,borderTop:"1px dashed var(--color-border-tertiary)",opacity:0.5 }}/></div>)}
-              {b && <BloqueCalendario fecha={f} bloque={b} onChange={(f2,nb)=>{if(hasAsistencia(f2))return;setLocalH(p=>({...p,[f2]:nb}));setTimeout(()=>saveBloque(f2,nb),600);}} onDelete={onDeleteB} bloqueado={bloqueado||hasAsistencia(f)} onOpen={setModalDk} asistencia={getAsistencia(f)} manicuraNombre={selectedManicura?.nombre} onTooltip={showTooltip} onHideTooltip={hideTooltip}/>}
+              style={{ position:"relative",height:CAL_GRID_H,borderLeft:"0.5px solid var(--color-border-secondary)",cursor:bloqueado?"default":(b?"default":"cell"),background:fer?"rgba(186,117,23,0.05)":"transparent" }}>
+              {CAL_HOURS.map((_,hi)=><div key={hi} style={{ position:"absolute",top:hi*CAL_SLOT_H,left:0,right:0,height:CAL_SLOT_H,borderTop:"0.5px solid var(--color-border-secondary)",pointerEvents:"none" }}><div style={{ position:"absolute",top:"50%",left:0,right:0,borderTop:"1px dashed var(--color-border-tertiary)",opacity:0.5 }}/></div>)}
+              {b && <BloqueCalendario fecha={f} bloque={b} onChange={(f2,nb)=>{if(hasAsistencia(f2))return;setLocalH(p=>({...p,[f2]:nb}));clearTimeout(saveTimers.current[f2]);saveTimers.current[f2]=setTimeout(()=>saveBloque(f2,nb),600);}} onDelete={onDeleteB} bloqueado={bloqueado||hasAsistencia(f)} onOpen={setModalDk} asistencia={getAsistencia(f)} manicuraNombre={selectedManicura?.nombre} onTooltip={showTooltip} onHideTooltip={hideTooltip}/>}
             </div>;
           })}
         </div>
-        <div style={{ width:80,flexShrink:0,borderLeft:"1px solid var(--color-border-secondary)",display:"flex",alignItems:"flex-start",justifyContent:"center",paddingTop:16 }}>
+        <div style={{ width:80,flexShrink:0,borderLeft:"0.5px solid var(--color-border-secondary)",display:"flex",alignItems:"flex-start",justifyContent:"center",paddingTop:16 }}>
           <span style={{ fontSize:16,fontWeight:500,color:totalHoras>0?COLORS.success:"var(--color-text-secondary)" }}>{totalHoras.toFixed(1)}h</span>
         </div>
       </div>
@@ -407,16 +429,17 @@ function CalendarioHorarios({ data, reloadData, user }) {
   // ── MENSUAL ──────────────────────────────────────────────────────
   const renderMensual = () => {
     const dias=getDiasDelMes(anio,mes), sems=getSemanas(dias);
-    return <div style={{ flex:1,overflow:"auto" }}>
-      <div style={{ display:"grid",gridTemplateColumns:"repeat(6,1fr) 80px",borderBottom:"1px solid var(--color-border-secondary)",position:"sticky",top:0,background:"var(--color-background-primary)",zIndex:2 }}>
-        {DIAS_SEMANA.map(d=><div key={d} style={{ textAlign:"center",padding:"8px 4px",fontSize:11,fontWeight:500,color:"var(--color-text-secondary)",borderLeft:"1px solid var(--color-border-secondary)" }}>{d}</div>)}
-        <div style={{ textAlign:"center",padding:"8px 4px",fontSize:11,fontWeight:500,color:"var(--color-text-secondary)",borderLeft:"1px solid var(--color-border-secondary)" }}>Sem.</div>
+    const rowH = Math.max(isMobile ? 58 : 74, Math.floor((520 - 34) / Math.max(sems.length, 1)));
+    return <div style={{ flex:1,overflow:"hidden" }}>
+      <div style={{ display:"grid",gridTemplateColumns:"repeat(6,1fr) 70px",borderBottom:"0.5px solid var(--color-border-secondary)",position:"sticky",top:0,background:"var(--color-background-primary)",zIndex:2 }}>
+        {DIAS_SEMANA.map(d=><div key={d} style={{ textAlign:"center",padding:"8px 4px",fontSize:11,fontWeight:500,color:"var(--color-text-secondary)",borderLeft:"0.5px solid var(--color-border-secondary)" }}>{d}</div>)}
+        <div style={{ textAlign:"center",padding:"8px 4px",fontSize:11,fontWeight:500,color:"var(--color-text-secondary)",borderLeft:"0.5px solid var(--color-border-secondary)" }}>Sem.</div>
       </div>
       {sems.map((semana,si)=>{
         const totalSem=semana.reduce((a,d)=>a+calHoras(getB(dateKey(d))),0);
-        return <div key={si} style={{ display:"grid",gridTemplateColumns:"repeat(6,1fr) 80px",borderBottom:"1px solid var(--color-border-secondary)",minHeight:108 }}>
+        return <div key={si} style={{ display:"grid",gridTemplateColumns:"repeat(6,1fr) 70px",borderBottom:"0.5px solid var(--color-border-secondary)",height:rowH }}>
           {Array.from({length:6},(_,i)=>{
-            const d=semana[i]; if(!d) return <div key={i} style={{ borderLeft:"1px solid var(--color-border-secondary)" }}/>;
+            const d=semana[i]; if(!d) return <div key={i} style={{ borderLeft:"0.5px solid var(--color-border-secondary)" }}/>;
             const f=dateKey(d),b=getB(f),isToday=f===todayDk,fer=feriados.has(f),asis=getAsistencia(f),ai=asistenciaInfo(asis),lockedDia=bloqueado||!!asis;
             const st=b?calFromSlot(b.startSlot):null, en=b?calFromSlot(b.endSlot):null;
             const tooltipTitle = b ? `${selectedManicura?.nombre || "Manicura"}\n${fechaLarga(f)}\nDesde: ${calFmt(st.h,st.m)}\nHasta: ${calFmt(en.h,en.m)}\nAsistencia: ${ai.label}` : "";
@@ -428,7 +451,7 @@ function CalendarioHorarios({ data, reloadData, user }) {
               onPointerMove={e=>b&&showTooltip(e,f,b)}
               onPointerLeave={hideTooltip}
               onPointerCancel={hideTooltip}
-              style={{ borderLeft:"1px solid var(--color-border-secondary)",padding:6,cursor:"pointer",background:fer?COLORS.amberLight:(b?COLORS.pinkLight:"transparent"),touchAction:"manipulation" }}>
+              style={{ borderLeft:"0.5px solid var(--color-border-secondary)",padding:isMobile?4:5,cursor:"pointer",background:fer?COLORS.amberLight:(b?COLORS.pinkLight:"transparent"),touchAction:"manipulation" }}>
               <div style={{ display:"flex",alignItems:"center",gap:4,marginBottom:5,minWidth:0 }}>
                 <div style={{ width:22,height:22,borderRadius:"50%",background:isToday?COLORS.pink:"transparent",display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0 }}>
                   <span style={{ fontSize:11,fontWeight:500,color:isToday?"#fff":fer?COLORS.amber:"var(--color-text-primary)" }}>{d.getDate()}</span>
@@ -437,10 +460,10 @@ function CalendarioHorarios({ data, reloadData, user }) {
                 {asis && <span style={{ marginLeft:"auto",width:18,height:18,borderRadius:"50%",background:ai.bg,color:ai.color,border:`1px solid ${ai.color}`,display:"flex",alignItems:"center",justifyContent:"center",fontSize:10,fontWeight:700,flexShrink:0 }}>{ai.icon}</span>}
               </div>
               {b ? <div style={{ background:"#fff",border:`1px solid ${asis?ai.color:COLORS.pink}`,borderRadius:5,padding:"5px 6px",minWidth:0,overflow:"hidden",opacity:lockedDia&&asis?0.95:1 }}>
-                <p style={{ margin:0,fontSize:10,color:asis?"#555":COLORS.pinkDark,fontWeight:600,lineHeight:1.25,whiteSpace:"normal" }}>Desde {calFmt(st.h,st.m)}</p>
-                <p style={{ margin:0,fontSize:10,color:asis?"#555":COLORS.pinkDark,fontWeight:600,lineHeight:1.25,whiteSpace:"normal" }}>Hasta {calFmt(en.h,en.m)}</p>
+                <p style={{ margin:0,fontSize:isMobile?9:10,color:asis?"#555":COLORS.pinkDark,fontWeight:600,lineHeight:1.25,whiteSpace:"normal" }}>Desde {calFmt(st.h,st.m)}</p>
+                <p style={{ margin:0,fontSize:isMobile?9:10,color:asis?"#555":COLORS.pinkDark,fontWeight:600,lineHeight:1.25,whiteSpace:"normal" }}>Hasta {calFmt(en.h,en.m)}</p>
                 <div style={{ display:"flex",alignItems:"center",justifyContent:"space-between",gap:4,marginTop:2 }}>
-                  <p style={{ margin:0,fontSize:10,color:asis?ai.color:COLORS.pink,fontWeight:asis?600:400 }}>{asis?ai.label:calHoras(b).toFixed(1)+"h"}</p>
+                  <p style={{ margin:0,fontSize:isMobile?9:10,color:asis?ai.color:COLORS.pink,fontWeight:asis?600:400 }}>{asis?ai.label:calHoras(b).toFixed(1)+"h"}</p>
                   {!lockedDia && <span style={{ fontSize:9,color:COLORS.gray,whiteSpace:"nowrap" }}>Editar</span>}
                   {lockedDia && asis && <span style={{ fontSize:9,color:COLORS.gray,whiteSpace:"nowrap" }}>Bloq.</span>}
                 </div>
@@ -448,7 +471,7 @@ function CalendarioHorarios({ data, reloadData, user }) {
               : !bloqueado && <p style={{ margin:0,fontSize:10,color:"var(--color-text-secondary)",opacity:0.5 }}>+ agregar</p>}
             </div>;
           })}
-          <div style={{ borderLeft:"1px solid var(--color-border-secondary)",display:"flex",alignItems:"center",justifyContent:"center" }}>
+          <div style={{ borderLeft:"0.5px solid var(--color-border-secondary)",display:"flex",alignItems:"center",justifyContent:"center" }}>
             <span style={{ fontSize:15,fontWeight:500,color:totalSem>0?COLORS.success:"var(--color-text-secondary)" }}>{totalSem.toFixed(1)}h</span>
           </div>
         </div>;
@@ -468,7 +491,7 @@ function CalendarioHorarios({ data, reloadData, user }) {
     const lockedDia = bloqueado || !!asistencia;
     const d = new Date(f+"T12:00:00"), dow=d.getDay();
     const label = `${DIAS_SEMANA[dow===0?6:dow-1]} ${d.getDate()} de ${MESES[d.getMonth()]}`;
-    const opciones = Array.from({length:CAL_TOTAL_SLOTS},(_,i)=>{ const {h,m}=calFromSlot(i); return calFmt(h,m); });
+    const opciones = Array.from({length:CAL_TOTAL_SLOTS + 1},(_,i)=>{ const {h,m}=calFromSlot(i); return calFmt(h,m); });
     const guardar = async () => {
       const [sh,sm]=start.split(":").map(Number),[eh,em]=end.split(":").map(Number);
       const ss=calToSlot(sh,sm),es=calToSlot(eh,em);
@@ -506,7 +529,7 @@ function CalendarioHorarios({ data, reloadData, user }) {
     <div>
       <div style={{ display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:16,flexWrap:"wrap",gap:8 }}>
         <h2 style={{ margin:0,fontSize:18,fontWeight:500 }}>{esAdmin?"Gestión de horarios":"Mis horarios"}</h2>
-        {esAdmin && <Btn onClick={toggleBloqueo} variant={(data.periodosBloqueados||[]).includes(periodoKey)?"success":"danger"} size="sm">{(data.periodosBloqueados||[]).includes(periodoKey)?"🔓 Habilitar período":"🔒 Bloquear período"}</Btn>}
+        {esAdmin && <Btn onClick={toggleBloqueo} variant={periodoBloqueadoParaManicura(periodoKey, manicuraId)?"success":"danger"} size="sm">{periodoBloqueadoParaManicura(periodoKey, manicuraId)?"🔓 Habilitar período de manicura":"🔒 Bloquear período de manicura"}</Btn>}
       </div>
       <div style={{ display:"flex",height:560,border:"0.5px solid var(--color-border-tertiary)",borderRadius:12,overflow:"hidden",background:"var(--color-background-primary)" }}>
         {/* Panel lateral */}
@@ -553,7 +576,7 @@ function CalendarioHorarios({ data, reloadData, user }) {
             </button>
             <div style={{ width:1,height:18,background:"var(--color-border-secondary)",margin:"0 2px",flexShrink:0 }}/>
             <span style={{ fontSize:12,fontWeight:500,color:"var(--color-text-secondary)" }}>{navLabel}</span>
-            {bloqueado && <span style={{ marginLeft:"auto",fontSize:11,color:COLORS.amber,background:COLORS.amberLight,padding:"3px 8px",borderRadius:6 }}>🔒 Período bloqueado</span>}
+            {bloqueado && <span style={{ marginLeft:"auto",fontSize:11,color:COLORS.amber,background:COLORS.amberLight,padding:"3px 8px",borderRadius:6 }}>🔒 Período bloqueado para esta manicura</span>}
             {vista==="semana"&&!bloqueado&&!isMobile&&<span style={{ marginLeft:"auto",fontSize:11,color:"var(--color-text-secondary)",opacity:0.7 }}>Clic en celda vacía para agregar · Arrastrá para mover</span>}
             {vista==="semana"&&!bloqueado&&isMobile&&<span style={{ marginLeft:"auto",fontSize:11,color:"var(--color-text-secondary)",opacity:0.7 }}>Arrastrá el bloque para mover · bordes para ajustar</span>}
           </div>
@@ -1105,7 +1128,7 @@ export default function App() {
       locales,
       horarios: horarios.map(normalizeHorario),
       asistencias: asistencias.map(normalizeAsistencia),
-      periodosBloqueados: periodos.map(p=>p.periodo),
+      periodosBloqueados: periodos.map(normalizePeriodo),
       feriados,
     });
   }, []);
