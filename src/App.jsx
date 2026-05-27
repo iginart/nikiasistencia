@@ -183,6 +183,8 @@ function CalendarioHorarios({ data, reloadData, user }) {
 
   const getB = f => localH[f] ?? bloques[f];
 
+  const isMobile = window.innerWidth < 640;
+
   const setScrollRef = useCallback(el => {
     scrollRef.current = el;
     if (el && !didScroll.current) { el.scrollTop = (CAL_VIEW_START - CAL_START) * CAL_SLOT_H - 8; didScroll.current = true; }
