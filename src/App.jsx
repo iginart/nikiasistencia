@@ -118,32 +118,72 @@ function calYSlot(y) { return Math.max(0, Math.min(CAL_TOTAL_SLOTS - 1, Math.rou
 function calHoras(b) { return b ? (b.endSlot - b.startSlot) / 2 : 0; }
 function getMon(date) { const d = new Date(date); const day = d.getDay(); d.setDate(d.getDate() + (day === 0 ? -6 : 1 - day)); d.setHours(0,0,0,0); return d; }
 
-function BloqueCalendario({ fecha, bloque, onChange, onDelete, bloqueado }) {
+function BloqueCalendario({ fecha, bloque, onChange, onDelete, bloqueado, onOpen }) {
   const { startSlot: ss, endSlot: es } = bloque;
-  const top = calSlotY(ss), height = Math.max(calSlotY(es) - top, 20);
+  const top = calSlotY(ss), height = Math.max(calSlotY(es) - top, 24);
   const s = calFromSlot(ss), e = calFromSlot(es);
+  const dragState = useRef({ moved:false, last:null });
+
   const drag = useCallback((ev, mode) => {
-    if (bloqueado) return; ev.preventDefault(); ev.stopPropagation();
-    const sy = ev.clientY, os = ss, oe = es;
+    if (bloqueado) return;
+    ev.preventDefault();
+    ev.stopPropagation();
+
+    const sy = ev.clientY;
+    const os = ss;
+    const oe = es;
+    dragState.current = { moved:false, last:null };
+
+    try { ev.currentTarget.setPointerCapture?.(ev.pointerId); } catch {}
+
     const mv = e2 => {
-      const d = Math.round((e2.clientY - sy) / (CAL_SLOT_H / 2));
-      if (mode === "move") { const dur = oe-os; const ns = Math.max(0,Math.min(CAL_TOTAL_SLOTS-dur,os+d)); onChange(fecha,{startSlot:ns,endSlot:ns+dur}); }
-      else if (mode === "top") onChange(fecha,{startSlot:Math.max(0,Math.min(oe-2,os+d)),endSlot:oe});
-      else onChange(fecha,{startSlot:os,endSlot:Math.max(os+2,Math.min(CAL_TOTAL_SLOTS,oe+d))});
+      e2.preventDefault();
+      const deltaY = e2.clientY - sy;
+      if (Math.abs(deltaY) > 4) dragState.current.moved = true;
+      const d = Math.round(deltaY / (CAL_SLOT_H / 2));
+      let nb;
+
+      if (mode === "move") {
+        const dur = oe - os;
+        const ns = Math.max(0, Math.min(CAL_TOTAL_SLOTS - dur, os + d));
+        nb = { startSlot: ns, endSlot: ns + dur };
+      } else if (mode === "top") {
+        nb = { startSlot: Math.max(0, Math.min(oe - 2, os + d)), endSlot: oe };
+      } else {
+        nb = { startSlot: os, endSlot: Math.max(os + 2, Math.min(CAL_TOTAL_SLOTS, oe + d)) };
+      }
+
+      dragState.current.last = nb;
+      onChange(fecha, nb);
     };
-    const up = () => { window.removeEventListener("mousemove",mv); window.removeEventListener("mouseup",up); };
-    window.addEventListener("mousemove",mv); window.addEventListener("mouseup",up);
-  }, [ss,es,fecha,onChange,bloqueado]);
+
+    const up = () => {
+      window.removeEventListener("pointermove", mv);
+      window.removeEventListener("pointerup", up);
+      window.removeEventListener("pointercancel", up);
+    };
+
+    window.addEventListener("pointermove", mv, { passive:false });
+    window.addEventListener("pointerup", up);
+    window.addEventListener("pointercancel", up);
+  }, [ss, es, fecha, onChange, bloqueado]);
+
   return (
-    <div style={{ position:"absolute",left:2,right:2,top,height,background:COLORS.pinkLight,border:`1.5px solid ${COLORS.pink}`,borderRadius:6,cursor:bloqueado?"default":"grab",userSelect:"none",overflow:"hidden",display:"flex",flexDirection:"column",zIndex:1 }}>
-      {!bloqueado && <div onMouseDown={e=>drag(e,"top")} style={{ height:5,background:COLORS.pink,cursor:"ns-resize",flexShrink:0,borderRadius:"4px 4px 0 0" }}/>}
-      <div onMouseDown={e=>drag(e,"move")} style={{ flex:1,padding:"2px 6px",minHeight:0,overflow:"hidden" }}>
+    <div
+      onClick={e => {
+        e.stopPropagation();
+        if (!dragState.current.moved && onOpen) onOpen(fecha);
+      }}
+      style={{ position:"absolute",left:2,right:2,top,height,background:COLORS.pinkLight,border:`1.5px solid ${COLORS.pink}`,borderRadius:6,cursor:bloqueado?"default":"grab",userSelect:"none",touchAction:"none",overflow:"hidden",display:"flex",flexDirection:"column",zIndex:1 }}
+    >
+      {!bloqueado && <div onPointerDown={e=>drag(e,"top")} style={{ height:10,background:COLORS.pink,cursor:"ns-resize",flexShrink:0,borderRadius:"4px 4px 0 0",touchAction:"none" }}/>}
+      <div onPointerDown={e=>drag(e,"move")} style={{ flex:1,padding:"2px 6px",minHeight:0,overflow:"hidden",touchAction:"none" }}>
         <p style={{ margin:0,fontSize:11,fontWeight:500,color:COLORS.pinkDark,lineHeight:1.3,whiteSpace:"nowrap" }}>{calFmt(s.h,s.m)} – {calFmt(e.h,e.m)}</p>
-        {height > 32 && <p style={{ margin:0,fontSize:10,color:COLORS.pink }}>{calHoras(bloque).toFixed(1)}h</p>}
+        {height > 36 && <p style={{ margin:0,fontSize:10,color:COLORS.pink }}>{calHoras(bloque).toFixed(1)}h</p>}
       </div>
       {!bloqueado && <>
-        <div onMouseDown={e=>drag(e,"bottom")} style={{ height:5,background:COLORS.pink,cursor:"ns-resize",flexShrink:0,borderRadius:"0 0 4px 4px" }}/>
-        <button onClick={e=>{ e.stopPropagation(); onDelete(fecha); }} style={{ position:"absolute",top:7,right:3,background:"none",border:"none",cursor:"pointer",fontSize:10,color:COLORS.pink,padding:0,fontWeight:700 }}>✕</button>
+        <div onPointerDown={e=>drag(e,"bottom")} style={{ height:10,background:COLORS.pink,cursor:"ns-resize",flexShrink:0,borderRadius:"0 0 4px 4px",touchAction:"none" }}/>
+        <button onClick={e=>{ e.stopPropagation(); onDelete(fecha); }} style={{ position:"absolute",top:10,right:3,background:"none",border:"none",cursor:"pointer",fontSize:10,color:COLORS.pink,padding:0,fontWeight:700 }}>✕</button>
       </>}
     </div>
   );
@@ -277,12 +317,7 @@ function CalendarioHorarios({ data, reloadData, user }) {
               }}
               style={{ position:"relative",height:CAL_GRID_H,borderLeft:"1px solid var(--color-border-secondary)",cursor:bloqueado?"default":(b?"default":"cell"),background:fer?"rgba(186,117,23,0.05)":"transparent" }}>
               {CAL_HOURS.map((_,hi)=><div key={hi} style={{ position:"absolute",top:hi*CAL_SLOT_H,left:0,right:0,height:CAL_SLOT_H,borderTop:"1px solid var(--color-border-secondary)",pointerEvents:"none" }}><div style={{ position:"absolute",top:"50%",left:0,right:0,borderTop:"1px dashed var(--color-border-tertiary)",opacity:0.5 }}/></div>)}
-              {b && (isMobile
-                ? <div onClick={e=>{e.stopPropagation();setModalDk(f);}} style={{ position:"absolute",left:2,right:2,top:calSlotY(b.startSlot),height:Math.max(calSlotY(b.endSlot)-calSlotY(b.startSlot),20),background:COLORS.pinkLight,border:`1.5px solid ${COLORS.pink}`,borderRadius:6,padding:"2px 4px",cursor:"pointer" }}>
-                    <p style={{ margin:0,fontSize:10,fontWeight:500,color:COLORS.pinkDark,lineHeight:1.3,whiteSpace:"nowrap" }}>{calFmt(calFromSlot(b.startSlot).h,calFromSlot(b.startSlot).m)}–{calFmt(calFromSlot(b.endSlot).h,calFromSlot(b.endSlot).m)}</p>
-                  </div>
-                : <BloqueCalendario fecha={f} bloque={b} onChange={(f2,nb)=>{setLocalH(p=>({...p,[f2]:nb}));setTimeout(()=>saveBloque(f2,nb),600);}} onDelete={onDeleteB} bloqueado={bloqueado}/>
-              )}
+              {b && <BloqueCalendario fecha={f} bloque={b} onChange={(f2,nb)=>{setLocalH(p=>({...p,[f2]:nb}));setTimeout(()=>saveBloque(f2,nb),600);}} onDelete={onDeleteB} bloqueado={bloqueado} onOpen={setModalDk}/>}
             </div>;
           })}
         </div>
@@ -308,14 +343,14 @@ function CalendarioHorarios({ data, reloadData, user }) {
             const d=semana[i]; if(!d) return <div key={i} style={{ borderLeft:"1px solid var(--color-border-secondary)" }}/>;
             const f=dateKey(d),b=getB(f),isToday=f===todayDk,fer=feriados.has(f);
             const s=b?calFromSlot(b.startSlot):null, e=b?calFromSlot(b.endSlot):null;
-            return <div key={i} onClick={()=>setModalDk(f)} style={{ borderLeft:"1px solid var(--color-border-secondary)",padding:6,cursor:"pointer",background:fer?COLORS.amberLight:(b?COLORS.pinkLight:"transparent") }}>
+            return <div key={i} onClick={()=>setModalDk(f)} style={{ borderLeft:"1px solid var(--color-border-secondary)",padding:6,cursor:"pointer",background:fer?COLORS.amberLight:(b?COLORS.pinkLight:"transparent"),touchAction:"manipulation" }}>
               <div style={{ display:"flex",alignItems:"center",gap:4,marginBottom:4 }}>
                 <div style={{ width:22,height:22,borderRadius:"50%",background:isToday?COLORS.pink:"transparent",display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0 }}>
                   <span style={{ fontSize:11,fontWeight:500,color:isToday?"#fff":fer?COLORS.amber:"var(--color-text-primary)" }}>{d.getDate()}</span>
                 </div>
                 {fer && <span style={{ fontSize:9,color:COLORS.amber,fontWeight:500 }}>Feriado</span>}
               </div>
-              {b ? <div style={{ background:"#fff",border:`1px solid ${COLORS.pink}`,borderRadius:4,padding:"2px 5px" }}><p style={{ margin:0,fontSize:10,color:COLORS.pinkDark,fontWeight:500 }}>{calFmt(s.h,s.m)}–{calFmt(e.h,e.m)}</p><p style={{ margin:0,fontSize:10,color:COLORS.pink }}>{calHoras(b).toFixed(1)}h</p></div>
+              {b ? <div style={{ background:"#fff",border:`1px solid ${COLORS.pink}`,borderRadius:4,padding:"4px 5px" }}><p style={{ margin:0,fontSize:10,color:COLORS.pinkDark,fontWeight:500 }}>{calFmt(s.h,s.m)}–{calFmt(e.h,e.m)}</p><p style={{ margin:0,fontSize:10,color:COLORS.pink }}>{calHoras(b).toFixed(1)}h</p><p style={{ margin:"2px 0 0",fontSize:9,color:COLORS.gray }}>Tocar para editar</p></div>
               : !bloqueado && <p style={{ margin:0,fontSize:10,color:"var(--color-text-secondary)",opacity:0.5 }}>+ agregar</p>}
             </div>;
           })}
@@ -417,7 +452,7 @@ function CalendarioHorarios({ data, reloadData, user }) {
             <span style={{ fontSize:12,fontWeight:500,color:"var(--color-text-secondary)" }}>{navLabel}</span>
             {bloqueado && <span style={{ marginLeft:"auto",fontSize:11,color:COLORS.amber,background:COLORS.amberLight,padding:"3px 8px",borderRadius:6 }}>🔒 Período bloqueado</span>}
             {vista==="semana"&&!bloqueado&&!isMobile&&<span style={{ marginLeft:"auto",fontSize:11,color:"var(--color-text-secondary)",opacity:0.7 }}>Clic en celda vacía para agregar · Arrastrá para mover</span>}
-            {vista==="semana"&&!bloqueado&&isMobile&&<span style={{ marginLeft:"auto",fontSize:11,color:"var(--color-text-secondary)",opacity:0.7 }}>Tocá un bloque para editar</span>}
+            {vista==="semana"&&!bloqueado&&isMobile&&<span style={{ marginLeft:"auto",fontSize:11,color:"var(--color-text-secondary)",opacity:0.7 }}>Arrastrá el bloque para mover · bordes para ajustar</span>}
           </div>
           {vista==="semana" ? renderSemanal() : renderMensual()}
         </div>
