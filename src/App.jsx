@@ -40,9 +40,21 @@ const api = {
   updateLocal: (id, d) => sb(`locales?id=eq.${id}`, { method: "PATCH", body: JSON.stringify(d) }),
   deleteLocal: (id) => sb(`locales?id=eq.${id}`, { method: "DELETE", prefer: "" }),
   getHorarios: () => sb("horarios?select=*"),
-  upsertHorario: (d) => sb("horarios", { method: "POST", body: JSON.stringify(d), prefer: "resolution=merge-duplicates,return=representation" }),
+  upsertHorario: async (d) => {
+    const existing = await sb(`horarios?user_id=eq.${d.user_id}&fecha=eq.${d.fecha}`);
+    if (existing && existing.length > 0) {
+      return sb(`horarios?user_id=eq.${d.user_id}&fecha=eq.${d.fecha}`, { method: "PATCH", body: JSON.stringify(d) });
+    }
+    return sb("horarios", { method: "POST", body: JSON.stringify(d) });
+  },
   getAsistencias: () => sb("asistencias?select=*"),
-  upsertAsistencia: (d) => sb("asistencias", { method: "POST", body: JSON.stringify(d), prefer: "resolution=merge-duplicates,return=representation" }),
+  upsertAsistencia: async (d) => {
+    const existing = await sb(`asistencias?user_id=eq.${d.user_id}&fecha=eq.${d.fecha}`);
+    if (existing && existing.length > 0) {
+      return sb(`asistencias?user_id=eq.${d.user_id}&fecha=eq.${d.fecha}`, { method: "PATCH", body: JSON.stringify(d) });
+    }
+    return sb("asistencias", { method: "POST", body: JSON.stringify(d) });
+  },
   deleteAsistencia: (userId, fecha) => sb(`asistencias?user_id=eq.${userId}&fecha=eq.${fecha}`, { method: "DELETE", prefer: "" }),
   getPeriodos: () => sb("periodos_bloqueados?select=*"),
   createPeriodo: (periodo) => sb("periodos_bloqueados", { method: "POST", body: JSON.stringify({ periodo }) }),
