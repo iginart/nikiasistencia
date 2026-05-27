@@ -14,15 +14,16 @@ const SUPABASE_URL = "https://fomdnmnrxntoqdsxndxx.supabase.co";
 const SUPABASE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImZvbWRubW5yeG50b3Fkc3huZHh4Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3Nzk4MDczMjksImV4cCI6MjA5NTM4MzMyOX0.pxqz72fqHYph-WZm9R3QT5tPpG9kOQBNaZKreEftFVA";
 
 const sb = async (path, opts = {}) => {
+  const { headers: extraHeaders, prefer, ...restOpts } = opts;
   const res = await fetch(`${SUPABASE_URL}/rest/v1/${path}`, {
     headers: {
       apikey: SUPABASE_KEY,
       Authorization: `Bearer ${SUPABASE_KEY}`,
       "Content-Type": "application/json",
-      Prefer: opts.prefer || "return=representation",
-      ...opts.headers,
+      Prefer: extraHeaders?.Prefer || prefer || "return=representation",
+      ...extraHeaders,
     },
-    ...opts,
+    ...restOpts,
   });
   if (!res.ok) { const e = await res.text(); throw new Error(e); }
   const text = await res.text();
@@ -591,15 +592,34 @@ function GestionHorarios({ data, reloadData }) {
 
   const dias = useMemo(() => getDiasDelMes(anio, mes), [anio, mes]);
   const semanas = useMemo(() => getSemanas(dias), [dias]);
-  const getH = dk => data.horarios.find(h => h.userId === parseInt(manicuraId) && h.fecha === dk) || { entrada: "", salida: "", trabaja: true };
 
-  const setH = async (dk, campo, val) => {
+  const [localH, setLocalH] = useState({});
+
+  const getH = dk => {
+    if (localH[dk]) return localH[dk];
+    return data.horarios.find(h => h.userId === parseInt(manicuraId) && h.fecha === dk) || { entrada: "", salida: "", trabaja: true };
+  };
+
+  const onChangeH = (dk, campo, val) => {
+    setLocalH(prev => ({ ...prev, [dk]: { ...getH(dk), [campo]: val } }));
+  };
+
+  const onBlurH = async (dk) => {
     const uid = parseInt(manicuraId);
-    const existing = data.horarios.find(h => h.userId === uid && h.fecha === dk);
-    const base = existing ? { ...existing } : { userId: uid, fecha: dk, entrada: "", salida: "", trabaja: true };
-    base[campo] = val;
-    await api.upsertHorario({ user_id: base.userId, fecha: base.fecha, entrada: base.entrada, salida: base.salida, trabaja: base.trabaja });
+    const h = localH[dk] || getH(dk);
+    await api.upsertHorario({ user_id: uid, fecha: dk, entrada: h.entrada, salida: h.salida, trabaja: h.trabaja });
     await reloadData();
+    setLocalH(prev => { const n = { ...prev }; delete n[dk]; return n; });
+  };
+
+  const toggleTrabaja = async (dk) => {
+    const uid = parseInt(manicuraId);
+    const h = getH(dk);
+    const nuevo = !h.trabaja;
+    setLocalH(prev => ({ ...prev, [dk]: { ...h, trabaja: nuevo } }));
+    await api.upsertHorario({ user_id: uid, fecha: dk, entrada: h.entrada, salida: h.salida, trabaja: nuevo });
+    await reloadData();
+    setLocalH(prev => { const n = { ...prev }; delete n[dk]; return n; });
   };
 
   const manicuras = data.users.filter(u => u.rol === "manicura" && u.activo);
@@ -640,13 +660,19 @@ function GestionHorarios({ data, reloadData }) {
                       <span style={{ fontSize: 13, color: "var(--color-text-secondary)", fontWeight: 500 }}>{nomDia} {d.getDate()}</span>
                       {h.trabaja ? (
                         <div style={{ display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap" }}>
-                          <input type="time" value={h.entrada || ""} onChange={e => setH(dk, "entrada", e.target.value)} style={{ border: "0.5px solid var(--color-border-secondary)", borderRadius: 6, padding: "4px 8px", fontSize: 13, background: "var(--color-background-primary)", color: "var(--color-text-primary)" }} />
+                          <input type="time" value={h.entrada || ""}
+                            onChange={e => onChangeH(dk, "entrada", e.target.value)}
+                            onBlur={() => onBlurH(dk)}
+                            style={{ border: "0.5px solid var(--color-border-secondary)", borderRadius: 6, padding: "4px 8px", fontSize: 13, background: "var(--color-background-primary)", color: "var(--color-text-primary)" }} />
                           <span style={{ fontSize: 12, color: "var(--color-text-secondary)" }}>a</span>
-                          <input type="time" value={h.salida || ""} onChange={e => setH(dk, "salida", e.target.value)} style={{ border: "0.5px solid var(--color-border-secondary)", borderRadius: 6, padding: "4px 8px", fontSize: 13, background: "var(--color-background-primary)", color: "var(--color-text-primary)" }} />
+                          <input type="time" value={h.salida || ""}
+                            onChange={e => onChangeH(dk, "salida", e.target.value)}
+                            onBlur={() => onBlurH(dk)}
+                            style={{ border: "0.5px solid var(--color-border-secondary)", borderRadius: 6, padding: "4px 8px", fontSize: 13, background: "var(--color-background-primary)", color: "var(--color-text-primary)" }} />
                           {calcHoras(h.entrada, h.salida) > 0 && <span style={{ fontSize: 12, color: COLORS.success, fontWeight: 500 }}>{calcHoras(h.entrada, h.salida).toFixed(1)}h</span>}
                         </div>
                       ) : <span style={{ fontSize: 13, color: "var(--color-text-secondary)" }}>No trabaja</span>}
-                      <button onClick={() => setH(dk, "trabaja", !h.trabaja)} style={{ background: h.trabaja ? COLORS.pinkLight : COLORS.grayLight, color: h.trabaja ? COLORS.pinkDark : "#666", border: "none", borderRadius: 6, padding: "4px 10px", fontSize: 12, cursor: "pointer", fontWeight: 500 }}>{h.trabaja ? "Libre" : "+ Agregar"}</button>
+                      <button onClick={() => toggleTrabaja(dk)} style={{ background: h.trabaja ? COLORS.pinkLight : COLORS.grayLight, color: h.trabaja ? COLORS.pinkDark : "#666", border: "none", borderRadius: 6, padding: "4px 10px", fontSize: 12, cursor: "pointer", fontWeight: 500 }}>{h.trabaja ? "Libre" : "+ Agregar"}</button>
                     </div>
                   );
                 })}
