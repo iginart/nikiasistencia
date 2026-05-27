@@ -20,15 +20,42 @@ const HEADERS_BASE = {
 };
 
 const sb = async (path, opts = {}) => {
-  const prefer = opts.prefer || "return=representation";
+  const prefer = opts.prefer ?? "return=representation";
+  const headers = {
+    apikey: SUPABASE_KEY,
+    Authorization: `Bearer ${SUPABASE_KEY}`,
+    "Content-Type": "application/json",
+  };
+  if (prefer) headers.Prefer = prefer;
   const res = await fetch(`${SUPABASE_URL}/rest/v1/${path}`, {
     method: opts.method || "GET",
-    headers: { ...HEADERS_BASE, Prefer: prefer },
+    headers,
     body: opts.body || undefined,
   });
   if (!res.ok) { const e = await res.text(); throw new Error(e); }
   const text = await res.text();
   return text ? JSON.parse(text) : null;
+};
+
+const patchOrPost = async (table, matchQuery, data) => {
+  // Intentar PATCH primero
+  const patchRes = await fetch(`${SUPABASE_URL}/rest/v1/${table}?${matchQuery}`, {
+    method: "PATCH",
+    headers: {
+      apikey: SUPABASE_KEY,
+      Authorization: `Bearer ${SUPABASE_KEY}`,
+      "Content-Type": "application/json",
+      Prefer: "return=representation",
+    },
+    body: JSON.stringify(data),
+  });
+  const patchText = await patchRes.text();
+  const patchResult = patchText ? JSON.parse(patchText) : [];
+  // Si el PATCH no actualizó nada (array vacío), hacer POST
+  if (!patchResult || patchResult.length === 0) {
+    return sb(table, { method: "POST", body: JSON.stringify(data) });
+  }
+  return patchResult;
 };
 
 const api = {
@@ -40,21 +67,9 @@ const api = {
   updateLocal: (id, d) => sb(`locales?id=eq.${id}`, { method: "PATCH", body: JSON.stringify(d) }),
   deleteLocal: (id) => sb(`locales?id=eq.${id}`, { method: "DELETE", prefer: "" }),
   getHorarios: () => sb("horarios?select=*"),
-  upsertHorario: async (d) => {
-    const existing = await sb(`horarios?user_id=eq.${d.user_id}&fecha=eq.${d.fecha}`);
-    if (existing && existing.length > 0) {
-      return sb(`horarios?user_id=eq.${d.user_id}&fecha=eq.${d.fecha}`, { method: "PATCH", body: JSON.stringify(d) });
-    }
-    return sb("horarios", { method: "POST", body: JSON.stringify(d) });
-  },
+  upsertHorario: (d) => patchOrPost("horarios", `user_id=eq.${d.user_id}&fecha=eq.${d.fecha}`, d),
   getAsistencias: () => sb("asistencias?select=*"),
-  upsertAsistencia: async (d) => {
-    const existing = await sb(`asistencias?user_id=eq.${d.user_id}&fecha=eq.${d.fecha}`);
-    if (existing && existing.length > 0) {
-      return sb(`asistencias?user_id=eq.${d.user_id}&fecha=eq.${d.fecha}`, { method: "PATCH", body: JSON.stringify(d) });
-    }
-    return sb("asistencias", { method: "POST", body: JSON.stringify(d) });
-  },
+  upsertAsistencia: (d) => patchOrPost("asistencias", `user_id=eq.${d.user_id}&fecha=eq.${d.fecha}`, d),
   deleteAsistencia: (userId, fecha) => sb(`asistencias?user_id=eq.${userId}&fecha=eq.${fecha}`, { method: "DELETE", prefer: "" }),
   getPeriodos: () => sb("periodos_bloqueados?select=*"),
   createPeriodo: (periodo) => sb("periodos_bloqueados", { method: "POST", body: JSON.stringify({ periodo }) }),
