@@ -58,12 +58,18 @@ const api = {
   getFeriados: () => sb("feriados?select=*"),
   createFeriado: (d) => sb("feriados", { method: "POST", body: JSON.stringify(d) }),
   deleteFeriado: (fecha) => sb(`feriados?fecha=eq.${fecha}`, { method: "DELETE", prefer: "" }),
+  getReglasCobertura: () => sb("reglas_cobertura?select=*&order=dia_semana"),
+  upsertReglaCobertura: (d) => patchOrPost("reglas_cobertura", `dia_semana=eq.${d.dia_semana}`, d),
+  getConfigCobertura: () => sb("config_cobertura?select=*"),
+  upsertConfigCobertura: (d) => patchOrPost("config_cobertura", "id=eq.1", { id: 1, ...d }),
 };
 
 function normalizeUser(u) { return { id: u.id, nombre: u.nombre, usuario: u.usuario, password: u.password, email: u.email || "", rol: u.rol, localId: u.local_id, activo: u.activo }; }
 function normalizeHorario(h) { return { id: h.id, userId: h.user_id, fecha: h.fecha, entrada: h.entrada || "", salida: h.salida || "", trabaja: h.trabaja }; }
 function normalizeAsistencia(a) { return { id: a.id, userId: a.user_id, fecha: a.fecha, estado: a.estado, entradaReal: a.entrada_real || "", salidaReal: a.salida_real || "", motivo: a.motivo || "", certificado: a.certificado, tipoDoc: a.tipo_doc || "" }; }
 function normalizePeriodo(p) { return { id: p.id, periodo: p.periodo, userId: p.user_id ?? p.userId ?? null }; }
+function normalizeReglaCobertura(r) { return { id:r.id, diaSemana:r.dia_semana, afluencia:r.afluencia, minimoDiario:r.minimo_diario, maximoDiario:r.maximo_diario, minimoApertura:r.minimo_apertura, minimoCierre:r.minimo_cierre, activo:r.activo }; }
+function normalizeConfigCobertura(c) { return { id:c.id, horaApertura:(c.hora_apertura||"10:00").slice(0,5), horaCierre:(c.hora_cierre||"20:00").slice(0,5), minutosApertura:c.minutos_apertura ?? 60, minutosCierre:c.minutos_cierre ?? 60 }; }
 
 const COLORS = {
   pink: "#d4537e", pinkLight: "#fbeaf0", pinkDark: "#72243e",
@@ -1163,12 +1169,13 @@ function AsistenciaDiaria({ data, reloadData }) {
 }
 
 // ── REPORTES ───────────────────────────────────────────────────────
+
 function Reportes({ data, user }) {
   const hoy = new Date();
-  const esAdmin = user.rol==="admin";
+  const esAdmin = user.rol === "admin";
   const [tab, setTab] = useState("horas");
   const [filtroTipo, setFiltroTipo] = useState("manicura");
-  const [filtroId, setFiltroId] = useState(esAdmin?(data.users.filter(u=>u.rol==="manicura")[0]?.id||""):user.id);
+  const [filtroId, setFiltroId] = useState(esAdmin ? (data.users.filter(u=>u.rol==="manicura")[0]?.id || "") : user.id);
   const [mes, setMes] = useState(hoy.getMonth());
   const [anio, setAnio] = useState(hoy.getFullYear());
   const [filtroSemana, setFiltroSemana] = useState("todas");
@@ -1176,15 +1183,22 @@ function Reportes({ data, user }) {
   const [fechaDesde, setFechaDesde] = useState(dateKey(new Date(hoy.getFullYear(),hoy.getMonth(),1)));
   const [fechaHasta, setFechaHasta] = useState(dateKey(hoy));
   const [expandidos, setExpandidos] = useState({});
+  const [localCobertura, setLocalCobertura] = useState("todos");
   const manicuras = data.users.filter(u=>u.rol==="manicura"&&u.activo);
   const semanasDelMes = useMemo(()=>getSemanas(getDiasDelMes(anio,mes)),[anio,mes]);
+
+  const TabBtn = ({id,label}) => <button onClick={()=>setTab(id)} style={{ padding:"8px 16px",border:"none",borderRadius:8,cursor:"pointer",fontSize:14,fontWeight:500,background:tab===id?COLORS.pink:"transparent",color:tab===id?"#fff":"var(--color-text-secondary)" }}>{label}</button>;
+  const estadoColor={presente:"success",tarde:"amber",ausente:"danger"};
+  const estadoLabel={presente:"Presente",tarde:"Tarde",ausente:"Ausente"};
+  const toggleExp = id => setExpandidos(e=>({...e,[id]:!e[id]}));
+
   const filtrarM = () => {
     let base = esAdmin?(filtroTipo==="manicura"?manicuras.filter(m=>m.id===parseInt(filtroId)):filtroTipo==="local"?manicuras.filter(m=>m.localId===parseInt(filtroId)):manicuras):[data.users.find(u=>u.id===user.id)].filter(Boolean);
     if (filtroEstado!=="todos") base=base.filter(m=>data.asistencias.some(a=>a.userId===m.id&&a.fecha>=fechaDesde&&a.fecha<=fechaHasta&&a.estado===filtroEstado));
     return base;
   };
   const mF = filtrarM();
-  const toggleExp = id => setExpandidos(e=>({...e,[id]:!e[id]}));
+
   const buildHorasReport = m => {
     const dias=getDiasDelMes(anio,mes), semanas=getSemanas(dias);
     const semanasData=semanas.map((sem,si)=>{
@@ -1211,113 +1225,142 @@ function Reportes({ data, user }) {
     const presentes=asist.filter(a=>a.estado==="presente").length, tardes=asist.filter(a=>a.estado==="tarde").length, ausentes=asist.filter(a=>a.estado==="ausente").length, total=presentes+tardes+ausentes;
     return {...m,asist:asistFilt,presentes,tardes,ausentes,total,pct:total>0?Math.round(((presentes+tardes)/total)*100):0};
   };
-  const TabBtn = ({id,label}) => <button onClick={()=>setTab(id)} style={{ padding:"8px 16px",border:"none",borderRadius:8,cursor:"pointer",fontSize:14,fontWeight:500,background:tab===id?COLORS.pink:"transparent",color:tab===id?"#fff":"var(--color-text-secondary)" }}>{label}</button>;
-  const estadoColor={presente:"success",tarde:"amber",ausente:"danger"};
-  const estadoLabel={presente:"Presente",tarde:"Tarde",ausente:"Ausente"};
+
+  const defaultRules = [
+    {diaSemana:1,afluencia:"baja",minimoDiario:2,maximoDiario:4,minimoApertura:1,minimoCierre:1},
+    {diaSemana:2,afluencia:"baja",minimoDiario:2,maximoDiario:4,minimoApertura:1,minimoCierre:1},
+    {diaSemana:3,afluencia:"media",minimoDiario:3,maximoDiario:5,minimoApertura:1,minimoCierre:1},
+    {diaSemana:4,afluencia:"media",minimoDiario:3,maximoDiario:5,minimoApertura:1,minimoCierre:1},
+    {diaSemana:5,afluencia:"alta",minimoDiario:4,maximoDiario:6,minimoApertura:2,minimoCierre:2},
+    {diaSemana:6,afluencia:"alta",minimoDiario:4,maximoDiario:6,minimoApertura:2,minimoCierre:2},
+  ];
+  const reglas = useMemo(()=>{
+    const map = new Map(defaultRules.map(r=>[r.diaSemana,r]));
+    (data.reglasCobertura||[]).forEach(r=>map.set(r.diaSemana,r));
+    return map;
+  }, [data.reglasCobertura]);
+  const configCob = data.configCobertura || { horaApertura:"10:00", horaCierre:"20:00", minutosApertura:60, minutosCierre:60 };
+  const minOf = t => { const [h,m]=(t||"00:00").split(":").map(Number); return h*60+(m||0); };
+  const overlap = (a1,a2,b1,b2) => Math.max(a1,b1) < Math.min(a2,b2);
+  const statusInfo = st => ({critico:["🔴","Crítico",COLORS.danger,COLORS.dangerLight],bajo:["🟡","Bajo",COLORS.amber,COLORS.amberLight],ok:["✅","Correcto",COLORS.success,COLORS.successLight],alto:["🟣","Sobrecubierto",COLORS.pinkDark,COLORS.pinkLight],sin:["⚪","Sin horarios",COLORS.gray,COLORS.grayLight]}[st]);
+
+  const cobertura = useMemo(()=>{
+    const open=minOf(configCob.horaApertura), close=minOf(configCob.horaCierre);
+    const openEnd=open+(configCob.minutosApertura||60), closeStart=close-(configCob.minutosCierre||60);
+    const horas=[]; for(let m=open; m<close; m+=60) horas.push(m);
+    const dias=getDiasDelMes(anio,mes);
+    const empleadosBase = manicuras.filter(m=>localCobertura==="todos" || m.localId===parseInt(localCobertura));
+    const items=dias.map(d=>{
+      const f=dateKey(d), dow=d.getDay(), regla=reglas.get(dow)||defaultRules.find(r=>r.diaSemana===dow)||defaultRules[0];
+      const hs=data.horarios.filter(h=>h.fecha===f&&h.trabaja&&h.entrada&&h.salida&&empleadosBase.some(m=>m.id===h.userId));
+      const userIds=[...new Set(hs.map(h=>h.userId))];
+      const total=userIds.length;
+      const apertura=hs.filter(h=>overlap(minOf(h.entrada),minOf(h.salida),open,openEnd)).length;
+      const cierre=hs.filter(h=>overlap(minOf(h.entrada),minOf(h.salida),closeStart,close)).length;
+      const hourly=horas.map(hm=>hs.filter(h=>overlap(minOf(h.entrada),minOf(h.salida),hm,hm+60)).length);
+      let estado="ok";
+      const motivos=[];
+      if(total===0){ estado="sin"; motivos.push("sin horarios cargados"); }
+      if(apertura<regla.minimoApertura){ estado="critico"; motivos.push(`apertura ${apertura}/${regla.minimoApertura}`); }
+      if(cierre<regla.minimoCierre){ estado="critico"; motivos.push(`cierre ${cierre}/${regla.minimoCierre}`); }
+      if(estado!=="critico"&&total<regla.minimoDiario){ estado="bajo"; motivos.push(`día ${total}/${regla.minimoDiario}`); }
+      if(estado==="ok"&&total>regla.maximoDiario){ estado="alto"; motivos.push(`${total}/${regla.maximoDiario} manicuras`); }
+      return {fecha:f,dia:d,dow,regla,total,apertura,cierre,hourly,estado,motivos};
+    });
+    const resumen={critico:items.filter(i=>i.estado==="critico").length,bajo:items.filter(i=>i.estado==="bajo").length,alto:items.filter(i=>i.estado==="alto").length,ok:items.filter(i=>i.estado==="ok").length,sin:items.filter(i=>i.estado==="sin").length};
+    const alertas=items.filter(i=>i.estado!=="ok").sort((a,b)=>(({critico:0,sin:1,bajo:2,alto:3}[a.estado]||0)-({critico:0,sin:1,bajo:2,alto:3}[b.estado]||0)||a.fecha.localeCompare(b.fecha)));
+    return {items,resumen,alertas,horas};
+  }, [anio, mes, data.horarios, manicuras, localCobertura, reglas, configCob]);
+
+  const renderCobertura = () => {
+    const cellBg = st => statusInfo(st)[3];
+    const cellFg = st => statusInfo(st)[2];
+    const semanas=getSemanas(cobertura.items.map(i=>i.dia));
+    const byFecha = new Map(cobertura.items.map(i=>[i.fecha,i]));
+    return <>
+      <div style={{ display:"flex",gap:8,marginBottom:16,flexWrap:"wrap",alignItems:"center" }}>
+        <Select value={mes} onChange={v=>setMes(parseInt(v))} style={{ width:130 }}>{MESES.map((m,i)=><option key={i} value={i}>{m}</option>)}</Select>
+        <Select value={anio} onChange={v=>setAnio(parseInt(v))} style={{ width:90 }}>{[hoy.getFullYear()-1,hoy.getFullYear(),hoy.getFullYear()+1].map(a=><option key={a} value={a}>{a}</option>)}</Select>
+        {esAdmin&&<Select value={localCobertura} onChange={setLocalCobertura} style={{ width:180 }}><option value="todos">Todos los locales</option>{data.locales.map(l=><option key={l.id} value={l.id}>{l.nombre}</option>)}</Select>}
+        <span style={{ fontSize:12,color:"var(--color-text-secondary)" }}>Apertura {configCob.horaApertura} · Cierre {configCob.horaCierre}</span>
+      </div>
+      <div style={{ display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(140px,1fr))",gap:10,marginBottom:14 }}>
+        {[['critico','Días críticos'],['bajo','Baja cobertura'],['ok','Correctos'],['alto','Sobrecubiertos'],['sin','Sin horarios']].map(([k,lbl])=>{const [ico,,fg,bg]=statusInfo(k); return <div key={k} style={{ background:bg,border:`1px solid ${fg}22`,borderRadius:10,padding:"10px 12px" }}><p style={{ margin:0,fontSize:12,color:fg,fontWeight:500 }}>{ico} {lbl}</p><p style={{ margin:0,fontSize:24,fontWeight:600,color:fg }}>{cobertura.resumen[k]}</p></div>;})}
+      </div>
+      <div style={{ display:"grid",gridTemplateColumns:"1.05fr 0.95fr",gap:14,alignItems:"start" }}>
+        <Card style={{ padding:0,overflow:"hidden" }}>
+          <div style={{ padding:"10px 12px",borderBottom:"1px solid rgba(120,120,120,0.18)",display:"flex",justifyContent:"space-between",alignItems:"center" }}><strong style={{ fontSize:14 }}>Calendario semaforizado</strong><span style={{ fontSize:12,color:"var(--color-text-secondary)" }}>{MESES[mes]} {anio}</span></div>
+          <div style={{ display:"grid",gridTemplateColumns:"repeat(6,1fr)",borderBottom:"1px solid rgba(120,120,120,0.18)" }}>{DIAS_SEMANA.map(d=><div key={d} style={{ padding:"7px 6px",textAlign:"center",fontSize:11,fontWeight:500,color:"var(--color-text-secondary)",borderLeft:"1px solid rgba(120,120,120,0.14)" }}>{d}</div>)}</div>
+          {semanas.map((sem,si)=><div key={si} style={{ display:"grid",gridTemplateColumns:"repeat(6,1fr)",minHeight:86,borderBottom:"1px solid rgba(120,120,120,0.14)" }}>{Array.from({length:6},(_,i)=>{const d=sem[i]; if(!d)return <div key={i} style={{ borderLeft:"1px solid rgba(120,120,120,0.12)" }}/>; const it=byFecha.get(dateKey(d)); const [ico,label,fg]=statusInfo(it.estado); return <div key={i} title={`${label} · ${it.motivos.join(', ') || 'Dentro del rango esperado'}`} style={{ padding:7,borderLeft:"1px solid rgba(120,120,120,0.12)",background:cellBg(it.estado) }}><div style={{ display:"flex",justifyContent:"space-between",gap:4 }}><span style={{ fontSize:12,fontWeight:600,color:fg }}>{d.getDate()}</span><span>{ico}</span></div><p style={{ margin:"4px 0 0",fontSize:11,color:fg,fontWeight:500 }}>👥 {it.total}</p><p style={{ margin:"2px 0 0",fontSize:10,color:"var(--color-text-secondary)" }}>Ap. {it.apertura} · Cie. {it.cierre}</p><p style={{ margin:"2px 0 0",fontSize:9,color:"var(--color-text-secondary)",textTransform:"capitalize" }}>{it.regla.afluencia}</p></div>;})}</div>)}
+        </Card>
+        <Card>
+          <h3 style={{ margin:"0 0 10px",fontSize:14,fontWeight:500 }}>Alertas principales</h3>
+          {cobertura.alertas.length===0?<p style={{ margin:0,fontSize:13,color:COLORS.success }}>No hay alertas para este período.</p>:<div style={{ display:"flex",flexDirection:"column",gap:7,maxHeight:390,overflow:"auto" }}>{cobertura.alertas.slice(0,18).map(it=>{const [ico,label,fg,bg]=statusInfo(it.estado); return <div key={it.fecha} style={{ background:bg,borderRadius:8,padding:"8px 10px",border:`1px solid ${fg}22` }}><p style={{ margin:0,fontSize:13,fontWeight:600,color:fg }}>{ico} {fmtFecha(it.dia)} · {label}</p><p style={{ margin:"2px 0 0",fontSize:12,color:"var(--color-text-secondary)" }}>👥 {it.total} · Apertura {it.apertura}/{it.regla.minimoApertura} · Cierre {it.cierre}/{it.regla.minimoCierre}</p><p style={{ margin:"2px 0 0",fontSize:11,color:"var(--color-text-secondary)" }}>{it.motivos.join(" · ")}</p></div>;})}</div>}
+        </Card>
+      </div>
+      <Card style={{ marginTop:14,padding:0,overflow:"hidden" }}>
+        <div style={{ padding:"10px 12px",borderBottom:"1px solid rgba(120,120,120,0.18)" }}><strong style={{ fontSize:14 }}>Mapa de calor por hora</strong><p style={{ margin:"2px 0 0",fontSize:12,color:"var(--color-text-secondary)" }}>Cantidad de manicuras activas por franja. Los colores comparan contra la demanda esperada del día.</p></div>
+        <div style={{ overflowX:"auto" }}><div style={{ minWidth:720 }}>
+          <div style={{ display:"grid",gridTemplateColumns:`88px repeat(${cobertura.horas.length},1fr)`,borderBottom:"1px solid rgba(120,120,120,0.16)" }}><div style={{ padding:7,fontSize:11,color:"var(--color-text-secondary)" }}>Día</div>{cobertura.horas.map(h=><div key={h} style={{ padding:7,textAlign:"center",fontSize:11,color:"var(--color-text-secondary)",borderLeft:"1px solid rgba(120,120,120,0.12)" }}>{String(Math.floor(h/60)).padStart(2,"0")}:00</div>)}</div>
+          {cobertura.items.map(it=><div key={it.fecha} style={{ display:"grid",gridTemplateColumns:`88px repeat(${cobertura.horas.length},1fr)`,borderBottom:"1px solid rgba(120,120,120,0.10)" }}><div style={{ padding:"7px 8px",fontSize:12,fontWeight:500 }}>{fmtFecha(it.dia)}</div>{it.hourly.map((qty,idx)=>{const minBase=Math.max(1,Math.round(it.regla.minimoDiario/2)); const bg=qty===0?COLORS.dangerLight:qty<minBase?COLORS.amberLight:qty>it.regla.maximoDiario?COLORS.pinkLight:COLORS.successLight; const fg=qty===0?COLORS.danger:qty<minBase?COLORS.amber:qty>it.regla.maximoDiario?COLORS.pinkDark:COLORS.success; return <div key={idx} style={{ padding:7,textAlign:"center",fontSize:12,fontWeight:600,color:fg,background:bg,borderLeft:"1px solid rgba(120,120,120,0.10)" }}>{qty}</div>;})}</div>)}
+        </div></div>
+      </Card>
+    </>;
+  };
+
   return (
     <div>
       <h2 style={{ margin:"0 0 16px",fontSize:18,fontWeight:500 }}>Reportes</h2>
-      <div style={{ display:"flex",gap:4,background:"var(--color-background-secondary)",padding:4,borderRadius:10,marginBottom:20,width:"fit-content" }}><TabBtn id="horas" label="Horas teóricas"/><TabBtn id="asistencia" label="Asistencia"/></div>
-      {esAdmin && <div style={{ display:"flex",gap:8,marginBottom:8,flexWrap:"wrap" }}>
+      <div style={{ display:"flex",gap:4,background:"var(--color-background-secondary)",padding:4,borderRadius:10,marginBottom:20,width:"fit-content",flexWrap:"wrap" }}><TabBtn id="horas" label="Horas teóricas"/><TabBtn id="asistencia" label="Asistencia"/><TabBtn id="cobertura" label="Cobertura"/></div>
+      {tab!=="cobertura"&&esAdmin && <div style={{ display:"flex",gap:8,marginBottom:8,flexWrap:"wrap" }}>
         <Select value={filtroTipo} onChange={v=>{setFiltroTipo(v);setExpandidos({});}} style={{ width:130 }}><option value="manicura">Manicura</option><option value="local">Local</option><option value="todas">Todas</option></Select>
         {filtroTipo==="manicura"&&<Select value={filtroId} onChange={v=>{setFiltroId(v);setExpandidos({});}} style={{ flex:1,minWidth:160 }}>{manicuras.map(m=><option key={m.id} value={m.id}>{m.nombre}</option>)}</Select>}
         {filtroTipo==="local"&&<Select value={filtroId} onChange={v=>{setFiltroId(v);setExpandidos({});}} style={{ flex:1,minWidth:160 }}>{data.locales.map(l=><option key={l.id} value={l.id}>{l.nombre}</option>)}</Select>}
       </div>}
-      <div style={{ display:"flex",gap:8,marginBottom:16,flexWrap:"wrap" }}>
+      {tab!=="cobertura"&&<div style={{ display:"flex",gap:8,marginBottom:16,flexWrap:"wrap" }}>
         <Select value={filtroSemana} onChange={v=>{setFiltroSemana(v);setExpandidos({});}} style={{ width:150 }}><option value="todas">Todas las semanas</option>{semanasDelMes.map((_,i)=><option key={i+1} value={i+1}>Semana {i+1}</option>)}</Select>
         <Select value={filtroEstado} onChange={v=>{setFiltroEstado(v);setExpandidos({});}} style={{ width:160 }}><option value="todos">Todos los estados</option><option value="ausente">Solo ausencias</option><option value="tarde">Solo llegadas tarde</option></Select>
-        {(filtroSemana!=="todas"||filtroEstado!=="todos")&&<button onClick={()=>{setFiltroSemana("todas");setFiltroEstado("todos");setExpandidos({});}} style={{ background:COLORS.amberLight,color:COLORS.amber,border:"none",borderRadius:8,padding:"7px 12px",fontSize:13,fontWeight:500,cursor:"pointer" }}>✕ Limpiar filtros</button>}
-      </div>
-      {filtroEstado!=="todos"&&<div style={{ background:COLORS.infoLight,color:COLORS.info,padding:"8px 12px",borderRadius:8,marginBottom:12,fontSize:13 }}>Mostrando solo <strong>{filtroEstado==="ausente"?"ausencias":"llegadas tarde"}</strong> en el período.</div>}
+      </div>}
+      {tab==="cobertura"&&renderCobertura()}
       {tab==="horas"&&<>
-        <div style={{ display:"flex",gap:8,marginBottom:16,flexWrap:"wrap" }}>
-          <Select value={mes} onChange={v=>{setMes(parseInt(v));setExpandidos({});}} style={{ width:130 }}>{MESES.map((m,i)=><option key={i} value={i}>{m}</option>)}</Select>
-          <Select value={anio} onChange={v=>{setAnio(parseInt(v));setExpandidos({});}} style={{ width:90 }}>{[hoy.getFullYear()-1,hoy.getFullYear(),hoy.getFullYear()+1].map(a=><option key={a} value={a}>{a}</option>)}</Select>
-        </div>
-        <div style={{ display:"flex",flexDirection:"column",gap:10 }}>
-          {mF.map(m=>{ const r=buildHorasReport(m),exp=expandidos[m.id]; return <Card key={m.id} style={{ padding:"0.875rem 1.25rem" }}>
-            <div style={{ display:"flex",alignItems:"center",gap:12,flexWrap:"wrap" }}>
-              <Avatar nombre={r.nombre}/>
-              <div style={{ flex:1 }}><p style={{ margin:0,fontWeight:500,fontSize:14 }}>{r.nombre}</p><p style={{ margin:0,fontSize:12,color:"var(--color-text-secondary)" }}>{data.locales.find(l=>l.id===r.localId)?.nombre||"Sin local"} · {r.diasTrabajo} días</p></div>
-              <div style={{ display:"flex",gap:16,marginRight:8,flexWrap:"wrap",justifyContent:"flex-end" }}>
-                <div style={{ textAlign:"right" }}><p style={{ margin:0,fontSize:18,fontWeight:500 }}>{r.totalMesTeo.toFixed(1)}h</p><p style={{ margin:0,fontSize:11,color:"var(--color-text-secondary)" }}>teóricas</p></div>
-                <div style={{ textAlign:"right" }}><p style={{ margin:0,fontSize:18,fontWeight:500,color:r.totalMesReal<r.totalMesTeo?COLORS.danger:COLORS.success }}>{r.totalMesReal.toFixed(1)}h</p><p style={{ margin:0,fontSize:11,color:"var(--color-text-secondary)" }}>reales</p></div>
-              </div>
-              <button onClick={()=>toggleExp(m.id)} style={{ background:COLORS.pinkLight,color:COLORS.pinkDark,border:"none",borderRadius:8,padding:"6px 12px",fontSize:12,fontWeight:500,cursor:"pointer",whiteSpace:"nowrap" }}>{exp?"▲ Ocultar":"▼ Ver detalle"}</button>
-            </div>
-            {exp&&<div style={{ marginTop:14,borderTop:"0.5px solid rgba(120,120,120,0.18)",paddingTop:14 }}>
-              {r.semanasData.map(sem=><div key={sem.semana} style={{ marginBottom:14 }}>
-                <div style={{ display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:8 }}>
-                  <span style={{ fontSize:12,fontWeight:500,color:"var(--color-text-secondary)",textTransform:"uppercase",letterSpacing:"0.04em" }}>Semana {sem.semana}</span>
-                  <div style={{ display:"flex",gap:10,alignItems:"center" }}>
-                    <span style={{ fontSize:12,color:"var(--color-text-secondary)" }}>Teo: <strong>{sem.totalTeo.toFixed(1)}h</strong></span>
-                    <span style={{ fontSize:12,color:sem.totalReal<sem.totalTeo?COLORS.danger:COLORS.success }}>Real: <strong>{sem.totalReal.toFixed(1)}h</strong></span>
-                    {sem.totalTeo>0&&<Badge color={sem.totalReal<sem.totalTeo?"danger":"success"}>{sem.totalReal>=sem.totalTeo?"✓":"-"+(sem.totalTeo-sem.totalReal).toFixed(1)+"h"}</Badge>}
-                  </div>
-                </div>
-                <div style={{ display:"flex",flexDirection:"column",gap:4 }}>
-                  {sem.dias.map(d=><div key={d.fecha} style={{ display:"grid",gridTemplateColumns:"60px 1fr 50px 50px 60px",gap:8,alignItems:"center",padding:"5px 8px",borderRadius:6,background:d.trabaja?"var(--color-background-secondary)":"transparent",opacity:d.trabaja?1:0.45 }}>
-                    <span style={{ fontSize:13,fontWeight:500,color:"var(--color-text-secondary)" }}>{d.label}</span>
-                    <span style={{ fontSize:12,color:"var(--color-text-primary)" }}>{d.trabaja?`${d.entrada} – ${d.salida}`:"—"}</span>
-                    <span style={{ fontSize:12,color:"var(--color-text-secondary)",textAlign:"right" }}>{d.trabaja?`${d.horasTeo.toFixed(1)}h`:""}</span>
-                    <span style={{ fontSize:12,textAlign:"right",color:d.trabaja?(d.horasReal<d.horasTeo?COLORS.danger:COLORS.success):"var(--color-text-secondary)" }}>{d.trabaja?(d.asistencia?`${d.horasReal.toFixed(1)}h`:"—"):""}</span>
-                    {d.trabaja?(d.asistencia?<Badge color={estadoColor[d.asistencia.estado]}>{d.asistencia.estado==="presente"?"✓":d.asistencia.estado==="tarde"?"Tarde":"Ausente"}</Badge>:<Badge color="gray">Sin reg.</Badge>):<Badge color="gray">Libre</Badge>}
-                  </div>)}
-                </div>
-              </div>)}
-            </div>}
-          </Card>; })}
-          {mF.length===0&&<Card><p style={{ margin:0,textAlign:"center",color:"var(--color-text-secondary)" }}>Sin datos para los filtros seleccionados.</p></Card>}
-        </div>
+        <div style={{ display:"flex",gap:8,marginBottom:16,flexWrap:"wrap" }}><Select value={mes} onChange={v=>{setMes(parseInt(v));setExpandidos({});}} style={{ width:130 }}>{MESES.map((m,i)=><option key={i} value={i}>{m}</option>)}</Select><Select value={anio} onChange={v=>{setAnio(parseInt(v));setExpandidos({});}} style={{ width:90 }}>{[hoy.getFullYear()-1,hoy.getFullYear(),hoy.getFullYear()+1].map(a=><option key={a} value={a}>{a}</option>)}</Select></div>
+        <div style={{ display:"flex",flexDirection:"column",gap:10 }}>{mF.map(m=>{ const r=buildHorasReport(m),exp=expandidos[m.id]; return <Card key={m.id} style={{ padding:"0.875rem 1.25rem" }}><div style={{ display:"flex",alignItems:"center",gap:12,flexWrap:"wrap" }}><Avatar nombre={r.nombre}/><div style={{ flex:1 }}><p style={{ margin:0,fontWeight:500,fontSize:14 }}>{r.nombre}</p><p style={{ margin:0,fontSize:12,color:"var(--color-text-secondary)" }}>{data.locales.find(l=>l.id===r.localId)?.nombre||"Sin local"} · {r.diasTrabajo} días</p></div><div style={{ display:"flex",gap:16,marginRight:8,flexWrap:"wrap",justifyContent:"flex-end" }}><div style={{ textAlign:"right" }}><p style={{ margin:0,fontSize:18,fontWeight:500 }}>{r.totalMesTeo.toFixed(1)}h</p><p style={{ margin:0,fontSize:11,color:"var(--color-text-secondary)" }}>teóricas</p></div><div style={{ textAlign:"right" }}><p style={{ margin:0,fontSize:18,fontWeight:500,color:r.totalMesReal<r.totalMesTeo?COLORS.danger:COLORS.success }}>{r.totalMesReal.toFixed(1)}h</p><p style={{ margin:0,fontSize:11,color:"var(--color-text-secondary)" }}>reales</p></div></div><button onClick={()=>toggleExp(m.id)} style={{ background:COLORS.pinkLight,color:COLORS.pinkDark,border:"none",borderRadius:8,padding:"6px 12px",fontSize:12,fontWeight:500,cursor:"pointer",whiteSpace:"nowrap" }}>{exp?"▲ Ocultar":"▼ Ver detalle"}</button></div>{exp&&<div style={{ marginTop:14,borderTop:"0.5px solid rgba(120,120,120,0.18)",paddingTop:14 }}>{r.semanasData.map(sem=><div key={sem.semana} style={{ marginBottom:14 }}><div style={{ display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:8 }}><span style={{ fontSize:12,fontWeight:500,color:"var(--color-text-secondary)",textTransform:"uppercase",letterSpacing:"0.04em" }}>Semana {sem.semana}</span><span style={{ fontSize:12,color:"var(--color-text-secondary)" }}>Teo: <strong>{sem.totalTeo.toFixed(1)}h</strong> · Real: <strong>{sem.totalReal.toFixed(1)}h</strong></span></div><div style={{ display:"flex",flexDirection:"column",gap:4 }}>{sem.dias.map(d=><div key={d.fecha} style={{ display:"grid",gridTemplateColumns:"60px 1fr 50px 50px 70px",gap:8,alignItems:"center",padding:"5px 8px",borderRadius:6,background:d.trabaja?"var(--color-background-secondary)":"transparent",opacity:d.trabaja?1:0.45 }}><span style={{ fontSize:13,fontWeight:500,color:"var(--color-text-secondary)" }}>{d.label}</span><span style={{ fontSize:12,color:"var(--color-text-primary)" }}>{d.trabaja?`${d.entrada} – ${d.salida}`:"—"}</span><span style={{ fontSize:12,color:"var(--color-text-secondary)",textAlign:"right" }}>{d.trabaja?`${d.horasTeo.toFixed(1)}h`:""}</span><span style={{ fontSize:12,textAlign:"right",color:d.trabaja?(d.horasReal<d.horasTeo?COLORS.danger:COLORS.success):"var(--color-text-secondary)" }}>{d.trabaja?(d.asistencia?`${d.horasReal.toFixed(1)}h`:"—"):""}</span>{d.trabaja?(d.asistencia?<Badge color={estadoColor[d.asistencia.estado]}>{d.asistencia.estado==="presente"?"✓":d.asistencia.estado==="tarde"?"Tarde":"Ausente"}</Badge>:<Badge color="gray">Sin reg.</Badge>):<Badge color="gray">Libre</Badge>}</div>)}</div></div>)}</div>}</Card>;})}{mF.length===0&&<Card><p style={{ margin:0,textAlign:"center",color:"var(--color-text-secondary)" }}>Sin datos para los filtros seleccionados.</p></Card>}</div>
       </>}
       {tab==="asistencia"&&<>
-        <div style={{ display:"flex",gap:8,marginBottom:16,flexWrap:"wrap",alignItems:"center" }}>
-          <span style={{ fontSize:13,color:"var(--color-text-secondary)" }}>Desde</span>
-          <input type="date" value={fechaDesde} onChange={e=>{setFechaDesde(e.target.value);setExpandidos({});}} style={{ border:"0.5px solid rgba(120,120,120,0.24)",borderRadius:8,padding:"7px 12px",fontSize:13,background:"var(--color-background-primary)",color:"var(--color-text-primary)" }}/>
-          <span style={{ fontSize:13,color:"var(--color-text-secondary)" }}>hasta</span>
-          <input type="date" value={fechaHasta} onChange={e=>{setFechaHasta(e.target.value);setExpandidos({});}} style={{ border:"0.5px solid rgba(120,120,120,0.24)",borderRadius:8,padding:"7px 12px",fontSize:13,background:"var(--color-background-primary)",color:"var(--color-text-primary)" }}/>
-        </div>
-        <div style={{ display:"flex",flexDirection:"column",gap:10 }}>
-          {mF.map(m=>{ const r=buildAsistenciaReport(m),exp=expandidos[m.id]; return <Card key={m.id} style={{ padding:"0.875rem 1.25rem" }}>
-            <div style={{ display:"flex",alignItems:"center",gap:12,flexWrap:"wrap" }}>
-              <Avatar nombre={r.nombre}/>
-              <div style={{ flex:1 }}><p style={{ margin:0,fontWeight:500,fontSize:14 }}>{r.nombre}</p><p style={{ margin:0,fontSize:12,color:"var(--color-text-secondary)" }}>{r.total} días registrados</p></div>
-              <div style={{ display:"flex",gap:6,flexWrap:"wrap",alignItems:"center" }}>
-                <Badge color="success">✓ {r.presentes}</Badge>
-                <Badge color="amber">⏰ {r.tardes}</Badge>
-                <Badge color="danger">✗ {r.ausentes}</Badge>
-                <span style={{ fontSize:18,fontWeight:500,color:r.pct>=90?COLORS.success:r.pct>=75?COLORS.amber:COLORS.danger,minWidth:44,textAlign:"right" }}>{r.pct}%</span>
-              </div>
-              <button onClick={()=>toggleExp(m.id)} style={{ background:COLORS.pinkLight,color:COLORS.pinkDark,border:"none",borderRadius:8,padding:"6px 12px",fontSize:12,fontWeight:500,cursor:"pointer",whiteSpace:"nowrap" }}>{exp?"▲ Ocultar":"▼ Ver detalle"}</button>
-            </div>
-            {exp&&<div style={{ marginTop:14,borderTop:"0.5px solid rgba(120,120,120,0.18)",paddingTop:14 }}>
-              {r.asist.length===0?<p style={{ margin:0,fontSize:13,color:"var(--color-text-secondary)",textAlign:"center" }}>Sin registros en este período.</p>
-              :<div style={{ display:"flex",flexDirection:"column",gap:4 }}>
-                <div style={{ display:"grid",gridTemplateColumns:"80px 70px 1fr 1fr 80px",gap:8,padding:"4px 8px" }}>
-                  {["Fecha","Estado","H. teórico","H. real","Detalle"].map(h=><span key={h} style={{ fontSize:11,fontWeight:500,color:"var(--color-text-secondary)",textTransform:"uppercase",letterSpacing:"0.04em" }}>{h}</span>)}
-                </div>
-                {r.asist.map(a=>{
-                  const ht=data.horarios.find(h=>h.userId===m.id&&h.fecha===a.fecha);
-                  const fmtD=(()=>{const p=a.fecha.split("-");return `${p[2]}/${p[1]}`;})();
-                  return <div key={a.fecha} style={{ display:"grid",gridTemplateColumns:"80px 70px 1fr 1fr 80px",gap:8,alignItems:"center",padding:"6px 8px",borderRadius:6,background:"var(--color-background-secondary)" }}>
-                    <span style={{ fontSize:13,fontWeight:500 }}>{fmtD}</span>
-                    <Badge color={estadoColor[a.estado]}>{estadoLabel[a.estado]}</Badge>
-                    <span style={{ fontSize:13,color:"var(--color-text-secondary)" }}>{ht?.entrada&&ht?.salida?`${ht.entrada} – ${ht.salida}`:"—"}</span>
-                    <span style={{ fontSize:13,color:"var(--color-text-secondary)" }}>{a.estado==="tarde"?`${a.entradaReal} – ${a.salidaReal}`:a.estado==="presente"?"En horario":"—"}</span>
-                    <span style={{ fontSize:12,color:"var(--color-text-secondary)" }}>
-                      {a.estado==="ausente"?<span>{a.motivo}{a.certificado&&<><br/><span style={{ fontSize:11,color:COLORS.info }}>{a.tipoDoc||"Con cert."}</span></>}</span>
-                        :a.estado==="tarde"?<span style={{ color:COLORS.amber }}>{(()=>{const d=calcHoras(ht?.entrada||"",a.entradaReal||"");return d>0?`+${d.toFixed(1)}h`:"";})()}</span>:""}
-                    </span>
-                  </div>;
-                })}
-              </div>}
-            </div>}
-          </Card>; })}
-          {mF.length===0&&<Card><p style={{ margin:0,textAlign:"center",color:"var(--color-text-secondary)" }}>Sin datos para los filtros seleccionados.</p></Card>}
-        </div>
+        <div style={{ display:"flex",gap:8,marginBottom:16,flexWrap:"wrap",alignItems:"center" }}><span style={{ fontSize:13,color:"var(--color-text-secondary)" }}>Desde</span><input type="date" value={fechaDesde} onChange={e=>{setFechaDesde(e.target.value);setExpandidos({});}} style={{ border:"0.5px solid rgba(120,120,120,0.24)",borderRadius:8,padding:"7px 12px",fontSize:13,background:"var(--color-background-primary)",color:"var(--color-text-primary)" }}/><span style={{ fontSize:13,color:"var(--color-text-secondary)" }}>hasta</span><input type="date" value={fechaHasta} onChange={e=>{setFechaHasta(e.target.value);setExpandidos({});}} style={{ border:"0.5px solid rgba(120,120,120,0.24)",borderRadius:8,padding:"7px 12px",fontSize:13,background:"var(--color-background-primary)",color:"var(--color-text-primary)" }}/></div>
+        <div style={{ display:"flex",flexDirection:"column",gap:10 }}>{mF.map(m=>{ const r=buildAsistenciaReport(m),exp=expandidos[m.id]; return <Card key={m.id} style={{ padding:"0.875rem 1.25rem" }}><div style={{ display:"flex",alignItems:"center",gap:12,flexWrap:"wrap" }}><Avatar nombre={r.nombre}/><div style={{ flex:1 }}><p style={{ margin:0,fontWeight:500,fontSize:14 }}>{r.nombre}</p><p style={{ margin:0,fontSize:12,color:"var(--color-text-secondary)" }}>{r.total} días registrados</p></div><div style={{ display:"flex",gap:6,flexWrap:"wrap",alignItems:"center" }}><Badge color="success">✓ {r.presentes}</Badge><Badge color="amber">⏰ {r.tardes}</Badge><Badge color="danger">✗ {r.ausentes}</Badge><span style={{ fontSize:18,fontWeight:500,color:r.pct>=90?COLORS.success:r.pct>=75?COLORS.amber:COLORS.danger,minWidth:44,textAlign:"right" }}>{r.pct}%</span></div><button onClick={()=>toggleExp(m.id)} style={{ background:COLORS.pinkLight,color:COLORS.pinkDark,border:"none",borderRadius:8,padding:"6px 12px",fontSize:12,fontWeight:500,cursor:"pointer",whiteSpace:"nowrap" }}>{exp?"▲ Ocultar":"▼ Ver detalle"}</button></div>{exp&&<div style={{ marginTop:14,borderTop:"0.5px solid rgba(120,120,120,0.18)",paddingTop:14 }}>{r.asist.length===0?<p style={{ margin:0,fontSize:13,color:"var(--color-text-secondary)",textAlign:"center" }}>Sin registros en este período.</p>:<div style={{ display:"flex",flexDirection:"column",gap:4 }}>{r.asist.map(a=>{const ht=data.horarios.find(h=>h.userId===m.id&&h.fecha===a.fecha);const fmtD=(()=>{const p=a.fecha.split("-");return `${p[2]}/${p[1]}`;})();return <div key={a.fecha} style={{ display:"grid",gridTemplateColumns:"80px 90px 1fr 1fr 100px",gap:8,alignItems:"center",padding:"6px 8px",borderRadius:6,background:"var(--color-background-secondary)" }}><span style={{ fontSize:13,fontWeight:500 }}>{fmtD}</span><Badge color={estadoColor[a.estado]}>{estadoLabel[a.estado]}</Badge><span style={{ fontSize:13,color:"var(--color-text-secondary)" }}>{ht?.entrada&&ht?.salida?`${ht.entrada} – ${ht.salida}`:"—"}</span><span style={{ fontSize:13,color:"var(--color-text-secondary)" }}>{a.estado==="tarde"?`${a.entradaReal} – ${a.salidaReal}`:a.estado==="presente"?"En horario":"—"}</span><span style={{ fontSize:12,color:"var(--color-text-secondary)" }}>{a.estado==="ausente"?a.motivo:a.estado==="tarde"?"Llegada tarde":""}</span></div>;})}</div>}</div>}</Card>;})}{mF.length===0&&<Card><p style={{ margin:0,textAlign:"center",color:"var(--color-text-secondary)" }}>Sin datos para los filtros seleccionados.</p></Card>}</div>
       </>}
     </div>
   );
+}
+
+function ConfiguracionCobertura({ data, reloadData }) {
+  const defaultRules = [
+    {diaSemana:1,afluencia:"baja",minimoDiario:2,maximoDiario:4,minimoApertura:1,minimoCierre:1},
+    {diaSemana:2,afluencia:"baja",minimoDiario:2,maximoDiario:4,minimoApertura:1,minimoCierre:1},
+    {diaSemana:3,afluencia:"media",minimoDiario:3,maximoDiario:5,minimoApertura:1,minimoCierre:1},
+    {diaSemana:4,afluencia:"media",minimoDiario:3,maximoDiario:5,minimoApertura:1,minimoCierre:1},
+    {diaSemana:5,afluencia:"alta",minimoDiario:4,maximoDiario:6,minimoApertura:2,minimoCierre:2},
+    {diaSemana:6,afluencia:"alta",minimoDiario:4,maximoDiario:6,minimoApertura:2,minimoCierre:2},
+  ];
+  const reglasIniciales = defaultRules.map(r => ({ ...r, ...(data.reglasCobertura||[]).find(x=>x.diaSemana===r.diaSemana) }));
+  const [reglas,setReglas] = useState(reglasIniciales);
+  const [config,setConfig] = useState(data.configCobertura || { horaApertura:"10:00", horaCierre:"20:00", minutosApertura:60, minutosCierre:60 });
+  const [saving,setSaving] = useState(false);
+  const [ok,setOk] = useState(false);
+  const setRegla = (dia, campo, valor) => setReglas(rs => rs.map(r => r.diaSemana===dia ? { ...r, [campo]: valor } : r));
+  const save = async () => {
+    setSaving(true); setOk(false);
+    await api.upsertConfigCobertura({ hora_apertura:config.horaApertura, hora_cierre:config.horaCierre, minutos_apertura:parseInt(config.minutosApertura)||60, minutos_cierre:parseInt(config.minutosCierre)||60 });
+    for (const r of reglas) await api.upsertReglaCobertura({ dia_semana:r.diaSemana, afluencia:r.afluencia, minimo_diario:parseInt(r.minimoDiario)||0, maximo_diario:parseInt(r.maximoDiario)||0, minimo_apertura:parseInt(r.minimoApertura)||0, minimo_cierre:parseInt(r.minimoCierre)||0, activo:true });
+    await reloadData(); setSaving(false); setOk(true);
+  };
+  return <div>
+    <div style={{ display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:16,flexWrap:"wrap",gap:8 }}><h2 style={{ margin:0,fontSize:18,fontWeight:500 }}>Configuración de cobertura</h2><Btn onClick={save} disabled={saving}>{saving?"Guardando...":"Guardar configuración"}</Btn></div>
+    {ok&&<div style={{ background:COLORS.successLight,color:COLORS.success,borderRadius:8,padding:"8px 12px",fontSize:13,marginBottom:12 }}>Configuración guardada correctamente.</div>}
+    <Card style={{ marginBottom:14 }}><h3 style={{ margin:"0 0 12px",fontSize:15,fontWeight:500 }}>Parámetros generales</h3><div style={{ display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(160px,1fr))",gap:12 }}><div><label style={{ fontSize:12,color:"var(--color-text-secondary)",display:"block",marginBottom:4 }}>Hora de apertura</label><Input type="time" value={config.horaApertura} onChange={v=>setConfig(c=>({...c,horaApertura:v}))}/></div><div><label style={{ fontSize:12,color:"var(--color-text-secondary)",display:"block",marginBottom:4 }}>Hora de cierre</label><Input type="time" value={config.horaCierre} onChange={v=>setConfig(c=>({...c,horaCierre:v}))}/></div><div><label style={{ fontSize:12,color:"var(--color-text-secondary)",display:"block",marginBottom:4 }}>Minutos de apertura</label><Input type="number" value={config.minutosApertura} onChange={v=>setConfig(c=>({...c,minutosApertura:v}))}/></div><div><label style={{ fontSize:12,color:"var(--color-text-secondary)",display:"block",marginBottom:4 }}>Minutos de cierre</label><Input type="number" value={config.minutosCierre} onChange={v=>setConfig(c=>({...c,minutosCierre:v}))}/></div></div></Card>
+    <Card style={{ padding:0,overflow:"hidden" }}><div style={{ padding:"12px 14px",borderBottom:"1px solid rgba(120,120,120,0.18)" }}><h3 style={{ margin:0,fontSize:15,fontWeight:500 }}>Reglas por día</h3><p style={{ margin:"3px 0 0",fontSize:12,color:"var(--color-text-secondary)" }}>Estos valores alimentan el reporte de cobertura y sus alertas visuales.</p></div><div style={{ overflowX:"auto" }}><div style={{ minWidth:760 }}><div style={{ display:"grid",gridTemplateColumns:"110px 130px repeat(4,1fr)",gap:8,padding:"8px 12px",fontSize:11,fontWeight:500,color:"var(--color-text-secondary)",borderBottom:"1px solid rgba(120,120,120,0.14)" }}>{["Día","Afluencia","Mín. día","Máx. día","Mín. apertura","Mín. cierre"].map(h=><span key={h}>{h}</span>)}</div>{reglas.map(r=><div key={r.diaSemana} style={{ display:"grid",gridTemplateColumns:"110px 130px repeat(4,1fr)",gap:8,padding:"8px 12px",alignItems:"center",borderBottom:"1px solid rgba(120,120,120,0.10)" }}><strong style={{ fontSize:13 }}>{DIAS_SEMANA[r.diaSemana-1]}</strong><Select value={r.afluencia} onChange={v=>setRegla(r.diaSemana,"afluencia",v)}><option value="baja">Baja</option><option value="media">Media</option><option value="alta">Alta</option></Select>{[["minimoDiario"],["maximoDiario"],["minimoApertura"],["minimoCierre"]].map(([campo])=><Input key={campo} type="number" value={r[campo]} onChange={v=>setRegla(r.diaSemana,campo,v)}/>)}</div>)}</div></div></Card>
+  </div>;
 }
 
 // ── APP PRINCIPAL ──────────────────────────────────────────────────
@@ -1329,8 +1372,8 @@ export default function App() {
   const [loading, setLoading] = useState(true);
 
   const reloadData = useCallback(async () => {
-    const [users, locales, horarios, asistencias, periodos, feriados] = await Promise.all([
-      api.getUsers(), api.getLocales(), api.getHorarios(), api.getAsistencias(), api.getPeriodos(), api.getFeriados()
+    const [users, locales, horarios, asistencias, periodos, feriados, reglasCobertura, configCobertura] = await Promise.all([
+      api.getUsers(), api.getLocales(), api.getHorarios(), api.getAsistencias(), api.getPeriodos(), api.getFeriados(), api.getReglasCobertura(), api.getConfigCobertura()
     ]);
     setData({
       users: users.map(normalizeUser),
@@ -1339,6 +1382,8 @@ export default function App() {
       asistencias: asistencias.map(normalizeAsistencia),
       periodosBloqueados: periodos.map(normalizePeriodo),
       feriados,
+      reglasCobertura: reglasCobertura.map(normalizeReglaCobertura),
+      configCobertura: configCobertura?.[0] ? normalizeConfigCobertura(configCobertura[0]) : null,
     });
   }, []);
 
@@ -1353,6 +1398,7 @@ export default function App() {
     {id:"reportes",label:"Reportes",icon:"📊"},
     {id:"manicuras",label:"Manicuras",icon:"💅"},
     {id:"locales",label:"Locales",icon:"🏠"},
+    {id:"cobertura_config",label:"Cobertura",icon:"⚙️"},
     {id:"perfil",label:"Mi perfil",icon:"👤"},
   ];
   const navManicura = [
@@ -1368,6 +1414,7 @@ export default function App() {
     if (seccion==="reportes") return <Reportes data={data} user={user}/>;
     if (seccion==="manicuras") return <ABMManicuras data={data} reloadData={reloadData}/>;
     if (seccion==="locales") return <ABMLocales data={data} reloadData={reloadData}/>;
+    if (seccion==="cobertura_config") return <ConfiguracionCobertura data={data} reloadData={reloadData}/>;
     if (seccion==="perfil") return <MiPerfil data={data} reloadData={reloadData} user={user} setUser={setUser}/>;
     return null;
   };
