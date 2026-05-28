@@ -1701,8 +1701,8 @@ function Reportes({ data, user, onOpenAgenda, reportRestore }) {
         onDrop={e=>{ e.preventDefault(); reorderCol(e.dataTransfer.getData("text/plain"), col.key); }}
         style={{ position:"relative",display:"flex",alignItems:"center",justifyContent:money?"flex-end":"flex-start",gap:5,minWidth:0,paddingRight:8,cursor:"grab",userSelect:"none",color:activeGroup?COLORS.pinkDark:"inherit" }}
       >
-        <button onClick={e=>{ e.stopPropagation(); setMenuColComisiones(menuColComisiones===col.key?null:col.key); }} style={{ border:"none",background:activeGroup?COLORS.pinkLight:"transparent",color:activeGroup?COLORS.pinkDark:"inherit",borderRadius:6,padding:"3px 5px",cursor:"pointer",fontSize:11,fontWeight:700,textTransform:"uppercase",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap",maxWidth:"100%" }}>
-          {activeGroup?"▾ ":""}{col.label}
+        <button onClick={e=>{ e.stopPropagation(); setMenuColComisiones(menuColComisiones===col.key?null:col.key); }} title="Clic para agrupar/desagrupar. Arrastrá el título para cambiar el orden." style={{ border:"none",background:activeGroup?COLORS.pinkLight:"transparent",color:activeGroup?COLORS.pinkDark:"inherit",borderRadius:6,padding:"3px 5px",cursor:"pointer",fontSize:11,fontWeight:700,textTransform:"uppercase",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap",maxWidth:"100%",display:"inline-flex",alignItems:"center",gap:4 }}>
+          <span>{activeGroup?"▾ ":""}{col.label}</span><span style={{ opacity:0.65,fontSize:10 }}>⋮</span>
         </button>
         {menuColComisiones===col.key&&<div style={{ position:"absolute",top:26,left:money?"auto":0,right:money?0:"auto",zIndex:20,background:"#fff",border:"1px solid rgba(120,120,120,0.18)",borderRadius:10,boxShadow:"0 8px 24px rgba(0,0,0,0.12)",padding:6,minWidth:150,textTransform:"none" }}>
           <button disabled={!groupableCol(col.key)} onClick={()=>setGroupFromColumn(col.key)} style={{ width:"100%",textAlign:"left",border:"none",background:"transparent",padding:"7px 9px",borderRadius:7,cursor:groupableCol(col.key)?"pointer":"not-allowed",opacity:groupableCol(col.key)?1:0.45,fontSize:12 }}>Agrupar</button>
@@ -1720,7 +1720,8 @@ function Reportes({ data, user, onOpenAgenda, reportRestore }) {
         <Select value={semanaComisiones} onChange={setSemanaComisiones} style={{ width:145 }}><option value="todas">Todas las semanas</option>{semanasDisponibles.map(s=><option key={s} value={s}>Semana {s}</option>)}</Select>
         {puedeGestionar&&<Select value={localComisiones} onChange={v=>{setLocalComisiones(v);setManicuraComisiones("todas");setSemanaComisiones("todas");}} style={{ width:190 }}><option value="todos">Todos los locales</option>{localesVisibles.map(l=><option key={l.id} value={l.id}>{l.nombre}</option>)}</Select>}
         {puedeGestionar&&<Select value={manicuraComisiones} onChange={v=>{setManicuraComisiones(v);setSemanaComisiones("todas");}} style={{ width:210 }}><option value="todas">Todas las manicuras</option>{manicurasComision.map(m=><option key={m.id} value={m.id}>{m.nombre}</option>)}</Select>}
-        <Select value={grupoComisiones} onChange={setGrupoComisiones} style={{ width:205 }}>{agrupables.map(g=><option key={g.id} value={g.id}>{g.id==="detalle"?g.label:`Agrupar por ${g.label}`}</option>)}</Select>
+        <span style={{ background:COLORS.pinkLight,color:COLORS.pinkDark,borderRadius:8,padding:"7px 10px",fontSize:12,fontWeight:600 }}>Tabla avanzada: clic en títulos para agrupar · arrastrá títulos/bordes</span>
+        {grupoComisiones!=="detalle"&&<button onClick={()=>{setGrupoComisiones("detalle");setCollapsedComisiones({});}} style={{ background:"#fff",border:`1px solid ${COLORS.pink}44`,color:COLORS.pinkDark,borderRadius:8,padding:"7px 10px",fontSize:12,fontWeight:600,cursor:"pointer" }}>Desagrupar</button>}
         {ultimaImportacion&&<span style={{ fontSize:12,color:"var(--color-text-secondary)",marginLeft:"auto" }}>Última importación: {ultimaImportacion.periodo} · {ultimaImportacion.registros} registros</span>}
       </div>
       <div style={{ display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(160px,1fr))",gap:10,marginBottom:14 }}>
@@ -1747,7 +1748,7 @@ function Reportes({ data, user, onOpenAgenda, reportRestore }) {
         </div></div>
       </Card>}
       <Card style={{ padding:0,overflow:"hidden" }}>
-        <div style={{ padding:"12px 14px",borderBottom:"1px solid rgba(120,120,120,0.16)",display:"flex",justifyContent:"space-between",gap:8,alignItems:"center",flexWrap:"wrap" }}><h3 style={{ margin:0,fontSize:15,fontWeight:500 }}>Detalle de comisiones</h3><span style={{ fontSize:12,color:"var(--color-text-secondary)" }}>{registros.length} registros</span></div>
+        <div style={{ padding:"12px 14px",borderBottom:"1px solid rgba(120,120,120,0.16)",display:"flex",justifyContent:"space-between",gap:8,alignItems:"center",flexWrap:"wrap" }}><h3 style={{ margin:0,fontSize:15,fontWeight:500 }}>Detalle de comisiones <span style={{ marginLeft:8,fontSize:11,color:COLORS.pinkDark,background:COLORS.pinkLight,borderRadius:999,padding:"3px 8px" }}>tabla avanzada</span></h3><span style={{ fontSize:12,color:"var(--color-text-secondary)" }}>{registros.length} registros</span></div>
         <div style={{ padding:"8px 12px",borderBottom:"1px solid rgba(120,120,120,0.12)",background:"var(--color-background-secondary)" }}>
           <p style={{ margin:0,fontSize:11,fontWeight:500,color:"var(--color-text-secondary)" }}>Arrastrá los títulos para cambiar el orden. Arrastrá el borde derecho de cada título para cambiar el ancho. Hacé clic en un título para agrupar, desagrupar, colapsar o expandir.</p>
         </div>
