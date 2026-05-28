@@ -58,18 +58,21 @@ const api = {
   getFeriados: () => sb("feriados?select=*"),
   createFeriado: (d) => sb("feriados", { method: "POST", body: JSON.stringify(d) }),
   deleteFeriado: (fecha) => sb(`feriados?fecha=eq.${fecha}`, { method: "DELETE", prefer: "" }),
-  getReglasCobertura: () => sb("reglas_cobertura?select=*&order=dia_semana"),
-  upsertReglaCobertura: (d) => patchOrPost("reglas_cobertura", `dia_semana=eq.${d.dia_semana}`, d),
-  getConfigCobertura: () => sb("config_cobertura?select=*"),
-  upsertConfigCobertura: (d) => patchOrPost("config_cobertura", "id=eq.1", { id: 1, ...d }),
+  getReglasCobertura: () => sb("reglas_cobertura?select=*&order=local_id,dia_semana"),
+  upsertReglaCobertura: (d) => patchOrPost("reglas_cobertura", `local_id=eq.${d.local_id}&dia_semana=eq.${d.dia_semana}`, d),
+  getConfigCobertura: () => sb("config_cobertura?select=*&order=local_id"),
+  upsertConfigCobertura: (d) => patchOrPost("config_cobertura", `local_id=eq.${d.local_id}`, d),
+  getEncargadoLocales: () => sb("encargado_locales?select=*"),
+  setEncargadoLocales: async (userId, localIds) => { await sb(`encargado_locales?user_id=eq.${userId}`, { method:"DELETE", prefer:"" }); if (!localIds?.length) return []; return sb("encargado_locales", { method:"POST", body:JSON.stringify(localIds.map(local_id=>({ user_id:userId, local_id:parseInt(local_id) }))) }); },
 };
 
 function normalizeUser(u) { return { id: u.id, nombre: u.nombre, usuario: u.usuario, password: u.password, email: u.email || "", rol: u.rol, localId: u.local_id, activo: u.activo }; }
 function normalizeHorario(h) { return { id: h.id, userId: h.user_id, fecha: h.fecha, entrada: h.entrada || "", salida: h.salida || "", trabaja: h.trabaja }; }
 function normalizeAsistencia(a) { return { id: a.id, userId: a.user_id, fecha: a.fecha, estado: a.estado, entradaReal: a.entrada_real || "", salidaReal: a.salida_real || "", motivo: a.motivo || "", certificado: a.certificado, tipoDoc: a.tipo_doc || "" }; }
 function normalizePeriodo(p) { return { id: p.id, periodo: p.periodo, userId: p.user_id ?? p.userId ?? null }; }
-function normalizeReglaCobertura(r) { return { id:r.id, diaSemana:r.dia_semana, afluencia:r.afluencia, minimoDiario:r.minimo_diario, maximoDiario:r.maximo_diario, minimoApertura:r.minimo_apertura, minimoCierre:r.minimo_cierre, activo:r.activo }; }
-function normalizeConfigCobertura(c) { return { id:c.id, horaApertura:(c.hora_apertura||"10:00").slice(0,5), horaCierre:(c.hora_cierre||"20:00").slice(0,5), minutosApertura:c.minutos_apertura ?? 60, minutosCierre:c.minutos_cierre ?? 60 }; }
+function normalizeReglaCobertura(r) { return { id:r.id, localId:r.local_id, diaSemana:r.dia_semana, afluencia:r.afluencia, minimoDiario:r.minimo_diario, maximoDiario:r.maximo_diario, minimoApertura:r.minimo_apertura, minimoCierre:r.minimo_cierre, activo:r.activo }; }
+function normalizeConfigCobertura(c) { return { id:c.id, localId:c.local_id, horaApertura:(c.hora_apertura||"10:00").slice(0,5), horaCierre:(c.hora_cierre||"20:00").slice(0,5), minutosApertura:c.minutos_apertura ?? 60, minutosCierre:c.minutos_cierre ?? 60 }; }
+function normalizeEncargadoLocal(x) { return { userId:x.user_id, localId:x.local_id }; }
 
 const COLORS = {
   pink: "#d4537e", pinkLight: "#fbeaf0", pinkDark: "#72243e",
@@ -90,6 +93,25 @@ function calcHoras(e, s) { if (!e || !s) return 0; const [eh, em] = e.split(":")
 function fmtFecha(d) { return `${String(d.getDate()).padStart(2,"00")}/${String(d.getMonth()+1).padStart(2,"00")}`; }
 function dateKey(d) { return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}`; }
 function genToken() { return Math.random().toString(36).slice(2) + Math.random().toString(36).slice(2); }
+function getAssignedLocalIds(data, user) {
+  if (!user) return [];
+  if (user.rol === "admin") return (data.locales || []).map(l => l.id);
+  if (user.rol === "encargada") return (data.encargadoLocales || []).filter(x => x.userId === user.id).map(x => x.localId);
+  return user.localId ? [user.localId] : [];
+}
+function canSeeLocal(data, user, localId) {
+  if (user?.rol === "admin") return true;
+  return getAssignedLocalIds(data, user).includes(parseInt(localId));
+}
+function filterUsersByScope(data, user, users) {
+  if (user?.rol === "admin") return users;
+  const allowed = new Set(getAssignedLocalIds(data, user));
+  if (user?.rol === "encargada") return users.filter(u => u.rol !== "admin" && allowed.has(u.localId));
+  return users.filter(u => u.id === user?.id);
+}
+function getConfigForLocal(data, localId) {
+  return (data.configCobertura || []).find(c => c.localId === parseInt(localId)) || { localId:parseInt(localId), horaApertura:"10:00", horaCierre:"20:00", minutosApertura:60, minutosCierre:60 };
+}
 
 function Avatar({ nombre, size = 36 }) { const i = nombre.split(" ").map(p => p[0]).slice(0,2).join("").toUpperCase(); return <div style={{ width:size,height:size,borderRadius:"50%",background:COLORS.pinkLight,color:COLORS.pinkDark,display:"flex",alignItems:"center",justifyContent:"center",fontWeight:500,fontSize:size*0.35,flexShrink:0 }}>{i}</div>; }
 function Badge({ children, color = "pink" }) { const map = { pink:[COLORS.pinkLight,COLORS.pinkDark],success:[COLORS.successLight,COLORS.success],danger:[COLORS.dangerLight,COLORS.danger],amber:[COLORS.amberLight,COLORS.amber],info:[COLORS.infoLight,COLORS.info],gray:[COLORS.grayLight,"#444"] }; const [bg,fg] = map[color]||map.pink; return <span style={{ background:bg,color:fg,fontSize:11,fontWeight:500,padding:"2px 8px",borderRadius:20,whiteSpace:"nowrap" }}>{children}</span>; }
@@ -266,13 +288,16 @@ function BloqueCalendario({ fecha, bloque, onChange, onCommit, onDelete, bloquea
 function CalendarioHorarios({ data, reloadData, user }) {
   const hoy = new Date();
   const esAdmin = user.rol === "admin";
+  const esEncargada = user.rol === "encargada";
+  const puedeGestionar = esAdmin || esEncargada;
+  const allowedLocalIds = getAssignedLocalIds(data, user);
   const isMobile = window.innerWidth < 640;
   const [vista, setVista] = useState("semana");
   const [weekStart, setWeekStart] = useState(getMon(hoy));
   const [diaVista, setDiaVista] = useState(dateKey(hoy));
   const [mes, setMes] = useState(hoy.getMonth() === 11 ? 0 : hoy.getMonth() + 1);
   const [anio, setAnio] = useState(hoy.getMonth() === 11 ? hoy.getFullYear() + 1 : hoy.getFullYear());
-  const [manicuraId, setManicuraId] = useState(esAdmin ? (data.users.filter(u=>u.rol==="manicura"&&u.activo)[0]?.id||null) : user.id);
+  const [manicuraId, setManicuraId] = useState(puedeGestionar ? (data.users.filter(u=>u.rol==="manicura"&&u.activo&&(esAdmin||allowedLocalIds.includes(u.localId)))[0]?.id||null) : user.id);
   const [navVisible, setNavVisible] = useState(true);
   const [modalDk, setModalDk] = useState(null);
   const [localH, setLocalH] = useState({});
@@ -306,13 +331,18 @@ function CalendarioHorarios({ data, reloadData, user }) {
       return p.periodo === periodo && parseInt(p.userId) === parseInt(uid);
     }), [data.periodosBloqueados]
   );
+  const puedeEditarManicura = useCallback((uid) => {
+    if (esAdmin) return true;
+    const m = data.users.find(u => u.id === parseInt(uid));
+    return esEncargada && m?.rol === "manicura" && allowedLocalIds.includes(m.localId);
+  }, [esAdmin, esEncargada, data.users, allowedLocalIds]);
   const bloqueadoPorFecha = useCallback((f, uid = manicuraId) =>
-    periodoBloqueadoParaManicura(periodoDesdeFecha(f), uid) && !esAdmin,
-    [periodoBloqueadoParaManicura, periodoDesdeFecha, manicuraId, esAdmin]
+    (periodoBloqueadoParaManicura(periodoDesdeFecha(f), uid) && !esAdmin) || !puedeEditarManicura(uid),
+    [periodoBloqueadoParaManicura, periodoDesdeFecha, manicuraId, esAdmin, puedeEditarManicura]
   );
-  const bloqueado = periodoBloqueadoParaManicura(periodoActivoKey, manicuraId) && !esAdmin;
+  const bloqueado = (periodoBloqueadoParaManicura(periodoActivoKey, manicuraId) && !esAdmin) || !puedeEditarManicura(manicuraId);
   const feriados = new Set((data.feriados||[]).map(f=>f.fecha));
-  const manicuras = data.users.filter(u=>u.rol==="manicura"&&u.activo);
+  const manicuras = data.users.filter(u=>u.rol==="manicura"&&u.activo&&(esAdmin || allowedLocalIds.includes(u.localId)));
   const selectedManicura = data.users.find(u=>u.id===parseInt(manicuraId));
   const getAsistencia = useCallback((f) => (data.asistencias||[]).find(a=>a.userId===parseInt(manicuraId)&&a.fecha===f), [data.asistencias, manicuraId]);
   const getAsistenciaFor = useCallback((uid, f) => (data.asistencias||[]).find(a=>a.userId===parseInt(uid)&&a.fecha===f), [data.asistencias]);
@@ -466,7 +496,7 @@ function CalendarioHorarios({ data, reloadData, user }) {
 
   const todasBloqueadas = useMemo(() => manicuras.length > 0 && manicuras.every(m => periodoBloqueadoParaManicura(periodoActivoKey, m.id)), [manicuras, periodoActivoKey, periodoBloqueadoParaManicura]);
   const toggleBloqueoTodas = useCallback(async () => {
-    if (!esAdmin || manicuras.length === 0) return;
+    if (!puedeGestionar || manicuras.length === 0) return;
     const accion = todasBloqueadas ? "habilitar" : "bloquear";
     const ok = await pedirConfirmacion({ title: accion === "bloquear" ? "Bloquear todas" : "Habilitar todas", message: `¿Confirmás que querés ${accion} ${periodoActivoLabel} para todas las manicuras activas?`, confirmText: accion === "bloquear" ? "Bloquear" : "Habilitar", variant: accion === "bloquear" ? "danger" : "primary" });
     if (!ok) return;
@@ -476,7 +506,7 @@ function CalendarioHorarios({ data, reloadData, user }) {
       if (!todasBloqueadas && !yaBloqueada) await api.createPeriodo(periodoActivoKey, m.id);
     }
     await reloadData();
-  }, [esAdmin, manicuras, todasBloqueadas, periodoActivoKey, periodoActivoLabel, periodoBloqueadoParaManicura, reloadData, pedirConfirmacion]);
+  }, [puedeGestionar, manicuras, todasBloqueadas, periodoActivoKey, periodoActivoLabel, periodoBloqueadoParaManicura, reloadData, pedirConfirmacion]);
 
   const { totalHoras, diasCargados } = useMemo(() => {
     let fechas = [];
@@ -564,7 +594,7 @@ function CalendarioHorarios({ data, reloadData, user }) {
 
   // ── DÍA / TODAS LAS MANICURAS ───────────────────────────────────
   const renderDiarioTodos = () => {
-    const cols = esAdmin ? manicuras : manicuras.filter(m => m.id === user.id);
+    const cols = puedeGestionar ? manicuras : manicuras.filter(m => m.id === user.id);
     const totalDia = cols.reduce((a,m)=>a+calHoras(getBloqueFor(m.id, diaVista)),0);
     const minColW = isMobile ? 118 : 0;
     const innerMinWidth = isMobile ? Math.max(cols.length * minColW, 1) : "100%";
@@ -600,7 +630,7 @@ function CalendarioHorarios({ data, reloadData, user }) {
                 const lockedForEdit = lockedByPeriod || !!asis;
                 return <div key={m.id}
                   onClick={async e=>{
-                    if (!esAdmin) return;
+                    if (!puedeEditarManicura(m.id)) return;
                     setManicuraId(m.id);
                     if (b || lockedForEdit) { setModalDk(diaVista); return; }
                     const rect=e.currentTarget.getBoundingClientRect();
@@ -609,7 +639,7 @@ function CalendarioHorarios({ data, reloadData, user }) {
                     const st=calFromSlot(nb.startSlot), en=calFromSlot(nb.endSlot);
                     await onAddBFor(m.id, diaVista, nb);
                   }}
-                  style={{ position:"relative",height:CAL_GRID_H+18,borderLeft:"0.5px solid rgba(120,120,120,0.24)",cursor:esAdmin&&!b&&!lockedForEdit?"cell":"default",background:fer?"rgba(186,117,23,0.05)":"transparent",minWidth:0 }}>
+                  style={{ position:"relative",height:CAL_GRID_H+18,borderLeft:"0.5px solid rgba(120,120,120,0.24)",cursor:puedeEditarManicura(m.id)&&!b&&!lockedForEdit?"cell":"default",background:fer?"rgba(186,117,23,0.05)":"transparent",minWidth:0 }}>
                   {CAL_HOURS.map((_,hi)=><div key={hi} style={{ position:"absolute",top:hi*CAL_SLOT_H,left:0,right:0,height:CAL_SLOT_H,borderTop:"0.5px solid rgba(120,120,120,0.24)",pointerEvents:"none" }}><div style={{ position:"absolute",top:"50%",left:0,right:0,borderTop:"1px dashed rgba(120,120,120,0.16)",opacity:0.5 }}/></div>)}
                   <div style={{ position:"absolute",top:CAL_GRID_H,left:0,right:0,borderTop:"0.5px solid rgba(120,120,120,0.24)",pointerEvents:"none" }}/>
                   {b && <BloqueCalendario fecha={diaVista} bloque={b} onChange={(f2,nb)=>{ if(asis) return; setLocalHAll(p=>({...p,[horarioKey(m.id,f2)]:nb})); }} onCommit={(f2,nb)=>saveBloqueFor(m.id,f2,nb)} onDelete={(f2)=>onDeleteBFor(m.id,f2)} bloqueado={lockedByPeriod || !!asis} onOpen={()=>{ setManicuraId(m.id); setModalDk(diaVista); }} asistencia={asis} manicuraNombre={m.nombre} onTooltip={(ev,f,bl)=>showTooltip(ev,f,bl,m.nombre,asis)} onHideTooltip={hideTooltip}/>} 
@@ -734,8 +764,8 @@ function CalendarioHorarios({ data, reloadData, user }) {
   return (
     <div>
       <div style={{ display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:16,flexWrap:"wrap",gap:8 }}>
-        <h2 style={{ margin:0,fontSize:18,fontWeight:500 }}>{esAdmin?"Gestión de horarios":"Mis horarios"}</h2>
-        {esAdmin && <div style={{ display:"flex",gap:8,flexWrap:"wrap" }}>
+        <h2 style={{ margin:0,fontSize:18,fontWeight:500 }}>{puedeGestionar?"Gestión de horarios":"Mis horarios"}</h2>
+        {puedeGestionar && <div style={{ display:"flex",gap:8,flexWrap:"wrap" }}>
           <Btn onClick={toggleBloqueo} variant={periodoBloqueadoParaManicura(periodoActivoKey, manicuraId)?"success":"danger"} size="sm">{periodoBloqueadoParaManicura(periodoActivoKey, manicuraId)?"🔓 Habilitar manicura":"🔒 Bloquear manicura"}</Btn>
           <Btn onClick={toggleBloqueoTodas} variant={todasBloqueadas?"success":"danger"} size="sm">{todasBloqueadas?"🔓 Habilitar todas":"🔒 Bloquear todas"}</Btn>
         </div>}
@@ -743,16 +773,16 @@ function CalendarioHorarios({ data, reloadData, user }) {
       <div style={{ display:"flex",height:vista==="mes"?560:640,border:"0.5px solid rgba(120,120,120,0.18)",borderRadius:12,overflow:"hidden",background:"var(--color-background-primary)" }}>
         {/* Panel lateral */}
         {navVisible && <div style={{ width:190,flexShrink:0,borderRight:"0.5px solid rgba(120,120,120,0.18)",display:"flex",flexDirection:"column",background:"var(--color-background-secondary)" }}>
-          {esAdmin && <div style={{ padding:"10px 10px 6px" }}>
+          {puedeGestionar && <div style={{ padding:"10px 10px 6px" }}>
             <p style={{ margin:"0 0 6px",fontSize:11,fontWeight:500,color:"var(--color-text-secondary)",textTransform:"uppercase",letterSpacing:"0.05em" }}>Manicura</p>
             <select value={manicuraId||""} onChange={e=>setManicuraId(e.target.value)} style={{ width:"100%",border:"0.5px solid rgba(120,120,120,0.24)",borderRadius:6,padding:"6px 8px",fontSize:12,background:"var(--color-background-primary)",color:"var(--color-text-primary)" }}>
               {manicuras.map(m=><option key={m.id} value={m.id}>{m.nombre}</option>)}
             </select>
           </div>}
-          <div style={{ padding:"10px 10px 6px",borderTop:esAdmin?"0.5px solid rgba(120,120,120,0.18)":"none" }}>
+          <div style={{ padding:"10px 10px 6px",borderTop:puedeGestionar?"0.5px solid rgba(120,120,120,0.18)":"none" }}>
             <p style={{ margin:"0 0 6px",fontSize:11,fontWeight:500,color:"var(--color-text-secondary)",textTransform:"uppercase",letterSpacing:"0.05em" }}>Vista</p>
             <div style={{ display:"flex",flexDirection:"column",gap:3 }}>
-              {["semana",...(esAdmin?["dia"]:[]),"mes"].map(v=><button key={v} onClick={()=>{ if(v==="dia") setDiaVista(todayDk); setVista(v); }} style={{ textAlign:"left",padding:"6px 8px",border:"none",borderRadius:6,cursor:"pointer",fontSize:12,fontWeight:500,background:vista===v?COLORS.pinkLight:"transparent",color:vista===v?COLORS.pinkDark:"var(--color-text-primary)" }}>{v==="semana"?"📅 Semana":v==="dia"?"👥 Día / todas":"🗓️ Mes"}</button>)}
+              {["semana",...(puedeGestionar?["dia"]:[]),"mes"].map(v=><button key={v} onClick={()=>{ if(v==="dia") setDiaVista(todayDk); setVista(v); }} style={{ textAlign:"left",padding:"6px 8px",border:"none",borderRadius:6,cursor:"pointer",fontSize:12,fontWeight:500,background:vista===v?COLORS.pinkLight:"transparent",color:vista===v?COLORS.pinkDark:"var(--color-text-primary)" }}>{v==="semana"?"📅 Semana":v==="dia"?"👥 Día / todas":"🗓️ Mes"}</button>)}
             </div>
           </div>
           <div style={{ padding:"8px 10px",borderTop:"0.5px solid rgba(120,120,120,0.18)" }}>
@@ -770,7 +800,7 @@ function CalendarioHorarios({ data, reloadData, user }) {
               {[["Días cargados",diasCargados,null],["Horas totales",`${totalHoras.toFixed(1)}h`,totalHoras>0?COLORS.success:null]].map(([lbl,val,color])=><div key={lbl} style={{ background:"var(--color-background-primary)",borderRadius:8,padding:"7px 10px",border:"0.5px solid rgba(120,120,120,0.18)" }}><p style={{ margin:0,fontSize:10,color:"var(--color-text-secondary)" }}>{lbl}</p><p style={{ margin:0,fontSize:18,fontWeight:500,color:color||"var(--color-text-primary)" }}>{val}</p></div>)}
             </div>
           </div>
-          {esAdmin && <div style={{ padding:"8px 10px",borderTop:"0.5px solid rgba(120,120,120,0.18)",marginTop:"auto" }}>
+          {puedeGestionar && <div style={{ padding:"8px 10px",borderTop:"0.5px solid rgba(120,120,120,0.18)",marginTop:"auto" }}>
             <div style={{ background:COLORS.amberLight,borderRadius:6,padding:"6px 8px" }}>
               <p style={{ margin:0,fontSize:10,color:COLORS.amber,fontWeight:500 }}>Clic en día (sem.) o modal (mes) para feriado</p>
             </div>
@@ -910,17 +940,21 @@ function Login({ onLogin, reloadData }) {
 }
 
 // ── ABM MANICURAS ──────────────────────────────────────────────────
-function ABMManicuras({ data, reloadData }) {
+function ABMManicuras({ data, reloadData, user }) {
   const [modal, setModal] = useState(null);
   const [form, setForm] = useState({});
   const [formErr, setFormErr] = useState("");
   const [saving, setSaving] = useState(false);
-  const manicuras = data.users.filter(u => u.rol === "manicura");
-  const openNew = () => { setForm({ nombre:"",usuario:"",email:"",password:"",password2:"",localId:data.locales[0]?.id||"",activo:true }); setFormErr(""); setModal("new"); };
+  const esAdmin = user.rol === "admin";
+  const allowedLocalIds = getAssignedLocalIds(data, user);
+  const localesPermitidos = esAdmin ? data.locales : data.locales.filter(l => allowedLocalIds.includes(l.id));
+  const manicuras = data.users.filter(u => u.rol === "manicura" && (esAdmin || allowedLocalIds.includes(u.localId)));
+  const openNew = () => { setForm({ nombre:"",usuario:"",email:"",password:"",password2:"",localId:localesPermitidos[0]?.id||"",activo:true }); setFormErr(""); setModal("new"); };
   const openEdit = u => { setForm({...u,password:"",password2:""}); setFormErr(""); setModal("edit"); };
   const save = async () => {
     setFormErr("");
     if (!form.nombre.trim()||!form.usuario.trim()) { setFormErr("Nombre y usuario son obligatorios."); return; }
+    if (!localesPermitidos.some(l => l.id === parseInt(form.localId))) { setFormErr("No podés asignar manicuras a ese local."); return; }
     if (modal==="new") {
       if (!form.password) { setFormErr("Ingresá una contraseña."); return; }
       if (form.password!==form.password2) { setFormErr("Las contraseñas no coinciden."); return; }
@@ -976,7 +1010,7 @@ function ABMManicuras({ data, reloadData }) {
           </div>
           <ModalSelect label="Local" value={form.localId||""} onChange={v=>setForm(f=>({...f,localId:v}))}>
             <option value="">Sin local</option>
-            {data.locales.map(l=><option key={l.id} value={l.id}>{l.nombre}</option>)}
+            {localesPermitidos.map(l=><option key={l.id} value={l.id}>{l.nombre}</option>)}
           </ModalSelect>
           {formErr && <p style={{ margin:0,fontSize:13,color:COLORS.danger,background:COLORS.dangerLight,padding:"8px 12px",borderRadius:8 }}>{formErr}</p>}
           <div style={{ display:"flex",gap:8,marginTop:4 }}>
@@ -1045,17 +1079,18 @@ function ABMLocales({ data, reloadData }) {
 
 // ── MI PERFIL ──────────────────────────────────────────────────────
 function MiPerfil({ data, reloadData, user, setUser }) {
-  const [form, setForm] = useState({nombre:user.nombre,email:user.email||"",password:"",password2:""});
+  const [form, setForm] = useState({nombre:user.nombre,usuario:user.usuario||"",email:user.email||"",password:"",password2:""});
   const [err, setErr] = useState("");
   const [ok, setOk] = useState(false);
   const [saving, setSaving] = useState(false);
   const save = async () => {
     setErr(""); setOk(false);
     if (!form.nombre.trim()) { setErr("El nombre es obligatorio."); return; }
+    if (!form.usuario.trim()) { setErr("El usuario es obligatorio."); return; }
     if (form.password&&form.password!==form.password2) { setErr("Las contraseñas no coinciden."); return; }
     setSaving(true);
     try {
-      const upd = {nombre:form.nombre.trim(),email:form.email.trim()};
+      const upd = {nombre:form.nombre.trim(),usuario:form.usuario.trim(),email:form.email.trim()};
       if (form.password) upd.password = form.password;
       await api.updateUser(user.id,upd);
       await reloadData(); setUser({...user,...upd}); setOk(true);
@@ -1068,6 +1103,7 @@ function MiPerfil({ data, reloadData, user, setUser }) {
       <Card style={{ maxWidth:440 }}>
         <div style={{ display:"flex",flexDirection:"column",gap:14 }}>
           <div><label style={{ fontSize:13,color:"var(--color-text-secondary)",display:"block",marginBottom:4 }}>Nombre</label><Input value={form.nombre} onChange={v=>setForm(f=>({...f,nombre:v}))}/></div>
+          <div><label style={{ fontSize:13,color:"var(--color-text-secondary)",display:"block",marginBottom:4 }}>Usuario</label><Input value={form.usuario} onChange={v=>setForm(f=>({...f,usuario:v}))}/></div>
           <div><label style={{ fontSize:13,color:"var(--color-text-secondary)",display:"block",marginBottom:4 }}>Email</label><Input type="email" value={form.email} onChange={v=>setForm(f=>({...f,email:v}))} placeholder="tu@mail.com"/></div>
           <div style={{ borderTop:"0.5px solid rgba(120,120,120,0.18)",paddingTop:14 }}>
             <p style={{ margin:"0 0 10px",fontSize:13,color:"var(--color-text-secondary)" }}>Cambiar contraseña (opcional)</p>
@@ -1086,14 +1122,16 @@ function MiPerfil({ data, reloadData, user, setUser }) {
 }
 
 // ── ASISTENCIA DIARIA ──────────────────────────────────────────────
-function AsistenciaDiaria({ data, reloadData }) {
+function AsistenciaDiaria({ data, reloadData, user }) {
   const hoy = new Date();
   const [fecha, setFecha] = useState(dateKey(hoy));
   const [modal, setModal] = useState(null);
   const [formAus, setFormAus] = useState({});
   const [formTarde, setFormTarde] = useState({});
+  const allowedLocalIds = getAssignedLocalIds(data, user);
   const manicurasConHorario = data.users.filter(u => {
     if (u.rol!=="manicura"||!u.activo) return false;
+    if (user.rol === "encargada" && !allowedLocalIds.includes(u.localId)) return false;
     const h = data.horarios.find(h=>h.userId===u.id&&h.fecha===fecha);
     return h&&h.trabaja&&h.entrada&&h.salida;
   });
@@ -1173,9 +1211,13 @@ function AsistenciaDiaria({ data, reloadData }) {
 function Reportes({ data, user }) {
   const hoy = new Date();
   const esAdmin = user.rol === "admin";
+  const esEncargada = user.rol === "encargada";
+  const puedeGestionar = esAdmin || esEncargada;
+  const allowedLocalIds = getAssignedLocalIds(data, user);
+  const localesVisibles = esAdmin ? data.locales : data.locales.filter(l => allowedLocalIds.includes(l.id));
   const [tab, setTab] = useState("horas");
-  const [filtroTipo, setFiltroTipo] = useState("manicura");
-  const [filtroId, setFiltroId] = useState(esAdmin ? (data.users.filter(u=>u.rol==="manicura")[0]?.id || "") : user.id);
+  const [filtroTipo, setFiltroTipo] = useState(puedeGestionar ? "manicura" : "manicura");
+  const [filtroId, setFiltroId] = useState(puedeGestionar ? (data.users.filter(u=>u.rol==="manicura"&&(esAdmin||allowedLocalIds.includes(u.localId)))[0]?.id || "") : user.id);
   const [mes, setMes] = useState(hoy.getMonth());
   const [anio, setAnio] = useState(hoy.getFullYear());
   const [filtroSemana, setFiltroSemana] = useState("todas");
@@ -1183,8 +1225,8 @@ function Reportes({ data, user }) {
   const [fechaDesde, setFechaDesde] = useState(dateKey(new Date(hoy.getFullYear(),hoy.getMonth(),1)));
   const [fechaHasta, setFechaHasta] = useState(dateKey(hoy));
   const [expandidos, setExpandidos] = useState({});
-  const [localCobertura, setLocalCobertura] = useState("todos");
-  const manicuras = data.users.filter(u=>u.rol==="manicura"&&u.activo);
+  const [localCobertura, setLocalCobertura] = useState(localesVisibles[0]?.id || "");
+  const manicuras = data.users.filter(u=>u.rol==="manicura"&&u.activo&&(esAdmin || allowedLocalIds.includes(u.localId)));
   const semanasDelMes = useMemo(()=>getSemanas(getDiasDelMes(anio,mes)),[anio,mes]);
 
   const TabBtn = ({id,label}) => <button onClick={()=>setTab(id)} style={{ padding:"8px 16px",border:"none",borderRadius:8,cursor:"pointer",fontSize:14,fontWeight:500,background:tab===id?COLORS.pink:"transparent",color:tab===id?"#fff":"var(--color-text-secondary)" }}>{label}</button>;
@@ -1193,7 +1235,7 @@ function Reportes({ data, user }) {
   const toggleExp = id => setExpandidos(e=>({...e,[id]:!e[id]}));
 
   const filtrarM = () => {
-    let base = esAdmin?(filtroTipo==="manicura"?manicuras.filter(m=>m.id===parseInt(filtroId)):filtroTipo==="local"?manicuras.filter(m=>m.localId===parseInt(filtroId)):manicuras):[data.users.find(u=>u.id===user.id)].filter(Boolean);
+    let base = puedeGestionar?(filtroTipo==="manicura"?manicuras.filter(m=>m.id===parseInt(filtroId)):filtroTipo==="local"?manicuras.filter(m=>m.localId===parseInt(filtroId)):manicuras):[data.users.find(u=>u.id===user.id)].filter(Boolean);
     if (filtroEstado!=="todos") base=base.filter(m=>data.asistencias.some(a=>a.userId===m.id&&a.fecha>=fechaDesde&&a.fecha<=fechaHasta&&a.estado===filtroEstado));
     return base;
   };
@@ -1234,12 +1276,12 @@ function Reportes({ data, user }) {
     {diaSemana:5,afluencia:"alta",minimoDiario:4,maximoDiario:6,minimoApertura:2,minimoCierre:2},
     {diaSemana:6,afluencia:"alta",minimoDiario:4,maximoDiario:6,minimoApertura:2,minimoCierre:2},
   ];
-  const reglas = useMemo(()=>{
-    const map = new Map(defaultRules.map(r=>[r.diaSemana,r]));
-    (data.reglasCobertura||[]).forEach(r=>map.set(r.diaSemana,r));
+  const reglasForLocal = useCallback((localId) => {
+    const map = new Map(defaultRules.map(r=>[r.diaSemana,{...r, localId:parseInt(localId)}]));
+    (data.reglasCobertura||[]).filter(r=>r.localId===parseInt(localId)).forEach(r=>map.set(r.diaSemana,r));
     return map;
   }, [data.reglasCobertura]);
-  const configCob = data.configCobertura || { horaApertura:"10:00", horaCierre:"20:00", minutosApertura:60, minutosCierre:60 };
+  const configCob = getConfigForLocal(data, localCobertura || localesVisibles[0]?.id);
   const minOf = t => { const [h,m]=(t||"00:00").split(":").map(Number); return h*60+(m||0); };
   const overlap = (a1,a2,b1,b2) => Math.max(a1,b1) < Math.min(a2,b2);
   const statusInfo = st => ({critico:["🔴","Crítico",COLORS.danger,COLORS.dangerLight],bajo:["🟡","Bajo",COLORS.amber,COLORS.amberLight],ok:["✅","Correcto",COLORS.success,COLORS.successLight],alto:["🟣","Sobrecubierto",COLORS.pinkDark,COLORS.pinkLight],sin:["⚪","Sin horarios",COLORS.gray,COLORS.grayLight]}[st]);
@@ -1249,7 +1291,9 @@ function Reportes({ data, user }) {
     const openEnd=open+(configCob.minutosApertura||60), closeStart=close-(configCob.minutosCierre||60);
     const horas=[]; for(let m=open; m<close; m+=60) horas.push(m);
     const dias=getDiasDelMes(anio,mes);
-    const empleadosBase = manicuras.filter(m=>localCobertura==="todos" || m.localId===parseInt(localCobertura));
+    const selectedLocalId = parseInt(localCobertura || localesVisibles[0]?.id);
+    const reglas = reglasForLocal(selectedLocalId);
+    const empleadosBase = manicuras.filter(m=>m.localId===selectedLocalId);
     const items=dias.map(d=>{
       const f=dateKey(d), dow=d.getDay(), regla=reglas.get(dow)||defaultRules.find(r=>r.diaSemana===dow)||defaultRules[0];
       const hs=data.horarios.filter(h=>h.fecha===f&&h.trabaja&&h.entrada&&h.salida&&empleadosBase.some(m=>m.id===h.userId));
@@ -1270,7 +1314,7 @@ function Reportes({ data, user }) {
     const resumen={critico:items.filter(i=>i.estado==="critico").length,bajo:items.filter(i=>i.estado==="bajo").length,alto:items.filter(i=>i.estado==="alto").length,ok:items.filter(i=>i.estado==="ok").length,sin:items.filter(i=>i.estado==="sin").length};
     const alertas=items.filter(i=>i.estado!=="ok").sort((a,b)=>(({critico:0,sin:1,bajo:2,alto:3}[a.estado]||0)-({critico:0,sin:1,bajo:2,alto:3}[b.estado]||0)||a.fecha.localeCompare(b.fecha)));
     return {items,resumen,alertas,horas};
-  }, [anio, mes, data.horarios, manicuras, localCobertura, reglas, configCob]);
+  }, [anio, mes, data.horarios, manicuras, localCobertura, localesVisibles, reglasForLocal, configCob]);
 
   const renderCobertura = () => {
     const cellBg = st => statusInfo(st)[3];
@@ -1281,7 +1325,7 @@ function Reportes({ data, user }) {
       <div style={{ display:"flex",gap:8,marginBottom:16,flexWrap:"wrap",alignItems:"center" }}>
         <Select value={mes} onChange={v=>setMes(parseInt(v))} style={{ width:130 }}>{MESES.map((m,i)=><option key={i} value={i}>{m}</option>)}</Select>
         <Select value={anio} onChange={v=>setAnio(parseInt(v))} style={{ width:90 }}>{[hoy.getFullYear()-1,hoy.getFullYear(),hoy.getFullYear()+1].map(a=><option key={a} value={a}>{a}</option>)}</Select>
-        {esAdmin&&<Select value={localCobertura} onChange={setLocalCobertura} style={{ width:180 }}><option value="todos">Todos los locales</option>{data.locales.map(l=><option key={l.id} value={l.id}>{l.nombre}</option>)}</Select>}
+        {puedeGestionar&&<Select value={localCobertura} onChange={setLocalCobertura} style={{ width:180 }}>{localesVisibles.map(l=><option key={l.id} value={l.id}>{l.nombre}</option>)}</Select>}
         <span style={{ fontSize:12,color:"var(--color-text-secondary)" }}>Apertura {configCob.horaApertura} · Cierre {configCob.horaCierre}</span>
       </div>
       <div style={{ display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(140px,1fr))",gap:10,marginBottom:14 }}>
@@ -1302,7 +1346,7 @@ function Reportes({ data, user }) {
         <div style={{ padding:"10px 12px",borderBottom:"1px solid rgba(120,120,120,0.18)" }}><strong style={{ fontSize:14 }}>Mapa de calor por hora</strong><p style={{ margin:"2px 0 0",fontSize:12,color:"var(--color-text-secondary)" }}>Cantidad de manicuras activas por franja. Los colores comparan contra la demanda esperada del día.</p></div>
         <div style={{ overflowX:"auto" }}><div style={{ minWidth:720 }}>
           <div style={{ display:"grid",gridTemplateColumns:`88px repeat(${cobertura.horas.length},1fr)`,borderBottom:"1px solid rgba(120,120,120,0.16)" }}><div style={{ padding:7,fontSize:11,color:"var(--color-text-secondary)" }}>Día</div>{cobertura.horas.map(h=><div key={h} style={{ padding:7,textAlign:"center",fontSize:11,color:"var(--color-text-secondary)",borderLeft:"1px solid rgba(120,120,120,0.12)" }}>{String(Math.floor(h/60)).padStart(2,"0")}:00</div>)}</div>
-          {cobertura.items.map(it=><div key={it.fecha} style={{ display:"grid",gridTemplateColumns:`88px repeat(${cobertura.horas.length},1fr)`,borderBottom:"1px solid rgba(120,120,120,0.10)" }}><div style={{ padding:"7px 8px",fontSize:12,fontWeight:500 }}>{fmtFecha(it.dia)}</div>{it.hourly.map((qty,idx)=>{const minBase=Math.max(1,Math.round(it.regla.minimoDiario/2)); const bg=qty===0?COLORS.dangerLight:qty<minBase?COLORS.amberLight:qty>it.regla.maximoDiario?COLORS.pinkLight:COLORS.successLight; const fg=qty===0?COLORS.danger:qty<minBase?COLORS.amber:qty>it.regla.maximoDiario?COLORS.pinkDark:COLORS.success; return <div key={idx} style={{ padding:7,textAlign:"center",fontSize:12,fontWeight:600,color:fg,background:bg,borderLeft:"1px solid rgba(120,120,120,0.10)" }}>{qty}</div>;})}</div>)}
+          {cobertura.items.map(it=><div key={it.fecha} style={{ display:"grid",gridTemplateColumns:`88px repeat(${cobertura.horas.length},1fr)`,borderBottom:"1px solid rgba(120,120,120,0.10)" }}><div style={{ padding:"7px 8px",fontSize:12,fontWeight:500 }}>{fmtFecha(it.dia)}</div>{it.hourly.map((qty,idx)=>{const minBase=Math.max(1,Math.round(it.regla.minimoDiario/2)); const shade=(palette,i)=>palette[Math.max(0,Math.min(palette.length-1,i))]; const palettes={danger:["#fff1f1","#ffdada","#f8b8b8","#e24b4a"],amber:["#fff6e8","#fae6c7","#f2c884","#ba7517"],success:["#f1f8e8","#dceec9","#b6d98c","#639922"],pink:["#fbeaf0","#f4c4d4","#e590ad","#72243e"]}; let bg,fg; if(qty===0){bg=palettes.danger[2];fg=COLORS.danger;} else if(qty<minBase){bg=shade(palettes.amber,qty);fg=COLORS.amber;} else if(qty>it.regla.maximoDiario){bg=shade(palettes.pink,Math.min(3,qty-it.regla.maximoDiario));fg=COLORS.pinkDark;} else {bg=shade(palettes.success,Math.max(0,qty-minBase));fg=COLORS.success;} return <div key={idx} style={{ padding:7,textAlign:"center",fontSize:12,fontWeight:600,color:fg,background:bg,borderLeft:"1px solid rgba(120,120,120,0.10)" }}>{qty}</div>;})}</div>)}
         </div></div>
       </Card>
     </>;
@@ -1312,10 +1356,10 @@ function Reportes({ data, user }) {
     <div>
       <h2 style={{ margin:"0 0 16px",fontSize:18,fontWeight:500 }}>Reportes</h2>
       <div style={{ display:"flex",gap:4,background:"var(--color-background-secondary)",padding:4,borderRadius:10,marginBottom:20,width:"fit-content",flexWrap:"wrap" }}><TabBtn id="horas" label="Horas teóricas"/><TabBtn id="asistencia" label="Asistencia"/><TabBtn id="cobertura" label="Cobertura"/></div>
-      {tab!=="cobertura"&&esAdmin && <div style={{ display:"flex",gap:8,marginBottom:8,flexWrap:"wrap" }}>
+      {tab!=="cobertura"&&puedeGestionar && <div style={{ display:"flex",gap:8,marginBottom:8,flexWrap:"wrap" }}>
         <Select value={filtroTipo} onChange={v=>{setFiltroTipo(v);setExpandidos({});}} style={{ width:130 }}><option value="manicura">Manicura</option><option value="local">Local</option><option value="todas">Todas</option></Select>
         {filtroTipo==="manicura"&&<Select value={filtroId} onChange={v=>{setFiltroId(v);setExpandidos({});}} style={{ flex:1,minWidth:160 }}>{manicuras.map(m=><option key={m.id} value={m.id}>{m.nombre}</option>)}</Select>}
-        {filtroTipo==="local"&&<Select value={filtroId} onChange={v=>{setFiltroId(v);setExpandidos({});}} style={{ flex:1,minWidth:160 }}>{data.locales.map(l=><option key={l.id} value={l.id}>{l.nombre}</option>)}</Select>}
+        {filtroTipo==="local"&&<Select value={filtroId} onChange={v=>{setFiltroId(v);setExpandidos({});}} style={{ flex:1,minWidth:160 }}>{localesVisibles.map(l=><option key={l.id} value={l.id}>{l.nombre}</option>)}</Select>}
       </div>}
       {tab!=="cobertura"&&<div style={{ display:"flex",gap:8,marginBottom:16,flexWrap:"wrap" }}>
         <Select value={filtroSemana} onChange={v=>{setFiltroSemana(v);setExpandidos({});}} style={{ width:150 }}><option value="todas">Todas las semanas</option>{semanasDelMes.map((_,i)=><option key={i+1} value={i+1}>Semana {i+1}</option>)}</Select>
@@ -1334,7 +1378,11 @@ function Reportes({ data, user }) {
   );
 }
 
-function ConfiguracionCobertura({ data, reloadData }) {
+function ConfiguracionCobertura({ data, reloadData, user }) {
+  const esAdmin = user.rol === "admin";
+  const allowedLocalIds = getAssignedLocalIds(data, user);
+  const localesVisibles = esAdmin ? data.locales : data.locales.filter(l => allowedLocalIds.includes(l.id));
+  const [localId,setLocalId] = useState(localesVisibles[0]?.id || "");
   const defaultRules = [
     {diaSemana:1,afluencia:"baja",minimoDiario:2,maximoDiario:4,minimoApertura:1,minimoCierre:1},
     {diaSemana:2,afluencia:"baja",minimoDiario:2,maximoDiario:4,minimoApertura:1,minimoCierre:1},
@@ -1343,23 +1391,81 @@ function ConfiguracionCobertura({ data, reloadData }) {
     {diaSemana:5,afluencia:"alta",minimoDiario:4,maximoDiario:6,minimoApertura:2,minimoCierre:2},
     {diaSemana:6,afluencia:"alta",minimoDiario:4,maximoDiario:6,minimoApertura:2,minimoCierre:2},
   ];
-  const reglasIniciales = defaultRules.map(r => ({ ...r, ...(data.reglasCobertura||[]).find(x=>x.diaSemana===r.diaSemana) }));
-  const [reglas,setReglas] = useState(reglasIniciales);
-  const [config,setConfig] = useState(data.configCobertura || { horaApertura:"10:00", horaCierre:"20:00", minutosApertura:60, minutosCierre:60 });
+  const buildReglas = (lid) => defaultRules.map(r => ({ ...r, localId:parseInt(lid), ...(data.reglasCobertura||[]).find(x=>x.localId===parseInt(lid)&&x.diaSemana===r.diaSemana) }));
+  const [reglas,setReglas] = useState(buildReglas(localId));
+  const [config,setConfig] = useState(getConfigForLocal(data, localId));
   const [saving,setSaving] = useState(false);
   const [ok,setOk] = useState(false);
+  useEffect(()=>{ setReglas(buildReglas(localId)); setConfig(getConfigForLocal(data, localId)); setOk(false); }, [localId, data.reglasCobertura, data.configCobertura]);
   const setRegla = (dia, campo, valor) => setReglas(rs => rs.map(r => r.diaSemana===dia ? { ...r, [campo]: valor } : r));
   const save = async () => {
     setSaving(true); setOk(false);
-    await api.upsertConfigCobertura({ hora_apertura:config.horaApertura, hora_cierre:config.horaCierre, minutos_apertura:parseInt(config.minutosApertura)||60, minutos_cierre:parseInt(config.minutosCierre)||60 });
-    for (const r of reglas) await api.upsertReglaCobertura({ dia_semana:r.diaSemana, afluencia:r.afluencia, minimo_diario:parseInt(r.minimoDiario)||0, maximo_diario:parseInt(r.maximoDiario)||0, minimo_apertura:parseInt(r.minimoApertura)||0, minimo_cierre:parseInt(r.minimoCierre)||0, activo:true });
+    const lid=parseInt(localId);
+    await api.upsertConfigCobertura({ local_id:lid, hora_apertura:config.horaApertura, hora_cierre:config.horaCierre, minutos_apertura:parseInt(config.minutosApertura)||60, minutos_cierre:parseInt(config.minutosCierre)||60 });
+    for (const r of reglas) await api.upsertReglaCobertura({ local_id:lid, dia_semana:r.diaSemana, afluencia:r.afluencia, minimo_diario:parseInt(r.minimoDiario)||0, maximo_diario:parseInt(r.maximoDiario)||0, minimo_apertura:parseInt(r.minimoApertura)||0, minimo_cierre:parseInt(r.minimoCierre)||0, activo:true });
     await reloadData(); setSaving(false); setOk(true);
   };
   return <div>
-    <div style={{ display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:16,flexWrap:"wrap",gap:8 }}><h2 style={{ margin:0,fontSize:18,fontWeight:500 }}>Configuración de cobertura</h2><Btn onClick={save} disabled={saving}>{saving?"Guardando...":"Guardar configuración"}</Btn></div>
+    <div style={{ display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:16,flexWrap:"wrap",gap:8 }}><h2 style={{ margin:0,fontSize:18,fontWeight:500 }}>Configuración de cobertura por local</h2><Btn onClick={save} disabled={saving||!localId}>{saving?"Guardando...":"Guardar configuración"}</Btn></div>
     {ok&&<div style={{ background:COLORS.successLight,color:COLORS.success,borderRadius:8,padding:"8px 12px",fontSize:13,marginBottom:12 }}>Configuración guardada correctamente.</div>}
+    <Card style={{ marginBottom:14 }}><h3 style={{ margin:"0 0 12px",fontSize:15,fontWeight:500 }}>Local</h3><Select value={localId} onChange={setLocalId} style={{ maxWidth:320 }}>{localesVisibles.map(l=><option key={l.id} value={l.id}>{l.nombre}</option>)}</Select></Card>
     <Card style={{ marginBottom:14 }}><h3 style={{ margin:"0 0 12px",fontSize:15,fontWeight:500 }}>Parámetros generales</h3><div style={{ display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(160px,1fr))",gap:12 }}><div><label style={{ fontSize:12,color:"var(--color-text-secondary)",display:"block",marginBottom:4 }}>Hora de apertura</label><Input type="time" value={config.horaApertura} onChange={v=>setConfig(c=>({...c,horaApertura:v}))}/></div><div><label style={{ fontSize:12,color:"var(--color-text-secondary)",display:"block",marginBottom:4 }}>Hora de cierre</label><Input type="time" value={config.horaCierre} onChange={v=>setConfig(c=>({...c,horaCierre:v}))}/></div><div><label style={{ fontSize:12,color:"var(--color-text-secondary)",display:"block",marginBottom:4 }}>Minutos de apertura</label><Input type="number" value={config.minutosApertura} onChange={v=>setConfig(c=>({...c,minutosApertura:v}))}/></div><div><label style={{ fontSize:12,color:"var(--color-text-secondary)",display:"block",marginBottom:4 }}>Minutos de cierre</label><Input type="number" value={config.minutosCierre} onChange={v=>setConfig(c=>({...c,minutosCierre:v}))}/></div></div></Card>
-    <Card style={{ padding:0,overflow:"hidden" }}><div style={{ padding:"12px 14px",borderBottom:"1px solid rgba(120,120,120,0.18)" }}><h3 style={{ margin:0,fontSize:15,fontWeight:500 }}>Reglas por día</h3><p style={{ margin:"3px 0 0",fontSize:12,color:"var(--color-text-secondary)" }}>Estos valores alimentan el reporte de cobertura y sus alertas visuales.</p></div><div style={{ overflowX:"auto" }}><div style={{ minWidth:760 }}><div style={{ display:"grid",gridTemplateColumns:"110px 130px repeat(4,1fr)",gap:8,padding:"8px 12px",fontSize:11,fontWeight:500,color:"var(--color-text-secondary)",borderBottom:"1px solid rgba(120,120,120,0.14)" }}>{["Día","Afluencia","Mín. día","Máx. día","Mín. apertura","Mín. cierre"].map(h=><span key={h}>{h}</span>)}</div>{reglas.map(r=><div key={r.diaSemana} style={{ display:"grid",gridTemplateColumns:"110px 130px repeat(4,1fr)",gap:8,padding:"8px 12px",alignItems:"center",borderBottom:"1px solid rgba(120,120,120,0.10)" }}><strong style={{ fontSize:13 }}>{DIAS_SEMANA[r.diaSemana-1]}</strong><Select value={r.afluencia} onChange={v=>setRegla(r.diaSemana,"afluencia",v)}><option value="baja">Baja</option><option value="media">Media</option><option value="alta">Alta</option></Select>{[["minimoDiario"],["maximoDiario"],["minimoApertura"],["minimoCierre"]].map(([campo])=><Input key={campo} type="number" value={r[campo]} onChange={v=>setRegla(r.diaSemana,campo,v)}/>)}</div>)}</div></div></Card>
+    <Card style={{ padding:0,overflow:"hidden" }}><div style={{ padding:"12px 14px",borderBottom:"1px solid rgba(120,120,120,0.18)" }}><h3 style={{ margin:0,fontSize:15,fontWeight:500 }}>Reglas por día</h3><p style={{ margin:"3px 0 0",fontSize:12,color:"var(--color-text-secondary)" }}>Estos valores alimentan el reporte de cobertura del local seleccionado.</p></div><div style={{ overflowX:"auto" }}><div style={{ minWidth:760 }}><div style={{ display:"grid",gridTemplateColumns:"110px 130px repeat(4,1fr)",gap:8,padding:"8px 12px",fontSize:11,fontWeight:500,color:"var(--color-text-secondary)",borderBottom:"1px solid rgba(120,120,120,0.14)" }}>{["Día","Afluencia","Mín. día","Máx. día","Mín. apertura","Mín. cierre"].map(h=><span key={h}>{h}</span>)}</div>{reglas.map(r=><div key={r.diaSemana} style={{ display:"grid",gridTemplateColumns:"110px 130px repeat(4,1fr)",gap:8,padding:"8px 12px",alignItems:"center",borderBottom:"1px solid rgba(120,120,120,0.10)" }}><strong style={{ fontSize:13 }}>{DIAS_SEMANA[r.diaSemana-1]}</strong><Select value={r.afluencia} onChange={v=>setRegla(r.diaSemana,"afluencia",v)}><option value="baja">Baja</option><option value="media">Media</option><option value="alta">Alta</option></Select>{[["minimoDiario"],["maximoDiario"],["minimoApertura"],["minimoCierre"]].map(([campo])=><Input key={campo} type="number" value={r[campo]} onChange={v=>setRegla(r.diaSemana,campo,v)}/>)}</div>)}</div></div></Card>
+  </div>;
+}
+
+// ── ABM ENCARGADAS ────────────────────────────────────────────────
+function ABMEncargadas({ data, reloadData }) {
+  const [modal, setModal] = useState(null);
+  const [form, setForm] = useState({});
+  const [formErr, setFormErr] = useState("");
+  const [saving, setSaving] = useState(false);
+  const encargadas = data.users.filter(u => u.rol === "encargada");
+  const localesDe = (uid) => (data.encargadoLocales||[]).filter(x=>x.userId===uid).map(x=>x.localId);
+  const openNew = () => { setForm({ nombre:"",usuario:"",email:"",password:"",password2:"",localIds:[] }); setFormErr(""); setModal("new"); };
+  const openEdit = u => { setForm({...u,password:"",password2:"",localIds:localesDe(u.id)}); setFormErr(""); setModal("edit"); };
+  const toggleLocal = (id) => setForm(f => ({ ...f, localIds:(f.localIds||[]).includes(id) ? (f.localIds||[]).filter(x=>x!==id) : [...(f.localIds||[]), id] }));
+  const save = async () => {
+    setFormErr("");
+    if (!form.nombre?.trim() || !form.usuario?.trim()) { setFormErr("Nombre y usuario son obligatorios."); return; }
+    if (!(form.localIds||[]).length) { setFormErr("Asigná al menos un local."); return; }
+    if (modal === "new") {
+      if (!form.password) { setFormErr("Ingresá una contraseña."); return; }
+      if (form.password !== form.password2) { setFormErr("Las contraseñas no coinciden."); return; }
+    } else if (form.password && form.password !== form.password2) { setFormErr("Las contraseñas no coinciden."); return; }
+    setSaving(true);
+    try {
+      let userId = form.id;
+      if (modal === "new") {
+        const created = await api.createUser({ nombre:form.nombre.trim(), usuario:form.usuario.trim(), email:form.email?.trim()||"", password:form.password, rol:"encargada", local_id:null, activo:true });
+        userId = created?.[0]?.id;
+      } else {
+        const upd = { nombre:form.nombre.trim(), usuario:form.usuario.trim(), email:form.email?.trim()||"" };
+        if (form.password) upd.password = form.password;
+        await api.updateUser(form.id, upd);
+      }
+      await api.setEncargadoLocales(userId, form.localIds);
+      await reloadData(); setModal(null);
+    } catch(e) { setFormErr("Error al guardar: "+e.message); }
+    setSaving(false);
+  };
+  const toggle = async (u) => { await api.updateUser(u.id,{activo:!u.activo}); await reloadData(); };
+  return <div>
+    <div style={{ display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:16 }}><h2 style={{ margin:0,fontSize:18,fontWeight:500 }}>Encargadas</h2><Btn onClick={openNew} size="sm">+ Nueva</Btn></div>
+    <div style={{ display:"flex",flexDirection:"column",gap:8 }}>
+      {encargadas.map(e=>{ const locs=localesDe(e.id).map(id=>data.locales.find(l=>l.id===id)?.nombre).filter(Boolean).join(", "); return <Card key={e.id} style={{ display:"flex",alignItems:"center",gap:12,flexWrap:"wrap" }}><Avatar nombre={e.nombre}/><div style={{ flex:1,minWidth:0 }}><p style={{ margin:0,fontWeight:500,fontSize:14 }}>{e.nombre}</p><p style={{ margin:0,fontSize:12,color:"var(--color-text-secondary)" }}>{e.usuario} · {e.email||"Sin mail"} · {locs||"Sin locales"}</p></div><Badge color={e.activo?"success":"gray"}>{e.activo?"Activa":"Inactiva"}</Badge><Btn onClick={()=>openEdit(e)} variant="ghost" size="sm">Editar</Btn><Btn onClick={()=>toggle(e)} variant="ghost" size="sm" style={{ color:e.activo?COLORS.danger:COLORS.success }}>{e.activo?"Desactivar":"Activar"}</Btn></Card>; })}
+    </div>
+    {modal && <Modal title={modal==="new"?"Nueva encargada":"Editar encargada"} onClose={()=>setModal(null)}>
+      <div style={{ display:"flex",flexDirection:"column",gap:14 }}>
+        <ModalInput label="Nombre completo" value={form.nombre||""} onChange={v=>setForm(f=>({...f,nombre:v}))}/>
+        <ModalInput label="Usuario" value={form.usuario||""} onChange={v=>setForm(f=>({...f,usuario:v}))}/>
+        <ModalInput label="Email" type="email" value={form.email||""} onChange={v=>setForm(f=>({...f,email:v}))}/>
+        <div style={{ borderTop:"1px dashed #eee",paddingTop:14 }}><p style={{ margin:"0 0 10px",fontSize:13,color:"#888" }}>{modal==="edit"?"Dejá en blanco para no cambiar la contraseña":"Contraseña"}</p><div style={{ display:"flex",flexDirection:"column",gap:14 }}><ModalInput label={modal==="edit"?"Nueva contraseña":"Contraseña"} type="password" value={form.password||""} onChange={v=>setForm(f=>({...f,password:v}))}/><ModalInput label="Repetir contraseña" type="password" value={form.password2||""} onChange={v=>setForm(f=>({...f,password2:v}))}/></div></div>
+        <div><label style={{ fontSize:13,fontWeight:500,color:"#555",display:"block",marginBottom:6 }}>Locales asignados</label><div style={{ display:"flex",flexDirection:"column",gap:6,maxHeight:150,overflowY:"auto",border:"1px solid #eee",borderRadius:8,padding:8 }}>{data.locales.map(l=><label key={l.id} style={{ display:"flex",gap:8,alignItems:"center",fontSize:14 }}><input type="checkbox" checked={(form.localIds||[]).includes(l.id)} onChange={()=>toggleLocal(l.id)}/>{l.nombre}</label>)}</div></div>
+        {formErr && <p style={{ margin:0,fontSize:13,color:COLORS.danger,background:COLORS.dangerLight,padding:"8px 12px",borderRadius:8 }}>{formErr}</p>}
+        <div style={{ display:"flex",gap:8,marginTop:4 }}><Btn onClick={save} disabled={saving} style={{ flex:1,justifyContent:"center" }}>{saving?"Guardando...":"Guardar"}</Btn><Btn onClick={()=>setModal(null)} variant="secondary" style={{ flex:1,justifyContent:"center" }}>Cancelar</Btn></div>
+      </div>
+    </Modal>}
   </div>;
 }
 
@@ -1372,8 +1478,8 @@ export default function App() {
   const [loading, setLoading] = useState(true);
 
   const reloadData = useCallback(async () => {
-    const [users, locales, horarios, asistencias, periodos, feriados, reglasCobertura, configCobertura] = await Promise.all([
-      api.getUsers(), api.getLocales(), api.getHorarios(), api.getAsistencias(), api.getPeriodos(), api.getFeriados(), api.getReglasCobertura(), api.getConfigCobertura()
+    const [users, locales, horarios, asistencias, periodos, feriados, reglasCobertura, configCobertura, encargadoLocales] = await Promise.all([
+      api.getUsers(), api.getLocales(), api.getHorarios(), api.getAsistencias(), api.getPeriodos(), api.getFeriados(), api.getReglasCobertura(), api.getConfigCobertura(), api.getEncargadoLocales()
     ]);
     setData({
       users: users.map(normalizeUser),
@@ -1383,21 +1489,31 @@ export default function App() {
       periodosBloqueados: periodos.map(normalizePeriodo),
       feriados,
       reglasCobertura: reglasCobertura.map(normalizeReglaCobertura),
-      configCobertura: configCobertura?.[0] ? normalizeConfigCobertura(configCobertura[0]) : null,
+      configCobertura: (configCobertura||[]).map(normalizeConfigCobertura),
+      encargadoLocales: (encargadoLocales||[]).map(normalizeEncargadoLocal),
     });
   }, []);
 
   useEffect(()=>{ reloadData().then(()=>setLoading(false)).catch(()=>setLoading(false)); },[]);
 
   if (loading) return <div style={{ minHeight:"100vh",display:"flex",alignItems:"center",justifyContent:"center" }}><p style={{ color:"var(--color-text-secondary)",fontSize:14 }}>Conectando con Supabase...</p></div>;
-  if (!user) return <Login onLogin={u=>{ setUser(u); setSeccion(u.rol==="admin"?"asistencia":"horarios"); }} reloadData={reloadData}/>;
+  if (!user) return <Login onLogin={u=>{ setUser(u); setSeccion(u.rol==="manicura"?"horarios":"asistencia"); }} reloadData={reloadData}/>;
 
   const navAdmin = [
     {id:"asistencia",label:"Asistencia",icon:"📋"},
     {id:"horarios",label:"Horarios",icon:"🗓️"},
     {id:"reportes",label:"Reportes",icon:"📊"},
     {id:"manicuras",label:"Manicuras",icon:"💅"},
+    {id:"encargadas",label:"Encargadas",icon:"👩‍💼"},
     {id:"locales",label:"Locales",icon:"🏠"},
+    {id:"cobertura_config",label:"Cobertura",icon:"⚙️"},
+    {id:"perfil",label:"Mi perfil",icon:"👤"},
+  ];
+  const navEncargada = [
+    {id:"asistencia",label:"Asistencia",icon:"📋"},
+    {id:"horarios",label:"Horarios",icon:"🗓️"},
+    {id:"reportes",label:"Reportes",icon:"📊"},
+    {id:"manicuras",label:"Manicuras",icon:"💅"},
     {id:"cobertura_config",label:"Cobertura",icon:"⚙️"},
     {id:"perfil",label:"Mi perfil",icon:"👤"},
   ];
@@ -1406,15 +1522,16 @@ export default function App() {
     {id:"reportes",label:"Mis reportes",icon:"📊"},
     {id:"perfil",label:"Mi perfil",icon:"👤"},
   ];
-  const nav = user.rol==="admin" ? navAdmin : navManicura;
+  const nav = user.rol==="admin" ? navAdmin : user.rol==="encargada" ? navEncargada : navManicura;
 
   const renderSeccion = () => {
-    if (seccion==="asistencia") return <AsistenciaDiaria data={data} reloadData={reloadData}/>;
+    if (seccion==="asistencia") return <AsistenciaDiaria data={data} reloadData={reloadData} user={user}/>;
     if (seccion==="horarios") return <CalendarioHorarios data={data} reloadData={reloadData} user={user}/>;
     if (seccion==="reportes") return <Reportes data={data} user={user}/>;
-    if (seccion==="manicuras") return <ABMManicuras data={data} reloadData={reloadData}/>;
-    if (seccion==="locales") return <ABMLocales data={data} reloadData={reloadData}/>;
-    if (seccion==="cobertura_config") return <ConfiguracionCobertura data={data} reloadData={reloadData}/>;
+    if (seccion==="manicuras") return <ABMManicuras data={data} reloadData={reloadData} user={user}/>;
+    if (seccion==="locales") return user.rol==="admin" ? <ABMLocales data={data} reloadData={reloadData}/> : null;
+    if (seccion==="encargadas") return user.rol==="admin" ? <ABMEncargadas data={data} reloadData={reloadData}/> : null;
+    if (seccion==="cobertura_config") return <ConfiguracionCobertura data={data} reloadData={reloadData} user={user}/>;
     if (seccion==="perfil") return <MiPerfil data={data} reloadData={reloadData} user={user} setUser={setUser}/>;
     return null;
   };
