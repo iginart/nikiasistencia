@@ -171,6 +171,21 @@ function fmtFecha(d) { return `${String(d.getDate()).padStart(2,"00")}/${String(
 function dateKey(d) { return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}`; }
 function fmtMoney(n) { return new Intl.NumberFormat("es-AR", { style:"currency", currency:"ARS", maximumFractionDigits:0 }).format(Number(n || 0)); }
 function fmtPeriodo(d) { return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}`; }
+function parseDateLocal(value) { return value ? new Date(String(value).slice(0,10) + "T12:00:00") : null; }
+function weekOfMonthLabel(fecha) {
+  const d = parseDateLocal(fecha);
+  if (!d) return "Sin semana";
+  const dias = getDiasDelMes(d.getFullYear(), d.getMonth());
+  const sems = getSemanas(dias);
+  const dk = dateKey(d);
+  const idx = sems.findIndex(sem => sem.some(x => dateKey(x) === dk));
+  return idx >= 0 ? `Semana ${idx + 1}` : "Sin semana";
+}
+function weekOfMonthValue(fecha) {
+  const label = weekOfMonthLabel(fecha);
+  const n = parseInt(label.replace(/\D/g, ""));
+  return Number.isFinite(n) ? String(n) : "";
+}
 function genToken() { return Math.random().toString(36).slice(2) + Math.random().toString(36).slice(2); }
 function getAssignedLocalIds(data, user) {
   if (!user) return [];
@@ -1421,6 +1436,18 @@ function Reportes({ data, user, onOpenAgenda, reportRestore }) {
   const [periodoComisiones, setPeriodoComisiones] = useState(fmtPeriodo(hoy));
   const [localComisiones, setLocalComisiones] = useState(puedeGestionar ? "todos" : String(user.localId || ""));
   const [manicuraComisiones, setManicuraComisiones] = useState(puedeGestionar ? "todas" : String(user.id));
+  const [semanaComisiones, setSemanaComisiones] = useState("todas");
+  const [grupoComisiones, setGrupoComisiones] = useState("detalle");
+  const [colsComisiones, setColsComisiones] = useState([
+    { key:"fecha", label:"Fecha", width:90 },
+    { key:"semana", label:"Semana", width:90 },
+    { key:"local", label:"Local", width:120 },
+    { key:"manicura", label:"Manicura", width:130 },
+    { key:"servicio", label:"Servicio", width:220 },
+    { key:"cliente", label:"Cliente", width:190 },
+    { key:"precio", label:"Precio", width:110 },
+    { key:"comision", label:"Comisión", width:110 },
+  ]);
   const manicuras = data.users.filter(u=>u.rol==="manicura"&&u.activo&&(esAdmin || allowedLocalIds.includes(u.localId)));
   const semanasDelMes = useMemo(()=>getSemanas(getDiasDelMes(anio,mes)),[anio,mes]);
 
@@ -1552,7 +1579,6 @@ function Reportes({ data, user, onOpenAgenda, reportRestore }) {
     const localNameById = new Map((data.locales||[]).map(l=>[l.id, l.nombre]));
     const userNameById = new Map((data.users||[]).map(u=>[u.id, u.nombre]));
     const allowedLocalNames = new Set(localesVisibles.map(l=>String(l.nombre||"").trim().toLowerCase()));
-    const visibleUserIds = new Set(manicuras.map(m=>m.id));
     const normalize = v => String(v || "").trim().toLowerCase();
     const puedeVerComision = (c) => {
       if (esAdmin) return true;
@@ -1560,25 +1586,80 @@ function Reportes({ data, user, onOpenAgenda, reportRestore }) {
       const localOk = !c.localId || c.localId === user.localId || normalize(c.nombreLocal) === normalize(localNameById.get(user.localId));
       return (c.userId === user.id || normalize(c.nombreManicura) === normalize(user.nombre)) && localOk;
     };
-    const registros = (data.comisiones||[])
+    const baseRegistros = (data.comisiones||[])
       .filter(c=>puedeVerComision(c))
       .filter(c=>!periodoComisiones || c.periodo === periodoComisiones)
       .filter(c=>localComisiones === "todos" || c.localId === parseInt(localComisiones) || normalize(c.nombreLocal) === normalize(localNameById.get(parseInt(localComisiones))))
-      .filter(c=>manicuraComisiones === "todas" || c.userId === parseInt(manicuraComisiones) || normalize(c.nombreManicura) === normalize(userNameById.get(parseInt(manicuraComisiones))))
+      .filter(c=>manicuraComisiones === "todas" || c.userId === parseInt(manicuraComisiones) || normalize(c.nombreManicura) === normalize(userNameById.get(parseInt(manicuraComisiones))));
+    const semanasDisponibles = Array.from(new Set(baseRegistros.map(c=>weekOfMonthValue(c.fechaPago)).filter(Boolean))).sort((a,b)=>parseInt(a)-parseInt(b));
+    const registros = baseRegistros
+      .filter(c=>semanaComisiones === "todas" || weekOfMonthValue(c.fechaPago) === semanaComisiones)
       .sort((a,b)=>(b.fechaPago||"").localeCompare(a.fechaPago||"") || (a.nombreLocal||"").localeCompare(b.nombreLocal||"") || (a.nombreManicura||"").localeCompare(b.nombreManicura||""));
     const totalPrecio = registros.reduce((a,c)=>a+c.precio,0);
     const totalComision = registros.reduce((a,c)=>a+c.comision,0);
     const servicios = registros.length;
     const clientes = new Set(registros.map(c=>normalize(c.cliente)).filter(Boolean)).size;
     const ultimaImportacion = (data.comisionesImportaciones||[]).find(i=>i.periodo===periodoComisiones) || (data.comisionesImportaciones||[])[0];
-    const manicurasComision = puedeGestionar ? manicuras.filter(m => registros.some(c => c.userId === m.id || normalize(c.nombreManicura) === normalize(m.nombre)) || m.activo) : [user];
+    const manicurasComision = puedeGestionar ? manicuras.filter(m => baseRegistros.some(c => c.userId === m.id || normalize(c.nombreManicura) === normalize(m.nombre)) || m.activo) : [user];
     const mesesDisponibles = Array.from(new Set([fmtPeriodo(hoy), ...(data.comisiones||[]).map(c=>c.periodo).filter(Boolean)])).sort().reverse();
     const resumenPorManicura = Array.from(registros.reduce((map,c)=>{ const key=c.userId || c.nombreManicura; const prev=map.get(key)||{ nombre:c.nombreManicura, local:c.nombreLocal, precio:0, comision:0, servicios:0 }; prev.precio+=c.precio; prev.comision+=c.comision; prev.servicios+=1; map.set(key,prev); return map; }, new Map()).values()).sort((a,b)=>b.comision-a.comision);
+
+    const agrupables = [
+      { id:"detalle", label:"Detalle sin agrupar" },
+      { id:"semana", label:"Semana" },
+      { id:"fecha", label:"Fecha" },
+      { id:"local", label:"Local" },
+      { id:"manicura", label:"Manicura" },
+      { id:"servicio", label:"Servicio" },
+      { id:"cliente", label:"Cliente" },
+    ];
+    const groupLabel = (c, campo) => {
+      if (campo === "semana") return weekOfMonthLabel(c.fechaPago);
+      if (campo === "fecha") return (c.fechaPago||"").split("-").reverse().join("/");
+      if (campo === "local") return c.nombreLocal || "Sin local";
+      if (campo === "manicura") return c.nombreManicura || "Sin manicura";
+      if (campo === "servicio") return c.servicio || "Sin servicio";
+      if (campo === "cliente") return c.cliente || "Sin cliente";
+      return "Detalle";
+    };
+    const agrupado = grupoComisiones === "detalle" ? [] : Array.from(registros.reduce((map,c)=>{
+      const key = groupLabel(c, grupoComisiones);
+      const prev = map.get(key) || { grupo:key, precio:0, comision:0, servicios:0, clientes:new Set(), desde:c.fechaPago, hasta:c.fechaPago };
+      prev.precio += c.precio;
+      prev.comision += c.comision;
+      prev.servicios += 1;
+      if (normalize(c.cliente)) prev.clientes.add(normalize(c.cliente));
+      if ((c.fechaPago||"") < (prev.desde||"")) prev.desde = c.fechaPago;
+      if ((c.fechaPago||"") > (prev.hasta||"")) prev.hasta = c.fechaPago;
+      map.set(key, prev);
+      return map;
+    }, new Map()).values()).map(x=>({...x, clientesQty:x.clientes.size})).sort((a,b)=>b.comision-a.comision);
+
+    const fmtFechaCorta = f => (f||"").split("-").reverse().join("/");
+    const renderCell = (c, key) => {
+      const map = {
+        fecha: fmtFechaCorta(c.fechaPago),
+        semana: weekOfMonthLabel(c.fechaPago),
+        local: c.nombreLocal,
+        manicura: c.nombreManicura,
+        servicio: c.servicio,
+        cliente: c.cliente,
+        precio: fmtMoney(c.precio),
+        comision: fmtMoney(c.comision),
+      };
+      return map[key] ?? "";
+    };
+    const gridColumns = colsComisiones.map(c=>`${c.width}px`).join(" ");
+    const updateColWidth = (key, delta) => setColsComisiones(cols=>cols.map(c=>c.key===key?{...c,width:Math.max(70,Math.min(420,c.width+delta))}:c));
+    const moveCol = (key, dir) => setColsComisiones(cols=>{ const idx=cols.findIndex(c=>c.key===key); const ni=idx+dir; if(idx<0||ni<0||ni>=cols.length) return cols; const n=[...cols]; [n[idx],n[ni]]=[n[ni],n[idx]]; return n; });
+
     return <>
       <div style={{ display:"flex",gap:8,marginBottom:16,flexWrap:"wrap",alignItems:"center" }}>
-        <Select value={periodoComisiones} onChange={setPeriodoComisiones} style={{ width:130 }}>{mesesDisponibles.map(p=><option key={p} value={p}>{p}</option>)}</Select>
-        {puedeGestionar&&<Select value={localComisiones} onChange={v=>{setLocalComisiones(v);setManicuraComisiones("todas");}} style={{ width:190 }}><option value="todos">Todos los locales</option>{localesVisibles.map(l=><option key={l.id} value={l.id}>{l.nombre}</option>)}</Select>}
-        {puedeGestionar&&<Select value={manicuraComisiones} onChange={setManicuraComisiones} style={{ width:210 }}><option value="todas">Todas las manicuras</option>{manicurasComision.map(m=><option key={m.id} value={m.id}>{m.nombre}</option>)}</Select>}
+        <Select value={periodoComisiones} onChange={v=>{setPeriodoComisiones(v);setSemanaComisiones("todas");}} style={{ width:130 }}>{mesesDisponibles.map(p=><option key={p} value={p}>{p}</option>)}</Select>
+        <Select value={semanaComisiones} onChange={setSemanaComisiones} style={{ width:145 }}><option value="todas">Todas las semanas</option>{semanasDisponibles.map(s=><option key={s} value={s}>Semana {s}</option>)}</Select>
+        {puedeGestionar&&<Select value={localComisiones} onChange={v=>{setLocalComisiones(v);setManicuraComisiones("todas");setSemanaComisiones("todas");}} style={{ width:190 }}><option value="todos">Todos los locales</option>{localesVisibles.map(l=><option key={l.id} value={l.id}>{l.nombre}</option>)}</Select>}
+        {puedeGestionar&&<Select value={manicuraComisiones} onChange={v=>{setManicuraComisiones(v);setSemanaComisiones("todas");}} style={{ width:210 }}><option value="todas">Todas las manicuras</option>{manicurasComision.map(m=><option key={m.id} value={m.id}>{m.nombre}</option>)}</Select>}
+        <Select value={grupoComisiones} onChange={setGrupoComisiones} style={{ width:205 }}>{agrupables.map(g=><option key={g.id} value={g.id}>{g.id==="detalle"?g.label:`Agrupar por ${g.label}`}</option>)}</Select>
         {ultimaImportacion&&<span style={{ fontSize:12,color:"var(--color-text-secondary)",marginLeft:"auto" }}>Última importación: {ultimaImportacion.periodo} · {ultimaImportacion.registros} registros</span>}
       </div>
       <div style={{ display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(160px,1fr))",gap:10,marginBottom:14 }}>
@@ -1588,11 +1669,22 @@ function Reportes({ data, user, onOpenAgenda, reportRestore }) {
         <Card><p style={{ margin:"0 0 4px",fontSize:11,color:"var(--color-text-secondary)",textTransform:"uppercase",letterSpacing:"0.04em" }}>Clientes</p><p style={{ margin:0,fontSize:22,fontWeight:600 }}>{clientes}</p></Card>
       </div>
       {puedeGestionar&&resumenPorManicura.length>0&&<Card style={{ marginBottom:14 }}><h3 style={{ margin:"0 0 10px",fontSize:15,fontWeight:500 }}>Resumen por manicura</h3><div style={{ display:"flex",flexDirection:"column",gap:6 }}>{resumenPorManicura.slice(0,8).map((r,i)=><div key={i} style={{ display:"grid",gridTemplateColumns:"1fr 90px 120px",gap:8,alignItems:"center",padding:"7px 8px",borderRadius:8,background:"var(--color-background-secondary)" }}><div><p style={{ margin:0,fontSize:13,fontWeight:500 }}>{r.nombre}</p><p style={{ margin:0,fontSize:11,color:"var(--color-text-secondary)" }}>{r.local} · {r.servicios} servicios</p></div><span style={{ fontSize:13,textAlign:"right",color:"var(--color-text-secondary)" }}>{fmtMoney(r.precio)}</span><strong style={{ fontSize:14,textAlign:"right",color:COLORS.pink }}>{fmtMoney(r.comision)}</strong></div>)}</div></Card>}
+      {grupoComisiones !== "detalle" && <Card style={{ padding:0,overflow:"hidden",marginBottom:14 }}>
+        <div style={{ padding:"12px 14px",borderBottom:"1px solid rgba(120,120,120,0.16)",display:"flex",justifyContent:"space-between",gap:8,alignItems:"center" }}><h3 style={{ margin:0,fontSize:15,fontWeight:500 }}>Totales agrupados</h3><span style={{ fontSize:12,color:"var(--color-text-secondary)" }}>{agrupado.length} grupos</span></div>
+        <div style={{ overflowX:"auto" }}><div style={{ minWidth:720 }}>
+          <div style={{ display:"grid",gridTemplateColumns:"1.5fr 100px 110px 130px 120px",gap:8,padding:"8px 12px",fontSize:11,fontWeight:600,color:"var(--color-text-secondary)",borderBottom:"1px solid rgba(120,120,120,0.14)",textTransform:"uppercase" }}><span>Grupo</span><span style={{ textAlign:"right" }}>Servicios</span><span style={{ textAlign:"right" }}>Clientes</span><span style={{ textAlign:"right" }}>Venta</span><span style={{ textAlign:"right" }}>Comisión</span></div>
+          {agrupado.map((g,i)=><div key={i} style={{ display:"grid",gridTemplateColumns:"1.5fr 100px 110px 130px 120px",gap:8,padding:"8px 12px",fontSize:12,alignItems:"center",borderBottom:"1px solid rgba(120,120,120,0.08)" }}><div><strong>{g.grupo}</strong><p style={{ margin:0,fontSize:11,color:"var(--color-text-secondary)" }}>{fmtFechaCorta(g.desde)}{g.desde!==g.hasta?` – ${fmtFechaCorta(g.hasta)}`:""}</p></div><span style={{ textAlign:"right" }}>{g.servicios}</span><span style={{ textAlign:"right" }}>{g.clientesQty}</span><span style={{ textAlign:"right",color:"var(--color-text-secondary)" }}>{fmtMoney(g.precio)}</span><strong style={{ textAlign:"right",color:COLORS.pink }}>{fmtMoney(g.comision)}</strong></div>)}
+        </div></div>
+      </Card>}
       <Card style={{ padding:0,overflow:"hidden" }}>
-        <div style={{ padding:"12px 14px",borderBottom:"1px solid rgba(120,120,120,0.16)",display:"flex",justifyContent:"space-between",gap:8,alignItems:"center" }}><h3 style={{ margin:0,fontSize:15,fontWeight:500 }}>Detalle de comisiones</h3><span style={{ fontSize:12,color:"var(--color-text-secondary)" }}>{registros.length} registros</span></div>
-        {registros.length===0?<p style={{ margin:0,padding:18,textAlign:"center",fontSize:13,color:"var(--color-text-secondary)" }}>Sin comisiones para los filtros seleccionados.</p>:<div style={{ overflowX:"auto" }}><div style={{ minWidth:900 }}>
-          <div style={{ display:"grid",gridTemplateColumns:"90px 120px 130px 1.3fr 1.2fr 110px 110px",gap:8,padding:"8px 12px",fontSize:11,fontWeight:600,color:"var(--color-text-secondary)",borderBottom:"1px solid rgba(120,120,120,0.14)",textTransform:"uppercase" }}><span>Fecha</span><span>Local</span><span>Manicura</span><span>Servicio</span><span>Cliente</span><span style={{ textAlign:"right" }}>Precio</span><span style={{ textAlign:"right" }}>Comisión</span></div>
-          {registros.map(c=><div key={c.id} style={{ display:"grid",gridTemplateColumns:"90px 120px 130px 1.3fr 1.2fr 110px 110px",gap:8,padding:"8px 12px",fontSize:12,alignItems:"center",borderBottom:"1px solid rgba(120,120,120,0.08)" }}><span>{(c.fechaPago||"").split("-").reverse().join("/")}</span><span>{c.nombreLocal}</span><span style={{ fontWeight:500 }}>{c.nombreManicura}</span><span>{c.servicio}</span><span>{c.cliente}</span><span style={{ textAlign:"right",color:"var(--color-text-secondary)" }}>{fmtMoney(c.precio)}</span><strong style={{ textAlign:"right",color:COLORS.pink }}>{fmtMoney(c.comision)}</strong></div>)}
+        <div style={{ padding:"12px 14px",borderBottom:"1px solid rgba(120,120,120,0.16)",display:"flex",justifyContent:"space-between",gap:8,alignItems:"center",flexWrap:"wrap" }}><h3 style={{ margin:0,fontSize:15,fontWeight:500 }}>Detalle de comisiones</h3><span style={{ fontSize:12,color:"var(--color-text-secondary)" }}>{registros.length} registros</span></div>
+        <div style={{ padding:"8px 12px",borderBottom:"1px solid rgba(120,120,120,0.12)",background:"var(--color-background-secondary)" }}>
+          <p style={{ margin:"0 0 6px",fontSize:11,fontWeight:600,color:"var(--color-text-secondary)",textTransform:"uppercase",letterSpacing:"0.04em" }}>Columnas: ancho y orden</p>
+          <div style={{ display:"flex",gap:6,flexWrap:"wrap" }}>{colsComisiones.map((col,idx)=><div key={col.key} style={{ display:"inline-flex",alignItems:"center",gap:3,background:"var(--color-background-primary)",border:"1px solid rgba(120,120,120,0.16)",borderRadius:7,padding:"4px 5px" }}><span style={{ fontSize:11,fontWeight:500 }}>{col.label}</span><button onClick={()=>updateColWidth(col.key,-20)} style={{ border:"none",background:COLORS.grayLight,borderRadius:4,cursor:"pointer",fontSize:11,width:20,height:20 }}>−</button><button onClick={()=>updateColWidth(col.key,20)} style={{ border:"none",background:COLORS.grayLight,borderRadius:4,cursor:"pointer",fontSize:11,width:20,height:20 }}>+</button><button disabled={idx===0} onClick={()=>moveCol(col.key,-1)} style={{ border:"none",background:COLORS.pinkLight,color:COLORS.pinkDark,borderRadius:4,cursor:idx===0?"default":"pointer",fontSize:11,width:20,height:20,opacity:idx===0?0.4:1 }}>‹</button><button disabled={idx===colsComisiones.length-1} onClick={()=>moveCol(col.key,1)} style={{ border:"none",background:COLORS.pinkLight,color:COLORS.pinkDark,borderRadius:4,cursor:idx===colsComisiones.length-1?"default":"pointer",fontSize:11,width:20,height:20,opacity:idx===colsComisiones.length-1?0.4:1 }}>›</button></div>)}</div>
+        </div>
+        {registros.length===0?<p style={{ margin:0,padding:18,textAlign:"center",fontSize:13,color:"var(--color-text-secondary)" }}>Sin comisiones para los filtros seleccionados.</p>:<div style={{ overflowX:"auto" }}><div style={{ minWidth:Math.max(980, colsComisiones.reduce((a,c)=>a+c.width,0)+120) }}>
+          <div style={{ display:"grid",gridTemplateColumns:gridColumns,gap:8,padding:"8px 12px",fontSize:11,fontWeight:600,color:"var(--color-text-secondary)",borderBottom:"1px solid rgba(120,120,120,0.14)",textTransform:"uppercase" }}>{colsComisiones.map(col=><span key={col.key} style={{ textAlign:["precio","comision"].includes(col.key)?"right":"left" }}>{col.label}</span>)}</div>
+          {registros.map(c=><div key={c.id} style={{ display:"grid",gridTemplateColumns:gridColumns,gap:8,padding:"8px 12px",fontSize:12,alignItems:"center",borderBottom:"1px solid rgba(120,120,120,0.08)" }}>{colsComisiones.map(col=>{ const money=["precio","comision"].includes(col.key); const strong=col.key==="comision"||col.key==="manicura"; const content=renderCell(c,col.key); return strong?<strong key={col.key} style={{ textAlign:money?"right":"left",color:col.key==="comision"?COLORS.pink:"var(--color-text-primary)",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap" }}>{content}</strong>:<span key={col.key} style={{ textAlign:money?"right":"left",color:money?"var(--color-text-secondary)":"var(--color-text-primary)",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap" }}>{content}</span>;})}</div>)}
         </div></div>}
       </Card>
     </>;
