@@ -1,13 +1,28 @@
 import { useState, useEffect, useMemo, useCallback, useRef } from "react";
 
-// Fuente Montserrat
+// Fuente Montserrat en toda la app, incluyendo controles nativos
 if (!document.getElementById("niki-font")) {
   const link = document.createElement("link");
-  link.id = "niki-font"; link.rel = "stylesheet";
+  link.id = "niki-font";
+  link.rel = "stylesheet";
   link.href = "https://fonts.googleapis.com/css2?family=Montserrat:wght@400;500;600;700&display=swap";
   document.head.appendChild(link);
-  document.body.style.fontFamily = "'Montserrat', sans-serif";
 }
+if (!document.getElementById("niki-font-global-style")) {
+  const style = document.createElement("style");
+  style.id = "niki-font-global-style";
+  style.textContent = `
+    html, body, #root, #root *,
+    button, input, select, textarea, option {
+      font-family: 'Montserrat', sans-serif !important;
+    }
+    button, input, select, textarea {
+      letter-spacing: inherit;
+    }
+  `;
+  document.head.appendChild(style);
+}
+document.body.style.fontFamily = "'Montserrat', sans-serif";
 
 const SUPABASE_URL = "https://fomdnmnrxntoqdsxndxx.supabase.co";
 const SUPABASE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImZvbWRubW5yeG50b3Fkc3huZHh4Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3Nzk4MDczMjksImV4cCI6MjA5NTM4MzMyOX0.pxqz72fqHYph-WZm9R3QT5tPpG9kOQBNaZKreEftFVA";
@@ -970,7 +985,7 @@ function Login({ onLogin, reloadData }) {
     <div style={{ minHeight:"100vh",display:"flex",alignItems:"center",justifyContent:"center",padding:16,background:"var(--color-background-tertiary)" }}>
       <Card style={{ width:"100%",maxWidth:360 }}>
         <div style={{ textAlign:"center",marginBottom:24 }}>
-          <div style={{ display:"flex",justifyContent:"center",marginBottom:10 }}><LogoMark size={58} variant="soft"/></div>
+          <div style={{ display:"flex",justifyContent:"center",marginBottom:14 }}><LogoMark size={104} variant="soft"/></div>
           <h2 style={{ margin:0,fontSize:20,fontWeight:500 }}>Niki Beauty Bar</h2>
           <p style={{ margin:"4px 0 0",fontSize:13,color:"var(--color-text-secondary)" }}>Control de asistencia</p>
         </div>
@@ -1682,9 +1697,9 @@ export default function App() {
 
   return (
     <div style={{ minHeight:"100vh",background:"var(--color-background-tertiary)",display:"flex",flexDirection:"column" }}>
-      <header style={{ background:COLORS.pink,color:"#fff",padding:"0 16px",height:54,display:"flex",alignItems:"center",justifyContent:"space-between",position:"sticky",top:0,zIndex:100 }}>
+      <header style={{ background:COLORS.pink,color:"#fff",padding:"0 16px",height:66,display:"flex",alignItems:"center",justifyContent:"space-between",position:"sticky",top:0,zIndex:100 }}>
         <div style={{ display:"flex",alignItems:"center",gap:10 }}>
-          <LogoMark size={30} variant="light"/>
+          <LogoMark size={48} variant="light"/>
           <span style={{ fontWeight:600,fontSize:15,letterSpacing:"-0.02em" }}>Niki Beauty Bar</span>
         </div>
         <div style={{ display:"flex",alignItems:"center",gap:10 }}>
@@ -1694,9 +1709,9 @@ export default function App() {
         </div>
       </header>
       <div style={{ display:"flex",flex:1 }}>
-        <nav style={{ width:menuOpen?"100%":0,maxWidth:220,background:"var(--color-background-primary)",borderRight:"0.5px solid rgba(120,120,120,0.18)",overflowX:"hidden",transition:"width 0.2s",flexShrink:0,position:"sticky",top:54,alignSelf:"flex-start",maxHeight:"calc(100vh - 54px)",overflowY:"auto" }}>
+        <nav style={{ width:menuOpen?"100%":0,maxWidth:220,background:"var(--color-background-primary)",borderRight:"0.5px solid rgba(120,120,120,0.18)",overflowX:"hidden",transition:"width 0.2s",flexShrink:0,position:"sticky",top:66,alignSelf:"flex-start",maxHeight:"calc(100vh - 66px)",overflowY:"auto" }}>
           <div style={{ padding:"12px 8px",display:"flex",flexDirection:"column",gap:2,minWidth:200 }}>
-            {nav.map(item=><button key={item.id} onClick={()=>{ setSeccion(item.id); setMenuOpen(false); if(item.id!=="horarios") setAgendaRequest(null); }} style={{ display:"flex",alignItems:"center",gap:10,padding:"10px 12px",border:"none",borderRadius:8,cursor:"pointer",fontSize:14,textAlign:"left",background:seccion===item.id?COLORS.pinkLight:"transparent",color:seccion===item.id?COLORS.pinkDark:"var(--color-text-primary)",fontWeight:seccion===item.id?500:400 }}><span>{item.icon === "logo" ? <LogoMark size={18} variant="soft"/> : item.icon}</span>{item.label}</button>)}
+            {nav.map(item=><button key={item.id} onClick={()=>{ setSeccion(item.id); setMenuOpen(false); if(item.id!=="horarios") setAgendaRequest(null); }} style={{ display:"flex",alignItems:"center",gap:10,padding:"10px 12px",border:"none",borderRadius:8,cursor:"pointer",fontSize:14,textAlign:"left",background:seccion===item.id?COLORS.pinkLight:"transparent",color:seccion===item.id?COLORS.pinkDark:"var(--color-text-primary)",fontWeight:seccion===item.id?500:400 }}><span>{item.icon === "logo" ? <LogoMark size={24} variant="soft"/> : item.icon}</span>{item.label}</button>)}
           </div>
         </nav>
         <main style={{ flex:1,padding:"20px 16px",maxWidth:1280,width:"100%",margin:"0 auto" }}>
