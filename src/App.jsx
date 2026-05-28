@@ -1,12 +1,12 @@
 import { useState, useEffect, useMemo, useCallback, useRef } from "react";
 
-// Fuente Inter
+// Fuente Montserrat
 if (!document.getElementById("niki-font")) {
   const link = document.createElement("link");
   link.id = "niki-font"; link.rel = "stylesheet";
-  link.href = "https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&display=swap";
+  link.href = "https://fonts.googleapis.com/css2?family=Montserrat:wght@400;500;600;700&display=swap";
   document.head.appendChild(link);
-  document.body.style.fontFamily = "'Inter', sans-serif";
+  document.body.style.fontFamily = "'Montserrat', sans-serif";
 }
 
 const SUPABASE_URL = "https://fomdnmnrxntoqdsxndxx.supabase.co";
@@ -82,6 +82,53 @@ const COLORS = {
   amber: "#ba7517", amberLight: "#faeeda",
   info: "#185fa5", infoLight: "#e6f1fb",
 };
+
+// Logo: pegá acá la URL pública del logo o una imagen en base64/data URL.
+// Si queda vacío, la app muestra una marca temporal con las iniciales.
+const LOGO_SRC = "data:image/png;base64,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";
+
+function LogoMark({ size = 32, variant = "light" }) {
+  const bg = variant === "light" ? "#fff" : COLORS.pinkLight;
+  const fg = variant === "light" ? COLORS.pinkDark : COLORS.pinkDark;
+  if (LOGO_SRC) {
+    return (
+      <img
+        src={LOGO_SRC}
+        alt="Niki Beauty Bar"
+        style={{
+          width: size,
+          height: size,
+          objectFit: "contain",
+          borderRadius: 8,
+          display: "block",
+          flexShrink: 0,
+        }}
+      />
+    );
+  }
+  return (
+    <div
+      aria-label="Niki Beauty Bar"
+      style={{
+        width: size,
+        height: size,
+        borderRadius: Math.max(8, size * 0.25),
+        background: bg,
+        color: fg,
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+        fontWeight: 700,
+        fontSize: Math.max(10, size * 0.34),
+        letterSpacing: "-0.04em",
+        boxShadow: variant === "light" ? "0 1px 4px rgba(0,0,0,0.12)" : "none",
+        flexShrink: 0,
+      }}
+    >
+      NB
+    </div>
+  );
+}
 
 const DIAS_SEMANA = ["Lun","Mar","Mié","Jue","Vie","Sáb"];
 const MESES = ["Enero","Febrero","Marzo","Abril","Mayo","Junio","Julio","Agosto","Septiembre","Octubre","Noviembre","Diciembre"];
@@ -923,7 +970,7 @@ function Login({ onLogin, reloadData }) {
     <div style={{ minHeight:"100vh",display:"flex",alignItems:"center",justifyContent:"center",padding:16,background:"var(--color-background-tertiary)" }}>
       <Card style={{ width:"100%",maxWidth:360 }}>
         <div style={{ textAlign:"center",marginBottom:24 }}>
-          <div style={{ fontSize:32,marginBottom:4 }}>💅</div>
+          <div style={{ display:"flex",justifyContent:"center",marginBottom:10 }}><LogoMark size={58} variant="soft"/></div>
           <h2 style={{ margin:0,fontSize:20,fontWeight:500 }}>Niki Beauty Bar</h2>
           <p style={{ margin:"4px 0 0",fontSize:13,color:"var(--color-text-secondary)" }}>Control de asistencia</p>
         </div>
@@ -1600,7 +1647,7 @@ export default function App() {
     {id:"asistencia",label:"Asistencia",icon:"📋"},
     {id:"horarios",label:"Horarios",icon:"🗓️"},
     {id:"reportes",label:"Reportes",icon:"📊"},
-    {id:"manicuras",label:"Manicuras",icon:"💅"},
+    {id:"manicuras",label:"Manicuras",icon:"logo"},
     {id:"encargadas",label:"Encargadas",icon:"👩‍💼"},
     {id:"locales",label:"Locales",icon:"🏠"},
     {id:"cobertura_config",label:"Cobertura",icon:"⚙️"},
@@ -1610,7 +1657,7 @@ export default function App() {
     {id:"asistencia",label:"Asistencia",icon:"📋"},
     {id:"horarios",label:"Horarios",icon:"🗓️"},
     {id:"reportes",label:"Reportes",icon:"📊"},
-    {id:"manicuras",label:"Manicuras",icon:"💅"},
+    {id:"manicuras",label:"Manicuras",icon:"logo"},
     {id:"cobertura_config",label:"Cobertura",icon:"⚙️"},
     {id:"perfil",label:"Mi perfil",icon:"👤"},
   ];
@@ -1637,8 +1684,8 @@ export default function App() {
     <div style={{ minHeight:"100vh",background:"var(--color-background-tertiary)",display:"flex",flexDirection:"column" }}>
       <header style={{ background:COLORS.pink,color:"#fff",padding:"0 16px",height:54,display:"flex",alignItems:"center",justifyContent:"space-between",position:"sticky",top:0,zIndex:100 }}>
         <div style={{ display:"flex",alignItems:"center",gap:10 }}>
-          <span style={{ fontSize:20 }}>💅</span>
-          <span style={{ fontWeight:500,fontSize:15 }}>Niki Beauty Bar</span>
+          <LogoMark size={30} variant="light"/>
+          <span style={{ fontWeight:600,fontSize:15,letterSpacing:"-0.02em" }}>Niki Beauty Bar</span>
         </div>
         <div style={{ display:"flex",alignItems:"center",gap:10 }}>
           <span style={{ fontSize:13,opacity:0.9 }}>{user.nombre}</span>
@@ -1649,7 +1696,7 @@ export default function App() {
       <div style={{ display:"flex",flex:1 }}>
         <nav style={{ width:menuOpen?"100%":0,maxWidth:220,background:"var(--color-background-primary)",borderRight:"0.5px solid rgba(120,120,120,0.18)",overflowX:"hidden",transition:"width 0.2s",flexShrink:0,position:"sticky",top:54,alignSelf:"flex-start",maxHeight:"calc(100vh - 54px)",overflowY:"auto" }}>
           <div style={{ padding:"12px 8px",display:"flex",flexDirection:"column",gap:2,minWidth:200 }}>
-            {nav.map(item=><button key={item.id} onClick={()=>{ setSeccion(item.id); setMenuOpen(false); if(item.id!=="horarios") setAgendaRequest(null); }} style={{ display:"flex",alignItems:"center",gap:10,padding:"10px 12px",border:"none",borderRadius:8,cursor:"pointer",fontSize:14,textAlign:"left",background:seccion===item.id?COLORS.pinkLight:"transparent",color:seccion===item.id?COLORS.pinkDark:"var(--color-text-primary)",fontWeight:seccion===item.id?500:400 }}><span>{item.icon}</span>{item.label}</button>)}
+            {nav.map(item=><button key={item.id} onClick={()=>{ setSeccion(item.id); setMenuOpen(false); if(item.id!=="horarios") setAgendaRequest(null); }} style={{ display:"flex",alignItems:"center",gap:10,padding:"10px 12px",border:"none",borderRadius:8,cursor:"pointer",fontSize:14,textAlign:"left",background:seccion===item.id?COLORS.pinkLight:"transparent",color:seccion===item.id?COLORS.pinkDark:"var(--color-text-primary)",fontWeight:seccion===item.id?500:400 }}><span>{item.icon === "logo" ? <LogoMark size={18} variant="soft"/> : item.icon}</span>{item.label}</button>)}
           </div>
         </nav>
         <main style={{ flex:1,padding:"20px 16px",maxWidth:1280,width:"100%",margin:"0 auto" }}>
