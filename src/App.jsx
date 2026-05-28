@@ -1438,6 +1438,8 @@ function Reportes({ data, user, onOpenAgenda, reportRestore }) {
   const [manicuraComisiones, setManicuraComisiones] = useState(puedeGestionar ? "todas" : String(user.id));
   const [semanaComisiones, setSemanaComisiones] = useState("todas");
   const [grupoComisiones, setGrupoComisiones] = useState("detalle");
+  const [menuColComisiones, setMenuColComisiones] = useState(null);
+  const [collapsedComisiones, setCollapsedComisiones] = useState({});
   const [colsComisiones, setColsComisiones] = useState([
     { key:"fecha", label:"Fecha", width:90 },
     { key:"semana", label:"Semana", width:90 },
@@ -1612,6 +1614,8 @@ function Reportes({ data, user, onOpenAgenda, reportRestore }) {
       { id:"manicura", label:"Manicura" },
       { id:"servicio", label:"Servicio" },
       { id:"cliente", label:"Cliente" },
+      { id:"precio", label:"Precio" },
+      { id:"comision", label:"Comisión" },
     ];
     const groupLabel = (c, campo) => {
       if (campo === "semana") return weekOfMonthLabel(c.fechaPago);
@@ -1620,14 +1624,17 @@ function Reportes({ data, user, onOpenAgenda, reportRestore }) {
       if (campo === "manicura") return c.nombreManicura || "Sin manicura";
       if (campo === "servicio") return c.servicio || "Sin servicio";
       if (campo === "cliente") return c.cliente || "Sin cliente";
+      if (campo === "precio") return fmtMoney(c.precio);
+      if (campo === "comision") return fmtMoney(c.comision);
       return "Detalle";
     };
     const agrupado = grupoComisiones === "detalle" ? [] : Array.from(registros.reduce((map,c)=>{
       const key = groupLabel(c, grupoComisiones);
-      const prev = map.get(key) || { grupo:key, precio:0, comision:0, servicios:0, clientes:new Set(), desde:c.fechaPago, hasta:c.fechaPago };
+      const prev = map.get(key) || { grupo:key, precio:0, comision:0, servicios:0, clientes:new Set(), desde:c.fechaPago, hasta:c.fechaPago, items:[] };
       prev.precio += c.precio;
       prev.comision += c.comision;
       prev.servicios += 1;
+      prev.items.push(c);
       if (normalize(c.cliente)) prev.clientes.add(normalize(c.cliente));
       if ((c.fechaPago||"") < (prev.desde||"")) prev.desde = c.fechaPago;
       if ((c.fechaPago||"") > (prev.hasta||"")) prev.hasta = c.fechaPago;
@@ -1650,8 +1657,62 @@ function Reportes({ data, user, onOpenAgenda, reportRestore }) {
       return map[key] ?? "";
     };
     const gridColumns = colsComisiones.map(c=>`${c.width}px`).join(" ");
-    const updateColWidth = (key, delta) => setColsComisiones(cols=>cols.map(c=>c.key===key?{...c,width:Math.max(70,Math.min(420,c.width+delta))}:c));
+    const groupableKeys = new Set(["semana","fecha","local","manicura","servicio","cliente","precio","comision"]);
+    const groupableCol = (key) => groupableKeys.has(key);
     const moveCol = (key, dir) => setColsComisiones(cols=>{ const idx=cols.findIndex(c=>c.key===key); const ni=idx+dir; if(idx<0||ni<0||ni>=cols.length) return cols; const n=[...cols]; [n[idx],n[ni]]=[n[ni],n[idx]]; return n; });
+    const reorderCol = (fromKey, toKey) => setColsComisiones(cols=>{
+      if(!fromKey || !toKey || fromKey===toKey) return cols;
+      const from=cols.findIndex(c=>c.key===fromKey), to=cols.findIndex(c=>c.key===toKey);
+      if(from<0||to<0) return cols;
+      const n=[...cols];
+      const [moved]=n.splice(from,1);
+      n.splice(to,0,moved);
+      return n;
+    });
+    const startResizeCol = (e, key) => {
+      e.preventDefault();
+      e.stopPropagation();
+      const startX = e.clientX;
+      const col = colsComisiones.find(c=>c.key===key);
+      const startW = col?.width || 120;
+      const onMove = ev => {
+        const next = Math.max(70, Math.min(520, startW + ev.clientX - startX));
+        setColsComisiones(cols=>cols.map(c=>c.key===key?{...c,width:next}:c));
+      };
+      const onUp = () => {
+        window.removeEventListener("mousemove", onMove);
+        window.removeEventListener("mouseup", onUp);
+      };
+      window.addEventListener("mousemove", onMove);
+      window.addEventListener("mouseup", onUp);
+    };
+    const setGroupFromColumn = (key) => { if(groupableCol(key)){ setGrupoComisiones(key); setCollapsedComisiones({}); } setMenuColComisiones(null); };
+    const clearGroup = () => { setGrupoComisiones("detalle"); setCollapsedComisiones({}); setMenuColComisiones(null); };
+    const collapseAllGroups = () => { setCollapsedComisiones(Object.fromEntries(agrupado.map(g=>[g.grupo,true]))); setMenuColComisiones(null); };
+    const expandAllGroups = () => { setCollapsedComisiones({}); setMenuColComisiones(null); };
+    const toggleGroup = (grupo) => setCollapsedComisiones(p=>({...p,[grupo]:!p[grupo]}));
+    const HeaderCell = ({ col }) => {
+      const money=["precio","comision"].includes(col.key);
+      const activeGroup=grupoComisiones===col.key;
+      return <div
+        draggable
+        onDragStart={e=>{ e.dataTransfer.setData("text/plain", col.key); e.dataTransfer.effectAllowed="move"; }}
+        onDragOver={e=>{ e.preventDefault(); e.dataTransfer.dropEffect="move"; }}
+        onDrop={e=>{ e.preventDefault(); reorderCol(e.dataTransfer.getData("text/plain"), col.key); }}
+        style={{ position:"relative",display:"flex",alignItems:"center",justifyContent:money?"flex-end":"flex-start",gap:5,minWidth:0,paddingRight:8,cursor:"grab",userSelect:"none",color:activeGroup?COLORS.pinkDark:"inherit" }}
+      >
+        <button onClick={e=>{ e.stopPropagation(); setMenuColComisiones(menuColComisiones===col.key?null:col.key); }} style={{ border:"none",background:activeGroup?COLORS.pinkLight:"transparent",color:activeGroup?COLORS.pinkDark:"inherit",borderRadius:6,padding:"3px 5px",cursor:"pointer",fontSize:11,fontWeight:700,textTransform:"uppercase",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap",maxWidth:"100%" }}>
+          {activeGroup?"▾ ":""}{col.label}
+        </button>
+        {menuColComisiones===col.key&&<div style={{ position:"absolute",top:26,left:money?"auto":0,right:money?0:"auto",zIndex:20,background:"#fff",border:"1px solid rgba(120,120,120,0.18)",borderRadius:10,boxShadow:"0 8px 24px rgba(0,0,0,0.12)",padding:6,minWidth:150,textTransform:"none" }}>
+          <button disabled={!groupableCol(col.key)} onClick={()=>setGroupFromColumn(col.key)} style={{ width:"100%",textAlign:"left",border:"none",background:"transparent",padding:"7px 9px",borderRadius:7,cursor:groupableCol(col.key)?"pointer":"not-allowed",opacity:groupableCol(col.key)?1:0.45,fontSize:12 }}>Agrupar</button>
+          <button onClick={clearGroup} style={{ width:"100%",textAlign:"left",border:"none",background:"transparent",padding:"7px 9px",borderRadius:7,cursor:"pointer",fontSize:12 }}>Desagrupar</button>
+          <button disabled={grupoComisiones==="detalle"} onClick={collapseAllGroups} style={{ width:"100%",textAlign:"left",border:"none",background:"transparent",padding:"7px 9px",borderRadius:7,cursor:grupoComisiones==="detalle"?"not-allowed":"pointer",opacity:grupoComisiones==="detalle"?0.45:1,fontSize:12 }}>Colapsar</button>
+          <button disabled={grupoComisiones==="detalle"} onClick={expandAllGroups} style={{ width:"100%",textAlign:"left",border:"none",background:"transparent",padding:"7px 9px",borderRadius:7,cursor:grupoComisiones==="detalle"?"not-allowed":"pointer",opacity:grupoComisiones==="detalle"?0.45:1,fontSize:12 }}>Expandir</button>
+        </div>}
+        <span onMouseDown={e=>startResizeCol(e,col.key)} title="Arrastrar para cambiar ancho" style={{ position:"absolute",right:-5,top:-8,bottom:-8,width:10,cursor:"col-resize" }} />
+      </div>;
+    };
 
     return <>
       <div style={{ display:"flex",gap:8,marginBottom:16,flexWrap:"wrap",alignItems:"center" }}>
@@ -1670,20 +1731,28 @@ function Reportes({ data, user, onOpenAgenda, reportRestore }) {
       </div>
       {puedeGestionar&&resumenPorManicura.length>0&&<Card style={{ marginBottom:14 }}><h3 style={{ margin:"0 0 10px",fontSize:15,fontWeight:500 }}>Resumen por manicura</h3><div style={{ display:"flex",flexDirection:"column",gap:6 }}>{resumenPorManicura.slice(0,8).map((r,i)=><div key={i} style={{ display:"grid",gridTemplateColumns:"1fr 90px 120px",gap:8,alignItems:"center",padding:"7px 8px",borderRadius:8,background:"var(--color-background-secondary)" }}><div><p style={{ margin:0,fontSize:13,fontWeight:500 }}>{r.nombre}</p><p style={{ margin:0,fontSize:11,color:"var(--color-text-secondary)" }}>{r.local} · {r.servicios} servicios</p></div><span style={{ fontSize:13,textAlign:"right",color:"var(--color-text-secondary)" }}>{fmtMoney(r.precio)}</span><strong style={{ fontSize:14,textAlign:"right",color:COLORS.pink }}>{fmtMoney(r.comision)}</strong></div>)}</div></Card>}
       {grupoComisiones !== "detalle" && <Card style={{ padding:0,overflow:"hidden",marginBottom:14 }}>
-        <div style={{ padding:"12px 14px",borderBottom:"1px solid rgba(120,120,120,0.16)",display:"flex",justifyContent:"space-between",gap:8,alignItems:"center" }}><h3 style={{ margin:0,fontSize:15,fontWeight:500 }}>Totales agrupados</h3><span style={{ fontSize:12,color:"var(--color-text-secondary)" }}>{agrupado.length} grupos</span></div>
-        <div style={{ overflowX:"auto" }}><div style={{ minWidth:720 }}>
+        <div style={{ padding:"12px 14px",borderBottom:"1px solid rgba(120,120,120,0.16)",display:"flex",justifyContent:"space-between",gap:8,alignItems:"center",flexWrap:"wrap" }}>
+          <h3 style={{ margin:0,fontSize:15,fontWeight:500 }}>Agrupado por {agrupables.find(g=>g.id===grupoComisiones)?.label}</h3>
+          <span style={{ fontSize:12,color:"var(--color-text-secondary)" }}>{agrupado.length} grupos · usá Colapsar/Expandir desde cualquier título</span>
+        </div>
+        <div style={{ overflowX:"auto" }}><div style={{ minWidth:760 }}>
           <div style={{ display:"grid",gridTemplateColumns:"1.5fr 100px 110px 130px 120px",gap:8,padding:"8px 12px",fontSize:11,fontWeight:600,color:"var(--color-text-secondary)",borderBottom:"1px solid rgba(120,120,120,0.14)",textTransform:"uppercase" }}><span>Grupo</span><span style={{ textAlign:"right" }}>Servicios</span><span style={{ textAlign:"right" }}>Clientes</span><span style={{ textAlign:"right" }}>Venta</span><span style={{ textAlign:"right" }}>Comisión</span></div>
-          {agrupado.map((g,i)=><div key={i} style={{ display:"grid",gridTemplateColumns:"1.5fr 100px 110px 130px 120px",gap:8,padding:"8px 12px",fontSize:12,alignItems:"center",borderBottom:"1px solid rgba(120,120,120,0.08)" }}><div><strong>{g.grupo}</strong><p style={{ margin:0,fontSize:11,color:"var(--color-text-secondary)" }}>{fmtFechaCorta(g.desde)}{g.desde!==g.hasta?` – ${fmtFechaCorta(g.hasta)}`:""}</p></div><span style={{ textAlign:"right" }}>{g.servicios}</span><span style={{ textAlign:"right" }}>{g.clientesQty}</span><span style={{ textAlign:"right",color:"var(--color-text-secondary)" }}>{fmtMoney(g.precio)}</span><strong style={{ textAlign:"right",color:COLORS.pink }}>{fmtMoney(g.comision)}</strong></div>)}
+          {agrupado.map((g,i)=>{ const collapsed=!!collapsedComisiones[g.grupo]; return <div key={i} style={{ borderBottom:"1px solid rgba(120,120,120,0.10)" }}>
+            <div style={{ display:"grid",gridTemplateColumns:"1.5fr 100px 110px 130px 120px",gap:8,padding:"9px 12px",fontSize:12,alignItems:"center",background:"var(--color-background-secondary)" }}>
+              <button onClick={()=>toggleGroup(g.grupo)} style={{ display:"flex",alignItems:"center",gap:7,textAlign:"left",border:"none",background:"transparent",cursor:"pointer",padding:0,fontSize:12,color:"var(--color-text-primary)" }}><span style={{ color:COLORS.pink,fontWeight:700 }}>{collapsed?"▶":"▼"}</span><span><strong>{g.grupo}</strong><p style={{ margin:0,fontSize:11,color:"var(--color-text-secondary)" }}>{fmtFechaCorta(g.desde)}{g.desde!==g.hasta?` – ${fmtFechaCorta(g.hasta)}`:""}</p></span></button>
+              <span style={{ textAlign:"right" }}>{g.servicios}</span><span style={{ textAlign:"right" }}>{g.clientesQty}</span><span style={{ textAlign:"right",color:"var(--color-text-secondary)" }}>{fmtMoney(g.precio)}</span><strong style={{ textAlign:"right",color:COLORS.pink }}>{fmtMoney(g.comision)}</strong>
+            </div>
+            {!collapsed && <div style={{ padding:"3px 12px 8px 34px" }}>{g.items.slice(0,80).map(item=><div key={item.id} style={{ display:"grid",gridTemplateColumns:"90px 1fr 1fr 110px 110px",gap:8,padding:"5px 0",fontSize:11,borderTop:"1px solid rgba(120,120,120,0.06)",alignItems:"center" }}><span>{fmtFechaCorta(item.fechaPago)}</span><span style={{ overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap" }}>{item.servicio}</span><span style={{ overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap",color:"var(--color-text-secondary)" }}>{item.cliente}</span><span style={{ textAlign:"right",color:"var(--color-text-secondary)" }}>{fmtMoney(item.precio)}</span><strong style={{ textAlign:"right",color:COLORS.pink }}>{fmtMoney(item.comision)}</strong></div>)}{g.items.length>80&&<p style={{ margin:"4px 0 0",fontSize:11,color:"var(--color-text-secondary)" }}>Mostrando 80 de {g.items.length} registros del grupo.</p>}</div>}
+          </div>;})}
         </div></div>
       </Card>}
       <Card style={{ padding:0,overflow:"hidden" }}>
         <div style={{ padding:"12px 14px",borderBottom:"1px solid rgba(120,120,120,0.16)",display:"flex",justifyContent:"space-between",gap:8,alignItems:"center",flexWrap:"wrap" }}><h3 style={{ margin:0,fontSize:15,fontWeight:500 }}>Detalle de comisiones</h3><span style={{ fontSize:12,color:"var(--color-text-secondary)" }}>{registros.length} registros</span></div>
         <div style={{ padding:"8px 12px",borderBottom:"1px solid rgba(120,120,120,0.12)",background:"var(--color-background-secondary)" }}>
-          <p style={{ margin:"0 0 6px",fontSize:11,fontWeight:600,color:"var(--color-text-secondary)",textTransform:"uppercase",letterSpacing:"0.04em" }}>Columnas: ancho y orden</p>
-          <div style={{ display:"flex",gap:6,flexWrap:"wrap" }}>{colsComisiones.map((col,idx)=><div key={col.key} style={{ display:"inline-flex",alignItems:"center",gap:3,background:"var(--color-background-primary)",border:"1px solid rgba(120,120,120,0.16)",borderRadius:7,padding:"4px 5px" }}><span style={{ fontSize:11,fontWeight:500 }}>{col.label}</span><button onClick={()=>updateColWidth(col.key,-20)} style={{ border:"none",background:COLORS.grayLight,borderRadius:4,cursor:"pointer",fontSize:11,width:20,height:20 }}>−</button><button onClick={()=>updateColWidth(col.key,20)} style={{ border:"none",background:COLORS.grayLight,borderRadius:4,cursor:"pointer",fontSize:11,width:20,height:20 }}>+</button><button disabled={idx===0} onClick={()=>moveCol(col.key,-1)} style={{ border:"none",background:COLORS.pinkLight,color:COLORS.pinkDark,borderRadius:4,cursor:idx===0?"default":"pointer",fontSize:11,width:20,height:20,opacity:idx===0?0.4:1 }}>‹</button><button disabled={idx===colsComisiones.length-1} onClick={()=>moveCol(col.key,1)} style={{ border:"none",background:COLORS.pinkLight,color:COLORS.pinkDark,borderRadius:4,cursor:idx===colsComisiones.length-1?"default":"pointer",fontSize:11,width:20,height:20,opacity:idx===colsComisiones.length-1?0.4:1 }}>›</button></div>)}</div>
+          <p style={{ margin:0,fontSize:11,fontWeight:500,color:"var(--color-text-secondary)" }}>Arrastrá los títulos para cambiar el orden. Arrastrá el borde derecho de cada título para cambiar el ancho. Hacé clic en un título para agrupar, desagrupar, colapsar o expandir.</p>
         </div>
         {registros.length===0?<p style={{ margin:0,padding:18,textAlign:"center",fontSize:13,color:"var(--color-text-secondary)" }}>Sin comisiones para los filtros seleccionados.</p>:<div style={{ overflowX:"auto" }}><div style={{ minWidth:Math.max(980, colsComisiones.reduce((a,c)=>a+c.width,0)+120) }}>
-          <div style={{ display:"grid",gridTemplateColumns:gridColumns,gap:8,padding:"8px 12px",fontSize:11,fontWeight:600,color:"var(--color-text-secondary)",borderBottom:"1px solid rgba(120,120,120,0.14)",textTransform:"uppercase" }}>{colsComisiones.map(col=><span key={col.key} style={{ textAlign:["precio","comision"].includes(col.key)?"right":"left" }}>{col.label}</span>)}</div>
+          <div style={{ display:"grid",gridTemplateColumns:gridColumns,gap:8,padding:"8px 12px",fontSize:11,fontWeight:600,color:"var(--color-text-secondary)",borderBottom:"1px solid rgba(120,120,120,0.14)",textTransform:"uppercase",position:"relative" }}>{colsComisiones.map(col=><HeaderCell key={col.key} col={col}/>)}</div>
           {registros.map(c=><div key={c.id} style={{ display:"grid",gridTemplateColumns:gridColumns,gap:8,padding:"8px 12px",fontSize:12,alignItems:"center",borderBottom:"1px solid rgba(120,120,120,0.08)" }}>{colsComisiones.map(col=>{ const money=["precio","comision"].includes(col.key); const strong=col.key==="comision"||col.key==="manicura"; const content=renderCell(c,col.key); return strong?<strong key={col.key} style={{ textAlign:money?"right":"left",color:col.key==="comision"?COLORS.pink:"var(--color-text-primary)",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap" }}>{content}</strong>:<span key={col.key} style={{ textAlign:money?"right":"left",color:money?"var(--color-text-secondary)":"var(--color-text-primary)",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap" }}>{content}</span>;})}</div>)}
         </div></div>}
       </Card>
