@@ -87,14 +87,14 @@ function genToken() { return Math.random().toString(36).slice(2) + Math.random()
 
 function Avatar({ nombre, size = 36 }) { const i = nombre.split(" ").map(p => p[0]).slice(0,2).join("").toUpperCase(); return <div style={{ width:size,height:size,borderRadius:"50%",background:COLORS.pinkLight,color:COLORS.pinkDark,display:"flex",alignItems:"center",justifyContent:"center",fontWeight:500,fontSize:size*0.35,flexShrink:0 }}>{i}</div>; }
 function Badge({ children, color = "pink" }) { const map = { pink:[COLORS.pinkLight,COLORS.pinkDark],success:[COLORS.successLight,COLORS.success],danger:[COLORS.dangerLight,COLORS.danger],amber:[COLORS.amberLight,COLORS.amber],info:[COLORS.infoLight,COLORS.info],gray:[COLORS.grayLight,"#444"] }; const [bg,fg] = map[color]||map.pink; return <span style={{ background:bg,color:fg,fontSize:11,fontWeight:500,padding:"2px 8px",borderRadius:20,whiteSpace:"nowrap" }}>{children}</span>; }
-function Card({ children, style }) { return <div style={{ background:"var(--color-background-primary)",border:"0.5px solid var(--color-border-tertiary)",borderRadius:12,padding:"1rem 1.25rem",...style }}>{children}</div>; }
+function Card({ children, style }) { return <div style={{ background:"var(--color-background-primary)",border:"0.5px solid rgba(120,120,120,0.18)",borderRadius:12,padding:"1rem 1.25rem",...style }}>{children}</div>; }
 function Btn({ children, onClick, variant="primary", size="md", disabled, style }) {
   const base = { border:"none",borderRadius:8,cursor:disabled?"not-allowed":"pointer",fontWeight:500,display:"inline-flex",alignItems:"center",gap:6,opacity:disabled?0.5:1,...style };
   const v = { primary:{background:COLORS.pink,color:"#fff",padding:size==="sm"?"5px 12px":"8px 18px",fontSize:size==="sm"?13:14},secondary:{background:COLORS.pinkLight,color:COLORS.pinkDark,padding:size==="sm"?"5px 12px":"8px 18px",fontSize:size==="sm"?13:14},ghost:{background:"transparent",color:COLORS.pink,padding:size==="sm"?"5px 8px":"8px 12px",fontSize:size==="sm"?13:14},danger:{background:COLORS.dangerLight,color:COLORS.danger,padding:size==="sm"?"5px 12px":"8px 18px",fontSize:size==="sm"?13:14},success:{background:COLORS.successLight,color:COLORS.success,padding:size==="sm"?"5px 12px":"8px 18px",fontSize:size==="sm"?13:14} };
   return <button style={{...base,...v[variant]}} onClick={onClick} disabled={disabled}>{children}</button>;
 }
-function Input({ value, onChange, type="text", placeholder, style }) { return <input type={type} value={value} onChange={e=>onChange(e.target.value)} placeholder={placeholder} style={{ border:"0.5px solid var(--color-border-secondary)",borderRadius:8,padding:"8px 12px",fontSize:14,width:"100%",background:"var(--color-background-primary)",color:"var(--color-text-primary)",boxSizing:"border-box",...style }}/>; }
-function Select({ value, onChange, children, style }) { return <select value={value} onChange={e=>onChange(e.target.value)} style={{ border:"0.5px solid var(--color-border-secondary)",borderRadius:8,padding:"8px 12px",fontSize:14,width:"100%",background:"var(--color-background-primary)",color:"var(--color-text-primary)",...style }}>{children}</select>; }
+function Input({ value, onChange, type="text", placeholder, style }) { return <input type={type} value={value} onChange={e=>onChange(e.target.value)} placeholder={placeholder} style={{ border:"0.5px solid rgba(120,120,120,0.24)",borderRadius:8,padding:"8px 12px",fontSize:14,width:"100%",background:"var(--color-background-primary)",color:"var(--color-text-primary)",boxSizing:"border-box",...style }}/>; }
+function Select({ value, onChange, children, style }) { return <select value={value} onChange={e=>onChange(e.target.value)} style={{ border:"0.5px solid rgba(120,120,120,0.24)",borderRadius:8,padding:"8px 12px",fontSize:14,width:"100%",background:"var(--color-background-primary)",color:"var(--color-text-primary)",...style }}>{children}</select>; }
 function Modal({ title, children, onClose, width=480 }) {
   useEffect(()=>{ const p=document.body.style.overflow; document.body.style.overflow="hidden"; return()=>{ document.body.style.overflow=p; }; },[]);
   return <div style={{ position:"fixed",inset:0,background:"rgba(0,0,0,0.55)",display:"flex",alignItems:"center",justifyContent:"center",zIndex:9999,padding:16 }} onClick={e=>{ if(e.target===e.currentTarget)onClose(); }}><div style={{ background:"#fff",borderRadius:14,padding:"1.5rem",width:"100%",maxWidth:width,maxHeight:"90vh",overflowY:"auto",boxShadow:"0 8px 32px rgba(0,0,0,0.18)" }}><div style={{ display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:20 }}><h3 style={{ margin:0,fontSize:16,fontWeight:500,color:"#1a1a1a" }}>{title}</h3><button onClick={onClose} style={{ background:"#f5f5f5",border:"none",cursor:"pointer",fontSize:18,color:"#666",width:30,height:30,borderRadius:"50%",display:"flex",alignItems:"center",justifyContent:"center" }}>×</button></div>{children}</div></div>;
@@ -417,12 +417,12 @@ function CalendarioHorarios({ data, reloadData, user }) {
   const renderSemanal = () => (
     <div style={{ display:"flex",flex:1,overflow:"hidden",flexDirection:"column" }}>
       {/* Header días — divisiones verticales claras */}
-      <div style={{ display:"flex",flexShrink:0,borderBottom:"0.5px solid var(--color-border-secondary)" }}>
+      <div style={{ display:"flex",flexShrink:0,borderBottom:"0.5px solid rgba(120,120,120,0.24)" }}>
         <div style={{ width:44,flexShrink:0 }}/>
         <div style={{ flex:1,display:"grid",gridTemplateColumns:"repeat(6,1fr)" }}>
           {weekDays.map((d,i)=>{
             const f=dateKey(d),isToday=f===todayDk,fer=feriados.has(f);
-            return <div key={i} onClick={()=>esAdmin&&toggleFeriado(f)} title={esAdmin?(fer?"Quitar feriado":"Marcar feriado"):""} style={{ textAlign:"center",padding:"6px 4px",borderLeft:"0.5px solid var(--color-border-secondary)",background:fer?COLORS.amberLight:"transparent",cursor:esAdmin?"pointer":"default" }}>
+            return <div key={i} onClick={()=>esAdmin&&toggleFeriado(f)} title={esAdmin?(fer?"Quitar feriado":"Marcar feriado"):""} style={{ textAlign:"center",padding:"6px 4px",borderLeft:"0.5px solid rgba(120,120,120,0.24)",background:fer?COLORS.amberLight:"transparent",cursor:esAdmin?"pointer":"default" }}>
               <p style={{ margin:0,fontSize:10,color:fer?COLORS.amber:"var(--color-text-secondary)",fontWeight:fer?500:400 }}>{DIAS_SEMANA[i]}{fer?" 🗓️":""}</p>
               <div style={{ width:26,height:26,borderRadius:"50%",background:isToday?COLORS.pink:"transparent",margin:"2px auto 0",display:"flex",alignItems:"center",justifyContent:"center" }}>
                 <span style={{ fontSize:13,fontWeight:500,color:isToday?"#fff":fer?COLORS.amber:"var(--color-text-primary)" }}>{d.getDate()}</span>
@@ -431,13 +431,13 @@ function CalendarioHorarios({ data, reloadData, user }) {
             </div>;
           })}
         </div>
-        <div style={{ width:80,flexShrink:0,borderLeft:"0.5px solid var(--color-border-secondary)",display:"flex",alignItems:"center",justifyContent:"center" }}>
+        <div style={{ width:80,flexShrink:0,borderLeft:"0.5px solid rgba(120,120,120,0.24)",display:"flex",alignItems:"center",justifyContent:"center" }}>
           <span style={{ fontSize:11,color:"var(--color-text-secondary)",fontWeight:500 }}>Sem.</span>
         </div>
       </div>
       {/* Cuerpo scrolleable: eje + grid juntos */}
       <div ref={setScrollRef} style={{ flex:1,overflowY:"hidden",display:"flex" }}>
-        <div style={{ width:44,flexShrink:0,borderRight:"0.5px solid var(--color-border-secondary)",position:"relative",height:CAL_GRID_H }}>
+        <div style={{ width:44,flexShrink:0,borderRight:"0.5px solid rgba(120,120,120,0.24)",position:"relative",height:CAL_GRID_H+18 }}>
           {CAL_LABEL_HOURS.map(h=>{
             const top=(h-CAL_START)*CAL_SLOT_H;
             return <span key={h} style={{ position:"absolute",right:6,top,transform:h===CAL_START?"translateY(1px)":h===CAL_END?"translateY(-100%)":"translateY(-50%)",fontSize:10,color:"var(--color-text-secondary)",lineHeight:1 }}>{String(h).padStart(2,"0")}:00</span>;
@@ -453,15 +453,15 @@ function CalendarioHorarios({ data, reloadData, user }) {
                 const slot = calYSlot(e.clientY - rect.top);
                 onAddB(f,{startSlot:slot,endSlot:Math.min(CAL_TOTAL_SLOTS,slot+8)});
               }}
-              style={{ position:"relative",height:CAL_GRID_H,borderLeft:"0.5px solid var(--color-border-secondary)",cursor:bloqueado?"default":(b?"default":"cell"),background:fer?"rgba(186,117,23,0.05)":"transparent" }}>
-              {CAL_HOURS.map((_,hi)=><div key={hi} style={{ position:"absolute",top:hi*CAL_SLOT_H,left:0,right:0,height:CAL_SLOT_H,borderTop:"0.5px solid var(--color-border-secondary)",pointerEvents:"none" }}><div style={{ position:"absolute",top:"50%",left:0,right:0,borderTop:"1px dashed var(--color-border-tertiary)",opacity:0.5 }}/></div>)}
-              <div style={{ position:"absolute",top:CAL_GRID_H,left:0,right:0,borderTop:"0.5px solid var(--color-border-secondary)",pointerEvents:"none" }}/>
+              style={{ position:"relative",height:CAL_GRID_H+18,borderLeft:"0.5px solid rgba(120,120,120,0.24)",cursor:bloqueado?"default":(b?"default":"cell"),background:fer?"rgba(186,117,23,0.05)":"transparent" }}>
+              {CAL_HOURS.map((_,hi)=><div key={hi} style={{ position:"absolute",top:hi*CAL_SLOT_H,left:0,right:0,height:CAL_SLOT_H,borderTop:"0.5px solid rgba(120,120,120,0.24)",pointerEvents:"none" }}><div style={{ position:"absolute",top:"50%",left:0,right:0,borderTop:"1px dashed rgba(120,120,120,0.16)",opacity:0.5 }}/></div>)}
+              <div style={{ position:"absolute",top:CAL_GRID_H,left:0,right:0,borderTop:"0.5px solid rgba(120,120,120,0.24)",pointerEvents:"none" }}/>
 
               {b && <BloqueCalendario fecha={f} bloque={b} onChange={(f2,nb)=>{if(hasAsistencia(f2))return;setLocalH(p=>({...p,[f2]:nb}));clearTimeout(saveTimers.current[f2]);saveTimers.current[f2]=setTimeout(()=>saveBloque(f2,nb),600);}} onDelete={onDeleteB} bloqueado={bloqueado||hasAsistencia(f)} onOpen={setModalDk} asistencia={getAsistencia(f)} manicuraNombre={selectedManicura?.nombre} onTooltip={showTooltip} onHideTooltip={hideTooltip}/>}
             </div>;
           })}
         </div>
-        <div style={{ width:80,flexShrink:0,borderLeft:"0.5px solid var(--color-border-secondary)",display:"flex",alignItems:"flex-start",justifyContent:"center",paddingTop:16 }}>
+        <div style={{ width:80,flexShrink:0,borderLeft:"0.5px solid rgba(120,120,120,0.24)",display:"flex",alignItems:"flex-start",justifyContent:"center",paddingTop:16 }}>
           <span style={{ fontSize:16,fontWeight:500,color:totalHoras>0?COLORS.success:"var(--color-text-secondary)" }}>{totalHoras.toFixed(1)}h</span>
         </div>
       </div>
@@ -480,9 +480,9 @@ function CalendarioHorarios({ data, reloadData, user }) {
 
     return <div style={{ display:"flex",flex:1,overflow:"hidden",flexDirection:"column" }}>
       <div style={{ display:"flex",flex:1,overflow:"hidden" }}>
-        <div style={{ width:44,flexShrink:0,borderRight:"0.5px solid var(--color-border-secondary)",display:"flex",flexDirection:"column" }}>
-          <div style={{ height:48,flexShrink:0,borderBottom:"0.5px solid var(--color-border-secondary)" }}/>
-          <div style={{ position:"relative",height:CAL_GRID_H,flexShrink:0 }}>
+        <div style={{ width:44,flexShrink:0,borderRight:"0.5px solid rgba(120,120,120,0.24)",display:"flex",flexDirection:"column" }}>
+          <div style={{ height:48,flexShrink:0,borderBottom:"0.5px solid rgba(120,120,120,0.24)" }}/>
+          <div style={{ position:"relative",height:CAL_GRID_H+18,flexShrink:0 }}>
             {CAL_LABEL_HOURS.map(h=>{
               const top=(h-CAL_START)*CAL_SLOT_H;
               return <span key={h} style={{ position:"absolute",right:6,top,transform:h===CAL_START?"translateY(1px)":h===CAL_END?"translateY(-100%)":"translateY(-50%)",fontSize:10,color:"var(--color-text-secondary)",lineHeight:1 }}>{String(h).padStart(2,"0")}:00</span>;
@@ -492,14 +492,14 @@ function CalendarioHorarios({ data, reloadData, user }) {
 
         <div style={{ flex:1,overflowX:isMobile?"auto":"hidden",overflowY:"hidden" }}>
           <div style={{ minWidth:innerMinWidth }}>
-            <div style={{ display:"grid",gridTemplateColumns:gridCols,height:48,borderBottom:"0.5px solid var(--color-border-secondary)" }}>
-              {cols.map(m=><div key={m.id} style={{ textAlign:"center",padding:"7px 6px",borderLeft:"0.5px solid var(--color-border-secondary)",background:"var(--color-background-primary)",minWidth:0 }}>
+            <div style={{ display:"grid",gridTemplateColumns:gridCols,height:48,borderBottom:"0.5px solid rgba(120,120,120,0.24)" }}>
+              {cols.map(m=><div key={m.id} style={{ textAlign:"center",padding:"7px 6px",borderLeft:"0.5px solid rgba(120,120,120,0.24)",background:"var(--color-background-primary)",minWidth:0 }}>
                 <p style={{ margin:0,fontSize:11,fontWeight:600,color:"var(--color-text-primary)",whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis" }}>{m.nombre}</p>
                 <p style={{ margin:"2px 0 0",fontSize:10,color:"var(--color-text-secondary)",whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis" }}>{data.locales.find(l=>l.id===m.localId)?.nombre||"Sin local"}</p>
               </div>)}
             </div>
 
-            <div style={{ display:"grid",gridTemplateColumns:gridCols,height:CAL_GRID_H }}>
+            <div style={{ display:"grid",gridTemplateColumns:gridCols,height:CAL_GRID_H+18 }}>
               {cols.map(m=>{
                 const b=getBloqueFor(m.id,diaVista), asis=getAsistenciaFor(m.id,diaVista), fer=feriados.has(diaVista);
                 const lockedByPeriod = periodoBloqueadoParaManicura(periodoKey,m.id) && !esAdmin;
@@ -516,9 +516,9 @@ function CalendarioHorarios({ data, reloadData, user }) {
                     await api.upsertHorario({user_id:m.id,fecha:diaVista,entrada:calFmt(st.h,st.m),salida:calFmt(en.h,en.m),trabaja:true});
                     await reloadData();
                   }}
-                  style={{ position:"relative",height:CAL_GRID_H,borderLeft:"0.5px solid var(--color-border-secondary)",cursor:esAdmin&&!b&&!lockedForEdit?"cell":"default",background:fer?"rgba(186,117,23,0.05)":"transparent",minWidth:0 }}>
-                  {CAL_HOURS.map((_,hi)=><div key={hi} style={{ position:"absolute",top:hi*CAL_SLOT_H,left:0,right:0,height:CAL_SLOT_H,borderTop:"0.5px solid var(--color-border-secondary)",pointerEvents:"none" }}><div style={{ position:"absolute",top:"50%",left:0,right:0,borderTop:"1px dashed var(--color-border-tertiary)",opacity:0.5 }}/></div>)}
-                  <div style={{ position:"absolute",top:CAL_GRID_H,left:0,right:0,borderTop:"0.5px solid var(--color-border-secondary)",pointerEvents:"none" }}/>
+                  style={{ position:"relative",height:CAL_GRID_H+18,borderLeft:"0.5px solid rgba(120,120,120,0.24)",cursor:esAdmin&&!b&&!lockedForEdit?"cell":"default",background:fer?"rgba(186,117,23,0.05)":"transparent",minWidth:0 }}>
+                  {CAL_HOURS.map((_,hi)=><div key={hi} style={{ position:"absolute",top:hi*CAL_SLOT_H,left:0,right:0,height:CAL_SLOT_H,borderTop:"0.5px solid rgba(120,120,120,0.24)",pointerEvents:"none" }}><div style={{ position:"absolute",top:"50%",left:0,right:0,borderTop:"1px dashed rgba(120,120,120,0.16)",opacity:0.5 }}/></div>)}
+                  <div style={{ position:"absolute",top:CAL_GRID_H,left:0,right:0,borderTop:"0.5px solid rgba(120,120,120,0.24)",pointerEvents:"none" }}/>
                   {b && <BloqueCalendario fecha={diaVista} bloque={b} onChange={()=>{}} onDelete={()=>{}} bloqueado={lockedByPeriod} readOnly={true} onOpen={()=>{ setManicuraId(m.id); setModalDk(diaVista); }} asistencia={asis} manicuraNombre={m.nombre} onTooltip={(ev,f,bl)=>showTooltip(ev,f,bl,m.nombre,asis)} onHideTooltip={hideTooltip}/>} 
                   {!b && lockedByPeriod && <div style={{ position:"absolute",left:4,right:4,top:8,background:COLORS.amberLight,color:COLORS.amber,borderRadius:6,padding:"4px 6px",fontSize:10,fontWeight:600,textAlign:"center" }}>Bloqueado</div>}
                 </div>;
@@ -527,11 +527,11 @@ function CalendarioHorarios({ data, reloadData, user }) {
           </div>
         </div>
 
-        <div style={{ width:70,flexShrink:0,borderLeft:"0.5px solid var(--color-border-secondary)",display:"flex",flexDirection:"column" }}>
-          <div style={{ height:48,flexShrink:0,borderBottom:"0.5px solid var(--color-border-secondary)",display:"flex",alignItems:"center",justifyContent:"center" }}>
+        <div style={{ width:70,flexShrink:0,borderLeft:"0.5px solid rgba(120,120,120,0.24)",display:"flex",flexDirection:"column" }}>
+          <div style={{ height:48,flexShrink:0,borderBottom:"0.5px solid rgba(120,120,120,0.24)",display:"flex",alignItems:"center",justifyContent:"center" }}>
             <span style={{ fontSize:11,color:"var(--color-text-secondary)",fontWeight:500 }}>{totalDia.toFixed(1)}h</span>
           </div>
-          <div style={{ height:CAL_GRID_H,display:"flex",alignItems:"flex-start",justifyContent:"center",paddingTop:16 }}>
+          <div style={{ height:CAL_GRID_H+18,display:"flex",alignItems:"flex-start",justifyContent:"center",paddingTop:16 }}>
             <span style={{ fontSize:16,fontWeight:500,color:totalDia>0?COLORS.success:"var(--color-text-secondary)" }}>{totalDia.toFixed(1)}h</span>
           </div>
         </div>
@@ -544,15 +544,15 @@ function CalendarioHorarios({ data, reloadData, user }) {
     const dias=getDiasDelMes(anio,mes), sems=getSemanas(dias);
     const rowH = Math.max(isMobile ? 58 : 74, Math.floor((520 - 34) / Math.max(sems.length, 1)));
     return <div style={{ flex:1,overflow:"hidden" }}>
-      <div style={{ display:"grid",gridTemplateColumns:"repeat(6,1fr) 70px",borderBottom:"0.5px solid var(--color-border-secondary)",position:"sticky",top:0,background:"var(--color-background-primary)",zIndex:2 }}>
-        {DIAS_SEMANA.map(d=><div key={d} style={{ textAlign:"center",padding:"8px 4px",fontSize:11,fontWeight:500,color:"var(--color-text-secondary)",borderLeft:"0.5px solid var(--color-border-secondary)" }}>{d}</div>)}
-        <div style={{ textAlign:"center",padding:"8px 4px",fontSize:11,fontWeight:500,color:"var(--color-text-secondary)",borderLeft:"0.5px solid var(--color-border-secondary)" }}>Sem.</div>
+      <div style={{ display:"grid",gridTemplateColumns:"repeat(6,1fr) 70px",borderBottom:"0.5px solid rgba(120,120,120,0.24)",position:"sticky",top:0,background:"var(--color-background-primary)",zIndex:2 }}>
+        {DIAS_SEMANA.map(d=><div key={d} style={{ textAlign:"center",padding:"8px 4px",fontSize:11,fontWeight:500,color:"var(--color-text-secondary)",borderLeft:"0.5px solid rgba(120,120,120,0.24)" }}>{d}</div>)}
+        <div style={{ textAlign:"center",padding:"8px 4px",fontSize:11,fontWeight:500,color:"var(--color-text-secondary)",borderLeft:"0.5px solid rgba(120,120,120,0.24)" }}>Sem.</div>
       </div>
       {sems.map((semana,si)=>{
         const totalSem=semana.reduce((a,d)=>a+calHoras(getB(dateKey(d))),0);
-        return <div key={si} style={{ display:"grid",gridTemplateColumns:"repeat(6,1fr) 70px",borderBottom:"0.5px solid var(--color-border-secondary)",height:rowH }}>
+        return <div key={si} style={{ display:"grid",gridTemplateColumns:"repeat(6,1fr) 70px",borderBottom:"0.5px solid rgba(120,120,120,0.24)",height:rowH }}>
           {Array.from({length:6},(_,i)=>{
-            const d=semana[i]; if(!d) return <div key={i} style={{ borderLeft:"0.5px solid var(--color-border-secondary)" }}/>;
+            const d=semana[i]; if(!d) return <div key={i} style={{ borderLeft:"0.5px solid rgba(120,120,120,0.24)" }}/>;
             const f=dateKey(d),b=getB(f),isToday=f===todayDk,fer=feriados.has(f),asis=getAsistencia(f),ai=asistenciaInfo(asis),lockedDia=bloqueado||!!asis;
             const st=b?calFromSlot(b.startSlot):null, en=b?calFromSlot(b.endSlot):null;
             const tooltipTitle = b ? `${selectedManicura?.nombre || "Manicura"}\n${fechaLarga(f)}\nDesde: ${calFmt(st.h,st.m)}\nHasta: ${calFmt(en.h,en.m)}\nAsistencia: ${ai.label}` : "";
@@ -564,7 +564,7 @@ function CalendarioHorarios({ data, reloadData, user }) {
               onPointerMove={e=>b&&showTooltip(e,f,b)}
               onPointerLeave={hideTooltip}
               onPointerCancel={hideTooltip}
-              style={{ borderLeft:"0.5px solid var(--color-border-secondary)",padding:isMobile?4:5,cursor:"pointer",background:fer?COLORS.amberLight:(b?COLORS.pinkLight:"transparent"),touchAction:"manipulation" }}>
+              style={{ borderLeft:"0.5px solid rgba(120,120,120,0.24)",padding:isMobile?4:5,cursor:"pointer",background:fer?COLORS.amberLight:(b?COLORS.pinkLight:"transparent"),touchAction:"manipulation" }}>
               <div style={{ display:"flex",alignItems:"center",gap:4,marginBottom:5,minWidth:0 }}>
                 <div style={{ width:22,height:22,borderRadius:"50%",background:isToday?COLORS.pink:"transparent",display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0 }}>
                   <span style={{ fontSize:11,fontWeight:500,color:isToday?"#fff":fer?COLORS.amber:"var(--color-text-primary)" }}>{d.getDate()}</span>
@@ -584,7 +584,7 @@ function CalendarioHorarios({ data, reloadData, user }) {
               : !bloqueado && <p style={{ margin:0,fontSize:10,color:"var(--color-text-secondary)",opacity:0.5 }}>+ agregar</p>}
             </div>;
           })}
-          <div style={{ borderLeft:"0.5px solid var(--color-border-secondary)",display:"flex",alignItems:"center",justifyContent:"center" }}>
+          <div style={{ borderLeft:"0.5px solid rgba(120,120,120,0.24)",display:"flex",alignItems:"center",justifyContent:"center" }}>
             <span style={{ fontSize:15,fontWeight:500,color:totalSem>0?COLORS.success:"var(--color-text-secondary)" }}>{totalSem.toFixed(1)}h</span>
           </div>
         </div>;
@@ -647,37 +647,37 @@ function CalendarioHorarios({ data, reloadData, user }) {
           <Btn onClick={toggleBloqueoTodas} variant={todasBloqueadas?"success":"danger"} size="sm">{todasBloqueadas?"🔓 Habilitar todas":"🔒 Bloquear todas"}</Btn>
         </div>}
       </div>
-      <div style={{ display:"flex",height:560,border:"0.5px solid var(--color-border-tertiary)",borderRadius:12,overflow:"hidden",background:"var(--color-background-primary)" }}>
+      <div style={{ display:"flex",height:vista==="mes"?560:640,border:"0.5px solid rgba(120,120,120,0.18)",borderRadius:12,overflow:"hidden",background:"var(--color-background-primary)" }}>
         {/* Panel lateral */}
-        {navVisible && <div style={{ width:190,flexShrink:0,borderRight:"0.5px solid var(--color-border-tertiary)",display:"flex",flexDirection:"column",background:"var(--color-background-secondary)" }}>
+        {navVisible && <div style={{ width:190,flexShrink:0,borderRight:"0.5px solid rgba(120,120,120,0.18)",display:"flex",flexDirection:"column",background:"var(--color-background-secondary)" }}>
           {esAdmin && <div style={{ padding:"10px 10px 6px" }}>
             <p style={{ margin:"0 0 6px",fontSize:11,fontWeight:500,color:"var(--color-text-secondary)",textTransform:"uppercase",letterSpacing:"0.05em" }}>Manicura</p>
-            <select value={manicuraId||""} onChange={e=>setManicuraId(e.target.value)} style={{ width:"100%",border:"0.5px solid var(--color-border-secondary)",borderRadius:6,padding:"6px 8px",fontSize:12,background:"var(--color-background-primary)",color:"var(--color-text-primary)" }}>
+            <select value={manicuraId||""} onChange={e=>setManicuraId(e.target.value)} style={{ width:"100%",border:"0.5px solid rgba(120,120,120,0.24)",borderRadius:6,padding:"6px 8px",fontSize:12,background:"var(--color-background-primary)",color:"var(--color-text-primary)" }}>
               {manicuras.map(m=><option key={m.id} value={m.id}>{m.nombre}</option>)}
             </select>
           </div>}
-          <div style={{ padding:"10px 10px 6px",borderTop:esAdmin?"0.5px solid var(--color-border-tertiary)":"none" }}>
+          <div style={{ padding:"10px 10px 6px",borderTop:esAdmin?"0.5px solid rgba(120,120,120,0.18)":"none" }}>
             <p style={{ margin:"0 0 6px",fontSize:11,fontWeight:500,color:"var(--color-text-secondary)",textTransform:"uppercase",letterSpacing:"0.05em" }}>Vista</p>
             <div style={{ display:"flex",flexDirection:"column",gap:3 }}>
               {["semana",...(esAdmin?["dia"]:[]),"mes"].map(v=><button key={v} onClick={()=>{ if(v==="dia") setDiaVista(todayDk); setVista(v); }} style={{ textAlign:"left",padding:"6px 8px",border:"none",borderRadius:6,cursor:"pointer",fontSize:12,fontWeight:500,background:vista===v?COLORS.pinkLight:"transparent",color:vista===v?COLORS.pinkDark:"var(--color-text-primary)" }}>{v==="semana"?"📅 Semana":v==="dia"?"👥 Día / todas":"🗓️ Mes"}</button>)}
             </div>
           </div>
-          <div style={{ padding:"8px 10px",borderTop:"0.5px solid var(--color-border-tertiary)" }}>
+          <div style={{ padding:"8px 10px",borderTop:"0.5px solid rgba(120,120,120,0.18)" }}>
             <p style={{ margin:"0 0 6px",fontSize:11,fontWeight:500,color:"var(--color-text-secondary)",textTransform:"uppercase",letterSpacing:"0.05em" }}>Período</p>
             <div style={{ display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:6 }}>
-              <button onClick={prevNav} style={{ background:"none",border:"0.5px solid var(--color-border-secondary)",borderRadius:5,padding:"2px 8px",cursor:"pointer",fontSize:14 }}>‹</button>
+              <button onClick={prevNav} style={{ background:"none",border:"0.5px solid rgba(120,120,120,0.24)",borderRadius:5,padding:"2px 8px",cursor:"pointer",fontSize:14 }}>‹</button>
               <span style={{ fontSize:10,fontWeight:500,textAlign:"center",flex:1,padding:"0 4px",color:"var(--color-text-primary)" }}>{navLabel}</span>
-              <button onClick={nextNav} style={{ background:"none",border:"0.5px solid var(--color-border-secondary)",borderRadius:5,padding:"2px 8px",cursor:"pointer",fontSize:14 }}>›</button>
+              <button onClick={nextNav} style={{ background:"none",border:"0.5px solid rgba(120,120,120,0.24)",borderRadius:5,padding:"2px 8px",cursor:"pointer",fontSize:14 }}>›</button>
             </div>
-            <button onClick={()=>{ setWeekStart(getMon(hoy)); setDiaVista(dateKey(hoy)); setMes(hoy.getMonth()); setAnio(hoy.getFullYear()); }} style={{ width:"100%",background:"none",border:"0.5px solid var(--color-border-secondary)",borderRadius:6,padding:"4px",cursor:"pointer",fontSize:11,color:"var(--color-text-secondary)" }}>Hoy</button>
+            <button onClick={()=>{ setWeekStart(getMon(hoy)); setDiaVista(dateKey(hoy)); setMes(hoy.getMonth()); setAnio(hoy.getFullYear()); }} style={{ width:"100%",background:"none",border:"0.5px solid rgba(120,120,120,0.24)",borderRadius:6,padding:"4px",cursor:"pointer",fontSize:11,color:"var(--color-text-secondary)" }}>Hoy</button>
           </div>
-          <div style={{ padding:"8px 10px",borderTop:"0.5px solid var(--color-border-tertiary)" }}>
+          <div style={{ padding:"8px 10px",borderTop:"0.5px solid rgba(120,120,120,0.18)" }}>
             <p style={{ margin:"0 0 6px",fontSize:11,fontWeight:500,color:"var(--color-text-secondary)",textTransform:"uppercase",letterSpacing:"0.05em" }}>Resumen</p>
             <div style={{ display:"flex",flexDirection:"column",gap:6 }}>
-              {[["Días cargados",diasCargados,null],["Horas totales",`${totalHoras.toFixed(1)}h`,totalHoras>0?COLORS.success:null]].map(([lbl,val,color])=><div key={lbl} style={{ background:"var(--color-background-primary)",borderRadius:8,padding:"7px 10px",border:"0.5px solid var(--color-border-tertiary)" }}><p style={{ margin:0,fontSize:10,color:"var(--color-text-secondary)" }}>{lbl}</p><p style={{ margin:0,fontSize:18,fontWeight:500,color:color||"var(--color-text-primary)" }}>{val}</p></div>)}
+              {[["Días cargados",diasCargados,null],["Horas totales",`${totalHoras.toFixed(1)}h`,totalHoras>0?COLORS.success:null]].map(([lbl,val,color])=><div key={lbl} style={{ background:"var(--color-background-primary)",borderRadius:8,padding:"7px 10px",border:"0.5px solid rgba(120,120,120,0.18)" }}><p style={{ margin:0,fontSize:10,color:"var(--color-text-secondary)" }}>{lbl}</p><p style={{ margin:0,fontSize:18,fontWeight:500,color:color||"var(--color-text-primary)" }}>{val}</p></div>)}
             </div>
           </div>
-          {esAdmin && <div style={{ padding:"8px 10px",borderTop:"0.5px solid var(--color-border-tertiary)",marginTop:"auto" }}>
+          {esAdmin && <div style={{ padding:"8px 10px",borderTop:"0.5px solid rgba(120,120,120,0.18)",marginTop:"auto" }}>
             <div style={{ background:COLORS.amberLight,borderRadius:6,padding:"6px 8px" }}>
               <p style={{ margin:0,fontSize:10,color:COLORS.amber,fontWeight:500 }}>Clic en día (sem.) o modal (mes) para feriado</p>
             </div>
@@ -685,9 +685,9 @@ function CalendarioHorarios({ data, reloadData, user }) {
         </div>}
         {/* Contenido principal */}
         <div style={{ flex:1,display:"flex",flexDirection:"column",overflow:"hidden" }}>
-          <div style={{ padding:"6px 10px",borderBottom:"0.5px solid var(--color-border-tertiary)",display:"flex",alignItems:"center",gap:8 }}>
+          <div style={{ padding:"6px 10px",borderBottom:"0.5px solid rgba(120,120,120,0.18)",display:"flex",alignItems:"center",gap:8 }}>
             {/* Botón ocultar panel — claramente separado del período */}
-            <button onClick={()=>setNavVisible(v=>!v)} title={navVisible?"Ocultar panel":"Mostrar panel"} style={{ background:"none",border:"0.5px solid var(--color-border-secondary)",borderRadius:6,padding:"3px 10px",cursor:"pointer",fontSize:12,color:"var(--color-text-secondary)",whiteSpace:"nowrap",flexShrink:0 }}>
+            <button onClick={()=>setNavVisible(v=>!v)} title={navVisible?"Ocultar panel":"Mostrar panel"} style={{ background:"none",border:"0.5px solid rgba(120,120,120,0.24)",borderRadius:6,padding:"3px 10px",cursor:"pointer",fontSize:12,color:"var(--color-text-secondary)",whiteSpace:"nowrap",flexShrink:0 }}>
               {navVisible?"‹ Ocultar":"Panel ›"}
             </button>
             <div style={{ width:1,height:18,background:"var(--color-border-secondary)",margin:"0 2px",flexShrink:0 }}/>
@@ -971,7 +971,7 @@ function MiPerfil({ data, reloadData, user, setUser }) {
         <div style={{ display:"flex",flexDirection:"column",gap:14 }}>
           <div><label style={{ fontSize:13,color:"var(--color-text-secondary)",display:"block",marginBottom:4 }}>Nombre</label><Input value={form.nombre} onChange={v=>setForm(f=>({...f,nombre:v}))}/></div>
           <div><label style={{ fontSize:13,color:"var(--color-text-secondary)",display:"block",marginBottom:4 }}>Email</label><Input type="email" value={form.email} onChange={v=>setForm(f=>({...f,email:v}))} placeholder="tu@mail.com"/></div>
-          <div style={{ borderTop:"0.5px solid var(--color-border-tertiary)",paddingTop:14 }}>
+          <div style={{ borderTop:"0.5px solid rgba(120,120,120,0.18)",paddingTop:14 }}>
             <p style={{ margin:"0 0 10px",fontSize:13,color:"var(--color-text-secondary)" }}>Cambiar contraseña (opcional)</p>
             <div style={{ display:"flex",flexDirection:"column",gap:10 }}>
               <Input type="password" value={form.password} onChange={v=>setForm(f=>({...f,password:v}))} placeholder="Nueva contraseña"/>
@@ -1011,7 +1011,7 @@ function AsistenciaDiaria({ data, reloadData }) {
     <div>
       <div style={{ display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:16,flexWrap:"wrap",gap:8 }}>
         <h2 style={{ margin:0,fontSize:18,fontWeight:500 }}>Asistencia diaria</h2>
-        <input type="date" value={fecha} onChange={e=>setFecha(e.target.value)} style={{ border:"0.5px solid var(--color-border-secondary)",borderRadius:8,padding:"7px 12px",fontSize:14,background:"var(--color-background-primary)",color:"var(--color-text-primary)" }}/>
+        <input type="date" value={fecha} onChange={e=>setFecha(e.target.value)} style={{ border:"0.5px solid rgba(120,120,120,0.24)",borderRadius:8,padding:"7px 12px",fontSize:14,background:"var(--color-background-primary)",color:"var(--color-text-primary)" }}/>
       </div>
       {manicurasConHorario.length===0
         ? <Card><p style={{ margin:0,color:"var(--color-text-secondary)",fontSize:14,textAlign:"center" }}>No hay manicuras con horario para esta fecha.</p></Card>
@@ -1153,7 +1153,7 @@ function Reportes({ data, user }) {
               </div>
               <button onClick={()=>toggleExp(m.id)} style={{ background:COLORS.pinkLight,color:COLORS.pinkDark,border:"none",borderRadius:8,padding:"6px 12px",fontSize:12,fontWeight:500,cursor:"pointer",whiteSpace:"nowrap" }}>{exp?"▲ Ocultar":"▼ Ver detalle"}</button>
             </div>
-            {exp&&<div style={{ marginTop:14,borderTop:"0.5px solid var(--color-border-tertiary)",paddingTop:14 }}>
+            {exp&&<div style={{ marginTop:14,borderTop:"0.5px solid rgba(120,120,120,0.18)",paddingTop:14 }}>
               {r.semanasData.map(sem=><div key={sem.semana} style={{ marginBottom:14 }}>
                 <div style={{ display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:8 }}>
                   <span style={{ fontSize:12,fontWeight:500,color:"var(--color-text-secondary)",textTransform:"uppercase",letterSpacing:"0.04em" }}>Semana {sem.semana}</span>
@@ -1181,9 +1181,9 @@ function Reportes({ data, user }) {
       {tab==="asistencia"&&<>
         <div style={{ display:"flex",gap:8,marginBottom:16,flexWrap:"wrap",alignItems:"center" }}>
           <span style={{ fontSize:13,color:"var(--color-text-secondary)" }}>Desde</span>
-          <input type="date" value={fechaDesde} onChange={e=>{setFechaDesde(e.target.value);setExpandidos({});}} style={{ border:"0.5px solid var(--color-border-secondary)",borderRadius:8,padding:"7px 12px",fontSize:13,background:"var(--color-background-primary)",color:"var(--color-text-primary)" }}/>
+          <input type="date" value={fechaDesde} onChange={e=>{setFechaDesde(e.target.value);setExpandidos({});}} style={{ border:"0.5px solid rgba(120,120,120,0.24)",borderRadius:8,padding:"7px 12px",fontSize:13,background:"var(--color-background-primary)",color:"var(--color-text-primary)" }}/>
           <span style={{ fontSize:13,color:"var(--color-text-secondary)" }}>hasta</span>
-          <input type="date" value={fechaHasta} onChange={e=>{setFechaHasta(e.target.value);setExpandidos({});}} style={{ border:"0.5px solid var(--color-border-secondary)",borderRadius:8,padding:"7px 12px",fontSize:13,background:"var(--color-background-primary)",color:"var(--color-text-primary)" }}/>
+          <input type="date" value={fechaHasta} onChange={e=>{setFechaHasta(e.target.value);setExpandidos({});}} style={{ border:"0.5px solid rgba(120,120,120,0.24)",borderRadius:8,padding:"7px 12px",fontSize:13,background:"var(--color-background-primary)",color:"var(--color-text-primary)" }}/>
         </div>
         <div style={{ display:"flex",flexDirection:"column",gap:10 }}>
           {mF.map(m=>{ const r=buildAsistenciaReport(m),exp=expandidos[m.id]; return <Card key={m.id} style={{ padding:"0.875rem 1.25rem" }}>
@@ -1198,7 +1198,7 @@ function Reportes({ data, user }) {
               </div>
               <button onClick={()=>toggleExp(m.id)} style={{ background:COLORS.pinkLight,color:COLORS.pinkDark,border:"none",borderRadius:8,padding:"6px 12px",fontSize:12,fontWeight:500,cursor:"pointer",whiteSpace:"nowrap" }}>{exp?"▲ Ocultar":"▼ Ver detalle"}</button>
             </div>
-            {exp&&<div style={{ marginTop:14,borderTop:"0.5px solid var(--color-border-tertiary)",paddingTop:14 }}>
+            {exp&&<div style={{ marginTop:14,borderTop:"0.5px solid rgba(120,120,120,0.18)",paddingTop:14 }}>
               {r.asist.length===0?<p style={{ margin:0,fontSize:13,color:"var(--color-text-secondary)",textAlign:"center" }}>Sin registros en este período.</p>
               :<div style={{ display:"flex",flexDirection:"column",gap:4 }}>
                 <div style={{ display:"grid",gridTemplateColumns:"80px 70px 1fr 1fr 80px",gap:8,padding:"4px 8px" }}>
@@ -1294,12 +1294,12 @@ export default function App() {
         </div>
       </header>
       <div style={{ display:"flex",flex:1 }}>
-        <nav style={{ width:menuOpen?"100%":0,maxWidth:220,background:"var(--color-background-primary)",borderRight:"0.5px solid var(--color-border-tertiary)",overflowX:"hidden",transition:"width 0.2s",flexShrink:0,position:"sticky",top:54,alignSelf:"flex-start",maxHeight:"calc(100vh - 54px)",overflowY:"auto" }}>
+        <nav style={{ width:menuOpen?"100%":0,maxWidth:220,background:"var(--color-background-primary)",borderRight:"0.5px solid rgba(120,120,120,0.18)",overflowX:"hidden",transition:"width 0.2s",flexShrink:0,position:"sticky",top:54,alignSelf:"flex-start",maxHeight:"calc(100vh - 54px)",overflowY:"auto" }}>
           <div style={{ padding:"12px 8px",display:"flex",flexDirection:"column",gap:2,minWidth:200 }}>
             {nav.map(item=><button key={item.id} onClick={()=>{ setSeccion(item.id); setMenuOpen(false); }} style={{ display:"flex",alignItems:"center",gap:10,padding:"10px 12px",border:"none",borderRadius:8,cursor:"pointer",fontSize:14,textAlign:"left",background:seccion===item.id?COLORS.pinkLight:"transparent",color:seccion===item.id?COLORS.pinkDark:"var(--color-text-primary)",fontWeight:seccion===item.id?500:400 }}><span>{item.icon}</span>{item.label}</button>)}
           </div>
         </nav>
-        <main style={{ flex:1,padding:"20px 16px",maxWidth:1120,width:"100%",margin:"0 auto" }}>
+        <main style={{ flex:1,padding:"20px 16px",maxWidth:1280,width:"100%",margin:"0 auto" }}>
           {renderSeccion()}
         </main>
       </div>
