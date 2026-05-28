@@ -285,7 +285,7 @@ function BloqueCalendario({ fecha, bloque, onChange, onCommit, onDelete, bloquea
   );
 }
 
-function CalendarioHorarios({ data, reloadData, user }) {
+function CalendarioHorarios({ data, reloadData, user, agendaRequest, onBackToReport }) {
   const hoy = new Date();
   const esAdmin = user.rol === "admin";
   const esEncargada = user.rol === "encargada";
@@ -295,6 +295,7 @@ function CalendarioHorarios({ data, reloadData, user }) {
   const [vista, setVista] = useState("semana");
   const [weekStart, setWeekStart] = useState(getMon(hoy));
   const [diaVista, setDiaVista] = useState(dateKey(hoy));
+  const [localDiaId, setLocalDiaId] = useState("");
   const [mes, setMes] = useState(hoy.getMonth() === 11 ? 0 : hoy.getMonth() + 1);
   const [anio, setAnio] = useState(hoy.getMonth() === 11 ? hoy.getFullYear() + 1 : hoy.getFullYear());
   const [manicuraId, setManicuraId] = useState(puedeGestionar ? (data.users.filter(u=>u.rol==="manicura"&&u.activo&&(esAdmin||allowedLocalIds.includes(u.localId)))[0]?.id||null) : user.id);
@@ -310,6 +311,16 @@ function CalendarioHorarios({ data, reloadData, user }) {
   const tooltipTimer = useRef(null);
   const saveTimers = useRef({});
   const [tooltip, setTooltip] = useState(null);
+
+  useEffect(() => {
+    if (!agendaRequest?.fecha) return;
+    const d = new Date(agendaRequest.fecha + "T12:00:00");
+    setVista("dia");
+    setDiaVista(agendaRequest.fecha);
+    setMes(d.getMonth());
+    setAnio(d.getFullYear());
+    setLocalDiaId(agendaRequest.localId ? String(agendaRequest.localId) : "");
+  }, [agendaRequest]);
 
   const mesKey = `${anio}-${String(mes+1).padStart(2,"0")}`;
   const periodoDesdeFecha = useCallback((f) => f.slice(0, 7), []);
@@ -594,7 +605,8 @@ function CalendarioHorarios({ data, reloadData, user }) {
 
   // ── DÍA / TODAS LAS MANICURAS ───────────────────────────────────
   const renderDiarioTodos = () => {
-    const cols = puedeGestionar ? manicuras : manicuras.filter(m => m.id === user.id);
+    const baseCols = puedeGestionar ? manicuras : manicuras.filter(m => m.id === user.id);
+    const cols = localDiaId ? baseCols.filter(m => m.localId === parseInt(localDiaId)) : baseCols;
     const totalDia = cols.reduce((a,m)=>a+calHoras(getBloqueFor(m.id, diaVista)),0);
     const minColW = isMobile ? 118 : 0;
     const innerMinWidth = isMobile ? Math.max(cols.length * minColW, 1) : "100%";
@@ -603,6 +615,13 @@ function CalendarioHorarios({ data, reloadData, user }) {
       : `repeat(${Math.max(cols.length,1)}, minmax(0, 1fr))`;
 
     return <div style={{ display:"flex",flex:1,overflow:"hidden",flexDirection:"column" }}>
+      {puedeGestionar && <div style={{ display:"flex",alignItems:"center",gap:8,padding:"8px 10px",borderBottom:"0.5px solid rgba(120,120,120,0.18)",background:"var(--color-background-primary)" }}>
+        <span style={{ fontSize:12,color:"var(--color-text-secondary)",fontWeight:500 }}>Local</span>
+        <select value={localDiaId} onChange={e=>setLocalDiaId(e.target.value)} style={{ border:"0.5px solid rgba(120,120,120,0.24)",borderRadius:6,padding:"5px 8px",fontSize:12,background:"var(--color-background-primary)",color:"var(--color-text-primary)" }}>
+          <option value="">Todos los locales visibles</option>
+          {data.locales.filter(l=>esAdmin || allowedLocalIds.includes(l.id)).map(l=><option key={l.id} value={l.id}>{l.nombre}</option>)}
+        </select>
+      </div>}
       <div style={{ display:"flex",flex:1,overflow:"hidden" }}>
         <div style={{ width:44,flexShrink:0,borderRight:"0.5px solid rgba(120,120,120,0.24)",display:"flex",flexDirection:"column" }}>
           <div style={{ height:48,flexShrink:0,borderBottom:"0.5px solid rgba(120,120,120,0.24)" }}/>
@@ -764,7 +783,10 @@ function CalendarioHorarios({ data, reloadData, user }) {
   return (
     <div>
       <div style={{ display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:16,flexWrap:"wrap",gap:8 }}>
-        <h2 style={{ margin:0,fontSize:18,fontWeight:500 }}>{puedeGestionar?"Gestión de horarios":"Mis horarios"}</h2>
+        <div style={{ display:"flex",alignItems:"center",gap:10,flexWrap:"wrap" }}>
+          <h2 style={{ margin:0,fontSize:18,fontWeight:500 }}>{puedeGestionar?"Gestión de horarios":"Mis horarios"}</h2>
+          {agendaRequest?.fromReport && onBackToReport && <Btn onClick={onBackToReport} variant="secondary" size="sm">← Volver al reporte</Btn>}
+        </div>
         {puedeGestionar && <div style={{ display:"flex",gap:8,flexWrap:"wrap" }}>
           <Btn onClick={toggleBloqueo} variant={periodoBloqueadoParaManicura(periodoActivoKey, manicuraId)?"success":"danger"} size="sm">{periodoBloqueadoParaManicura(periodoActivoKey, manicuraId)?"🔓 Habilitar manicura":"🔒 Bloquear manicura"}</Btn>
           <Btn onClick={toggleBloqueoTodas} variant={todasBloqueadas?"success":"danger"} size="sm">{todasBloqueadas?"🔓 Habilitar todas":"🔒 Bloquear todas"}</Btn>
@@ -1208,24 +1230,25 @@ function AsistenciaDiaria({ data, reloadData, user }) {
 
 // ── REPORTES ───────────────────────────────────────────────────────
 
-function Reportes({ data, user }) {
+function Reportes({ data, user, onOpenAgenda, reportRestore }) {
   const hoy = new Date();
   const esAdmin = user.rol === "admin";
   const esEncargada = user.rol === "encargada";
   const puedeGestionar = esAdmin || esEncargada;
   const allowedLocalIds = getAssignedLocalIds(data, user);
   const localesVisibles = esAdmin ? data.locales : data.locales.filter(l => allowedLocalIds.includes(l.id));
-  const [tab, setTab] = useState("horas");
+  const [tab, setTab] = useState(reportRestore?.tab || "horas");
   const [filtroTipo, setFiltroTipo] = useState(puedeGestionar ? "manicura" : "manicura");
   const [filtroId, setFiltroId] = useState(puedeGestionar ? (data.users.filter(u=>u.rol==="manicura"&&(esAdmin||allowedLocalIds.includes(u.localId)))[0]?.id || "") : user.id);
-  const [mes, setMes] = useState(hoy.getMonth());
-  const [anio, setAnio] = useState(hoy.getFullYear());
+  const restoreDate = reportRestore?.fecha ? new Date(reportRestore.fecha + "T12:00:00") : null;
+  const [mes, setMes] = useState(restoreDate ? restoreDate.getMonth() : hoy.getMonth());
+  const [anio, setAnio] = useState(restoreDate ? restoreDate.getFullYear() : hoy.getFullYear());
   const [filtroSemana, setFiltroSemana] = useState("todas");
   const [filtroEstado, setFiltroEstado] = useState("todos");
   const [fechaDesde, setFechaDesde] = useState(dateKey(new Date(hoy.getFullYear(),hoy.getMonth(),1)));
   const [fechaHasta, setFechaHasta] = useState(dateKey(hoy));
   const [expandidos, setExpandidos] = useState({});
-  const [localCobertura, setLocalCobertura] = useState(localesVisibles[0]?.id || "");
+  const [localCobertura, setLocalCobertura] = useState(reportRestore?.localId || localesVisibles[0]?.id || "");
   const manicuras = data.users.filter(u=>u.rol==="manicura"&&u.activo&&(esAdmin || allowedLocalIds.includes(u.localId)));
   const semanasDelMes = useMemo(()=>getSemanas(getDiasDelMes(anio,mes)),[anio,mes]);
 
@@ -1285,6 +1308,7 @@ function Reportes({ data, user }) {
   const minOf = t => { const [h,m]=(t||"00:00").split(":").map(Number); return h*60+(m||0); };
   const overlap = (a1,a2,b1,b2) => Math.max(a1,b1) < Math.min(a2,b2);
   const statusInfo = st => ({critico:["🔴","Crítico",COLORS.danger,COLORS.dangerLight],bajo:["🟡","Bajo",COLORS.amber,COLORS.amberLight],ok:["✅","Correcto",COLORS.success,COLORS.successLight],alto:["🟣","Sobrecubierto",COLORS.pinkDark,COLORS.pinkLight],sin:["⚪","Sin horarios",COLORS.gray,COLORS.grayLight]}[st]);
+  const abrirAgendaDia = (fecha) => onOpenAgenda?.({ fecha, localId: parseInt(localCobertura || localesVisibles[0]?.id) });
 
   const cobertura = useMemo(()=>{
     const open=minOf(configCob.horaApertura), close=minOf(configCob.horaCierre);
@@ -1335,18 +1359,18 @@ function Reportes({ data, user }) {
         <Card style={{ padding:0,overflow:"hidden" }}>
           <div style={{ padding:"10px 12px",borderBottom:"1px solid rgba(120,120,120,0.18)",display:"flex",justifyContent:"space-between",alignItems:"center" }}><strong style={{ fontSize:14 }}>Calendario semaforizado</strong><span style={{ fontSize:12,color:"var(--color-text-secondary)" }}>{MESES[mes]} {anio}</span></div>
           <div style={{ display:"grid",gridTemplateColumns:"repeat(6,1fr)",borderBottom:"1px solid rgba(120,120,120,0.18)" }}>{DIAS_SEMANA.map(d=><div key={d} style={{ padding:"7px 6px",textAlign:"center",fontSize:11,fontWeight:500,color:"var(--color-text-secondary)",borderLeft:"1px solid rgba(120,120,120,0.14)" }}>{d}</div>)}</div>
-          {semanas.map((sem,si)=><div key={si} style={{ display:"grid",gridTemplateColumns:"repeat(6,1fr)",minHeight:86,borderBottom:"1px solid rgba(120,120,120,0.14)" }}>{Array.from({length:6},(_,i)=>{const d=sem[i]; if(!d)return <div key={i} style={{ borderLeft:"1px solid rgba(120,120,120,0.12)" }}/>; const it=byFecha.get(dateKey(d)); const [ico,label,fg]=statusInfo(it.estado); return <div key={i} title={`${label} · ${it.motivos.join(', ') || 'Dentro del rango esperado'}`} style={{ padding:7,borderLeft:"1px solid rgba(120,120,120,0.12)",background:cellBg(it.estado) }}><div style={{ display:"flex",justifyContent:"space-between",gap:4 }}><span style={{ fontSize:12,fontWeight:600,color:fg }}>{d.getDate()}</span><span>{ico}</span></div><p style={{ margin:"4px 0 0",fontSize:11,color:fg,fontWeight:500 }}>👥 {it.total}</p><p style={{ margin:"2px 0 0",fontSize:10,color:"var(--color-text-secondary)" }}>Ap. {it.apertura} · Cie. {it.cierre}</p><p style={{ margin:"2px 0 0",fontSize:9,color:"var(--color-text-secondary)",textTransform:"capitalize" }}>{it.regla.afluencia}</p></div>;})}</div>)}
+          {semanas.map((sem,si)=><div key={si} style={{ display:"grid",gridTemplateColumns:"repeat(6,1fr)",minHeight:86,borderBottom:"1px solid rgba(120,120,120,0.14)" }}>{Array.from({length:6},(_,i)=>{const d=sem[i]; if(!d)return <div key={i} style={{ borderLeft:"1px solid rgba(120,120,120,0.12)" }}/>; const it=byFecha.get(dateKey(d)); const [ico,label,fg]=statusInfo(it.estado); return <div key={i} title={`${label} · ${it.motivos.join(', ') || 'Dentro del rango esperado'}`} style={{ padding:7,borderLeft:"1px solid rgba(120,120,120,0.12)",background:cellBg(it.estado) }}><div style={{ display:"flex",justifyContent:"space-between",gap:4 }}><span style={{ fontSize:12,fontWeight:600,color:fg }}>{d.getDate()}</span><span>{ico}</span></div><p style={{ margin:"4px 0 0",fontSize:11,color:fg,fontWeight:500 }}>👥 {it.total}</p><p style={{ margin:"2px 0 0",fontSize:10,color:"var(--color-text-secondary)" }}>Ap. {it.apertura} · Cie. {it.cierre}</p><p style={{ margin:"2px 0 0",fontSize:9,color:"var(--color-text-secondary)",textTransform:"capitalize" }}>{it.regla.afluencia}</p><button onClick={e=>{ e.stopPropagation(); abrirAgendaDia(it.fecha); }} style={{ marginTop:5,background:"rgba(255,255,255,0.75)",border:`1px solid ${fg}33`,borderRadius:6,padding:"3px 6px",fontSize:10,fontWeight:600,color:fg,cursor:"pointer",width:"100%" }}>Ver agenda</button></div>;})}</div>)}
         </Card>
         <Card>
           <h3 style={{ margin:"0 0 10px",fontSize:14,fontWeight:500 }}>Alertas principales</h3>
-          {cobertura.alertas.length===0?<p style={{ margin:0,fontSize:13,color:COLORS.success }}>No hay alertas para este período.</p>:<div style={{ display:"flex",flexDirection:"column",gap:7,maxHeight:390,overflow:"auto" }}>{cobertura.alertas.slice(0,18).map(it=>{const [ico,label,fg,bg]=statusInfo(it.estado); return <div key={it.fecha} style={{ background:bg,borderRadius:8,padding:"8px 10px",border:`1px solid ${fg}22` }}><p style={{ margin:0,fontSize:13,fontWeight:600,color:fg }}>{ico} {fmtFecha(it.dia)} · {label}</p><p style={{ margin:"2px 0 0",fontSize:12,color:"var(--color-text-secondary)" }}>👥 {it.total} · Apertura {it.apertura}/{it.regla.minimoApertura} · Cierre {it.cierre}/{it.regla.minimoCierre}</p><p style={{ margin:"2px 0 0",fontSize:11,color:"var(--color-text-secondary)" }}>{it.motivos.join(" · ")}</p></div>;})}</div>}
+          {cobertura.alertas.length===0?<p style={{ margin:0,fontSize:13,color:COLORS.success }}>No hay alertas para este período.</p>:<div style={{ display:"flex",flexDirection:"column",gap:7,maxHeight:390,overflow:"auto" }}>{cobertura.alertas.slice(0,18).map(it=>{const [ico,label,fg,bg]=statusInfo(it.estado); return <div key={it.fecha} style={{ background:bg,borderRadius:8,padding:"8px 10px",border:`1px solid ${fg}22` }}><div style={{ display:"flex",alignItems:"center",justifyContent:"space-between",gap:8 }}><p style={{ margin:0,fontSize:13,fontWeight:600,color:fg }}>{ico} {fmtFecha(it.dia)} · {label}</p><button onClick={()=>abrirAgendaDia(it.fecha)} style={{ background:"#fff",border:`1px solid ${fg}33`,borderRadius:6,padding:"4px 7px",fontSize:11,fontWeight:600,color:fg,cursor:"pointer",whiteSpace:"nowrap" }}>Ver agenda</button></div><p style={{ margin:"2px 0 0",fontSize:12,color:"var(--color-text-secondary)" }}>👥 {it.total} · Apertura {it.apertura}/{it.regla.minimoApertura} · Cierre {it.cierre}/{it.regla.minimoCierre}</p><p style={{ margin:"2px 0 0",fontSize:11,color:"var(--color-text-secondary)" }}>{it.motivos.join(" · ")}</p></div>;})}</div>}
         </Card>
       </div>
       <Card style={{ marginTop:14,padding:0,overflow:"hidden" }}>
         <div style={{ padding:"10px 12px",borderBottom:"1px solid rgba(120,120,120,0.18)" }}><strong style={{ fontSize:14 }}>Mapa de calor por hora</strong><p style={{ margin:"2px 0 0",fontSize:12,color:"var(--color-text-secondary)" }}>Cantidad de manicuras activas por franja. Los colores comparan contra la demanda esperada del día.</p></div>
         <div style={{ overflowX:"auto" }}><div style={{ minWidth:720 }}>
           <div style={{ display:"grid",gridTemplateColumns:`88px repeat(${cobertura.horas.length},1fr)`,borderBottom:"1px solid rgba(120,120,120,0.16)" }}><div style={{ padding:7,fontSize:11,color:"var(--color-text-secondary)" }}>Día</div>{cobertura.horas.map(h=><div key={h} style={{ padding:7,textAlign:"center",fontSize:11,color:"var(--color-text-secondary)",borderLeft:"1px solid rgba(120,120,120,0.12)" }}>{String(Math.floor(h/60)).padStart(2,"0")}:00</div>)}</div>
-          {cobertura.items.map(it=><div key={it.fecha} style={{ display:"grid",gridTemplateColumns:`88px repeat(${cobertura.horas.length},1fr)`,borderBottom:"1px solid rgba(120,120,120,0.10)" }}><div style={{ padding:"7px 8px",fontSize:12,fontWeight:500 }}>{fmtFecha(it.dia)}</div>{it.hourly.map((qty,idx)=>{const minBase=Math.max(1,Math.round(it.regla.minimoDiario/2)); const shade=(palette,i)=>palette[Math.max(0,Math.min(palette.length-1,i))]; const palettes={danger:["#fff1f1","#ffdada","#f8b8b8","#e24b4a"],amber:["#fff6e8","#fae6c7","#f2c884","#ba7517"],success:["#f1f8e8","#dceec9","#b6d98c","#639922"],pink:["#fbeaf0","#f4c4d4","#e590ad","#72243e"]}; let bg,fg; if(qty===0){bg=palettes.danger[2];fg=COLORS.danger;} else if(qty<minBase){bg=shade(palettes.amber,qty);fg=COLORS.amber;} else if(qty>it.regla.maximoDiario){bg=shade(palettes.pink,Math.min(3,qty-it.regla.maximoDiario));fg=COLORS.pinkDark;} else {bg=shade(palettes.success,Math.max(0,qty-minBase));fg=COLORS.success;} return <div key={idx} style={{ padding:7,textAlign:"center",fontSize:12,fontWeight:600,color:fg,background:bg,borderLeft:"1px solid rgba(120,120,120,0.10)" }}>{qty}</div>;})}</div>)}
+          {cobertura.items.map(it=><div key={it.fecha} style={{ display:"grid",gridTemplateColumns:`88px repeat(${cobertura.horas.length},1fr)`,borderBottom:"1px solid rgba(120,120,120,0.10)" }}><div style={{ padding:"7px 8px",fontSize:12,fontWeight:500 }}>{fmtFecha(it.dia)}</div>{it.hourly.map((qty,idx)=>{const minBase=Math.max(1,Math.round(it.regla.minimoDiario/2)); const shade=(palette,i)=>palette[Math.max(0,Math.min(palette.length-1,i))]; const palettes={danger:["#fff1f1","#ffdada","#f8b8b8","#e24b4a"],amber:["#fff6e8","#fae6c7","#f2c884","#ba7517"],success:["#f1f8e8","#dceec9","#b6d98c","#639922"],pink:["#fbeaf0","#f4c4d4","#e590ad","#72243e"]}; let bg,fg; let shadeIdx=0; if(qty===0){bg=palettes.danger[2];fg=COLORS.danger;} else if(qty<minBase){shadeIdx=qty;bg=shade(palettes.amber,shadeIdx);fg=shadeIdx>=3?"#fff":COLORS.amber;} else if(qty>it.regla.maximoDiario){shadeIdx=Math.min(3,qty-it.regla.maximoDiario);bg=shade(palettes.pink,shadeIdx);fg=shadeIdx>=3?"#fff":COLORS.pinkDark;} else {shadeIdx=Math.max(0,qty-minBase);bg=shade(palettes.success,shadeIdx);fg=shadeIdx>=3?"#fff":COLORS.success;} return <div key={idx} style={{ padding:7,textAlign:"center",fontSize:12,fontWeight:700,color:fg,background:bg,borderLeft:"1px solid rgba(120,120,120,0.10)",textShadow:fg==="#fff"?"0 1px 1px rgba(0,0,0,0.25)":"none" }}>{qty}</div>;})}</div>)}
         </div></div>
       </Card>
     </>;
@@ -1476,6 +1500,8 @@ export default function App() {
   const [seccion, setSeccion] = useState(null);
   const [menuOpen, setMenuOpen] = useState(false);
   const [loading, setLoading] = useState(true);
+  const [agendaRequest, setAgendaRequest] = useState(null);
+  const [reportRestore, setReportRestore] = useState(null);
 
   const reloadData = useCallback(async () => {
     const [users, locales, horarios, asistencias, periodos, feriados, reglasCobertura, configCobertura, encargadoLocales] = await Promise.all([
@@ -1526,8 +1552,8 @@ export default function App() {
 
   const renderSeccion = () => {
     if (seccion==="asistencia") return <AsistenciaDiaria data={data} reloadData={reloadData} user={user}/>;
-    if (seccion==="horarios") return <CalendarioHorarios data={data} reloadData={reloadData} user={user}/>;
-    if (seccion==="reportes") return <Reportes data={data} user={user}/>;
+    if (seccion==="horarios") return <CalendarioHorarios data={data} reloadData={reloadData} user={user} agendaRequest={agendaRequest} onBackToReport={()=>{ setSeccion("reportes"); setMenuOpen(false); }}/>;
+    if (seccion==="reportes") return <Reportes data={data} user={user} reportRestore={reportRestore} onOpenAgenda={(req)=>{ const restore={ tab:"cobertura", fecha:req.fecha, localId:req.localId || "" }; setReportRestore(restore); setAgendaRequest({...req, fromReport:true}); setSeccion("horarios"); setMenuOpen(false); }}/>;
     if (seccion==="manicuras") return <ABMManicuras data={data} reloadData={reloadData} user={user}/>;
     if (seccion==="locales") return user.rol==="admin" ? <ABMLocales data={data} reloadData={reloadData}/> : null;
     if (seccion==="encargadas") return user.rol==="admin" ? <ABMEncargadas data={data} reloadData={reloadData}/> : null;
@@ -1552,7 +1578,7 @@ export default function App() {
       <div style={{ display:"flex",flex:1 }}>
         <nav style={{ width:menuOpen?"100%":0,maxWidth:220,background:"var(--color-background-primary)",borderRight:"0.5px solid rgba(120,120,120,0.18)",overflowX:"hidden",transition:"width 0.2s",flexShrink:0,position:"sticky",top:54,alignSelf:"flex-start",maxHeight:"calc(100vh - 54px)",overflowY:"auto" }}>
           <div style={{ padding:"12px 8px",display:"flex",flexDirection:"column",gap:2,minWidth:200 }}>
-            {nav.map(item=><button key={item.id} onClick={()=>{ setSeccion(item.id); setMenuOpen(false); }} style={{ display:"flex",alignItems:"center",gap:10,padding:"10px 12px",border:"none",borderRadius:8,cursor:"pointer",fontSize:14,textAlign:"left",background:seccion===item.id?COLORS.pinkLight:"transparent",color:seccion===item.id?COLORS.pinkDark:"var(--color-text-primary)",fontWeight:seccion===item.id?500:400 }}><span>{item.icon}</span>{item.label}</button>)}
+            {nav.map(item=><button key={item.id} onClick={()=>{ setSeccion(item.id); setMenuOpen(false); if(item.id!=="horarios") setAgendaRequest(null); }} style={{ display:"flex",alignItems:"center",gap:10,padding:"10px 12px",border:"none",borderRadius:8,cursor:"pointer",fontSize:14,textAlign:"left",background:seccion===item.id?COLORS.pinkLight:"transparent",color:seccion===item.id?COLORS.pinkDark:"var(--color-text-primary)",fontWeight:seccion===item.id?500:400 }}><span>{item.icon}</span>{item.label}</button>)}
           </div>
         </nav>
         <main style={{ flex:1,padding:"20px 16px",maxWidth:1280,width:"100%",margin:"0 auto" }}>
