@@ -405,10 +405,12 @@ function CalendarioHorarios({ data, reloadData, user, agendaRequest, onBackToRep
     }), [data.periodosBloqueados]
   );
   const puedeEditarManicura = useCallback((uid) => {
+    const uidNum = parseInt(uid);
     if (esAdmin) return true;
-    const m = data.users.find(u => u.id === parseInt(uid));
+    if (user.rol === "manicura") return uidNum === parseInt(user.id);
+    const m = data.users.find(u => u.id === uidNum);
     return esEncargada && m?.rol === "manicura" && allowedLocalIds.includes(m.localId);
-  }, [esAdmin, esEncargada, data.users, allowedLocalIds]);
+  }, [esAdmin, esEncargada, user.rol, user.id, data.users, allowedLocalIds]);
   const bloqueadoPorFecha = useCallback((f, uid = manicuraId) =>
     (periodoBloqueadoParaManicura(periodoDesdeFecha(f), uid) && !esAdmin) || !puedeEditarManicura(uid),
     [periodoBloqueadoParaManicura, periodoDesdeFecha, manicuraId, esAdmin, puedeEditarManicura]
@@ -1632,6 +1634,7 @@ export default function App() {
   const [user, setUser] = useState(null);
   const [seccion, setSeccion] = useState(null);
   const [menuOpen, setMenuOpen] = useState(false);
+  const [isDesktopMenu, setIsDesktopMenu] = useState(() => window.innerWidth >= 768);
   const [loading, setLoading] = useState(true);
   const [agendaRequest, setAgendaRequest] = useState(null);
   const [reportRestore, setReportRestore] = useState(null);
@@ -1654,6 +1657,12 @@ export default function App() {
   }, []);
 
   useEffect(()=>{ reloadData().then(()=>setLoading(false)).catch(()=>setLoading(false)); },[]);
+
+  useEffect(() => {
+    const onResize = () => setIsDesktopMenu(window.innerWidth >= 768);
+    window.addEventListener("resize", onResize);
+    return () => window.removeEventListener("resize", onResize);
+  }, []);
 
   if (loading) return <div style={{ minHeight:"100vh",display:"flex",alignItems:"center",justifyContent:"center" }}><p style={{ color:"var(--color-text-secondary)",fontSize:14 }}>Conectando con Supabase...</p></div>;
   if (!user) return <Login onLogin={u=>{ setUser(u); setSeccion(u.rol==="manicura"?"horarios":"asistencia"); }} reloadData={reloadData}/>;
@@ -1705,13 +1714,13 @@ export default function App() {
         <div style={{ display:"flex",alignItems:"center",gap:10 }}>
           <span style={{ fontSize:13,opacity:0.9 }}>{user.nombre}</span>
           <button onClick={()=>{ setUser(null); setMenuOpen(false); }} style={{ background:"rgba(255,255,255,0.2)",border:"none",color:"#fff",borderRadius:6,padding:"4px 10px",fontSize:12,cursor:"pointer" }}>Salir</button>
-          <button onClick={()=>setMenuOpen(m=>!m)} style={{ background:"rgba(255,255,255,0.2)",border:"none",color:"#fff",borderRadius:6,padding:"6px 10px",fontSize:16,cursor:"pointer" }}>☰</button>
+          {!isDesktopMenu && <button onClick={()=>setMenuOpen(m=>!m)} style={{ background:"rgba(255,255,255,0.2)",border:"none",color:"#fff",borderRadius:6,padding:"6px 10px",fontSize:16,cursor:"pointer" }}>☰</button>}
         </div>
       </header>
       <div style={{ display:"flex",flex:1 }}>
-        <nav style={{ width:menuOpen?"100%":0,maxWidth:220,background:"var(--color-background-primary)",borderRight:"0.5px solid rgba(120,120,120,0.18)",overflowX:"hidden",transition:"width 0.2s",flexShrink:0,position:"sticky",top:66,alignSelf:"flex-start",maxHeight:"calc(100vh - 66px)",overflowY:"auto" }}>
+        <nav style={{ width:isDesktopMenu?220:(menuOpen?"100%":0),maxWidth:isDesktopMenu?220:"100%",background:"var(--color-background-primary)",borderRight:isDesktopMenu||menuOpen?"0.5px solid rgba(120,120,120,0.18)":"none",overflowX:"hidden",transition:"width 0.2s",flexShrink:0,position:isDesktopMenu?"sticky":"fixed",top:66,left:0,bottom:isDesktopMenu?"auto":0,zIndex:isDesktopMenu?1:90,alignSelf:"flex-start",maxHeight:"calc(100vh - 66px)",overflowY:"auto",boxShadow:!isDesktopMenu&&menuOpen?"8px 0 24px rgba(0,0,0,0.12)":"none" }}>
           <div style={{ padding:"12px 8px",display:"flex",flexDirection:"column",gap:2,minWidth:200 }}>
-            {nav.map(item=><button key={item.id} onClick={()=>{ setSeccion(item.id); setMenuOpen(false); if(item.id!=="horarios") setAgendaRequest(null); }} style={{ display:"flex",alignItems:"center",gap:10,padding:"10px 12px",border:"none",borderRadius:8,cursor:"pointer",fontSize:14,textAlign:"left",background:seccion===item.id?COLORS.pinkLight:"transparent",color:seccion===item.id?COLORS.pinkDark:"var(--color-text-primary)",fontWeight:seccion===item.id?500:400 }}><span>{item.icon === "logo" ? <LogoMark size={24} variant="soft"/> : item.icon}</span>{item.label}</button>)}
+            {nav.map(item=><button key={item.id} onClick={()=>{ setSeccion(item.id); if(!isDesktopMenu) setMenuOpen(false); if(item.id!=="horarios") setAgendaRequest(null); }} style={{ display:"flex",alignItems:"center",gap:10,padding:"10px 12px",border:"none",borderRadius:8,cursor:"pointer",fontSize:14,textAlign:"left",background:seccion===item.id?COLORS.pinkLight:"transparent",color:seccion===item.id?COLORS.pinkDark:"var(--color-text-primary)",fontWeight:seccion===item.id?500:400 }}><span>{item.icon === "logo" ? <LogoMark size={24} variant="soft"/> : item.icon}</span>{item.label}</button>)}
           </div>
         </nav>
         <main style={{ flex:1,padding:"20px 16px",maxWidth:1280,width:"100%",margin:"0 auto" }}>
