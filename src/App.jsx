@@ -92,7 +92,7 @@ const api = {
   setEncargadoLocales: async (userId, localIds) => { await sb(`encargado_locales?user_id=eq.${userId}`, { method:"DELETE", prefer:"" }); if (!localIds?.length) return []; return sb("encargado_locales", { method:"POST", body:JSON.stringify(localIds.map(local_id=>({ user_id:userId, local_id:parseInt(local_id) }))) }); },
 };
 
-function normalizeUser(u) { return { id: u.id, nombre: u.nombre, usuario: u.usuario, password: u.password, email: u.email || "", rol: u.rol, localId: u.local_id, activo: u.activo }; }
+function normalizeUser(u) { return { id: u.id, nombre: u.nombre, usuario: u.usuario, password: u.password, email: u.email || "", rol: u.rol, localId: u.local_id, activo: u.activo, codigoExterno: u.codigo_externo || "" }; }
 function normalizeHorario(h) { return { id: h.id, userId: h.user_id, fecha: h.fecha, entrada: h.entrada || "", salida: h.salida || "", trabaja: h.trabaja }; }
 function normalizeAsistencia(a) { return { id: a.id, userId: a.user_id, fecha: a.fecha, estado: a.estado, entradaReal: a.entrada_real || "", salidaReal: a.salida_real || "", motivo: a.motivo || "", certificado: a.certificado, tipoDoc: a.tipo_doc || "" }; }
 function normalizePeriodo(p) { return { id: p.id, periodo: p.periodo, userId: p.user_id ?? p.userId ?? null }; }
@@ -225,6 +225,19 @@ function ConfirmDialog({ config, onCancel, onConfirm }) {
 
 function ModalInput({ label, value, onChange, type="text" }) { return <div><label style={{ fontSize:13,fontWeight:500,color:"#555",display:"block",marginBottom:6 }}>{label}</label><input type={type} value={value} onChange={e=>onChange(e.target.value)} style={{ width:"100%",border:"1.5px solid #e0e0e0",borderRadius:8,padding:"9px 12px",fontSize:14,background:"#fafafa",color:"#1a1a1a",outline:"none",boxSizing:"border-box" }} onFocus={e=>e.target.style.borderColor=COLORS.pink} onBlur={e=>e.target.style.borderColor="#e0e0e0"}/></div>; }
 function ModalSelect({ label, value, onChange, children }) { return <div><label style={{ fontSize:13,fontWeight:500,color:"#555",display:"block",marginBottom:6 }}>{label}</label><select value={value} onChange={e=>onChange(e.target.value)} style={{ width:"100%",border:"1.5px solid #e0e0e0",borderRadius:8,padding:"9px 12px",fontSize:14,background:"#fafafa",color:"#1a1a1a",outline:"none",boxSizing:"border-box" }}>{children}</select></div>; }
+function HelpTip({ text }) {
+  const [open, setOpen] = useState(false);
+  return <span style={{ position:"relative",display:"inline-flex",alignItems:"center",marginLeft:6 }}>
+    <button type="button" onClick={()=>setOpen(o=>!o)} onMouseEnter={()=>setOpen(true)} onMouseLeave={()=>setOpen(false)} style={{ width:18,height:18,borderRadius:"50%",border:`1px solid ${COLORS.pink}`,background:COLORS.pinkLight,color:COLORS.pinkDark,fontSize:12,fontWeight:700,lineHeight:"16px",display:"inline-flex",alignItems:"center",justifyContent:"center",cursor:"help",padding:0 }}>?</button>
+    {open && <span style={{ position:"absolute",left:24,top:-8,width:250,background:"#fff",border:"1px solid #ead7df",boxShadow:"0 8px 22px rgba(0,0,0,0.14)",borderRadius:10,padding:"9px 11px",fontSize:12,lineHeight:1.35,color:"#444",zIndex:10000 }}>{text}</span>}
+  </span>;
+}
+function ModalInputWithHelp({ label, help, value, onChange, type="text", placeholder="" }) {
+  return <div>
+    <label style={{ fontSize:13,fontWeight:500,color:"#555",display:"flex",alignItems:"center",marginBottom:6 }}>{label}<HelpTip text={help}/></label>
+    <input type={type} value={value} onChange={e=>onChange(e.target.value)} placeholder={placeholder} style={{ width:"100%",border:"1.5px solid #e0e0e0",borderRadius:8,padding:"9px 12px",fontSize:14,background:"#fafafa",color:"#1a1a1a",outline:"none",boxSizing:"border-box" }} onFocus={e=>e.target.style.borderColor=COLORS.pink} onBlur={e=>e.target.style.borderColor="#e0e0e0"}/>
+  </div>;
+}
 
 // ── CALENDARIO ────────────────────────────────────────────────────
 const CAL_SLOT_H = 48;
@@ -1046,7 +1059,7 @@ function ABMManicuras({ data, reloadData, user }) {
   const allowedLocalIds = getAssignedLocalIds(data, user);
   const localesPermitidos = esAdmin ? data.locales : data.locales.filter(l => allowedLocalIds.includes(l.id));
   const manicuras = data.users.filter(u => u.rol === "manicura" && (esAdmin || allowedLocalIds.includes(u.localId)));
-  const openNew = () => { setForm({ nombre:"",usuario:"",email:"",password:"",password2:"",localId:localesPermitidos[0]?.id||"",activo:true }); setFormErr(""); setModal("new"); };
+  const openNew = () => { setForm({ nombre:"",usuario:"",email:"",codigoExterno:"",password:"",password2:"",localId:localesPermitidos[0]?.id||"",activo:true }); setFormErr(""); setModal("new"); };
   const openEdit = u => { setForm({...u,password:"",password2:""}); setFormErr(""); setModal("edit"); };
   const save = async () => {
     setFormErr("");
@@ -1061,9 +1074,9 @@ function ABMManicuras({ data, reloadData, user }) {
     setSaving(true);
     try {
       if (modal==="new") {
-        await api.createUser({ nombre:form.nombre.trim(),usuario:form.usuario.trim(),email:form.email.trim(),password:form.password,rol:"manicura",local_id:parseInt(form.localId)||null,activo:true });
+        await api.createUser({ nombre:form.nombre.trim(),usuario:form.usuario.trim(),email:form.email.trim(),codigo_externo:(form.codigoExterno||"").trim()||null,password:form.password,rol:"manicura",local_id:parseInt(form.localId)||null,activo:true });
       } else {
-        const upd = { nombre:form.nombre.trim(),usuario:form.usuario.trim(),email:form.email?.trim()||"",local_id:parseInt(form.localId)||null };
+        const upd = { nombre:form.nombre.trim(),usuario:form.usuario.trim(),email:form.email?.trim()||"",codigo_externo:(form.codigoExterno||"").trim()||null,local_id:parseInt(form.localId)||null };
         if (form.password) upd.password = form.password;
         await api.updateUser(form.id, upd);
       }
@@ -1085,7 +1098,7 @@ function ABMManicuras({ data, reloadData, user }) {
             <Avatar nombre={m.nombre}/>
             <div style={{ flex:1,minWidth:0 }}>
               <p style={{ margin:0,fontWeight:500,fontSize:14 }}>{m.nombre}</p>
-              <p style={{ margin:0,fontSize:12,color:"var(--color-text-secondary)" }}>{m.usuario} · {m.email||"Sin mail"} · {local?.nombre||"Sin local"}</p>
+              <p style={{ margin:0,fontSize:12,color:"var(--color-text-secondary)" }}>{m.usuario} · {m.email||"Sin mail"} · {local?.nombre||"Sin local"}{m.codigoExterno?` · AgendaPro: ${m.codigoExterno}`:""}</p>
             </div>
             <Badge color={m.activo?"success":"gray"}>{m.activo?"Activa":"Inactiva"}</Badge>
             <Btn onClick={()=>openEdit(m)} variant="ghost" size="sm">Editar</Btn>
@@ -1098,6 +1111,7 @@ function ABMManicuras({ data, reloadData, user }) {
           <ModalInput label="Nombre completo" value={form.nombre||""} onChange={v=>setForm(f=>({...f,nombre:v}))}/>
           <ModalInput label="Usuario" value={form.usuario||""} onChange={v=>setForm(f=>({...f,usuario:v}))}/>
           <ModalInput label="Email" type="email" value={form.email||""} onChange={v=>setForm(f=>({...f,email:v}))}/>
+          <ModalInputWithHelp label="Código externo AgendaPro" value={form.codigoExterno||""} onChange={v=>setForm(f=>({...f,codigoExterno:v}))} help="Debe respetar exactamente el nombre o código con el que esta manicura figura en AgendaPro/Qlik. Sirve para vincular las comisiones importadas con la manicura correcta, especialmente si hay nombres repetidos en diferentes locales."/>
           <div style={{ borderTop:"1px dashed #eee",paddingTop:14 }}>
             <p style={{ margin:"0 0 10px",fontSize:13,color:"#888" }}>{modal==="edit"?"Dejá en blanco para no cambiar la contraseña":"Contraseña"}</p>
             <div style={{ display:"flex",flexDirection:"column",gap:14 }}>
@@ -1125,13 +1139,13 @@ function ABMLocales({ data, reloadData }) {
   const [modal, setModal] = useState(null);
   const [form, setForm] = useState({});
   const [saving, setSaving] = useState(false);
-  const openNew = () => { setForm({nombre:"",direccion:""}); setModal("new"); };
-  const openEdit = l => { setForm({...l}); setModal("edit"); };
+  const openNew = () => { setForm({nombre:"",direccion:"",codigoExterno:""}); setModal("new"); };
+  const openEdit = l => { setForm({...l,codigoExterno:l.codigo_externo||l.codigoExterno||""}); setModal("edit"); };
   const save = async () => {
     if (!form.nombre) return; setSaving(true);
     try {
-      if (modal==="new") await api.createLocal({nombre:form.nombre,direccion:form.direccion});
-      else await api.updateLocal(form.id,{nombre:form.nombre,direccion:form.direccion});
+      if (modal==="new") await api.createLocal({nombre:form.nombre,direccion:form.direccion,codigo_externo:(form.codigoExterno||"").trim()||null});
+      else await api.updateLocal(form.id,{nombre:form.nombre,direccion:form.direccion,codigo_externo:(form.codigoExterno||"").trim()||null});
       await reloadData(); setModal(null);
     } catch(e) { alert("Error: "+e.message); }
     setSaving(false);
@@ -1152,7 +1166,7 @@ function ABMLocales({ data, reloadData }) {
           return <Card key={l.id} style={{ display:"flex",alignItems:"center",gap:12,flexWrap:"wrap" }}>
             <div style={{ flex:1 }}>
               <p style={{ margin:0,fontWeight:500,fontSize:14 }}>{l.nombre}</p>
-              <p style={{ margin:0,fontSize:12,color:"var(--color-text-secondary)" }}>{l.direccion}</p>
+              <p style={{ margin:0,fontSize:12,color:"var(--color-text-secondary)" }}>{l.direccion}{(l.codigo_externo||l.codigoExterno)?` · Código externo: ${l.codigo_externo||l.codigoExterno}`:""}</p>
             </div>
             <Badge color="info">{qty} manicura{qty!==1?"s":""}</Badge>
             <Btn onClick={()=>openEdit(l)} variant="ghost" size="sm">Editar</Btn>
@@ -1164,6 +1178,7 @@ function ABMLocales({ data, reloadData }) {
         <div style={{ display:"flex",flexDirection:"column",gap:14 }}>
           <ModalInput label="Nombre" value={form.nombre||""} onChange={v=>setForm(f=>({...f,nombre:v}))}/>
           <ModalInput label="Dirección" value={form.direccion||""} onChange={v=>setForm(f=>({...f,direccion:v}))}/>
+          <ModalInputWithHelp label="Código externo" value={form.codigoExterno||""} onChange={v=>setForm(f=>({...f,codigoExterno:v}))} help="Debe coincidir con el nombre o código del local que llega desde AgendaPro/Qlik. Se usa para vincular ventas y comisiones con el local correcto."/>
           <div style={{ display:"flex",gap:8,marginTop:4 }}>
             <Btn onClick={save} disabled={saving} style={{ flex:1,justifyContent:"center" }}>{saving?"Guardando...":"Guardar"}</Btn>
             <Btn onClick={()=>setModal(null)} variant="secondary" style={{ flex:1,justifyContent:"center" }}>Cancelar</Btn>
