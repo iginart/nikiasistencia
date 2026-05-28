@@ -99,6 +99,29 @@ function Modal({ title, children, onClose, width=480 }) {
   useEffect(()=>{ const p=document.body.style.overflow; document.body.style.overflow="hidden"; return()=>{ document.body.style.overflow=p; }; },[]);
   return <div style={{ position:"fixed",inset:0,background:"rgba(0,0,0,0.55)",display:"flex",alignItems:"center",justifyContent:"center",zIndex:9999,padding:16 }} onClick={e=>{ if(e.target===e.currentTarget)onClose(); }}><div style={{ background:"#fff",borderRadius:14,padding:"1.5rem",width:"100%",maxWidth:width,maxHeight:"90vh",overflowY:"auto",boxShadow:"0 8px 32px rgba(0,0,0,0.18)" }}><div style={{ display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:20 }}><h3 style={{ margin:0,fontSize:16,fontWeight:500,color:"#1a1a1a" }}>{title}</h3><button onClick={onClose} style={{ background:"#f5f5f5",border:"none",cursor:"pointer",fontSize:18,color:"#666",width:30,height:30,borderRadius:"50%",display:"flex",alignItems:"center",justifyContent:"center" }}>×</button></div>{children}</div></div>;
 }
+function ConfirmDialog({ config, onCancel, onConfirm }) {
+  if (!config) return null;
+  const variant = config.variant || "primary";
+  const confirmBg = variant === "danger" ? COLORS.danger : COLORS.pink;
+  return (
+    <div style={{ position:"fixed",inset:0,background:"rgba(0,0,0,0.45)",display:"flex",alignItems:"center",justifyContent:"center",zIndex:10001,padding:16 }} onClick={e=>{ if(e.target===e.currentTarget) onCancel(); }}>
+      <div style={{ background:"#fff",borderRadius:14,padding:"1.25rem",width:"100%",maxWidth:380,boxShadow:"0 10px 34px rgba(0,0,0,0.20)",border:"1px solid rgba(120,120,120,0.14)" }}>
+        <div style={{ display:"flex",gap:12,alignItems:"flex-start",marginBottom:14 }}>
+          <div style={{ width:34,height:34,borderRadius:"50%",background:variant === "danger" ? COLORS.dangerLight : COLORS.pinkLight,color:variant === "danger" ? COLORS.danger : COLORS.pinkDark,display:"flex",alignItems:"center",justifyContent:"center",fontWeight:700,flexShrink:0 }}>!</div>
+          <div style={{ flex:1 }}>
+            <h3 style={{ margin:"1px 0 4px",fontSize:16,fontWeight:600,color:"#1a1a1a" }}>{config.title || "Confirmar cambio"}</h3>
+            <p style={{ margin:0,fontSize:13,lineHeight:1.45,color:"#555" }}>{config.message}</p>
+          </div>
+        </div>
+        <div style={{ display:"flex",gap:8,justifyContent:"flex-end",marginTop:18 }}>
+          <button onClick={onCancel} style={{ background:"#f5f5f5",border:"none",borderRadius:8,padding:"8px 14px",fontSize:14,cursor:"pointer",color:"#555",fontWeight:500 }}>Cancelar</button>
+          <button onClick={onConfirm} style={{ background:confirmBg,color:"#fff",border:"none",borderRadius:8,padding:"8px 14px",fontSize:14,cursor:"pointer",fontWeight:500 }}>{config.confirmText || "Confirmar"}</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function ModalInput({ label, value, onChange, type="text" }) { return <div><label style={{ fontSize:13,fontWeight:500,color:"#555",display:"block",marginBottom:6 }}>{label}</label><input type={type} value={value} onChange={e=>onChange(e.target.value)} style={{ width:"100%",border:"1.5px solid #e0e0e0",borderRadius:8,padding:"9px 12px",fontSize:14,background:"#fafafa",color:"#1a1a1a",outline:"none",boxSizing:"border-box" }} onFocus={e=>e.target.style.borderColor=COLORS.pink} onBlur={e=>e.target.style.borderColor="#e0e0e0"}/></div>; }
 function ModalSelect({ label, value, onChange, children }) { return <div><label style={{ fontSize:13,fontWeight:500,color:"#555",display:"block",marginBottom:6 }}>{label}</label><select value={value} onChange={e=>onChange(e.target.value)} style={{ width:"100%",border:"1.5px solid #e0e0e0",borderRadius:8,padding:"9px 12px",fontSize:14,background:"#fafafa",color:"#1a1a1a",outline:"none",boxSizing:"border-box" }}>{children}</select></div>; }
 
@@ -146,7 +169,7 @@ function TooltipHorario({ tooltip }) {
   );
 }
 
-function BloqueCalendario({ fecha, bloque, onChange, onDelete, bloqueado, onOpen, asistencia, manicuraNombre, onTooltip, onHideTooltip, readOnly = false }) {
+function BloqueCalendario({ fecha, bloque, onChange, onCommit, onDelete, bloqueado, onOpen, asistencia, manicuraNombre, onTooltip, onHideTooltip, readOnly = false }) {
   const { startSlot: ss, endSlot: es } = bloque;
   const top = calSlotY(ss), height = Math.max(calSlotY(es) - top, 24);
   const s = calFromSlot(ss), e = calFromSlot(es);
@@ -196,12 +219,15 @@ function BloqueCalendario({ fecha, bloque, onChange, onDelete, bloqueado, onOpen
       window.removeEventListener("pointermove", mv);
       window.removeEventListener("pointerup", up);
       window.removeEventListener("pointercancel", up);
+      if (dragState.current.moved && dragState.current.last && onCommit) {
+        onCommit(fecha, dragState.current.last);
+      }
     };
 
     window.addEventListener("pointermove", mv, { passive:false });
     window.addEventListener("pointerup", up);
     window.addEventListener("pointercancel", up);
-  }, [ss, es, fecha, onChange, locked, readOnly]);
+  }, [ss, es, fecha, onChange, onCommit, locked, readOnly]);
 
   return (
     <div
@@ -244,6 +270,10 @@ function CalendarioHorarios({ data, reloadData, user }) {
   const [navVisible, setNavVisible] = useState(true);
   const [modalDk, setModalDk] = useState(null);
   const [localH, setLocalH] = useState({});
+  const [localHAll, setLocalHAll] = useState({});
+  const [confirmDialog, setConfirmDialog] = useState(null);
+  const confirmResolver = useRef(null);
+  const silentEditOnce = useRef(new Set());
   const scrollRef = useRef(null);
   const didScroll = useRef(false);
   const tooltipTimer = useRef(null);
@@ -271,12 +301,27 @@ function CalendarioHorarios({ data, reloadData, user }) {
     return { startSlot:calToSlot(eh,em), endSlot:calToSlot(sh,sm) };
   }, [data.horarios]);
   const hasAsistencia = useCallback((f) => !!getAsistencia(f), [getAsistencia]);
-  const hasHorarioPersistido = useCallback((f) => (data.horarios||[]).some(h=>h.userId===parseInt(manicuraId)&&h.fecha===f&&h.trabaja&&h.entrada&&h.salida), [data.horarios, manicuraId]);
-  const confirmarCambioHorario = useCallback((f, accion) => {
-    if (!hasHorarioPersistido(f)) return true;
-    const dia = fechaLarga(f);
-    return window.confirm(`Este horario ya está guardado para ${dia}. ¿Confirmás que querés ${accion}?`);
-  }, [hasHorarioPersistido]);
+  const horarioKey = useCallback((uid, f) => `${parseInt(uid)}|${f}`, []);
+  const hasHorarioPersistidoFor = useCallback((uid, f) => (data.horarios||[]).some(h=>h.userId===parseInt(uid)&&h.fecha===f&&h.trabaja&&h.entrada&&h.salida), [data.horarios]);
+  const pedirConfirmacion = useCallback((config) => new Promise(resolve => {
+    confirmResolver.current = resolve;
+    setConfirmDialog(config);
+  }), []);
+  const confirmarCambioHorario = useCallback(async (uid, f, accion) => {
+    const key = horarioKey(uid, f);
+    if (!hasHorarioPersistidoFor(uid, f)) return true;
+    if (silentEditOnce.current.has(key)) {
+      silentEditOnce.current.delete(key);
+      return true;
+    }
+    const ok = await pedirConfirmacion({
+      title: accion === "eliminarlo" ? "Eliminar horario" : "Modificar horario",
+      message: `Este horario ya está guardado para ${fechaLarga(f)}. ¿Confirmás que querés ${accion}?`,
+      confirmText: accion === "eliminarlo" ? "Eliminar" : "Modificar",
+      variant: accion === "eliminarlo" ? "danger" : "primary",
+    });
+    return ok;
+  }, [hasHorarioPersistidoFor, horarioKey, pedirConfirmacion]);
 
   const bloques = useMemo(() => {
     const uid = parseInt(manicuraId); const res = {};
@@ -291,6 +336,7 @@ function CalendarioHorarios({ data, reloadData, user }) {
   }, [data.horarios, manicuraId]);
 
   const getB = f => localH[f] ?? bloques[f];
+  const getBFor = (uid, f) => localHAll[horarioKey(uid, f)] ?? getBloqueFor(uid, f);
 
   const showTooltip = useCallback((ev, f, b, manicuraNombre, asistenciaOverride) => {
     if (!b) return;
@@ -328,33 +374,54 @@ function CalendarioHorarios({ data, reloadData, user }) {
     Object.values(saveTimers.current).forEach(clearTimeout);
   }, []);
 
-  const saveBloque = useCallback(async (f, b) => {
-    if (hasAsistencia(f)) return;
-    if (!confirmarCambioHorario(f, "modificarlo")) return;
-    const uid = parseInt(manicuraId);
-    const bl = b || localH[f] || bloques[f]; if (!bl) return;
+  const saveBloqueFor = useCallback(async (uid, f, b, opts = {}) => {
+    if (getAsistenciaFor(uid, f)) return false;
+    const key = horarioKey(uid, f);
+    const bl = b || (parseInt(uid) === parseInt(manicuraId) ? localH[f] || bloques[f] : localHAll[key] || getBloqueFor(uid, f));
+    if (!bl) return false;
+    const ok = await confirmarCambioHorario(uid, f, "modificarlo");
+    if (!ok) {
+      if (opts.clearSelected !== false && parseInt(uid) === parseInt(manicuraId)) setLocalH(p => { const n={...p}; delete n[f]; return n; });
+      setLocalHAll(p => { const n={...p}; delete n[key]; return n; });
+      return false;
+    }
     const s = calFromSlot(bl.startSlot), e = calFromSlot(bl.endSlot);
-    await api.upsertHorario({ user_id:uid, fecha:f, entrada:calFmt(s.h,s.m), salida:calFmt(e.h,e.m), trabaja:true });
+    await api.upsertHorario({ user_id:parseInt(uid), fecha:f, entrada:calFmt(s.h,s.m), salida:calFmt(e.h,e.m), trabaja:true });
     await reloadData();
-    setLocalH(p => { const n={...p}; delete n[f]; return n; });
-  }, [manicuraId, localH, bloques, reloadData, hasAsistencia, confirmarCambioHorario]);
+    if (parseInt(uid) === parseInt(manicuraId)) setLocalH(p => { const n={...p}; delete n[f]; return n; });
+    setLocalHAll(p => { const n={...p}; delete n[key]; return n; });
+    return true;
+  }, [manicuraId, localH, localHAll, bloques, getBloqueFor, getAsistenciaFor, reloadData, confirmarCambioHorario, horarioKey]);
 
-  const onAddB = useCallback(async (f, b) => {
-    if (hasAsistencia(f)) return;
-    if (!confirmarCambioHorario(f, "modificarlo")) return;
-    const uid = parseInt(manicuraId);
-    setLocalH(p => ({...p,[f]:b}));
+  const saveBloque = useCallback(async (f, b) => saveBloqueFor(parseInt(manicuraId), f, b), [manicuraId, saveBloqueFor]);
+
+  const onAddBFor = useCallback(async (uid, f, b) => {
+    if (getAsistenciaFor(uid, f)) return false;
+    const key = horarioKey(uid, f);
+    const alreadyPersisted = hasHorarioPersistidoFor(uid, f);
+    if (alreadyPersisted && !(await confirmarCambioHorario(uid, f, "modificarlo"))) return false;
+    if (parseInt(uid) === parseInt(manicuraId)) setLocalH(p => ({...p,[f]:b}));
+    setLocalHAll(p => ({...p,[key]:b}));
     const s = calFromSlot(b.startSlot), e = calFromSlot(b.endSlot);
-    await api.upsertHorario({ user_id:uid, fecha:f, entrada:calFmt(s.h,s.m), salida:calFmt(e.h,e.m), trabaja:true });
+    await api.upsertHorario({ user_id:parseInt(uid), fecha:f, entrada:calFmt(s.h,s.m), salida:calFmt(e.h,e.m), trabaja:true });
+    if (!alreadyPersisted) silentEditOnce.current.add(key);
     await reloadData();
-    setLocalH(p => { const n={...p}; delete n[f]; return n; });
-  }, [manicuraId, reloadData, hasAsistencia, confirmarCambioHorario]);
+    if (parseInt(uid) === parseInt(manicuraId)) setLocalH(p => { const n={...p}; delete n[f]; return n; });
+    setLocalHAll(p => { const n={...p}; delete n[key]; return n; });
+    return true;
+  }, [manicuraId, reloadData, getAsistenciaFor, confirmarCambioHorario, hasHorarioPersistidoFor, horarioKey]);
 
-  const onDeleteB = useCallback(async (f) => {
-    if (hasAsistencia(f)) return;
-    if (!confirmarCambioHorario(f, "eliminarlo")) return;
-    await api.deleteHorario(parseInt(manicuraId), f); await reloadData();
-  }, [manicuraId, reloadData, hasAsistencia, confirmarCambioHorario]);
+  const onAddB = useCallback(async (f, b) => onAddBFor(parseInt(manicuraId), f, b), [manicuraId, onAddBFor]);
+
+  const onDeleteBFor = useCallback(async (uid, f) => {
+    if (getAsistenciaFor(uid, f)) return false;
+    if (!(await confirmarCambioHorario(uid, f, "eliminarlo"))) return false;
+    await api.deleteHorario(parseInt(uid), f);
+    await reloadData();
+    return true;
+  }, [reloadData, getAsistenciaFor, confirmarCambioHorario]);
+
+  const onDeleteB = useCallback(async (f) => onDeleteBFor(parseInt(manicuraId), f), [manicuraId, onDeleteBFor]);
 
   const toggleFeriado = useCallback(async (f) => {
     if (!esAdmin) return;
@@ -375,14 +442,15 @@ function CalendarioHorarios({ data, reloadData, user }) {
   const toggleBloqueoTodas = useCallback(async () => {
     if (!esAdmin || manicuras.length === 0) return;
     const accion = todasBloqueadas ? "habilitar" : "bloquear";
-    if (!window.confirm(`¿Confirmás que querés ${accion} ${MESES[mes]} ${anio} para todas las manicuras activas?`)) return;
+    const ok = await pedirConfirmacion({ title: accion === "bloquear" ? "Bloquear todas" : "Habilitar todas", message: `¿Confirmás que querés ${accion} ${MESES[mes]} ${anio} para todas las manicuras activas?`, confirmText: accion === "bloquear" ? "Bloquear" : "Habilitar", variant: accion === "bloquear" ? "danger" : "primary" });
+    if (!ok) return;
     for (const m of manicuras) {
       const yaBloqueada = periodoBloqueadoParaManicura(periodoKey, m.id);
       if (todasBloqueadas && yaBloqueada) await api.deletePeriodo(periodoKey, m.id);
       if (!todasBloqueadas && !yaBloqueada) await api.createPeriodo(periodoKey, m.id);
     }
     await reloadData();
-  }, [esAdmin, manicuras, todasBloqueadas, periodoKey, periodoBloqueadoParaManicura, reloadData, mes, anio]);
+  }, [esAdmin, manicuras, todasBloqueadas, periodoKey, periodoBloqueadoParaManicura, reloadData, mes, anio, pedirConfirmacion]);
 
   const { totalHoras, diasCargados } = useMemo(() => {
     let fechas = [];
@@ -457,7 +525,7 @@ function CalendarioHorarios({ data, reloadData, user }) {
               {CAL_HOURS.map((_,hi)=><div key={hi} style={{ position:"absolute",top:hi*CAL_SLOT_H,left:0,right:0,height:CAL_SLOT_H,borderTop:"0.5px solid rgba(120,120,120,0.24)",pointerEvents:"none" }}><div style={{ position:"absolute",top:"50%",left:0,right:0,borderTop:"1px dashed rgba(120,120,120,0.16)",opacity:0.5 }}/></div>)}
               <div style={{ position:"absolute",top:CAL_GRID_H,left:0,right:0,borderTop:"0.5px solid rgba(120,120,120,0.24)",pointerEvents:"none" }}/>
 
-              {b && <BloqueCalendario fecha={f} bloque={b} onChange={(f2,nb)=>{if(hasAsistencia(f2))return;setLocalH(p=>({...p,[f2]:nb}));clearTimeout(saveTimers.current[f2]);saveTimers.current[f2]=setTimeout(()=>saveBloque(f2,nb),600);}} onDelete={onDeleteB} bloqueado={bloqueado||hasAsistencia(f)} onOpen={setModalDk} asistencia={getAsistencia(f)} manicuraNombre={selectedManicura?.nombre} onTooltip={showTooltip} onHideTooltip={hideTooltip}/>}
+              {b && <BloqueCalendario fecha={f} bloque={b} onChange={(f2,nb)=>{if(hasAsistencia(f2))return;setLocalH(p=>({...p,[f2]:nb}));}} onCommit={(f2,nb)=>saveBloque(f2,nb)} onDelete={onDeleteB} bloqueado={bloqueado||hasAsistencia(f)} onOpen={setModalDk} asistencia={getAsistencia(f)} manicuraNombre={selectedManicura?.nombre} onTooltip={showTooltip} onHideTooltip={hideTooltip}/>}
             </div>;
           })}
         </div>
@@ -501,7 +569,7 @@ function CalendarioHorarios({ data, reloadData, user }) {
 
             <div style={{ display:"grid",gridTemplateColumns:gridCols,height:CAL_GRID_H+18 }}>
               {cols.map(m=>{
-                const b=getBloqueFor(m.id,diaVista), asis=getAsistenciaFor(m.id,diaVista), fer=feriados.has(diaVista);
+                const b=getBFor(m.id,diaVista), asis=getAsistenciaFor(m.id,diaVista), fer=feriados.has(diaVista);
                 const lockedByPeriod = periodoBloqueadoParaManicura(periodoKey,m.id) && !esAdmin;
                 const lockedForEdit = lockedByPeriod || !!asis;
                 return <div key={m.id}
@@ -513,13 +581,12 @@ function CalendarioHorarios({ data, reloadData, user }) {
                     const slot=calYSlot(e.clientY-rect.top);
                     const nb={startSlot:slot,endSlot:Math.min(CAL_TOTAL_SLOTS,slot+8)};
                     const st=calFromSlot(nb.startSlot), en=calFromSlot(nb.endSlot);
-                    await api.upsertHorario({user_id:m.id,fecha:diaVista,entrada:calFmt(st.h,st.m),salida:calFmt(en.h,en.m),trabaja:true});
-                    await reloadData();
+                    await onAddBFor(m.id, diaVista, nb);
                   }}
                   style={{ position:"relative",height:CAL_GRID_H+18,borderLeft:"0.5px solid rgba(120,120,120,0.24)",cursor:esAdmin&&!b&&!lockedForEdit?"cell":"default",background:fer?"rgba(186,117,23,0.05)":"transparent",minWidth:0 }}>
                   {CAL_HOURS.map((_,hi)=><div key={hi} style={{ position:"absolute",top:hi*CAL_SLOT_H,left:0,right:0,height:CAL_SLOT_H,borderTop:"0.5px solid rgba(120,120,120,0.24)",pointerEvents:"none" }}><div style={{ position:"absolute",top:"50%",left:0,right:0,borderTop:"1px dashed rgba(120,120,120,0.16)",opacity:0.5 }}/></div>)}
                   <div style={{ position:"absolute",top:CAL_GRID_H,left:0,right:0,borderTop:"0.5px solid rgba(120,120,120,0.24)",pointerEvents:"none" }}/>
-                  {b && <BloqueCalendario fecha={diaVista} bloque={b} onChange={()=>{}} onDelete={()=>{}} bloqueado={lockedByPeriod} readOnly={true} onOpen={()=>{ setManicuraId(m.id); setModalDk(diaVista); }} asistencia={asis} manicuraNombre={m.nombre} onTooltip={(ev,f,bl)=>showTooltip(ev,f,bl,m.nombre,asis)} onHideTooltip={hideTooltip}/>} 
+                  {b && <BloqueCalendario fecha={diaVista} bloque={b} onChange={(f2,nb)=>{ if(asis) return; setLocalHAll(p=>({...p,[horarioKey(m.id,f2)]:nb})); }} onCommit={(f2,nb)=>saveBloqueFor(m.id,f2,nb)} onDelete={(f2)=>onDeleteBFor(m.id,f2)} bloqueado={lockedByPeriod || !!asis} onOpen={()=>{ setManicuraId(m.id); setModalDk(diaVista); }} asistencia={asis} manicuraNombre={m.nombre} onTooltip={(ev,f,bl)=>showTooltip(ev,f,bl,m.nombre,asis)} onHideTooltip={hideTooltip}/>} 
                   {!b && lockedByPeriod && <div style={{ position:"absolute",left:4,right:4,top:8,background:COLORS.amberLight,color:COLORS.amber,borderRadius:6,padding:"4px 6px",fontSize:10,fontWeight:600,textAlign:"center" }}>Bloqueado</div>}
                 </div>;
               })}
@@ -701,6 +768,11 @@ function CalendarioHorarios({ data, reloadData, user }) {
         </div>
       </div>
       <TooltipHorario tooltip={tooltip}/>
+      <ConfirmDialog
+        config={confirmDialog}
+        onCancel={() => { setConfirmDialog(null); confirmResolver.current?.(false); confirmResolver.current = null; }}
+        onConfirm={() => { setConfirmDialog(null); confirmResolver.current?.(true); confirmResolver.current = null; }}
+      />
       {modalDk && <ModalDia f={modalDk}/>}
     </div>
   );
