@@ -89,6 +89,8 @@ const api = {
   getConfigCobertura: () => sb("config_cobertura?select=*&order=local_id"),
   upsertConfigCobertura: (d) => patchOrPost("config_cobertura", `local_id=eq.${d.local_id}`, d),
   getEncargadoLocales: () => sb("encargado_locales?select=*"),
+  getComisiones: () => sb("comisiones_detalle?select=*&order=fecha_pago.desc,id.desc"),
+  getComisionesImportaciones: () => sb("comisiones_importaciones?select=*&order=creado_en.desc&limit=10"),
   setEncargadoLocales: async (userId, localIds) => { await sb(`encargado_locales?user_id=eq.${userId}`, { method:"DELETE", prefer:"" }); if (!localIds?.length) return []; return sb("encargado_locales", { method:"POST", body:JSON.stringify(localIds.map(local_id=>({ user_id:userId, local_id:parseInt(local_id) }))) }); },
 };
 
@@ -99,6 +101,8 @@ function normalizePeriodo(p) { return { id: p.id, periodo: p.periodo, userId: p.
 function normalizeReglaCobertura(r) { return { id:r.id, localId:r.local_id, diaSemana:r.dia_semana, afluencia:r.afluencia, minimoDiario:r.minimo_diario, maximoDiario:r.maximo_diario, minimoApertura:r.minimo_apertura, minimoCierre:r.minimo_cierre, activo:r.activo }; }
 function normalizeConfigCobertura(c) { return { id:c.id, localId:c.local_id, horaApertura:(c.hora_apertura||"10:00").slice(0,5), horaCierre:(c.hora_cierre||"20:00").slice(0,5), minutosApertura:c.minutos_apertura ?? 60, minutosCierre:c.minutos_cierre ?? 60 }; }
 function normalizeEncargadoLocal(x) { return { userId:x.user_id, localId:x.local_id }; }
+function normalizeComision(c) { return { id:c.id, periodo:c.periodo, fechaPago:c.fecha_pago, localId:c.local_id, codigoExternoLocal:c.codigo_externo_local || "", nombreLocal:c.nombre_local || "", userId:c.user_id, codigoExternoManicura:c.codigo_externo_manicura || "", nombreManicura:c.nombre_manicura || "", servicio:c.servicio || "", cliente:c.cliente || "", precio:Number(c.precio || 0), comision:Number(c.comision || 0), hashRegistro:c.hash_registro || "", actualizadoEn:c.actualizado_en || "" }; }
+function normalizeComisionImportacion(i) { return { id:i.id, periodo:i.periodo, registros:i.registros || 0, totalPrecio:Number(i.total_precio || 0), totalComision:Number(i.total_comision || 0), estado:i.estado || "", mensaje:i.mensaje || "", creadoEn:i.creado_en || "" }; }
 
 const COLORS = {
   pink: "#d4537e", pinkLight: "#fbeaf0", pinkDark: "#72243e",
@@ -165,6 +169,8 @@ function getSemanas(dias) { const s = []; let sem = []; dias.forEach((d, i) => {
 function calcHoras(e, s) { if (!e || !s) return 0; const [eh, em] = e.split(":").map(Number), [sh, sm] = s.split(":").map(Number); const m = (sh * 60 + sm) - (eh * 60 + em); return m > 0 ? m / 60 : 0; }
 function fmtFecha(d) { return `${String(d.getDate()).padStart(2,"00")}/${String(d.getMonth()+1).padStart(2,"00")}`; }
 function dateKey(d) { return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}`; }
+function fmtMoney(n) { return new Intl.NumberFormat("es-AR", { style:"currency", currency:"ARS", maximumFractionDigits:0 }).format(Number(n || 0)); }
+function fmtPeriodo(d) { return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}`; }
 function genToken() { return Math.random().toString(36).slice(2) + Math.random().toString(36).slice(2); }
 function getAssignedLocalIds(data, user) {
   if (!user) return [];
@@ -1412,6 +1418,9 @@ function Reportes({ data, user, onOpenAgenda, reportRestore }) {
   const [fechaHasta, setFechaHasta] = useState(dateKey(hoy));
   const [expandidos, setExpandidos] = useState({});
   const [localCobertura, setLocalCobertura] = useState(reportRestore?.localId || localesVisibles[0]?.id || "");
+  const [periodoComisiones, setPeriodoComisiones] = useState(fmtPeriodo(hoy));
+  const [localComisiones, setLocalComisiones] = useState(puedeGestionar ? "todos" : String(user.localId || ""));
+  const [manicuraComisiones, setManicuraComisiones] = useState(puedeGestionar ? "todas" : String(user.id));
   const manicuras = data.users.filter(u=>u.rol==="manicura"&&u.activo&&(esAdmin || allowedLocalIds.includes(u.localId)));
   const semanasDelMes = useMemo(()=>getSemanas(getDiasDelMes(anio,mes)),[anio,mes]);
 
@@ -1539,20 +1548,71 @@ function Reportes({ data, user, onOpenAgenda, reportRestore }) {
     </>;
   };
 
+  const renderComisiones = () => {
+    const localNameById = new Map((data.locales||[]).map(l=>[l.id, l.nombre]));
+    const userNameById = new Map((data.users||[]).map(u=>[u.id, u.nombre]));
+    const allowedLocalNames = new Set(localesVisibles.map(l=>String(l.nombre||"").trim().toLowerCase()));
+    const visibleUserIds = new Set(manicuras.map(m=>m.id));
+    const normalize = v => String(v || "").trim().toLowerCase();
+    const puedeVerComision = (c) => {
+      if (esAdmin) return true;
+      if (esEncargada) return (c.localId && allowedLocalIds.includes(c.localId)) || allowedLocalNames.has(normalize(c.nombreLocal));
+      const localOk = !c.localId || c.localId === user.localId || normalize(c.nombreLocal) === normalize(localNameById.get(user.localId));
+      return (c.userId === user.id || normalize(c.nombreManicura) === normalize(user.nombre)) && localOk;
+    };
+    const registros = (data.comisiones||[])
+      .filter(c=>puedeVerComision(c))
+      .filter(c=>!periodoComisiones || c.periodo === periodoComisiones)
+      .filter(c=>localComisiones === "todos" || c.localId === parseInt(localComisiones) || normalize(c.nombreLocal) === normalize(localNameById.get(parseInt(localComisiones))))
+      .filter(c=>manicuraComisiones === "todas" || c.userId === parseInt(manicuraComisiones) || normalize(c.nombreManicura) === normalize(userNameById.get(parseInt(manicuraComisiones))))
+      .sort((a,b)=>(b.fechaPago||"").localeCompare(a.fechaPago||"") || (a.nombreLocal||"").localeCompare(b.nombreLocal||"") || (a.nombreManicura||"").localeCompare(b.nombreManicura||""));
+    const totalPrecio = registros.reduce((a,c)=>a+c.precio,0);
+    const totalComision = registros.reduce((a,c)=>a+c.comision,0);
+    const servicios = registros.length;
+    const clientes = new Set(registros.map(c=>normalize(c.cliente)).filter(Boolean)).size;
+    const ultimaImportacion = (data.comisionesImportaciones||[]).find(i=>i.periodo===periodoComisiones) || (data.comisionesImportaciones||[])[0];
+    const manicurasComision = puedeGestionar ? manicuras.filter(m => registros.some(c => c.userId === m.id || normalize(c.nombreManicura) === normalize(m.nombre)) || m.activo) : [user];
+    const mesesDisponibles = Array.from(new Set([fmtPeriodo(hoy), ...(data.comisiones||[]).map(c=>c.periodo).filter(Boolean)])).sort().reverse();
+    const resumenPorManicura = Array.from(registros.reduce((map,c)=>{ const key=c.userId || c.nombreManicura; const prev=map.get(key)||{ nombre:c.nombreManicura, local:c.nombreLocal, precio:0, comision:0, servicios:0 }; prev.precio+=c.precio; prev.comision+=c.comision; prev.servicios+=1; map.set(key,prev); return map; }, new Map()).values()).sort((a,b)=>b.comision-a.comision);
+    return <>
+      <div style={{ display:"flex",gap:8,marginBottom:16,flexWrap:"wrap",alignItems:"center" }}>
+        <Select value={periodoComisiones} onChange={setPeriodoComisiones} style={{ width:130 }}>{mesesDisponibles.map(p=><option key={p} value={p}>{p}</option>)}</Select>
+        {puedeGestionar&&<Select value={localComisiones} onChange={v=>{setLocalComisiones(v);setManicuraComisiones("todas");}} style={{ width:190 }}><option value="todos">Todos los locales</option>{localesVisibles.map(l=><option key={l.id} value={l.id}>{l.nombre}</option>)}</Select>}
+        {puedeGestionar&&<Select value={manicuraComisiones} onChange={setManicuraComisiones} style={{ width:210 }}><option value="todas">Todas las manicuras</option>{manicurasComision.map(m=><option key={m.id} value={m.id}>{m.nombre}</option>)}</Select>}
+        {ultimaImportacion&&<span style={{ fontSize:12,color:"var(--color-text-secondary)",marginLeft:"auto" }}>Última importación: {ultimaImportacion.periodo} · {ultimaImportacion.registros} registros</span>}
+      </div>
+      <div style={{ display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(160px,1fr))",gap:10,marginBottom:14 }}>
+        <Card><p style={{ margin:"0 0 4px",fontSize:11,color:"var(--color-text-secondary)",textTransform:"uppercase",letterSpacing:"0.04em" }}>Venta total</p><p style={{ margin:0,fontSize:22,fontWeight:600 }}>{fmtMoney(totalPrecio)}</p></Card>
+        <Card><p style={{ margin:"0 0 4px",fontSize:11,color:"var(--color-text-secondary)",textTransform:"uppercase",letterSpacing:"0.04em" }}>Comisión total</p><p style={{ margin:0,fontSize:22,fontWeight:600,color:COLORS.pink }}>{fmtMoney(totalComision)}</p></Card>
+        <Card><p style={{ margin:"0 0 4px",fontSize:11,color:"var(--color-text-secondary)",textTransform:"uppercase",letterSpacing:"0.04em" }}>Servicios</p><p style={{ margin:0,fontSize:22,fontWeight:600 }}>{servicios}</p></Card>
+        <Card><p style={{ margin:"0 0 4px",fontSize:11,color:"var(--color-text-secondary)",textTransform:"uppercase",letterSpacing:"0.04em" }}>Clientes</p><p style={{ margin:0,fontSize:22,fontWeight:600 }}>{clientes}</p></Card>
+      </div>
+      {puedeGestionar&&resumenPorManicura.length>0&&<Card style={{ marginBottom:14 }}><h3 style={{ margin:"0 0 10px",fontSize:15,fontWeight:500 }}>Resumen por manicura</h3><div style={{ display:"flex",flexDirection:"column",gap:6 }}>{resumenPorManicura.slice(0,8).map((r,i)=><div key={i} style={{ display:"grid",gridTemplateColumns:"1fr 90px 120px",gap:8,alignItems:"center",padding:"7px 8px",borderRadius:8,background:"var(--color-background-secondary)" }}><div><p style={{ margin:0,fontSize:13,fontWeight:500 }}>{r.nombre}</p><p style={{ margin:0,fontSize:11,color:"var(--color-text-secondary)" }}>{r.local} · {r.servicios} servicios</p></div><span style={{ fontSize:13,textAlign:"right",color:"var(--color-text-secondary)" }}>{fmtMoney(r.precio)}</span><strong style={{ fontSize:14,textAlign:"right",color:COLORS.pink }}>{fmtMoney(r.comision)}</strong></div>)}</div></Card>}
+      <Card style={{ padding:0,overflow:"hidden" }}>
+        <div style={{ padding:"12px 14px",borderBottom:"1px solid rgba(120,120,120,0.16)",display:"flex",justifyContent:"space-between",gap:8,alignItems:"center" }}><h3 style={{ margin:0,fontSize:15,fontWeight:500 }}>Detalle de comisiones</h3><span style={{ fontSize:12,color:"var(--color-text-secondary)" }}>{registros.length} registros</span></div>
+        {registros.length===0?<p style={{ margin:0,padding:18,textAlign:"center",fontSize:13,color:"var(--color-text-secondary)" }}>Sin comisiones para los filtros seleccionados.</p>:<div style={{ overflowX:"auto" }}><div style={{ minWidth:900 }}>
+          <div style={{ display:"grid",gridTemplateColumns:"90px 120px 130px 1.3fr 1.2fr 110px 110px",gap:8,padding:"8px 12px",fontSize:11,fontWeight:600,color:"var(--color-text-secondary)",borderBottom:"1px solid rgba(120,120,120,0.14)",textTransform:"uppercase" }}><span>Fecha</span><span>Local</span><span>Manicura</span><span>Servicio</span><span>Cliente</span><span style={{ textAlign:"right" }}>Precio</span><span style={{ textAlign:"right" }}>Comisión</span></div>
+          {registros.map(c=><div key={c.id} style={{ display:"grid",gridTemplateColumns:"90px 120px 130px 1.3fr 1.2fr 110px 110px",gap:8,padding:"8px 12px",fontSize:12,alignItems:"center",borderBottom:"1px solid rgba(120,120,120,0.08)" }}><span>{(c.fechaPago||"").split("-").reverse().join("/")}</span><span>{c.nombreLocal}</span><span style={{ fontWeight:500 }}>{c.nombreManicura}</span><span>{c.servicio}</span><span>{c.cliente}</span><span style={{ textAlign:"right",color:"var(--color-text-secondary)" }}>{fmtMoney(c.precio)}</span><strong style={{ textAlign:"right",color:COLORS.pink }}>{fmtMoney(c.comision)}</strong></div>)}
+        </div></div>}
+      </Card>
+    </>;
+  };
+
   return (
     <div>
       <h2 style={{ margin:"0 0 16px",fontSize:18,fontWeight:500 }}>Reportes</h2>
-      <div style={{ display:"flex",gap:4,background:"var(--color-background-secondary)",padding:4,borderRadius:10,marginBottom:20,width:"fit-content",flexWrap:"wrap" }}><TabBtn id="horas" label="Horas teóricas"/><TabBtn id="asistencia" label="Asistencia"/>{puedeVerCobertura && <TabBtn id="cobertura" label="Cobertura"/>}</div>
-      {tab!=="cobertura"&&puedeGestionar && <div style={{ display:"flex",gap:8,marginBottom:8,flexWrap:"wrap" }}>
+      <div style={{ display:"flex",gap:4,background:"var(--color-background-secondary)",padding:4,borderRadius:10,marginBottom:20,width:"fit-content",flexWrap:"wrap" }}><TabBtn id="horas" label="Horas teóricas"/><TabBtn id="asistencia" label="Asistencia"/>{puedeVerCobertura && <TabBtn id="cobertura" label="Cobertura"/>}<TabBtn id="comisiones" label="Comisiones"/></div>
+      {tab!=="cobertura"&&tab!=="comisiones"&&puedeGestionar && <div style={{ display:"flex",gap:8,marginBottom:8,flexWrap:"wrap" }}>
         <Select value={filtroTipo} onChange={v=>{setFiltroTipo(v);setExpandidos({});}} style={{ width:130 }}><option value="manicura">Manicura</option><option value="local">Local</option><option value="todas">Todas</option></Select>
         {filtroTipo==="manicura"&&<Select value={filtroId} onChange={v=>{setFiltroId(v);setExpandidos({});}} style={{ flex:1,minWidth:160 }}>{manicuras.map(m=><option key={m.id} value={m.id}>{m.nombre}</option>)}</Select>}
         {filtroTipo==="local"&&<Select value={filtroId} onChange={v=>{setFiltroId(v);setExpandidos({});}} style={{ flex:1,minWidth:160 }}>{localesVisibles.map(l=><option key={l.id} value={l.id}>{l.nombre}</option>)}</Select>}
       </div>}
-      {tab!=="cobertura"&&<div style={{ display:"flex",gap:8,marginBottom:16,flexWrap:"wrap" }}>
+      {tab!=="cobertura"&&tab!=="comisiones"&&<div style={{ display:"flex",gap:8,marginBottom:16,flexWrap:"wrap" }}>
         <Select value={filtroSemana} onChange={v=>{setFiltroSemana(v);setExpandidos({});}} style={{ width:150 }}><option value="todas">Todas las semanas</option>{semanasDelMes.map((_,i)=><option key={i+1} value={i+1}>Semana {i+1}</option>)}</Select>
         <Select value={filtroEstado} onChange={v=>{setFiltroEstado(v);setExpandidos({});}} style={{ width:160 }}><option value="todos">Todos los estados</option><option value="ausente">Solo ausencias</option><option value="tarde">Solo llegadas tarde</option></Select>
       </div>}
       {tab==="cobertura"&&puedeVerCobertura&&renderCobertura()}
+      {tab==="comisiones"&&renderComisiones()}
       {tab==="horas"&&<>
         <div style={{ display:"flex",gap:8,marginBottom:16,flexWrap:"wrap" }}><Select value={mes} onChange={v=>{setMes(parseInt(v));setExpandidos({});}} style={{ width:130 }}>{MESES.map((m,i)=><option key={i} value={i}>{m}</option>)}</Select><Select value={anio} onChange={v=>{setAnio(parseInt(v));setExpandidos({});}} style={{ width:90 }}>{[hoy.getFullYear()-1,hoy.getFullYear(),hoy.getFullYear()+1].map(a=><option key={a} value={a}>{a}</option>)}</Select></div>
         <div style={{ display:"flex",flexDirection:"column",gap:10 }}>{mF.map(m=>{ const r=buildHorasReport(m),exp=expandidos[m.id]; return <Card key={m.id} style={{ padding:"0.875rem 1.25rem" }}><div style={{ display:"flex",alignItems:"center",gap:12,flexWrap:"wrap" }}><Avatar nombre={r.nombre}/><div style={{ flex:1 }}><p style={{ margin:0,fontWeight:500,fontSize:14 }}>{r.nombre}</p><p style={{ margin:0,fontSize:12,color:"var(--color-text-secondary)" }}>{data.locales.find(l=>l.id===r.localId)?.nombre||"Sin local"} · {r.diasTrabajo} días</p></div><div style={{ display:"flex",gap:16,marginRight:8,flexWrap:"wrap",justifyContent:"flex-end" }}><div style={{ textAlign:"right" }}><p style={{ margin:0,fontSize:18,fontWeight:500 }}>{r.totalMesTeo.toFixed(1)}h</p><p style={{ margin:0,fontSize:11,color:"var(--color-text-secondary)" }}>teóricas</p></div><div style={{ textAlign:"right" }}><p style={{ margin:0,fontSize:18,fontWeight:500,color:r.totalMesReal<r.totalMesTeo?COLORS.danger:COLORS.success }}>{r.totalMesReal.toFixed(1)}h</p><p style={{ margin:0,fontSize:11,color:"var(--color-text-secondary)" }}>reales</p></div></div><button onClick={()=>toggleExp(m.id)} style={{ background:COLORS.pinkLight,color:COLORS.pinkDark,border:"none",borderRadius:8,padding:"6px 12px",fontSize:12,fontWeight:500,cursor:"pointer",whiteSpace:"nowrap" }}>{exp?"▲ Ocultar":"▼ Ver detalle"}</button></div>{exp&&<div style={{ marginTop:14,borderTop:"0.5px solid rgba(120,120,120,0.18)",paddingTop:14 }}>{r.semanasData.map(sem=><div key={sem.semana} style={{ marginBottom:14 }}><div style={{ display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:8 }}><span style={{ fontSize:12,fontWeight:500,color:"var(--color-text-secondary)",textTransform:"uppercase",letterSpacing:"0.04em" }}>Semana {sem.semana}</span><span style={{ fontSize:12,color:"var(--color-text-secondary)" }}>Teo: <strong>{sem.totalTeo.toFixed(1)}h</strong> · Real: <strong>{sem.totalReal.toFixed(1)}h</strong></span></div><div style={{ display:"flex",flexDirection:"column",gap:4 }}>{sem.dias.map(d=><div key={d.fecha} style={{ display:"grid",gridTemplateColumns:"60px 1fr 50px 50px 70px",gap:8,alignItems:"center",padding:"5px 8px",borderRadius:6,background:d.trabaja?"var(--color-background-secondary)":"transparent",opacity:d.trabaja?1:0.45 }}><span style={{ fontSize:13,fontWeight:500,color:"var(--color-text-secondary)" }}>{d.label}</span><span style={{ fontSize:12,color:"var(--color-text-primary)" }}>{d.trabaja?`${d.entrada} – ${d.salida}`:"—"}</span><span style={{ fontSize:12,color:"var(--color-text-secondary)",textAlign:"right" }}>{d.trabaja?`${d.horasTeo.toFixed(1)}h`:""}</span><span style={{ fontSize:12,textAlign:"right",color:d.trabaja?(d.horasReal<d.horasTeo?COLORS.danger:COLORS.success):"var(--color-text-secondary)" }}>{d.trabaja?(d.asistencia?`${d.horasReal.toFixed(1)}h`:"—"):""}</span>{d.trabaja?(d.asistencia?<Badge color={estadoColor[d.asistencia.estado]}>{d.asistencia.estado==="presente"?"✓":d.asistencia.estado==="tarde"?"Tarde":"Ausente"}</Badge>:<Badge color="gray">Sin reg.</Badge>):<Badge color="gray">Libre</Badge>}</div>)}</div></div>)}</div>}</Card>;})}{mF.length===0&&<Card><p style={{ margin:0,textAlign:"center",color:"var(--color-text-secondary)" }}>Sin datos para los filtros seleccionados.</p></Card>}</div>
@@ -1668,8 +1728,8 @@ export default function App() {
   const [reportRestore, setReportRestore] = useState(null);
 
   const reloadData = useCallback(async () => {
-    const [users, locales, horarios, asistencias, periodos, feriados, reglasCobertura, configCobertura, encargadoLocales] = await Promise.all([
-      api.getUsers(), api.getLocales(), api.getHorarios(), api.getAsistencias(), api.getPeriodos(), api.getFeriados(), api.getReglasCobertura(), api.getConfigCobertura(), api.getEncargadoLocales()
+    const [users, locales, horarios, asistencias, periodos, feriados, reglasCobertura, configCobertura, encargadoLocales, comisiones, comisionesImportaciones] = await Promise.all([
+      api.getUsers(), api.getLocales(), api.getHorarios(), api.getAsistencias(), api.getPeriodos(), api.getFeriados(), api.getReglasCobertura(), api.getConfigCobertura(), api.getEncargadoLocales(), api.getComisiones(), api.getComisionesImportaciones()
     ]);
     setData({
       users: users.map(normalizeUser),
@@ -1681,6 +1741,8 @@ export default function App() {
       reglasCobertura: reglasCobertura.map(normalizeReglaCobertura),
       configCobertura: (configCobertura||[]).map(normalizeConfigCobertura),
       encargadoLocales: (encargadoLocales||[]).map(normalizeEncargadoLocal),
+      comisiones: (comisiones||[]).map(normalizeComision),
+      comisionesImportaciones: (comisionesImportaciones||[]).map(normalizeComisionImportacion),
     });
   }, []);
 
