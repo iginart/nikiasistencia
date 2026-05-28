@@ -280,14 +280,31 @@ function CalendarioHorarios({ data, reloadData, user }) {
   const saveTimers = useRef({});
   const [tooltip, setTooltip] = useState(null);
 
-  const periodoKey = `${anio}-${String(mes+1).padStart(2,"0")}`;
+  const mesKey = `${anio}-${String(mes+1).padStart(2,"0")}`;
+  const periodoDesdeFecha = useCallback((f) => f.slice(0, 7), []);
+  const periodoDesdeDate = useCallback((d) => `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}`, []);
+  const periodoActivoKey = vista === "semana"
+    ? periodoDesdeDate(weekStart)
+    : vista === "dia"
+      ? periodoDesdeFecha(diaVista)
+      : mesKey;
+  const periodoActivoDate = vista === "semana"
+    ? weekStart
+    : vista === "dia"
+      ? new Date(diaVista + "T12:00:00")
+      : new Date(anio, mes, 1);
+  const periodoActivoLabel = `${MESES[periodoActivoDate.getMonth()]} ${periodoActivoDate.getFullYear()}`;
   const periodoBloqueadoParaManicura = useCallback((periodo, uid) =>
     (data.periodosBloqueados || []).some(p => {
       if (typeof p === "string") return p === periodo;
       return p.periodo === periodo && parseInt(p.userId) === parseInt(uid);
     }), [data.periodosBloqueados]
   );
-  const bloqueado = periodoBloqueadoParaManicura(periodoKey, manicuraId) && !esAdmin;
+  const bloqueadoPorFecha = useCallback((f, uid = manicuraId) =>
+    periodoBloqueadoParaManicura(periodoDesdeFecha(f), uid) && !esAdmin,
+    [periodoBloqueadoParaManicura, periodoDesdeFecha, manicuraId, esAdmin]
+  );
+  const bloqueado = periodoBloqueadoParaManicura(periodoActivoKey, manicuraId) && !esAdmin;
   const feriados = new Set((data.feriados||[]).map(f=>f.fecha));
   const manicuras = data.users.filter(u=>u.rol==="manicura"&&u.activo);
   const selectedManicura = data.users.find(u=>u.id===parseInt(manicuraId));
@@ -376,6 +393,7 @@ function CalendarioHorarios({ data, reloadData, user }) {
 
   const saveBloqueFor = useCallback(async (uid, f, b, opts = {}) => {
     if (getAsistenciaFor(uid, f)) return false;
+    if (bloqueadoPorFecha(f, uid)) return false;
     const key = horarioKey(uid, f);
     const bl = b || (parseInt(uid) === parseInt(manicuraId) ? localH[f] || bloques[f] : localHAll[key] || getBloqueFor(uid, f));
     if (!bl) return false;
@@ -391,12 +409,13 @@ function CalendarioHorarios({ data, reloadData, user }) {
     if (parseInt(uid) === parseInt(manicuraId)) setLocalH(p => { const n={...p}; delete n[f]; return n; });
     setLocalHAll(p => { const n={...p}; delete n[key]; return n; });
     return true;
-  }, [manicuraId, localH, localHAll, bloques, getBloqueFor, getAsistenciaFor, reloadData, confirmarCambioHorario, horarioKey]);
+  }, [manicuraId, localH, localHAll, bloques, getBloqueFor, getAsistenciaFor, reloadData, confirmarCambioHorario, horarioKey, bloqueadoPorFecha]);
 
   const saveBloque = useCallback(async (f, b) => saveBloqueFor(parseInt(manicuraId), f, b), [manicuraId, saveBloqueFor]);
 
   const onAddBFor = useCallback(async (uid, f, b) => {
     if (getAsistenciaFor(uid, f)) return false;
+    if (bloqueadoPorFecha(f, uid)) return false;
     const key = horarioKey(uid, f);
     const alreadyPersisted = hasHorarioPersistidoFor(uid, f);
     if (alreadyPersisted && !(await confirmarCambioHorario(uid, f, "modificarlo"))) return false;
@@ -409,17 +428,18 @@ function CalendarioHorarios({ data, reloadData, user }) {
     if (parseInt(uid) === parseInt(manicuraId)) setLocalH(p => { const n={...p}; delete n[f]; return n; });
     setLocalHAll(p => { const n={...p}; delete n[key]; return n; });
     return true;
-  }, [manicuraId, reloadData, getAsistenciaFor, confirmarCambioHorario, hasHorarioPersistidoFor, horarioKey]);
+  }, [manicuraId, reloadData, getAsistenciaFor, confirmarCambioHorario, hasHorarioPersistidoFor, horarioKey, bloqueadoPorFecha]);
 
   const onAddB = useCallback(async (f, b) => onAddBFor(parseInt(manicuraId), f, b), [manicuraId, onAddBFor]);
 
   const onDeleteBFor = useCallback(async (uid, f) => {
     if (getAsistenciaFor(uid, f)) return false;
+    if (bloqueadoPorFecha(f, uid)) return false;
     if (!(await confirmarCambioHorario(uid, f, "eliminarlo"))) return false;
     await api.deleteHorario(parseInt(uid), f);
     await reloadData();
     return true;
-  }, [reloadData, getAsistenciaFor, confirmarCambioHorario]);
+  }, [reloadData, getAsistenciaFor, confirmarCambioHorario, bloqueadoPorFecha]);
 
   const onDeleteB = useCallback(async (f) => onDeleteBFor(parseInt(manicuraId), f), [manicuraId, onDeleteBFor]);
 
@@ -433,24 +453,24 @@ function CalendarioHorarios({ data, reloadData, user }) {
   const toggleBloqueo = useCallback(async () => {
     const uid = parseInt(manicuraId);
     if (!uid) return;
-    if (periodoBloqueadoParaManicura(periodoKey, uid)) await api.deletePeriodo(periodoKey, uid);
-    else await api.createPeriodo(periodoKey, uid);
+    if (periodoBloqueadoParaManicura(periodoActivoKey, uid)) await api.deletePeriodo(periodoActivoKey, uid);
+    else await api.createPeriodo(periodoActivoKey, uid);
     await reloadData();
-  }, [periodoKey, manicuraId, periodoBloqueadoParaManicura, reloadData]);
+  }, [periodoActivoKey, manicuraId, periodoBloqueadoParaManicura, reloadData]);
 
-  const todasBloqueadas = useMemo(() => manicuras.length > 0 && manicuras.every(m => periodoBloqueadoParaManicura(periodoKey, m.id)), [manicuras, periodoKey, periodoBloqueadoParaManicura]);
+  const todasBloqueadas = useMemo(() => manicuras.length > 0 && manicuras.every(m => periodoBloqueadoParaManicura(periodoActivoKey, m.id)), [manicuras, periodoActivoKey, periodoBloqueadoParaManicura]);
   const toggleBloqueoTodas = useCallback(async () => {
     if (!esAdmin || manicuras.length === 0) return;
     const accion = todasBloqueadas ? "habilitar" : "bloquear";
-    const ok = await pedirConfirmacion({ title: accion === "bloquear" ? "Bloquear todas" : "Habilitar todas", message: `¿Confirmás que querés ${accion} ${MESES[mes]} ${anio} para todas las manicuras activas?`, confirmText: accion === "bloquear" ? "Bloquear" : "Habilitar", variant: accion === "bloquear" ? "danger" : "primary" });
+    const ok = await pedirConfirmacion({ title: accion === "bloquear" ? "Bloquear todas" : "Habilitar todas", message: `¿Confirmás que querés ${accion} ${periodoActivoLabel} para todas las manicuras activas?`, confirmText: accion === "bloquear" ? "Bloquear" : "Habilitar", variant: accion === "bloquear" ? "danger" : "primary" });
     if (!ok) return;
     for (const m of manicuras) {
-      const yaBloqueada = periodoBloqueadoParaManicura(periodoKey, m.id);
-      if (todasBloqueadas && yaBloqueada) await api.deletePeriodo(periodoKey, m.id);
-      if (!todasBloqueadas && !yaBloqueada) await api.createPeriodo(periodoKey, m.id);
+      const yaBloqueada = periodoBloqueadoParaManicura(periodoActivoKey, m.id);
+      if (todasBloqueadas && yaBloqueada) await api.deletePeriodo(periodoActivoKey, m.id);
+      if (!todasBloqueadas && !yaBloqueada) await api.createPeriodo(periodoActivoKey, m.id);
     }
     await reloadData();
-  }, [esAdmin, manicuras, todasBloqueadas, periodoKey, periodoBloqueadoParaManicura, reloadData, mes, anio, pedirConfirmacion]);
+  }, [esAdmin, manicuras, todasBloqueadas, periodoActivoKey, periodoActivoLabel, periodoBloqueadoParaManicura, reloadData, pedirConfirmacion]);
 
   const { totalHoras, diasCargados } = useMemo(() => {
     let fechas = [];
@@ -513,19 +533,19 @@ function CalendarioHorarios({ data, reloadData, user }) {
         </div>
         <div style={{ flex:1,display:"grid",gridTemplateColumns:"repeat(6,1fr)" }}>
           {weekDays.map((d,i)=>{
-            const f=dateKey(d),fer=feriados.has(f),b=getB(f);
+            const f=dateKey(d),fer=feriados.has(f),b=getB(f),lockedDay=bloqueadoPorFecha(f);
             return <div key={i}
               onClick={e=>{
-                if (bloqueado || b || hasAsistencia(f)) return;
+                if (lockedDay || b || hasAsistencia(f)) return;
                 const rect = e.currentTarget.getBoundingClientRect();
                 const slot = calYSlot(e.clientY - rect.top);
                 onAddB(f,{startSlot:slot,endSlot:Math.min(CAL_TOTAL_SLOTS,slot+8)});
               }}
-              style={{ position:"relative",height:CAL_GRID_H+18,borderLeft:"0.5px solid rgba(120,120,120,0.24)",cursor:bloqueado?"default":(b?"default":"cell"),background:fer?"rgba(186,117,23,0.05)":"transparent" }}>
+              style={{ position:"relative",height:CAL_GRID_H+18,borderLeft:"0.5px solid rgba(120,120,120,0.24)",cursor:lockedDay?"default":(b?"default":"cell"),background:fer?"rgba(186,117,23,0.05)":"transparent" }}>
               {CAL_HOURS.map((_,hi)=><div key={hi} style={{ position:"absolute",top:hi*CAL_SLOT_H,left:0,right:0,height:CAL_SLOT_H,borderTop:"0.5px solid rgba(120,120,120,0.24)",pointerEvents:"none" }}><div style={{ position:"absolute",top:"50%",left:0,right:0,borderTop:"1px dashed rgba(120,120,120,0.16)",opacity:0.5 }}/></div>)}
               <div style={{ position:"absolute",top:CAL_GRID_H,left:0,right:0,borderTop:"0.5px solid rgba(120,120,120,0.24)",pointerEvents:"none" }}/>
 
-              {b && <BloqueCalendario fecha={f} bloque={b} onChange={(f2,nb)=>{if(hasAsistencia(f2))return;setLocalH(p=>({...p,[f2]:nb}));}} onCommit={(f2,nb)=>saveBloque(f2,nb)} onDelete={onDeleteB} bloqueado={bloqueado||hasAsistencia(f)} onOpen={setModalDk} asistencia={getAsistencia(f)} manicuraNombre={selectedManicura?.nombre} onTooltip={showTooltip} onHideTooltip={hideTooltip}/>}
+              {b && <BloqueCalendario fecha={f} bloque={b} onChange={(f2,nb)=>{if(hasAsistencia(f2))return;setLocalH(p=>({...p,[f2]:nb}));}} onCommit={(f2,nb)=>saveBloque(f2,nb)} onDelete={onDeleteB} bloqueado={lockedDay||hasAsistencia(f)} onOpen={setModalDk} asistencia={getAsistencia(f)} manicuraNombre={selectedManicura?.nombre} onTooltip={showTooltip} onHideTooltip={hideTooltip}/>}
             </div>;
           })}
         </div>
@@ -570,7 +590,7 @@ function CalendarioHorarios({ data, reloadData, user }) {
             <div style={{ display:"grid",gridTemplateColumns:gridCols,height:CAL_GRID_H+18 }}>
               {cols.map(m=>{
                 const b=getBFor(m.id,diaVista), asis=getAsistenciaFor(m.id,diaVista), fer=feriados.has(diaVista);
-                const lockedByPeriod = periodoBloqueadoParaManicura(periodoKey,m.id) && !esAdmin;
+                const lockedByPeriod = bloqueadoPorFecha(diaVista, m.id);
                 const lockedForEdit = lockedByPeriod || !!asis;
                 return <div key={m.id}
                   onClick={async e=>{
@@ -620,7 +640,7 @@ function CalendarioHorarios({ data, reloadData, user }) {
         return <div key={si} style={{ display:"grid",gridTemplateColumns:"repeat(6,1fr) 70px",borderBottom:"0.5px solid rgba(120,120,120,0.24)",height:rowH }}>
           {Array.from({length:6},(_,i)=>{
             const d=semana[i]; if(!d) return <div key={i} style={{ borderLeft:"0.5px solid rgba(120,120,120,0.24)" }}/>;
-            const f=dateKey(d),b=getB(f),isToday=f===todayDk,fer=feriados.has(f),asis=getAsistencia(f),ai=asistenciaInfo(asis),lockedDia=bloqueado||!!asis;
+            const f=dateKey(d),b=getB(f),isToday=f===todayDk,fer=feriados.has(f),asis=getAsistencia(f),ai=asistenciaInfo(asis),lockedDia=bloqueadoPorFecha(f)||!!asis;
             const st=b?calFromSlot(b.startSlot):null, en=b?calFromSlot(b.endSlot):null;
             const tooltipTitle = b ? `${selectedManicura?.nombre || "Manicura"}\n${fechaLarga(f)}\nDesde: ${calFmt(st.h,st.m)}\nHasta: ${calFmt(en.h,en.m)}\nAsistencia: ${ai.label}` : "";
             return <div
@@ -648,7 +668,7 @@ function CalendarioHorarios({ data, reloadData, user }) {
                   {lockedDia && asis && <span style={{ fontSize:9,color:COLORS.gray,whiteSpace:"nowrap" }}>Bloq.</span>}
                 </div>
               </div>
-              : !bloqueado && <p style={{ margin:0,fontSize:10,color:"var(--color-text-secondary)",opacity:0.5 }}>+ agregar</p>}
+              : !lockedDia && <p style={{ margin:0,fontSize:10,color:"var(--color-text-secondary)",opacity:0.5 }}>+ agregar</p>}
             </div>;
           })}
           <div style={{ borderLeft:"0.5px solid rgba(120,120,120,0.24)",display:"flex",alignItems:"center",justifyContent:"center" }}>
@@ -668,7 +688,7 @@ function CalendarioHorarios({ data, reloadData, user }) {
     const fer = feriados.has(f);
     const asistencia = getAsistencia(f);
     const ai = asistenciaInfo(asistencia);
-    const lockedDia = bloqueado || !!asistencia;
+    const lockedDia = bloqueadoPorFecha(f) || !!asistencia;
     const d = new Date(f+"T12:00:00"), dow=d.getDay();
     const label = `${DIAS_SEMANA[dow===0?6:dow-1]} ${d.getDate()} de ${MESES[d.getMonth()]}`;
     const opciones = Array.from({length:CAL_TOTAL_SLOTS + 1},(_,i)=>{ const {h,m}=calFromSlot(i); return calFmt(h,m); });
@@ -687,7 +707,7 @@ function CalendarioHorarios({ data, reloadData, user }) {
         {asistencia && <div style={{ background:ai.bg,color:ai.color,borderRadius:8,padding:"8px 10px",fontSize:13,fontWeight:500,marginBottom:12 }}>
           {ai.icon} {ai.label}. Este horario ya tiene datos reales y no puede modificarse ni eliminarse.
         </div>}
-        {!asistencia && bloqueado && <div style={{ background:COLORS.amberLight,color:COLORS.amber,borderRadius:8,padding:"8px 10px",fontSize:13,fontWeight:500,marginBottom:12 }}>
+        {!asistencia && bloqueadoPorFecha(f) && <div style={{ background:COLORS.amberLight,color:COLORS.amber,borderRadius:8,padding:"8px 10px",fontSize:13,fontWeight:500,marginBottom:12 }}>
           🔒 Este período está bloqueado.
         </div>}
         {!lockedDia && <div style={{ display:"flex",flexDirection:"column",gap:12 }}>
@@ -710,7 +730,7 @@ function CalendarioHorarios({ data, reloadData, user }) {
       <div style={{ display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:16,flexWrap:"wrap",gap:8 }}>
         <h2 style={{ margin:0,fontSize:18,fontWeight:500 }}>{esAdmin?"Gestión de horarios":"Mis horarios"}</h2>
         {esAdmin && <div style={{ display:"flex",gap:8,flexWrap:"wrap" }}>
-          <Btn onClick={toggleBloqueo} variant={periodoBloqueadoParaManicura(periodoKey, manicuraId)?"success":"danger"} size="sm">{periodoBloqueadoParaManicura(periodoKey, manicuraId)?"🔓 Habilitar manicura":"🔒 Bloquear manicura"}</Btn>
+          <Btn onClick={toggleBloqueo} variant={periodoBloqueadoParaManicura(periodoActivoKey, manicuraId)?"success":"danger"} size="sm">{periodoBloqueadoParaManicura(periodoActivoKey, manicuraId)?"🔓 Habilitar manicura":"🔒 Bloquear manicura"}</Btn>
           <Btn onClick={toggleBloqueoTodas} variant={todasBloqueadas?"success":"danger"} size="sm">{todasBloqueadas?"🔓 Habilitar todas":"🔒 Bloquear todas"}</Btn>
         </div>}
       </div>
