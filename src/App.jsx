@@ -1151,49 +1151,120 @@ function AsistenciaDiaria({ data, reloadData, user }) {
   const [formAus, setFormAus] = useState({});
   const [formTarde, setFormTarde] = useState({});
   const allowedLocalIds = getAssignedLocalIds(data, user);
-  const manicurasConHorario = data.users.filter(u => {
+  const localesVisibles = (user.rol === "admin"
+    ? data.locales
+    : data.locales.filter(l => allowedLocalIds.includes(l.id))
+  ).sort((a,b)=>(a.nombre||"").localeCompare(b.nombre||""));
+  const [filtroLocal, setFiltroLocal] = useState("todos");
+
+  useEffect(() => {
+    if (filtroLocal !== "todos" && !localesVisibles.some(l => l.id === parseInt(filtroLocal))) {
+      setFiltroLocal("todos");
+    }
+  }, [filtroLocal, localesVisibles]);
+
+  const getA = uid => data.asistencias.find(a=>a.userId===uid&&a.fecha===fecha);
+  const estadoColor = {presente:"success",tarde:"amber",ausente:"danger"};
+  const estadoLabel = {presente:"✓ Presente",tarde:"⏰ Tarde",ausente:"✗ Ausente"};
+
+  const manicurasConHorario = useMemo(() => data.users.filter(u => {
     if (u.rol!=="manicura"||!u.activo) return false;
     if (user.rol === "encargada" && !allowedLocalIds.includes(u.localId)) return false;
+    if (filtroLocal !== "todos" && u.localId !== parseInt(filtroLocal)) return false;
     const h = data.horarios.find(h=>h.userId===u.id&&h.fecha===fecha);
     return h&&h.trabaja&&h.entrada&&h.salida;
-  });
-  const getA = uid => data.asistencias.find(a=>a.userId===uid&&a.fecha===fecha);
+  }).sort((a,b)=>{
+    const la=data.locales.find(l=>l.id===a.localId)?.nombre||"";
+    const lb=data.locales.find(l=>l.id===b.localId)?.nombre||"";
+    return la.localeCompare(lb) || a.nombre.localeCompare(b.nombre);
+  }), [data.users, data.horarios, data.locales, fecha, user.rol, allowedLocalIds, filtroLocal]);
+
+  const gruposPorLocal = useMemo(() => {
+    const grupos = new Map();
+    manicurasConHorario.forEach(m => {
+      const local = data.locales.find(l=>l.id===m.localId) || { id: "sin", nombre: "Sin local", direccion: "" };
+      if (!grupos.has(local.id)) grupos.set(local.id, { local, manicuras: [] });
+      grupos.get(local.id).manicuras.push(m);
+    });
+    return Array.from(grupos.values()).sort((a,b)=>(a.local.nombre||"").localeCompare(b.local.nombre||""));
+  }, [manicurasConHorario, data.locales]);
+
+  const resumenLocal = (manicuras) => manicuras.reduce((acc,m)=>{
+    const a=getA(m.id);
+    if (!a) acc.pendientes += 1;
+    else if (a.estado === "presente") acc.presentes += 1;
+    else if (a.estado === "tarde") acc.tardes += 1;
+    else if (a.estado === "ausente") acc.ausentes += 1;
+    return acc;
+  }, { presentes:0, tardes:0, ausentes:0, pendientes:0 });
+
   const setA = async (uid, datos) => {
     await api.upsertAsistencia({user_id:uid,fecha,estado:datos.estado,entrada_real:datos.entradaReal||null,salida_real:datos.salidaReal||null,motivo:datos.motivo||null,certificado:datos.certificado||false,tipo_doc:datos.tipoDoc||null});
     await reloadData();
   };
   const limpiar = async (uid) => { await api.deleteAsistencia(uid,fecha); await reloadData(); };
-  const estadoColor = {presente:"success",tarde:"amber",ausente:"danger"};
-  const estadoLabel = {presente:"✓ Presente",tarde:"⏰ Tarde",ausente:"✗ Ausente"};
+
+  const renderManicura = (m) => {
+    const h=data.horarios.find(hh=>hh.userId===m.id&&hh.fecha===fecha);
+    const a=getA(m.id);
+    return <Card key={m.id} style={{ padding:"0.85rem 1rem",borderColor:a?.estado?"rgba(120,120,120,0.18)":"rgba(120,120,120,0.14)" }}>
+      <div style={{ display:"flex",alignItems:"center",gap:12,flexWrap:"wrap" }}>
+        <Avatar nombre={m.nombre}/>
+        <div style={{ flex:1,minWidth:120 }}>
+          <p style={{ margin:0,fontWeight:500,fontSize:14 }}>{m.nombre}</p>
+          <p style={{ margin:0,fontSize:12,color:"var(--color-text-secondary)" }}>Horario: {h?.entrada} – {h?.salida}{a?.estado==="tarde"?` | Real: ${a.entradaReal} – ${a.salidaReal}`:""}</p>
+          {a?.estado==="ausente"&&<p style={{ margin:0,fontSize:12,color:COLORS.danger }}>{a.motivo}{a.certificado?` · ${a.tipoDoc||"con certificado"}`:""}</p>}
+        </div>
+        {a?.estado ? <Badge color={estadoColor[a.estado]}>{estadoLabel[a.estado]}</Badge> : <Badge color="gray">Pendiente</Badge>}
+        <div style={{ display:"flex",gap:6,flexWrap:"wrap" }}>
+          <Btn onClick={()=>setA(m.id,{estado:"presente"})} variant="success" size="sm">✓</Btn>
+          <Btn onClick={()=>{ const h2=data.horarios.find(h=>h.userId===m.id&&h.fecha===fecha); const a2=getA(m.id); setFormTarde({uid:m.id,entrada:a2?.entradaReal||h2?.entrada||"",salida:a2?.salidaReal||h2?.salida||""}); setModal("tarde"); }} variant="secondary" size="sm">⏰ Tarde</Btn>
+          <Btn onClick={()=>{ const a2=getA(m.id); setFormAus({uid:m.id,motivo:a2?.motivo||MOTIVOS_AUSENCIA[0],certificado:a2?.certificado||false,tipoDoc:a2?.tipoDoc||""}); setModal("ausencia"); }} variant="danger" size="sm">✗ Ausente</Btn>
+          {a&&<Btn onClick={()=>limpiar(m.id)} variant="ghost" size="sm">Limpiar</Btn>}
+        </div>
+      </div>
+    </Card>;
+  };
+
   return (
     <div>
       <div style={{ display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:16,flexWrap:"wrap",gap:8 }}>
-        <h2 style={{ margin:0,fontSize:18,fontWeight:500 }}>Asistencia diaria</h2>
-        <input type="date" value={fecha} onChange={e=>setFecha(e.target.value)} style={{ border:"0.5px solid rgba(120,120,120,0.24)",borderRadius:8,padding:"7px 12px",fontSize:14,background:"var(--color-background-primary)",color:"var(--color-text-primary)" }}/>
+        <div>
+          <h2 style={{ margin:0,fontSize:18,fontWeight:500 }}>Asistencia diaria</h2>
+          <p style={{ margin:"3px 0 0",fontSize:12,color:"var(--color-text-secondary)" }}>Agrupada por local para controlar cada sucursal por separado.</p>
+        </div>
+        <div style={{ display:"flex",gap:8,alignItems:"center",flexWrap:"wrap" }}>
+          <select value={filtroLocal} onChange={e=>setFiltroLocal(e.target.value)} style={{ border:"0.5px solid rgba(120,120,120,0.24)",borderRadius:8,padding:"7px 12px",fontSize:14,background:"var(--color-background-primary)",color:"var(--color-text-primary)",minWidth:180 }}>
+            <option value="todos">Todos los locales</option>
+            {localesVisibles.map(l=><option key={l.id} value={l.id}>{l.nombre}</option>)}
+          </select>
+          <input type="date" value={fecha} onChange={e=>setFecha(e.target.value)} style={{ border:"0.5px solid rgba(120,120,120,0.24)",borderRadius:8,padding:"7px 12px",fontSize:14,background:"var(--color-background-primary)",color:"var(--color-text-primary)" }}/>
+        </div>
       </div>
+
       {manicurasConHorario.length===0
-        ? <Card><p style={{ margin:0,color:"var(--color-text-secondary)",fontSize:14,textAlign:"center" }}>No hay manicuras con horario para esta fecha.</p></Card>
-        : <div style={{ display:"flex",flexDirection:"column",gap:8 }}>
-          {manicurasConHorario.map(m=>{
-            const h=data.horarios.find(hh=>hh.userId===m.id&&hh.fecha===fecha);
-            const a=getA(m.id);
-            return <Card key={m.id}>
-              <div style={{ display:"flex",alignItems:"center",gap:12,flexWrap:"wrap" }}>
-                <Avatar nombre={m.nombre}/>
-                <div style={{ flex:1,minWidth:100 }}>
-                  <p style={{ margin:0,fontWeight:500,fontSize:14 }}>{m.nombre}</p>
-                  <p style={{ margin:0,fontSize:12,color:"var(--color-text-secondary)" }}>Horario: {h?.entrada} – {h?.salida}{a?.estado==="tarde"?` | Real: ${a.entradaReal} – ${a.salidaReal}`:""}</p>
-                  {a?.estado==="ausente"&&<p style={{ margin:0,fontSize:12,color:COLORS.danger }}>{a.motivo}{a.certificado?` · ${a.tipoDoc||"con certificado"}`:""}</p>}
+        ? <Card><p style={{ margin:0,color:"var(--color-text-secondary)",fontSize:14,textAlign:"center" }}>No hay manicuras con horario para esta fecha{filtroLocal!=="todos"?" en el local seleccionado":""}.</p></Card>
+        : <div style={{ display:"flex",flexDirection:"column",gap:14 }}>
+          {gruposPorLocal.map(({ local, manicuras }) => {
+            const r = resumenLocal(manicuras);
+            return <div key={local.id} style={{ border:"1px solid rgba(120,120,120,0.18)",borderRadius:14,overflow:"hidden",background:"var(--color-background-primary)" }}>
+              <div style={{ display:"flex",alignItems:"center",justifyContent:"space-between",gap:10,flexWrap:"wrap",padding:"10px 12px",background:"var(--color-background-secondary)",borderBottom:"1px solid rgba(120,120,120,0.14)" }}>
+                <div>
+                  <p style={{ margin:0,fontSize:15,fontWeight:600,color:"var(--color-text-primary)" }}>🏠 {local.nombre}</p>
+                  {local.direccion&&<p style={{ margin:"2px 0 0",fontSize:11,color:"var(--color-text-secondary)" }}>{local.direccion}</p>}
                 </div>
-                {a?.estado&&<Badge color={estadoColor[a.estado]}>{estadoLabel[a.estado]}</Badge>}
-                <div style={{ display:"flex",gap:6,flexWrap:"wrap" }}>
-                  <Btn onClick={()=>setA(m.id,{estado:"presente"})} variant="success" size="sm">✓</Btn>
-                  <Btn onClick={()=>{ const h2=data.horarios.find(h=>h.userId===m.id&&h.fecha===fecha); const a2=getA(m.id); setFormTarde({uid:m.id,entrada:a2?.entradaReal||h2?.entrada||"",salida:a2?.salidaReal||h2?.salida||""}); setModal("tarde"); }} variant="secondary" size="sm">⏰ Tarde</Btn>
-                  <Btn onClick={()=>{ const a2=getA(m.id); setFormAus({uid:m.id,motivo:a2?.motivo||MOTIVOS_AUSENCIA[0],certificado:a2?.certificado||false,tipoDoc:a2?.tipoDoc||""}); setModal("ausencia"); }} variant="danger" size="sm">✗ Ausente</Btn>
-                  {a&&<Btn onClick={()=>limpiar(m.id)} variant="ghost" size="sm">Limpiar</Btn>}
+                <div style={{ display:"flex",gap:6,flexWrap:"wrap",alignItems:"center" }}>
+                  <Badge color="info">{manicuras.length} con horario</Badge>
+                  <Badge color="success">✓ {r.presentes}</Badge>
+                  <Badge color="amber">⏰ {r.tardes}</Badge>
+                  <Badge color="danger">✗ {r.ausentes}</Badge>
+                  <Badge color="gray">Pend. {r.pendientes}</Badge>
                 </div>
               </div>
-            </Card>;
+              <div style={{ display:"flex",flexDirection:"column",gap:8,padding:10 }}>
+                {manicuras.map(renderManicura)}
+              </div>
+            </div>;
           })}
         </div>}
       {modal==="tarde" && <Modal title="Registrar llegada tarde" onClose={()=>setModal(null)}>
