@@ -1684,7 +1684,7 @@ export default function App() {
     {id:"asistencia",label:"Asistencia",icon:"📋"},
     {id:"horarios",label:"Horarios",icon:"🗓️"},
     {id:"reportes",label:"Reportes",icon:"📊"},
-    {id:"manicuras",label:"Manicuras",icon:"logo"},
+    {id:"manicuras",label:"Manicuras",icon:"💅"},
     {id:"encargadas",label:"Encargadas",icon:"👩‍💼"},
     {id:"locales",label:"Locales",icon:"🏠"},
     {id:"cobertura_config",label:"Cobertura",icon:"⚙️"},
@@ -1694,7 +1694,7 @@ export default function App() {
     {id:"asistencia",label:"Asistencia",icon:"📋"},
     {id:"horarios",label:"Horarios",icon:"🗓️"},
     {id:"reportes",label:"Reportes",icon:"📊"},
-    {id:"manicuras",label:"Manicuras",icon:"logo"},
+    {id:"manicuras",label:"Manicuras",icon:"💅"},
     {id:"cobertura_config",label:"Cobertura",icon:"⚙️"},
     {id:"perfil",label:"Mi perfil",icon:"👤"},
   ];
@@ -1730,10 +1730,42 @@ export default function App() {
           {!isDesktopMenu && <button onClick={()=>setMenuOpen(m=>!m)} style={{ background:"rgba(255,255,255,0.2)",border:"none",color:"#fff",borderRadius:6,padding:"6px 10px",fontSize:16,cursor:"pointer" }}>☰</button>}
         </div>
       </header>
-      <div style={{ display:"flex",flex:1 }}>
-        <nav style={{ width:isDesktopMenu?220:(menuOpen?"100%":0),maxWidth:isDesktopMenu?220:"100%",background:"var(--color-background-primary)",borderRight:isDesktopMenu||menuOpen?"0.5px solid rgba(120,120,120,0.18)":"none",overflowX:"hidden",transition:"width 0.2s",flexShrink:0,position:isDesktopMenu?"sticky":"fixed",top:66,left:0,bottom:isDesktopMenu?"auto":0,zIndex:isDesktopMenu?1:90,alignSelf:"flex-start",maxHeight:"calc(100vh - 66px)",overflowY:"auto",boxShadow:!isDesktopMenu&&menuOpen?"8px 0 24px rgba(0,0,0,0.12)":"none" }}>
-          <div style={{ padding:"12px 8px",display:"flex",flexDirection:"column",gap:2,minWidth:200 }}>
-            {nav.map(item=><button key={item.id} onClick={()=>{ setSeccion(item.id); if(!isDesktopMenu) setMenuOpen(false); if(item.id!=="horarios") setAgendaRequest(null); }} style={{ display:"flex",alignItems:"center",gap:10,padding:"10px 12px",border:"none",borderRadius:8,cursor:"pointer",fontSize:14,textAlign:"left",background:seccion===item.id?COLORS.pinkLight:"transparent",color:seccion===item.id?COLORS.pinkDark:"var(--color-text-primary)",fontWeight:seccion===item.id?500:400 }}><span>{item.icon === "logo" ? <LogoMark size={24} variant="soft"/> : item.icon}</span>{item.label}</button>)}
+      <div style={{ display:"flex",flex:1,position:"relative" }}>
+        {!isDesktopMenu && menuOpen && (
+          <div
+            onClick={() => setMenuOpen(false)}
+            style={{
+              position:"fixed",
+              top:66,
+              left:0,
+              right:0,
+              bottom:0,
+              background:"rgba(0,0,0,0.32)",
+              zIndex:998,
+            }}
+          />
+        )}
+        <nav style={{
+          width:isDesktopMenu?220:(menuOpen?280:0),
+          maxWidth:isDesktopMenu?220:"82vw",
+          background:"#fff",
+          borderRight:isDesktopMenu||menuOpen?"0.5px solid rgba(120,120,120,0.18)":"none",
+          overflowX:"hidden",
+          transition:"width 0.2s ease",
+          flexShrink:0,
+          position:isDesktopMenu?"sticky":"fixed",
+          top:66,
+          left:0,
+          bottom:isDesktopMenu?"auto":0,
+          zIndex:isDesktopMenu?1:999,
+          alignSelf:"flex-start",
+          maxHeight:"calc(100vh - 66px)",
+          overflowY:"auto",
+          boxShadow:!isDesktopMenu&&menuOpen?"8px 0 28px rgba(0,0,0,0.22)":"none",
+          pointerEvents:isDesktopMenu||menuOpen?"auto":"none",
+        }}>
+          <div style={{ padding:"12px 8px",display:"flex",flexDirection:"column",gap:2,minWidth:220 }}>
+            {nav.map(item=><button key={item.id} onClick={()=>{ setSeccion(item.id); if(!isDesktopMenu) setMenuOpen(false); if(item.id!=="horarios") setAgendaRequest(null); }} style={{ display:"flex",alignItems:"center",gap:10,padding:"10px 12px",border:"none",borderRadius:8,cursor:"pointer",fontSize:14,textAlign:"left",background:seccion===item.id?COLORS.pinkLight:"transparent",color:seccion===item.id?COLORS.pinkDark:"var(--color-text-primary)",fontWeight:seccion===item.id?500:400,width:"100%" }}><span style={{ width:20,textAlign:"center",flexShrink:0 }}>{item.icon}</span>{item.label}</button>)}
           </div>
         </nav>
         <main style={{ flex:1,padding:"20px 16px",maxWidth:1280,width:"100%",margin:"0 auto" }}>
