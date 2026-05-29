@@ -156,6 +156,7 @@ const api = {
   getGarantias: () => sb("garantias_servicios?select=*&order=fecha_reparacion.desc,id.desc"),
   getInformesDiarios: () => sb("informes_diarios?select=*&order=fecha.desc,id.desc"),
   createInformeDiario: (d) => sb("informes_diarios", { method: "POST", body: JSON.stringify(d) }),
+  upsertInformeDiario: (d) => patchOrPost("informes_diarios", `fecha=eq.${d.fecha}&local_id=eq.${d.local_id}`, d),
   updateInformeDiario: (id, d) => sb(`informes_diarios?id=eq.${id}`, { method: "PATCH", body: JSON.stringify(d) }),
   deleteInformeDiario: (id) => sb(`informes_diarios?id=eq.${id}`, { method: "DELETE", prefer: "" }),
   createGarantia: (d) => sb("garantias_servicios", { method: "POST", body: JSON.stringify(d) }),
@@ -2975,19 +2976,21 @@ function InformeDiario({ data, reloadData, user }) {
       `URGENTES GENERALES:`,
       inf.urgentesGenerales || "-",
       ``,
-      `EFECTIVO EN CAJA: ${fmtMoney(inf.efectivoCaja)}`,
-      `COINCIDE LA CAJA: ${inf.coincideCaja ? "Sí" : "No"}`,
+      `CAJA EN EFECTIVO:`,
+      `Efectivo en caja: ${fmtMoney(inf.efectivoCaja)}`,
+      `Coincide la caja: ${inf.coincideCaja ? "Sí" : "No"}`,
+      ``,
       `MERCADO PAGO / TOTAL / RESERVAS:`,
       inf.mercadoPagoTotalReservas || "-",
       ``,
       `PAGOS REALIZADOS:`,
       inf.pagosRealizados || "-",
       ``,
-      `TRASPASOS A CAJA GENERAL:`,
+      `CAJA GENERAL:`,
       `Saldo anterior: ${fmtMoney(inf.saldoAnterior)}`,
-      `Traspaso a Caja General: ${fmtMoney(inf.traspasoCajaGeneral)}`,
-      `Traspaso a Caja Efectivo: ${fmtMoney(inf.traspasoCajaEfectivo)}`,
-      `Total: ${fmtMoney(calcTotalCaja(inf))}`,
+      `+ Traspaso a Caja General: ${fmtMoney(inf.traspasoCajaGeneral)}`,
+      `- Traspaso a Caja Efectivo: ${fmtMoney(inf.traspasoCajaEfectivo)}`,
+      `Saldo final: ${fmtMoney(calcTotalCaja(inf))}`,
       ``,
       `GARANTÍAS DEL DÍA:`,
       buildGarantiasText(inf),
@@ -3027,11 +3030,14 @@ function InformeDiario({ data, reloadData, user }) {
         creado_por_user_id: form.creadoPor || user.id,
         actualizado_en: new Date().toISOString(),
       };
-      if (form.id) await api.updateInformeDiario(form.id, payload);
-      else await api.createInformeDiario(payload);
+      const savedRows = form.id
+        ? await api.updateInformeDiario(form.id, payload)
+        : await api.upsertInformeDiario(payload);
+      const savedRaw = Array.isArray(savedRows) ? savedRows[0] : null;
+      const savedNormalized = savedRaw ? normalizeInformeDiario(savedRaw) : { ...form, ...payload, localId: payload.local_id, estado: payload.estado, enviadoEn: payload.enviado_en };
+      setForm(savedNormalized);
       await reloadData();
-      const saved = findInforme(form.fecha, form.localId) || form;
-      if (markSent) setPreview({ ...form, ...payload, localId: payload.local_id, estado:"enviado" });
+      if (markSent) setPreview(savedNormalized);
     } catch(e) { alert("Error al guardar informe: " + e.message); }
     setSaving(false);
   };
@@ -3050,11 +3056,10 @@ function InformeDiario({ data, reloadData, user }) {
       ["FECHA", parseDateLabel(inf.fecha)],
       ["IMPORTANTE PARA MAÑANA", inf.importanteManana],
       ["URGENTES GENERALES", inf.urgentesGenerales, "danger"],
-      ["EFECTIVO EN CAJA", fmtMoney(inf.efectivoCaja)],
-      ["COINCIDE LA CAJA", inf.coincideCaja ? "Sí" : "No"],
+      ["CAJA EN EFECTIVO", `Efectivo en caja: ${fmtMoney(inf.efectivoCaja)}\nCoincide la caja: ${inf.coincideCaja ? "Sí" : "No"}`],
       ["MERCADO PAGO / TOTAL / RESERVAS", inf.mercadoPagoTotalReservas],
       ["PAGOS REALIZADOS", inf.pagosRealizados],
-      ["TRASPASOS A CAJA GENERAL", `Saldo anterior: ${fmtMoney(inf.saldoAnterior)}\nTraspaso a Caja General: ${fmtMoney(inf.traspasoCajaGeneral)}\nTraspaso a Caja Efectivo: ${fmtMoney(inf.traspasoCajaEfectivo)}\nTOTAL: ${fmtMoney(calcTotalCaja(inf))}`],
+      ["CAJA GENERAL", `Saldo anterior: ${fmtMoney(inf.saldoAnterior)}\n+ Traspaso a Caja General: ${fmtMoney(inf.traspasoCajaGeneral)}\n- Traspaso a Caja Efectivo: ${fmtMoney(inf.traspasoCajaEfectivo)}\nSALDO FINAL: ${fmtMoney(calcTotalCaja(inf))}`],
       ["RECLAMOS", inf.reclamos],
       ["NOVEDADES SALÓN / MANICURAS", inf.novedadesSalonManicuras],
       ["OBSERVACIONES / EXTRAS", inf.observacionesExtras],
@@ -3080,7 +3085,7 @@ function InformeDiario({ data, reloadData, user }) {
       <h2 style={{ margin:0,fontSize:18,fontWeight:600 }}>Informe diario</h2>
       <div style={{ display:"flex",gap:8,flexWrap:"wrap" }}>
         <Btn onClick={()=>save(false)} disabled={saving}>{saving?"Guardando...":"Guardar"}</Btn>
-        <Btn onClick={()=>save(true)} variant="success" disabled={saving}>Guardar y preparar envío</Btn>
+        <Btn onClick={()=>save(true)} variant="success" disabled={saving}>Guardar como enviado y preparar envío</Btn>
       </div>
     </div>
 
@@ -3107,23 +3112,42 @@ function InformeDiario({ data, reloadData, user }) {
           <Field label="Urgentes generales"><TextArea value={form.urgentesGenerales} onChange={v=>setForm(f=>({...f,urgentesGenerales:v}))}/></Field>
         </div>
 
-        <div style={{ border:"1px solid var(--color-border-tertiary)",borderRadius:14,overflow:"hidden",background:"var(--color-background-primary)" }}>
-          <div style={{ background:"var(--color-background-secondary)",padding:"10px 12px",borderBottom:"1px solid var(--color-border-tertiary)",display:"flex",justifyContent:"space-between",alignItems:"center",gap:8,flexWrap:"wrap" }}>
-            <div>
-              <h3 style={{ margin:0,fontSize:15,fontWeight:700 }}>Caja y traspasos</h3>
-              <p style={{ margin:"2px 0 0",fontSize:12,color:"var(--color-text-secondary)" }}>El saldo anterior se toma del saldo final del informe anterior del mismo local.</p>
+        <div style={{ display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(280px,1fr))",gap:14 }}>
+          <div style={{ border:"1px solid var(--color-border-tertiary)",borderRadius:14,overflow:"hidden",background:"var(--color-background-primary)" }}>
+            <div style={{ background:COLORS.infoLight,padding:"10px 12px",borderBottom:"1px solid var(--color-border-tertiary)" }}>
+              <h3 style={{ margin:0,fontSize:15,fontWeight:700,color:COLORS.info }}>Caja en efectivo</h3>
+              <p style={{ margin:"2px 0 0",fontSize:12,color:COLORS.info }}>Control del efectivo físico del local.</p>
             </div>
-            <Badge color="pink">Saldo final {fmtMoney(calcTotalCaja(form))}</Badge>
+            <div style={{ padding:12,display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(180px,1fr))",gap:12 }}>
+              <Field label="Efectivo en caja"><MoneyInput value={form.efectivoCaja} onChange={v=>setForm(f=>({...f,efectivoCaja:v}))}/></Field>
+              <Field label="¿Coincide la caja?"><Select value={form.coincideCaja?"si":"no"} onChange={v=>setForm(f=>({...f,coincideCaja:v==="si"}))}><option value="si">Sí</option><option value="no">No</option></Select></Field>
+            </div>
           </div>
-          <div style={{ padding:12,display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(220px,1fr))",gap:12 }}>
-            <Field label="Efectivo en caja"><MoneyInput value={form.efectivoCaja} onChange={v=>setForm(f=>({...f,efectivoCaja:v}))}/></Field>
-            <Field label="¿Coincide la caja?"><Select value={form.coincideCaja?"si":"no"} onChange={v=>setForm(f=>({...f,coincideCaja:v==="si"}))}><option value="si">Sí</option><option value="no">No</option></Select></Field>
-            <Field label="Saldo anterior"><MoneyInput readOnly value={form.saldoAnterior} onChange={()=>{}}/></Field>
-            <Field label="+ Traspaso a Caja General"><MoneyInput value={form.traspasoCajaGeneral} onChange={v=>setForm(f=>({...f,traspasoCajaGeneral:v}))}/></Field>
-            <Field label="- Traspaso a Caja Efectivo"><MoneyInput value={form.traspasoCajaEfectivo} onChange={v=>setForm(f=>({...f,traspasoCajaEfectivo:v}))}/></Field>
-            <Field label="Saldo final"><div style={{ padding:"8px 12px",borderRadius:8,background:COLORS.pinkLight,color:COLORS.pinkDark,fontWeight:800,fontSize:16 }}>{fmtMoney(calcTotalCaja(form))}</div></Field>
-            <Field label="Mercado Pago / Total / Reservas" style={{ gridColumn:"1 / -1" }}><TextArea value={form.mercadoPagoTotalReservas} onChange={v=>setForm(f=>({...f,mercadoPagoTotalReservas:v}))}/></Field>
-            <Field label="Pagos realizados" style={{ gridColumn:"1 / -1" }}><TextArea value={form.pagosRealizados} onChange={v=>setForm(f=>({...f,pagosRealizados:v}))}/></Field>
+
+          <div style={{ border:"1px solid var(--color-border-tertiary)",borderRadius:14,overflow:"hidden",background:"var(--color-background-primary)" }}>
+            <div style={{ background:COLORS.pinkLight,padding:"10px 12px",borderBottom:"1px solid var(--color-border-tertiary)",display:"flex",justifyContent:"space-between",alignItems:"center",gap:8,flexWrap:"wrap" }}>
+              <div>
+                <h3 style={{ margin:0,fontSize:15,fontWeight:700,color:COLORS.pinkDark }}>Caja general</h3>
+                <p style={{ margin:"2px 0 0",fontSize:12,color:COLORS.pinkDark }}>El saldo anterior se toma del saldo final del informe anterior.</p>
+              </div>
+              <Badge color="pink">Saldo final {fmtMoney(calcTotalCaja(form))}</Badge>
+            </div>
+            <div style={{ padding:12,display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(180px,1fr))",gap:12 }}>
+              <Field label="Saldo anterior"><MoneyInput readOnly value={form.saldoAnterior} onChange={()=>{}}/></Field>
+              <Field label="+ Traspaso a Caja General"><MoneyInput value={form.traspasoCajaGeneral} onChange={v=>setForm(f=>({...f,traspasoCajaGeneral:v}))}/></Field>
+              <Field label="- Traspaso a Caja Efectivo"><MoneyInput value={form.traspasoCajaEfectivo} onChange={v=>setForm(f=>({...f,traspasoCajaEfectivo:v}))}/></Field>
+              <Field label="Saldo final"><div style={{ padding:"8px 12px",borderRadius:8,background:COLORS.pinkLight,color:COLORS.pinkDark,fontWeight:800,fontSize:16 }}>{fmtMoney(calcTotalCaja(form))}</div></Field>
+            </div>
+          </div>
+        </div>
+
+        <div style={{ border:"1px solid var(--color-border-tertiary)",borderRadius:14,overflow:"hidden",background:"var(--color-background-primary)" }}>
+          <div style={{ background:"var(--color-background-secondary)",padding:"10px 12px",borderBottom:"1px solid var(--color-border-tertiary)" }}>
+            <h3 style={{ margin:0,fontSize:15,fontWeight:700 }}>Pagos y medios electrónicos</h3>
+          </div>
+          <div style={{ padding:12,display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(260px,1fr))",gap:12 }}>
+            <Field label="Mercado Pago / Total / Reservas"><TextArea value={form.mercadoPagoTotalReservas} onChange={v=>setForm(f=>({...f,mercadoPagoTotalReservas:v}))}/></Field>
+            <Field label="Pagos realizados"><TextArea value={form.pagosRealizados} onChange={v=>setForm(f=>({...f,pagosRealizados:v}))}/></Field>
           </div>
         </div>
 
