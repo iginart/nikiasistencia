@@ -1933,6 +1933,7 @@ function AdelantosManicuras({ data, reloadData, user }) {
   const [localId, setLocalId] = useState(localesPermitidos[0]?.id || "");
   const manicurasPermitidas = data.users.filter(u => u.rol === "manicura" && u.activo && (!localId || u.localId === parseInt(localId)) && (esAdmin || allowedLocalIds.includes(u.localId)));
   const [form, setForm] = useState({ fecha:dateKey(hoy), userId:"", importe:"", concepto:"Adelanto", observacion:"" });
+  const [editing, setEditing] = useState(null);
   const [saving, setSaving] = useState(false);
   const [err, setErr] = useState("");
 
@@ -1989,6 +1990,45 @@ function AdelantosManicuras({ data, reloadData, user }) {
     await reloadData();
   };
 
+  const openEdit = (a) => {
+    const manicura = data.users.find(u => u.id === a.userId);
+    const local = data.locales.find(l => l.id === a.localId);
+    setErr("");
+    setEditing({
+      id: a.id,
+      fecha: a.fecha || dateKey(hoy),
+      importe: String(a.importe || ""),
+      concepto: a.concepto || "Adelanto",
+      observacion: a.observacion || "",
+      localNombre: local?.nombre || "—",
+      manicuraNombre: manicura?.nombre || "—",
+      localId: a.localId,
+    });
+  };
+
+  const saveEdit = async () => {
+    if (!editing) return;
+    setErr("");
+    if (!editing.fecha || !editing.importe) { setErr("Completá fecha e importe."); return; }
+    if (!esAdmin && !allowedLocalIds.includes(editing.localId)) { setErr("No tenés permiso para editar adelantos en ese local."); return; }
+    const importe = Number(String(editing.importe).replace(",","."));
+    if (!Number.isFinite(importe) || importe <= 0) { setErr("Ingresá un importe válido mayor a cero."); return; }
+    setSaving(true);
+    try {
+      await api.updateAdelanto(editing.id, {
+        fecha: editing.fecha,
+        periodo: editing.fecha.slice(0,7),
+        importe,
+        concepto: editing.concepto || "Adelanto",
+        observacion: editing.observacion || null,
+      });
+      await reloadData();
+      setPeriodo(editing.fecha.slice(0,7));
+      setEditing(null);
+    } catch(e) { setErr("Error al guardar: " + e.message); }
+    setSaving(false);
+  };
+
   if (!esAdmin && !esEncargada) return null;
 
   return <div>
@@ -2020,10 +2060,27 @@ function AdelantosManicuras({ data, reloadData, user }) {
     <Card style={{ padding:0,overflow:"hidden" }}>
       <div style={{ padding:"12px 14px",borderBottom:"1px solid rgba(120,120,120,0.16)",display:"flex",justifyContent:"space-between",alignItems:"center" }}><h3 style={{ margin:0,fontSize:15,fontWeight:500 }}>Detalle de adelantos</h3><span style={{ fontSize:12,color:"var(--color-text-secondary)" }}>{adelantos.length} registros</span></div>
       {adelantos.length===0 ? <p style={{ margin:0,padding:18,textAlign:"center",fontSize:13,color:"var(--color-text-secondary)" }}>Sin adelantos para el período/local seleccionado.</p> : <div style={{ overflowX:"auto" }}><div style={{ minWidth:760 }}>
-        <div style={{ display:"grid",gridTemplateColumns:"90px 1fr 1fr 120px 1fr 70px",gap:8,padding:"8px 12px",fontSize:11,fontWeight:600,color:"var(--color-text-secondary)",borderBottom:"1px solid rgba(120,120,120,0.14)",textTransform:"uppercase" }}><span>Fecha</span><span>Local</span><span>Manicura</span><span style={{ textAlign:"right" }}>Importe</span><span>Concepto / Obs.</span><span></span></div>
-        {adelantos.map(a=>{ const m=data.users.find(u=>u.id===a.userId), l=data.locales.find(x=>x.id===a.localId); return <div key={a.id} style={{ display:"grid",gridTemplateColumns:"90px 1fr 1fr 120px 1fr 70px",gap:8,padding:"8px 12px",fontSize:12,alignItems:"center",borderBottom:"1px solid rgba(120,120,120,0.10)" }}><span>{(a.fecha||"").split("-").reverse().join("/")}</span><span>{l?.nombre||"—"}</span><span>{m?.nombre||"—"}</span><strong style={{ textAlign:"right",color:COLORS.amber }}>{fmtMoney(a.importe)}</strong><span>{a.concepto}{a.observacion?` · ${a.observacion}`:""}</span><Btn onClick={()=>del(a)} variant="ghost" size="sm" style={{ color:COLORS.danger }}>Eliminar</Btn></div>;})}
+        <div style={{ display:"grid",gridTemplateColumns:"90px 1fr 1fr 120px 1fr 130px",gap:8,padding:"8px 12px",fontSize:11,fontWeight:600,color:"var(--color-text-secondary)",borderBottom:"1px solid rgba(120,120,120,0.14)",textTransform:"uppercase" }}><span>Fecha</span><span>Local</span><span>Manicura</span><span style={{ textAlign:"right" }}>Importe</span><span>Concepto / Obs.</span><span></span></div>
+        {adelantos.map(a=>{ const m=data.users.find(u=>u.id===a.userId), l=data.locales.find(x=>x.id===a.localId); return <div key={a.id} style={{ display:"grid",gridTemplateColumns:"90px 1fr 1fr 120px 1fr 130px",gap:8,padding:"8px 12px",fontSize:12,alignItems:"center",borderBottom:"1px solid rgba(120,120,120,0.10)" }}><span>{(a.fecha||"").split("-").reverse().join("/")}</span><span>{l?.nombre||"—"}</span><span>{m?.nombre||"—"}</span><strong style={{ textAlign:"right",color:COLORS.amber }}>{fmtMoney(a.importe)}</strong><span>{a.concepto}{a.observacion?` · ${a.observacion}`:""}</span><div style={{ display:"flex",gap:6,justifyContent:"flex-end" }}><Btn onClick={()=>openEdit(a)} variant="ghost" size="sm">Editar</Btn><Btn onClick={()=>del(a)} variant="ghost" size="sm" style={{ color:COLORS.danger }}>Eliminar</Btn></div></div>;})}
       </div></div>}
     </Card>
+    {editing && <Modal title="Editar adelanto" onClose={()=>setEditing(null)}>
+      <div style={{ display:"flex",flexDirection:"column",gap:14 }}>
+        <div style={{ background:"var(--color-background-secondary)",border:"0.5px solid var(--color-border-tertiary)",borderRadius:10,padding:"10px 12px" }}>
+          <p style={{ margin:0,fontSize:13,fontWeight:500 }}>{editing.manicuraNombre}</p>
+          <p style={{ margin:"2px 0 0",fontSize:12,color:"var(--color-text-secondary)" }}>{editing.localNombre}</p>
+        </div>
+        <div><label style={{ fontSize:12,color:"var(--color-text-secondary)",display:"block",marginBottom:4 }}>Fecha del adelanto</label><input type="date" value={editing.fecha} onChange={e=>setEditing(x=>({...x,fecha:e.target.value}))} style={{ width:"100%",border:"1.5px solid #e0e0e0",borderRadius:8,padding:"9px 12px",fontSize:14,background:"#fafafa",color:"#1a1a1a",boxSizing:"border-box" }}/></div>
+        <ModalInput label="Importe" value={editing.importe} onChange={v=>setEditing(x=>({...x,importe:v}))}/>
+        <ModalInput label="Concepto" value={editing.concepto} onChange={v=>setEditing(x=>({...x,concepto:v}))}/>
+        <ModalInput label="Observación" value={editing.observacion} onChange={v=>setEditing(x=>({...x,observacion:v}))}/>
+        {err && <p style={{ margin:0,fontSize:13,color:COLORS.danger,background:COLORS.dangerLight,padding:"8px 12px",borderRadius:8 }}>{err}</p>}
+        <div style={{ display:"flex",gap:8,marginTop:4 }}>
+          <Btn onClick={saveEdit} disabled={saving} style={{ flex:1,justifyContent:"center" }}>{saving?"Guardando...":"Guardar cambios"}</Btn>
+          <Btn onClick={()=>setEditing(null)} variant="secondary" style={{ flex:1,justifyContent:"center" }}>Cancelar</Btn>
+        </div>
+      </div>
+    </Modal>}
   </div>;
 }
 
