@@ -1778,9 +1778,22 @@ function Reportes({ data, user, onOpenAgenda, reportRestore }) {
       return { ...m, trabajaSabado, asistenciaSabado:asistenciaSabado?.estado || "", fechaPago: fechaPago ? dateKey(fechaPago) : "", neto:m.comision - m.adelantos };
     }).sort((a,b)=>(a.fechaPago||"").localeCompare(b.fechaPago||"") || String(a.nombre).localeCompare(String(b.nombre)));
     const mesesDisponibles = Array.from(new Set([fmtPeriodo(hoy), ...(data.comisiones||[]).map(c=>c.periodo).filter(Boolean)])).sort().reverse();
-    const resumenMapComisiones = registros.reduce((map,c)=>{ const key=c.userId || c.nombreManicura; const prev=map.get(key)||{ userId:c.userId, nombre:c.nombreManicura, local:c.nombreLocal, precio:0, comision:0, adelantos:0, neto:0, servicios:0 }; prev.precio+=c.precio; prev.comision+=c.comision; prev.servicios+=1; map.set(key,prev); return map; }, new Map());
-    adelantos.forEach(a=>{ const m=data.users.find(u=>u.id===a.userId); const l=data.locales.find(x=>x.id===a.localId); const key=a.userId || `adelanto-${a.id}`; const prev=resumenMapComisiones.get(key)||{ userId:a.userId, nombre:m?.nombre||"Sin manicura", local:l?.nombre||"", precio:0, comision:0, adelantos:0, neto:0, servicios:0 }; prev.adelantos+=a.importe; resumenMapComisiones.set(key,prev); });
-    const resumenPorManicura = Array.from(resumenMapComisiones.values()).map(r=>({...r, neto:r.comision-r.adelantos})).sort((a,b)=>b.neto-a.neto);
+    const resumenMapComisiones = registros.reduce((map,c)=>{
+      const key=c.userId || c.nombreManicura;
+      const prev=map.get(key)||{ userId:c.userId, nombre:c.nombreManicura, local:c.nombreLocal, precio:0, comisionBase:0, garantias:0, adelantos:0, neto:0, servicios:0, garantiasQty:0 };
+      if (c.tipoRegistro === "garantia") {
+        prev.garantias += Number(c.comision || 0);
+        prev.garantiasQty += 1;
+      } else {
+        prev.precio += Number(c.precio || 0);
+        prev.comisionBase += Number(c.comision || 0);
+        prev.servicios += 1;
+      }
+      map.set(key,prev);
+      return map;
+    }, new Map());
+    adelantos.forEach(a=>{ const m=data.users.find(u=>u.id===a.userId); const l=data.locales.find(x=>x.id===a.localId); const key=a.userId || `adelanto-${a.id}`; const prev=resumenMapComisiones.get(key)||{ userId:a.userId, nombre:m?.codigoExterno||m?.nombre||"Sin manicura", local:l?.nombre||"", precio:0, comisionBase:0, garantias:0, adelantos:0, neto:0, servicios:0, garantiasQty:0 }; prev.adelantos+=a.importe; resumenMapComisiones.set(key,prev); });
+    const resumenPorManicura = Array.from(resumenMapComisiones.values()).map(r=>({...r, neto:r.comisionBase+r.garantias-r.adelantos})).sort((a,b)=>b.neto-a.neto);
 
     const agrupables = [
       { id:"semana", label:"Semana" },
@@ -2025,7 +2038,28 @@ function Reportes({ data, user, onOpenAgenda, reportRestore }) {
           </div>)}
         </div>}
       </Card>
-      {puedeGestionar&&resumenPorManicura.length>0&&<Card style={{ marginBottom:14 }}><h3 style={{ margin:"0 0 10px",fontSize:15,fontWeight:500 }}>Resumen por manicura</h3><div style={{ display:"flex",flexDirection:"column",gap:6 }}>{resumenPorManicura.slice(0,8).map((r,i)=><div key={i} style={{ display:"grid",gridTemplateColumns:"1fr 95px 105px 110px 115px",gap:8,alignItems:"center",padding:"7px 8px",borderRadius:8,background:"var(--color-background-secondary)" }}><div><p style={{ margin:0,fontSize:13,fontWeight:500 }}>{r.nombre}</p><p style={{ margin:0,fontSize:11,color:"var(--color-text-secondary)" }}>{r.local} · {r.servicios} servicios</p></div><span style={{ fontSize:13,textAlign:"right",color:"var(--color-text-secondary)" }}>{fmtMoney(r.precio)}</span><strong style={{ fontSize:14,textAlign:"right",color:COLORS.pink }}>{fmtMoney(r.comision)}</strong><strong style={{ fontSize:14,textAlign:"right",color:COLORS.amber }}>-{fmtMoney(r.adelantos)}</strong><strong style={{ fontSize:14,textAlign:"right",color:r.neto>=0?COLORS.success:COLORS.danger }}>{fmtMoney(r.neto)}</strong></div>)}</div></Card>}
+      {puedeGestionar&&resumenPorManicura.length>0&&<Card style={{ marginBottom:14 }}>
+        <div style={{ display:"flex",alignItems:"center",justifyContent:"space-between",gap:8,marginBottom:10,flexWrap:"wrap" }}>
+          <h3 style={{ margin:0,fontSize:15,fontWeight:500 }}>Resumen por manicura</h3>
+          <span style={{ fontSize:11,color:"var(--color-text-secondary)" }}>Comisión + garantías - adelantos = neto</span>
+        </div>
+        <div style={{ display:"grid",gridTemplateColumns:"1fr 95px 105px 105px 110px 115px",gap:8,alignItems:"center",padding:"0 8px 6px",borderBottom:"1px solid rgba(120,120,120,0.12)",marginBottom:6 }}>
+          <span style={{ fontSize:10,fontWeight:700,color:"var(--color-text-secondary)",textTransform:"uppercase",letterSpacing:"0.04em" }}>Manicura</span>
+          <span style={{ fontSize:10,fontWeight:700,color:"var(--color-text-secondary)",textTransform:"uppercase",letterSpacing:"0.04em",textAlign:"right" }}>Venta</span>
+          <span style={{ fontSize:10,fontWeight:700,color:"var(--color-text-secondary)",textTransform:"uppercase",letterSpacing:"0.04em",textAlign:"right" }}>Comisión</span>
+          <span style={{ fontSize:10,fontWeight:700,color:"var(--color-text-secondary)",textTransform:"uppercase",letterSpacing:"0.04em",textAlign:"right" }}>Garantías</span>
+          <span style={{ fontSize:10,fontWeight:700,color:"var(--color-text-secondary)",textTransform:"uppercase",letterSpacing:"0.04em",textAlign:"right" }}>Adelantos</span>
+          <span style={{ fontSize:10,fontWeight:700,color:"var(--color-text-secondary)",textTransform:"uppercase",letterSpacing:"0.04em",textAlign:"right" }}>Neto</span>
+        </div>
+        <div style={{ display:"flex",flexDirection:"column",gap:6 }}>{resumenPorManicura.slice(0,8).map((r,i)=><div key={i} style={{ display:"grid",gridTemplateColumns:"1fr 95px 105px 105px 110px 115px",gap:8,alignItems:"center",padding:"7px 8px",borderRadius:8,background:"var(--color-background-secondary)" }}>
+          <div><p style={{ margin:0,fontSize:13,fontWeight:500 }}>{r.nombre}</p><p style={{ margin:0,fontSize:11,color:"var(--color-text-secondary)" }}>{r.local} · {r.servicios} servicios{r.garantiasQty?` · ${r.garantiasQty} garantía${r.garantiasQty!==1?"s":""}`:""}</p></div>
+          <span style={{ fontSize:13,textAlign:"right",color:"var(--color-text-secondary)" }}>{fmtMoney(r.precio)}</span>
+          <strong style={{ fontSize:14,textAlign:"right",color:COLORS.pink }}>{fmtMoney(r.comisionBase)}</strong>
+          <strong style={{ fontSize:14,textAlign:"right",color:r.garantias>0?COLORS.success:r.garantias<0?COLORS.danger:"var(--color-text-secondary)" }}>{r.garantias>0?"+":r.garantias<0?"-":""}{fmtMoney(Math.abs(r.garantias))}</strong>
+          <strong style={{ fontSize:14,textAlign:"right",color:COLORS.amber }}>-{fmtMoney(r.adelantos)}</strong>
+          <strong style={{ fontSize:14,textAlign:"right",color:r.neto>=0?COLORS.success:COLORS.danger }}>{fmtMoney(r.neto)}</strong>
+        </div>)}</div>
+      </Card>}
       <Card style={{ padding:0,overflow:"hidden" }}>
         <div style={{ padding:"12px 14px",borderBottom:"1px solid rgba(120,120,120,0.16)",display:"flex",justifyContent:"space-between",gap:8,alignItems:"center",flexWrap:"wrap" }}><h3 style={{ margin:0,fontSize:15,fontWeight:500 }}>Detalle de comisiones <span style={{ marginLeft:8,fontSize:11,color:COLORS.pinkDark,background:COLORS.pinkLight,borderRadius:999,padding:"3px 8px" }}>{gruposComisiones.length ? `agrupado: ${gruposComisiones.map(g=>agrupables.find(a=>a.id===g)?.label||g).join(" → ")}` : "tabla avanzada"}</span></h3><span style={{ fontSize:12,color:"var(--color-text-secondary)" }}>{registros.length} registros</span></div>
         <div style={{ padding:"8px 12px",borderBottom:"1px solid rgba(120,120,120,0.12)",background:"var(--color-background-secondary)" }}>
