@@ -91,6 +91,10 @@ const api = {
   getEncargadoLocales: () => sb("encargado_locales?select=*"),
   getComisiones: () => sb("comisiones_detalle?select=*&order=fecha_pago.desc,id.desc"),
   getComisionesImportaciones: () => sb("comisiones_importaciones?select=*&order=creado_en.desc&limit=10"),
+  getAdelantos: () => sb("adelantos_manicuras?select=*&order=fecha.desc,id.desc"),
+  createAdelanto: (d) => sb("adelantos_manicuras", { method: "POST", body: JSON.stringify(d) }),
+  updateAdelanto: (id, d) => sb(`adelantos_manicuras?id=eq.${id}`, { method: "PATCH", body: JSON.stringify(d) }),
+  deleteAdelanto: (id) => sb(`adelantos_manicuras?id=eq.${id}`, { method: "DELETE", prefer: "" }),
   setEncargadoLocales: async (userId, localIds) => { await sb(`encargado_locales?user_id=eq.${userId}`, { method:"DELETE", prefer:"" }); if (!localIds?.length) return []; return sb("encargado_locales", { method:"POST", body:JSON.stringify(localIds.map(local_id=>({ user_id:userId, local_id:parseInt(local_id) }))) }); },
 };
 
@@ -103,6 +107,7 @@ function normalizeConfigCobertura(c) { return { id:c.id, localId:c.local_id, hor
 function normalizeEncargadoLocal(x) { return { userId:x.user_id, localId:x.local_id }; }
 function normalizeComision(c) { return { id:c.id, periodo:c.periodo, fechaPago:c.fecha_pago, localId:c.local_id, codigoExternoLocal:c.codigo_externo_local || "", nombreLocal:c.nombre_local || "", userId:c.user_id, codigoExternoManicura:c.codigo_externo_manicura || "", nombreManicura:c.nombre_manicura || "", servicio:c.servicio || "", cliente:c.cliente || "", precio:Number(c.precio || 0), comision:Number(c.comision || 0), hashRegistro:c.hash_registro || "", actualizadoEn:c.actualizado_en || "" }; }
 function normalizeComisionImportacion(i) { return { id:i.id, periodo:i.periodo, registros:i.registros || 0, totalPrecio:Number(i.total_precio || 0), totalComision:Number(i.total_comision || 0), estado:i.estado || "", mensaje:i.mensaje || "", creadoEn:i.creado_en || "" }; }
+function normalizeAdelanto(a) { return { id:a.id, fecha:a.fecha, periodo:a.periodo || (a.fecha ? String(a.fecha).slice(0,7) : ""), userId:a.user_id, localId:a.local_id, importe:Number(a.importe || 0), concepto:a.concepto || "", observacion:a.observacion || "", creadoPor:a.creado_por, creadoEn:a.creado_en || "" }; }
 
 const COLORS = {
   pink: "#d4537e", pinkLight: "#fbeaf0", pinkDark: "#72243e",
@@ -1597,14 +1602,29 @@ function Reportes({ data, user, onOpenAgenda, reportRestore }) {
     const registros = baseRegistros
       .filter(c=>semanaComisiones === "todas" || weekOfMonthValue(c.fechaPago) === semanaComisiones)
       .sort((a,b)=>(b.fechaPago||"").localeCompare(a.fechaPago||"") || (a.nombreLocal||"").localeCompare(b.nombreLocal||"") || (a.nombreManicura||"").localeCompare(b.nombreManicura||""));
+    const puedeVerAdelanto = (a) => {
+      if (esAdmin) return true;
+      if (esEncargada) return a.localId && allowedLocalIds.includes(a.localId);
+      return a.userId === user.id;
+    };
+    const baseAdelantos = (data.adelantos||[])
+      .filter(a=>puedeVerAdelanto(a))
+      .filter(a=>!periodoComisiones || a.periodo === periodoComisiones)
+      .filter(a=>localComisiones === "todos" || a.localId === parseInt(localComisiones))
+      .filter(a=>manicuraComisiones === "todas" || a.userId === parseInt(manicuraComisiones));
+    const adelantos = baseAdelantos.filter(a=>semanaComisiones === "todas" || weekOfMonthValue(a.fecha) === semanaComisiones);
     const totalPrecio = registros.reduce((a,c)=>a+c.precio,0);
     const totalComision = registros.reduce((a,c)=>a+c.comision,0);
+    const totalAdelantos = adelantos.reduce((a,x)=>a+x.importe,0);
+    const netoPagar = totalComision - totalAdelantos;
     const servicios = registros.length;
     const clientes = new Set(registros.map(c=>normalize(c.cliente)).filter(Boolean)).size;
     const ultimaImportacion = (data.comisionesImportaciones||[]).find(i=>i.periodo===periodoComisiones) || (data.comisionesImportaciones||[])[0];
     const manicurasComision = puedeGestionar ? manicuras.filter(m => baseRegistros.some(c => c.userId === m.id || normalize(c.nombreManicura) === normalize(m.nombre)) || m.activo) : [user];
     const mesesDisponibles = Array.from(new Set([fmtPeriodo(hoy), ...(data.comisiones||[]).map(c=>c.periodo).filter(Boolean)])).sort().reverse();
-    const resumenPorManicura = Array.from(registros.reduce((map,c)=>{ const key=c.userId || c.nombreManicura; const prev=map.get(key)||{ nombre:c.nombreManicura, local:c.nombreLocal, precio:0, comision:0, servicios:0 }; prev.precio+=c.precio; prev.comision+=c.comision; prev.servicios+=1; map.set(key,prev); return map; }, new Map()).values()).sort((a,b)=>b.comision-a.comision);
+    const resumenMapComisiones = registros.reduce((map,c)=>{ const key=c.userId || c.nombreManicura; const prev=map.get(key)||{ userId:c.userId, nombre:c.nombreManicura, local:c.nombreLocal, precio:0, comision:0, adelantos:0, neto:0, servicios:0 }; prev.precio+=c.precio; prev.comision+=c.comision; prev.servicios+=1; map.set(key,prev); return map; }, new Map());
+    adelantos.forEach(a=>{ const m=data.users.find(u=>u.id===a.userId); const l=data.locales.find(x=>x.id===a.localId); const key=a.userId || `adelanto-${a.id}`; const prev=resumenMapComisiones.get(key)||{ userId:a.userId, nombre:m?.nombre||"Sin manicura", local:l?.nombre||"", precio:0, comision:0, adelantos:0, neto:0, servicios:0 }; prev.adelantos+=a.importe; resumenMapComisiones.set(key,prev); });
+    const resumenPorManicura = Array.from(resumenMapComisiones.values()).map(r=>({...r, neto:r.comision-r.adelantos})).sort((a,b)=>b.neto-a.neto);
 
     const agrupables = [
       { id:"semana", label:"Semana" },
@@ -1818,11 +1838,13 @@ function Reportes({ data, user, onOpenAgenda, reportRestore }) {
       </div>
       <div style={{ display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(160px,1fr))",gap:10,marginBottom:14 }}>
         <Card><p style={{ margin:"0 0 4px",fontSize:11,color:"var(--color-text-secondary)",textTransform:"uppercase",letterSpacing:"0.04em" }}>Venta total</p><p style={{ margin:0,fontSize:22,fontWeight:600 }}>{fmtMoney(totalPrecio)}</p></Card>
-        <Card><p style={{ margin:"0 0 4px",fontSize:11,color:"var(--color-text-secondary)",textTransform:"uppercase",letterSpacing:"0.04em" }}>Comisión total</p><p style={{ margin:0,fontSize:22,fontWeight:600,color:COLORS.pink }}>{fmtMoney(totalComision)}</p></Card>
+        <Card><p style={{ margin:"0 0 4px",fontSize:11,color:"var(--color-text-secondary)",textTransform:"uppercase",letterSpacing:"0.04em" }}>Comisión bruta</p><p style={{ margin:0,fontSize:22,fontWeight:600,color:COLORS.pink }}>{fmtMoney(totalComision)}</p></Card>
+        <Card><p style={{ margin:"0 0 4px",fontSize:11,color:"var(--color-text-secondary)",textTransform:"uppercase",letterSpacing:"0.04em" }}>Adelantos</p><p style={{ margin:0,fontSize:22,fontWeight:600,color:COLORS.amber }}>-{fmtMoney(totalAdelantos)}</p></Card>
+        <Card><p style={{ margin:"0 0 4px",fontSize:11,color:"var(--color-text-secondary)",textTransform:"uppercase",letterSpacing:"0.04em" }}>Neto a pagar</p><p style={{ margin:0,fontSize:22,fontWeight:600,color:netoPagar>=0?COLORS.success:COLORS.danger }}>{fmtMoney(netoPagar)}</p></Card>
         <Card><p style={{ margin:"0 0 4px",fontSize:11,color:"var(--color-text-secondary)",textTransform:"uppercase",letterSpacing:"0.04em" }}>Servicios</p><p style={{ margin:0,fontSize:22,fontWeight:600 }}>{servicios}</p></Card>
         <Card><p style={{ margin:"0 0 4px",fontSize:11,color:"var(--color-text-secondary)",textTransform:"uppercase",letterSpacing:"0.04em" }}>Clientes</p><p style={{ margin:0,fontSize:22,fontWeight:600 }}>{clientes}</p></Card>
       </div>
-      {puedeGestionar&&resumenPorManicura.length>0&&<Card style={{ marginBottom:14 }}><h3 style={{ margin:"0 0 10px",fontSize:15,fontWeight:500 }}>Resumen por manicura</h3><div style={{ display:"flex",flexDirection:"column",gap:6 }}>{resumenPorManicura.slice(0,8).map((r,i)=><div key={i} style={{ display:"grid",gridTemplateColumns:"1fr 90px 120px",gap:8,alignItems:"center",padding:"7px 8px",borderRadius:8,background:"var(--color-background-secondary)" }}><div><p style={{ margin:0,fontSize:13,fontWeight:500 }}>{r.nombre}</p><p style={{ margin:0,fontSize:11,color:"var(--color-text-secondary)" }}>{r.local} · {r.servicios} servicios</p></div><span style={{ fontSize:13,textAlign:"right",color:"var(--color-text-secondary)" }}>{fmtMoney(r.precio)}</span><strong style={{ fontSize:14,textAlign:"right",color:COLORS.pink }}>{fmtMoney(r.comision)}</strong></div>)}</div></Card>}
+      {puedeGestionar&&resumenPorManicura.length>0&&<Card style={{ marginBottom:14 }}><h3 style={{ margin:"0 0 10px",fontSize:15,fontWeight:500 }}>Resumen por manicura</h3><div style={{ display:"flex",flexDirection:"column",gap:6 }}>{resumenPorManicura.slice(0,8).map((r,i)=><div key={i} style={{ display:"grid",gridTemplateColumns:"1fr 95px 105px 110px 115px",gap:8,alignItems:"center",padding:"7px 8px",borderRadius:8,background:"var(--color-background-secondary)" }}><div><p style={{ margin:0,fontSize:13,fontWeight:500 }}>{r.nombre}</p><p style={{ margin:0,fontSize:11,color:"var(--color-text-secondary)" }}>{r.local} · {r.servicios} servicios</p></div><span style={{ fontSize:13,textAlign:"right",color:"var(--color-text-secondary)" }}>{fmtMoney(r.precio)}</span><strong style={{ fontSize:14,textAlign:"right",color:COLORS.pink }}>{fmtMoney(r.comision)}</strong><strong style={{ fontSize:14,textAlign:"right",color:COLORS.amber }}>-{fmtMoney(r.adelantos)}</strong><strong style={{ fontSize:14,textAlign:"right",color:r.neto>=0?COLORS.success:COLORS.danger }}>{fmtMoney(r.neto)}</strong></div>)}</div></Card>}
       <Card style={{ padding:0,overflow:"hidden" }}>
         <div style={{ padding:"12px 14px",borderBottom:"1px solid rgba(120,120,120,0.16)",display:"flex",justifyContent:"space-between",gap:8,alignItems:"center",flexWrap:"wrap" }}><h3 style={{ margin:0,fontSize:15,fontWeight:500 }}>Detalle de comisiones <span style={{ marginLeft:8,fontSize:11,color:COLORS.pinkDark,background:COLORS.pinkLight,borderRadius:999,padding:"3px 8px" }}>{gruposComisiones.length ? `agrupado: ${gruposComisiones.map(g=>agrupables.find(a=>a.id===g)?.label||g).join(" → ")}` : "tabla avanzada"}</span></h3><span style={{ fontSize:12,color:"var(--color-text-secondary)" }}>{registros.length} registros</span></div>
         <div style={{ padding:"8px 12px",borderBottom:"1px solid rgba(120,120,120,0.12)",background:"var(--color-background-secondary)" }}>
@@ -1899,6 +1921,112 @@ function ConfiguracionCobertura({ data, reloadData, user }) {
   </div>;
 }
 
+
+// ── ADELANTOS A MANICURAS ─────────────────────────────────────────
+function AdelantosManicuras({ data, reloadData, user }) {
+  const hoy = new Date();
+  const esAdmin = user.rol === "admin";
+  const esEncargada = user.rol === "encargada";
+  const allowedLocalIds = getAssignedLocalIds(data, user);
+  const localesPermitidos = esAdmin ? data.locales : data.locales.filter(l => allowedLocalIds.includes(l.id));
+  const [periodo, setPeriodo] = useState(fmtPeriodo(hoy));
+  const [localId, setLocalId] = useState(localesPermitidos[0]?.id || "");
+  const manicurasPermitidas = data.users.filter(u => u.rol === "manicura" && u.activo && (!localId || u.localId === parseInt(localId)) && (esAdmin || allowedLocalIds.includes(u.localId)));
+  const [form, setForm] = useState({ fecha:dateKey(hoy), userId:"", importe:"", concepto:"Adelanto", observacion:"" });
+  const [saving, setSaving] = useState(false);
+  const [err, setErr] = useState("");
+
+  useEffect(() => {
+    if (!manicurasPermitidas.some(m => m.id === parseInt(form.userId))) {
+      setForm(f => ({ ...f, userId: manicurasPermitidas[0]?.id || "" }));
+    }
+  }, [localId, data.users]);
+
+  const localActual = data.locales.find(l => l.id === parseInt(localId));
+  const adelantos = (data.adelantos||[])
+    .filter(a => a.periodo === periodo)
+    .filter(a => !localId || a.localId === parseInt(localId))
+    .filter(a => esAdmin || allowedLocalIds.includes(a.localId))
+    .sort((a,b)=>(b.fecha||"").localeCompare(a.fecha||"") || b.id-a.id);
+  const total = adelantos.reduce((acc,a)=>acc+a.importe,0);
+  const porManicura = Array.from(adelantos.reduce((map,a)=>{
+    const m = data.users.find(u=>u.id===a.userId);
+    const key = a.userId || `sin-${a.id}`;
+    const prev = map.get(key) || { nombre:m?.nombre || "Sin manicura", importe:0, cantidad:0 };
+    prev.importe += a.importe; prev.cantidad += 1; map.set(key, prev); return map;
+  }, new Map()).values()).sort((a,b)=>b.importe-a.importe);
+
+  const save = async () => {
+    setErr("");
+    if (!form.fecha || !form.userId || !localId || !form.importe) { setErr("Completá fecha, local, manicura e importe."); return; }
+    const manicura = data.users.find(u=>u.id===parseInt(form.userId));
+    if (!manicura || manicura.localId !== parseInt(localId)) { setErr("La manicura no corresponde al local seleccionado."); return; }
+    if (!esAdmin && !allowedLocalIds.includes(manicura.localId)) { setErr("No tenés permiso para cargar adelantos en ese local."); return; }
+    const importe = Number(String(form.importe).replace(",","."));
+    if (!Number.isFinite(importe) || importe <= 0) { setErr("Ingresá un importe válido mayor a cero."); return; }
+    setSaving(true);
+    try {
+      await api.createAdelanto({
+        fecha: form.fecha,
+        periodo: form.fecha.slice(0,7),
+        user_id: manicura.id,
+        local_id: manicura.localId,
+        importe,
+        concepto: form.concepto || "Adelanto",
+        observacion: form.observacion || null,
+        creado_por: user.id,
+      });
+      await reloadData();
+      setPeriodo(form.fecha.slice(0,7));
+      setForm(f => ({ ...f, importe:"", observacion:"" }));
+    } catch(e) { setErr("Error al guardar: " + e.message); }
+    setSaving(false);
+  };
+
+  const del = async (a) => {
+    if (!confirm("¿Eliminar este adelanto?")) return;
+    await api.deleteAdelanto(a.id);
+    await reloadData();
+  };
+
+  if (!esAdmin && !esEncargada) return null;
+
+  return <div>
+    <div style={{ display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:16,flexWrap:"wrap",gap:8 }}>
+      <h2 style={{ margin:0,fontSize:18,fontWeight:500 }}>Adelantos a manicuras</h2>
+      <Select value={periodo} onChange={setPeriodo} style={{ width:140 }}>
+        {Array.from(new Set([fmtPeriodo(hoy), ...(data.adelantos||[]).map(a=>a.periodo).filter(Boolean)])).sort().reverse().map(p=><option key={p} value={p}>{p}</option>)}
+      </Select>
+    </div>
+    <div style={{ display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(220px,1fr))",gap:12,marginBottom:14 }}>
+      <Card><p style={{ margin:"0 0 4px",fontSize:11,color:"var(--color-text-secondary)",textTransform:"uppercase",letterSpacing:"0.04em" }}>Total adelantos</p><p style={{ margin:0,fontSize:24,fontWeight:600,color:COLORS.amber }}>{fmtMoney(total)}</p></Card>
+      <Card><p style={{ margin:"0 0 4px",fontSize:11,color:"var(--color-text-secondary)",textTransform:"uppercase",letterSpacing:"0.04em" }}>Registros</p><p style={{ margin:0,fontSize:24,fontWeight:600 }}>{adelantos.length}</p></Card>
+      <Card><p style={{ margin:"0 0 4px",fontSize:11,color:"var(--color-text-secondary)",textTransform:"uppercase",letterSpacing:"0.04em" }}>Local</p><p style={{ margin:0,fontSize:18,fontWeight:600 }}>{localActual?.nombre || "—"}</p></Card>
+    </div>
+    <Card style={{ marginBottom:14 }}>
+      <h3 style={{ margin:"0 0 12px",fontSize:15,fontWeight:500 }}>Cargar adelanto</h3>
+      <div style={{ display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(160px,1fr))",gap:10,alignItems:"end" }}>
+        <div><label style={{ fontSize:12,color:"var(--color-text-secondary)",display:"block",marginBottom:4 }}>Fecha</label><input type="date" value={form.fecha} onChange={e=>setForm(f=>({...f,fecha:e.target.value}))} style={{ width:"100%",border:"0.5px solid var(--color-border-secondary)",borderRadius:8,padding:"8px 12px",fontSize:14,background:"var(--color-background-primary)",color:"var(--color-text-primary)" }}/></div>
+        <div><label style={{ fontSize:12,color:"var(--color-text-secondary)",display:"block",marginBottom:4 }}>Local</label><Select value={localId} onChange={v=>setLocalId(v)}>{localesPermitidos.map(l=><option key={l.id} value={l.id}>{l.nombre}</option>)}</Select></div>
+        <div><label style={{ fontSize:12,color:"var(--color-text-secondary)",display:"block",marginBottom:4 }}>Manicura</label><Select value={form.userId} onChange={v=>setForm(f=>({...f,userId:v}))}>{manicurasPermitidas.map(m=><option key={m.id} value={m.id}>{m.nombre}</option>)}</Select></div>
+        <div><label style={{ fontSize:12,color:"var(--color-text-secondary)",display:"block",marginBottom:4 }}>Importe</label><Input value={form.importe} onChange={v=>setForm(f=>({...f,importe:v}))} placeholder="0"/></div>
+        <div><label style={{ fontSize:12,color:"var(--color-text-secondary)",display:"block",marginBottom:4 }}>Concepto</label><Input value={form.concepto} onChange={v=>setForm(f=>({...f,concepto:v}))}/></div>
+        <div style={{ gridColumn:"1 / -1" }}><label style={{ fontSize:12,color:"var(--color-text-secondary)",display:"block",marginBottom:4 }}>Observación</label><Input value={form.observacion} onChange={v=>setForm(f=>({...f,observacion:v}))} placeholder="Opcional"/></div>
+      </div>
+      {err && <p style={{ margin:"10px 0 0",fontSize:13,color:COLORS.danger,background:COLORS.dangerLight,padding:"8px 12px",borderRadius:8 }}>{err}</p>}
+      <Btn onClick={save} disabled={saving} style={{ marginTop:12 }}>{saving?"Guardando...":"Guardar adelanto"}</Btn>
+    </Card>
+    {porManicura.length>0&&<Card style={{ marginBottom:14 }}><h3 style={{ margin:"0 0 10px",fontSize:15,fontWeight:500 }}>Resumen por manicura</h3><div style={{ display:"flex",flexDirection:"column",gap:6 }}>{porManicura.map((r,i)=><div key={i} style={{ display:"grid",gridTemplateColumns:"1fr 80px 120px",gap:8,alignItems:"center",padding:"7px 8px",borderRadius:8,background:"var(--color-background-secondary)" }}><span style={{ fontSize:13,fontWeight:500 }}>{r.nombre}</span><span style={{ fontSize:12,color:"var(--color-text-secondary)",textAlign:"right" }}>{r.cantidad} reg.</span><strong style={{ textAlign:"right",color:COLORS.amber }}>{fmtMoney(r.importe)}</strong></div>)}</div></Card>}
+    <Card style={{ padding:0,overflow:"hidden" }}>
+      <div style={{ padding:"12px 14px",borderBottom:"1px solid rgba(120,120,120,0.16)",display:"flex",justifyContent:"space-between",alignItems:"center" }}><h3 style={{ margin:0,fontSize:15,fontWeight:500 }}>Detalle de adelantos</h3><span style={{ fontSize:12,color:"var(--color-text-secondary)" }}>{adelantos.length} registros</span></div>
+      {adelantos.length===0 ? <p style={{ margin:0,padding:18,textAlign:"center",fontSize:13,color:"var(--color-text-secondary)" }}>Sin adelantos para el período/local seleccionado.</p> : <div style={{ overflowX:"auto" }}><div style={{ minWidth:760 }}>
+        <div style={{ display:"grid",gridTemplateColumns:"90px 1fr 1fr 120px 1fr 70px",gap:8,padding:"8px 12px",fontSize:11,fontWeight:600,color:"var(--color-text-secondary)",borderBottom:"1px solid rgba(120,120,120,0.14)",textTransform:"uppercase" }}><span>Fecha</span><span>Local</span><span>Manicura</span><span style={{ textAlign:"right" }}>Importe</span><span>Concepto / Obs.</span><span></span></div>
+        {adelantos.map(a=>{ const m=data.users.find(u=>u.id===a.userId), l=data.locales.find(x=>x.id===a.localId); return <div key={a.id} style={{ display:"grid",gridTemplateColumns:"90px 1fr 1fr 120px 1fr 70px",gap:8,padding:"8px 12px",fontSize:12,alignItems:"center",borderBottom:"1px solid rgba(120,120,120,0.10)" }}><span>{(a.fecha||"").split("-").reverse().join("/")}</span><span>{l?.nombre||"—"}</span><span>{m?.nombre||"—"}</span><strong style={{ textAlign:"right",color:COLORS.amber }}>{fmtMoney(a.importe)}</strong><span>{a.concepto}{a.observacion?` · ${a.observacion}`:""}</span><Btn onClick={()=>del(a)} variant="ghost" size="sm" style={{ color:COLORS.danger }}>Eliminar</Btn></div>;})}
+      </div></div>}
+    </Card>
+  </div>;
+}
+
 // ── ABM ENCARGADAS ────────────────────────────────────────────────
 function ABMEncargadas({ data, reloadData }) {
   const [modal, setModal] = useState(null);
@@ -1966,8 +2094,8 @@ export default function App() {
   const [reportRestore, setReportRestore] = useState(null);
 
   const reloadData = useCallback(async () => {
-    const [users, locales, horarios, asistencias, periodos, feriados, reglasCobertura, configCobertura, encargadoLocales, comisiones, comisionesImportaciones] = await Promise.all([
-      api.getUsers(), api.getLocales(), api.getHorarios(), api.getAsistencias(), api.getPeriodos(), api.getFeriados(), api.getReglasCobertura(), api.getConfigCobertura(), api.getEncargadoLocales(), api.getComisiones(), api.getComisionesImportaciones()
+    const [users, locales, horarios, asistencias, periodos, feriados, reglasCobertura, configCobertura, encargadoLocales, comisiones, comisionesImportaciones, adelantos] = await Promise.all([
+      api.getUsers(), api.getLocales(), api.getHorarios(), api.getAsistencias(), api.getPeriodos(), api.getFeriados(), api.getReglasCobertura(), api.getConfigCobertura(), api.getEncargadoLocales(), api.getComisiones(), api.getComisionesImportaciones(), api.getAdelantos()
     ]);
     setData({
       users: users.map(normalizeUser),
@@ -1981,6 +2109,7 @@ export default function App() {
       encargadoLocales: (encargadoLocales||[]).map(normalizeEncargadoLocal),
       comisiones: (comisiones||[]).map(normalizeComision),
       comisionesImportaciones: (comisionesImportaciones||[]).map(normalizeComisionImportacion),
+      adelantos: (adelantos||[]).map(normalizeAdelanto),
     });
   }, []);
 
@@ -1999,6 +2128,7 @@ export default function App() {
     {id:"asistencia",label:"Asistencia",icon:"📋"},
     {id:"horarios",label:"Horarios",icon:"🗓️"},
     {id:"reportes",label:"Reportes",icon:"📊"},
+    {id:"adelantos",label:"Adelantos",icon:"💸"},
     {id:"manicuras",label:"Manicuras",icon:"💅"},
     {id:"encargadas",label:"Encargadas",icon:"👩‍💼"},
     {id:"locales",label:"Locales",icon:"🏠"},
@@ -2009,6 +2139,7 @@ export default function App() {
     {id:"asistencia",label:"Asistencia",icon:"📋"},
     {id:"horarios",label:"Horarios",icon:"🗓️"},
     {id:"reportes",label:"Reportes",icon:"📊"},
+    {id:"adelantos",label:"Adelantos",icon:"💸"},
     {id:"manicuras",label:"Manicuras",icon:"💅"},
     {id:"cobertura_config",label:"Cobertura",icon:"⚙️"},
     {id:"perfil",label:"Mi perfil",icon:"👤"},
@@ -2024,6 +2155,7 @@ export default function App() {
     if (seccion==="asistencia") return <AsistenciaDiaria data={data} reloadData={reloadData} user={user}/>;
     if (seccion==="horarios") return <CalendarioHorarios data={data} reloadData={reloadData} user={user} agendaRequest={agendaRequest} onBackToReport={()=>{ setSeccion("reportes"); setMenuOpen(false); }}/>;
     if (seccion==="reportes") return <Reportes data={data} user={user} reportRestore={reportRestore} onOpenAgenda={(req)=>{ const restore={ tab:"cobertura", fecha:req.fecha, localId:req.localId || "" }; setReportRestore(restore); setAgendaRequest({...req, fromReport:true}); setSeccion("horarios"); setMenuOpen(false); }}/>;
+    if (seccion==="adelantos") return user.rol!=="manicura" ? <AdelantosManicuras data={data} reloadData={reloadData} user={user}/> : null;
     if (seccion==="manicuras") return <ABMManicuras data={data} reloadData={reloadData} user={user}/>;
     if (seccion==="locales") return user.rol==="admin" ? <ABMLocales data={data} reloadData={reloadData}/> : null;
     if (seccion==="encargadas") return user.rol==="admin" ? <ABMEncargadas data={data} reloadData={reloadData}/> : null;
