@@ -1467,6 +1467,7 @@ function Reportes({ data, user, onOpenAgenda, reportRestore }) {
   const [gruposComisiones, setGruposComisiones] = useState([]);
   const [menuColComisiones, setMenuColComisiones] = useState(null);
   const [collapsedComisiones, setCollapsedComisiones] = useState({});
+  const [sortComisiones, setSortComisiones] = useState({ key:"fecha", dir:"desc" });
   const [colsComisiones, setColsComisiones] = useState([
     { key:"fecha", label:"Fecha", width:90 },
     { key:"semana", label:"Semana", width:90 },
@@ -1621,9 +1622,30 @@ function Reportes({ data, user, onOpenAgenda, reportRestore }) {
       .filter(c=>localComisiones === "todos" || c.localId === parseInt(localComisiones) || normalize(c.nombreLocal) === normalize(localNameById.get(parseInt(localComisiones))))
       .filter(c=>manicuraComisiones === "todas" || c.userId === parseInt(manicuraComisiones) || normalize(c.nombreManicura) === normalize(userNameById.get(parseInt(manicuraComisiones))));
     const semanasDisponibles = Array.from(new Set(baseRegistros.map(c=>weekOfMonthValue(c.fechaPago)).filter(Boolean))).sort((a,b)=>parseInt(a)-parseInt(b));
-    const registros = baseRegistros
-      .filter(c=>semanaComisiones === "todas" || weekOfMonthValue(c.fechaPago) === semanaComisiones)
-      .sort((a,b)=>(b.fechaPago||"").localeCompare(a.fechaPago||"") || (a.nombreLocal||"").localeCompare(b.nombreLocal||"") || (a.nombreManicura||"").localeCompare(b.nombreManicura||""));
+    const registrosFiltrados = baseRegistros
+      .filter(c=>semanaComisiones === "todas" || weekOfMonthValue(c.fechaPago) === semanaComisiones);
+    const sortRawValue = (c, key) => {
+      if (key === "fecha") return c.fechaPago || "";
+      if (key === "semana") return Number(weekOfMonthValue(c.fechaPago) || 0);
+      if (key === "local") return normalize(c.nombreLocal);
+      if (key === "manicura") return normalize(c.nombreManicura);
+      if (key === "servicio") return normalize(c.servicio);
+      if (key === "cliente") return normalize(c.cliente);
+      if (key === "precio") return Number(c.precio || 0);
+      if (key === "comision") return Number(c.comision || 0);
+      return "";
+    };
+    const compareSortValue = (a, b, key) => {
+      const av = sortRawValue(a, key), bv = sortRawValue(b, key);
+      if (typeof av === "number" || typeof bv === "number") return Number(av || 0) - Number(bv || 0);
+      return String(av || "").localeCompare(String(bv || ""), "es", { numeric:true, sensitivity:"base" });
+    };
+    const registros = [...registrosFiltrados].sort((a,b)=>{
+      const primary = compareSortValue(a,b,sortComisiones.key);
+      const ordered = sortComisiones.dir === "desc" ? -primary : primary;
+      if (ordered !== 0) return ordered;
+      return (b.fechaPago||"").localeCompare(a.fechaPago||"") || (a.nombreLocal||"").localeCompare(b.nombreLocal||"") || (a.nombreManicura||"").localeCompare(b.nombreManicura||"");
+    });
     const puedeVerAdelanto = (a) => {
       if (esAdmin) return true;
       if (esEncargada) return a.localId && allowedLocalIds.includes(a.localId);
@@ -1662,6 +1684,7 @@ function Reportes({ data, user, onOpenAgenda, reportRestore }) {
     const sabadoPagoCheck = sabadoPagoBase ? new Date(sabadoPagoBase) : null;
     if (sabadoPagoCheck) sabadoPagoCheck.setHours(0,0,0,0);
     const semanaFinalizada = !!sabadoPagoCheck && hoyPagoCheck > sabadoPagoCheck;
+    const pagoEstimado = semanaComisiones !== "todas" && !!sabadoPagoBase && !semanaFinalizada;
     const manicurasPagoMap = new Map();
     registros.forEach(c => {
       const key = c.userId || normalize(c.nombreLocal + "|" + c.nombreManicura);
@@ -1683,7 +1706,9 @@ function Reportes({ data, user, onOpenAgenda, reportRestore }) {
       const sabadoKey = sabadoPagoBase ? dateKey(sabadoPagoBase) : "";
       const horarioSabado = !!(sabadoKey && m.userId && data.horarios.some(h => h.userId===m.userId && h.fecha===sabadoKey && h.trabaja && h.entrada && h.salida));
       const asistenciaSabado = sabadoKey && m.userId ? data.asistencias.find(a => a.userId===m.userId && a.fecha===sabadoKey) : null;
-      const trabajaSabado = asistenciaSabado ? asistenciaSabado.estado !== "ausente" : horarioSabado;
+      const trabajaSabado = semanaFinalizada
+        ? (asistenciaSabado ? asistenciaSabado.estado !== "ausente" : horarioSabado)
+        : horarioSabado;
       const fechaPago = sabadoPagoBase ? addDaysLocal(dateKey(sabadoPagoBase), trabajaSabado ? 2 : 3) : null;
       return { ...m, trabajaSabado, asistenciaSabado:asistenciaSabado?.estado || "", fechaPago: fechaPago ? dateKey(fechaPago) : "", neto:m.comision - m.adelantos };
     }).sort((a,b)=>(a.fechaPago||"").localeCompare(b.fechaPago||"") || String(a.nombre).localeCompare(String(b.nombre)));
@@ -1819,6 +1844,8 @@ function Reportes({ data, user, onOpenAgenda, reportRestore }) {
     const collapseLevel = (campo) => { setCollapsedComisiones(p=>({...p,...Object.fromEntries(collectGroupIds(groupedTree,g=>g.campo===campo).map(id=>[id,true]))})); setMenuColComisiones(null); };
     const expandLevel = (campo) => { const ids=new Set(collectGroupIds(groupedTree,g=>g.campo===campo)); setCollapsedComisiones(p=>Object.fromEntries(Object.entries(p).filter(([id])=>!ids.has(id)))); setMenuColComisiones(null); };
     const toggleGroup = (id) => setCollapsedComisiones(p=>({...p,[id]:!p[id]}));
+    const setSortColumn = (key, dir) => { setSortComisiones({ key, dir }); setMenuColComisiones(null); };
+    const sortIcon = (key) => sortComisiones.key === key ? (sortComisiones.dir === "asc" ? "↑" : "↓") : "↕";
     const HeaderCell = ({ col }) => {
       const money=["precio","comision"].includes(col.key);
       const activeGroupIndex=gruposComisiones.indexOf(col.key);
@@ -1831,9 +1858,12 @@ function Reportes({ data, user, onOpenAgenda, reportRestore }) {
         style={{ position:"relative",display:"flex",alignItems:"center",justifyContent:money?"flex-end":"flex-start",gap:5,minWidth:0,paddingRight:8,cursor:"grab",userSelect:"none",color:activeGroup?COLORS.pinkDark:"inherit" }}
       >
         <button onClick={e=>{ e.stopPropagation(); setMenuColComisiones(menuColComisiones===col.key?null:col.key); }} title="Clic para agrupar/desagrupar. Arrastrá el título para cambiar el orden." style={{ border:"none",background:activeGroup?COLORS.pinkLight:"transparent",color:activeGroup?COLORS.pinkDark:"inherit",borderRadius:6,padding:"3px 5px",cursor:"pointer",fontSize:11,fontWeight:700,textTransform:"uppercase",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap",maxWidth:"100%",display:"inline-flex",alignItems:"center",gap:4 }}>
-          <span>{activeGroup?`${activeGroupIndex+1}. `:""}{col.label}</span><span style={{ opacity:0.65,fontSize:10 }}>⋮</span>
+          <span>{activeGroup?`${activeGroupIndex+1}. `:""}{col.label}</span><span style={{ opacity:sortComisiones.key===col.key?1:0.45,fontSize:11,color:sortComisiones.key===col.key?COLORS.pinkDark:"inherit" }}>{sortIcon(col.key)}</span><span style={{ opacity:0.65,fontSize:10 }}>⋮</span>
         </button>
-        {menuColComisiones===col.key&&<div style={{ position:"absolute",top:26,left:money?"auto":0,right:money?0:"auto",zIndex:20,background:"#fff",border:"1px solid rgba(120,120,120,0.18)",borderRadius:10,boxShadow:"0 8px 24px rgba(0,0,0,0.12)",padding:6,minWidth:185,textTransform:"none" }}>
+        {menuColComisiones===col.key&&<div style={{ position:"absolute",top:26,left:money?"auto":0,right:money?0:"auto",zIndex:20,background:"#fff",border:"1px solid rgba(120,120,120,0.18)",borderRadius:10,boxShadow:"0 8px 24px rgba(0,0,0,0.12)",padding:6,minWidth:205,textTransform:"none" }}>
+          <button onClick={()=>setSortColumn(col.key,"asc")} style={{ width:"100%",textAlign:"left",border:"none",background:sortComisiones.key===col.key&&sortComisiones.dir==="asc"?COLORS.pinkLight:"transparent",color:sortComisiones.key===col.key&&sortComisiones.dir==="asc"?COLORS.pinkDark:"inherit",padding:"7px 9px",borderRadius:7,cursor:"pointer",fontSize:12 }}>Ordenar ascendente ↑</button>
+          <button onClick={()=>setSortColumn(col.key,"desc")} style={{ width:"100%",textAlign:"left",border:"none",background:sortComisiones.key===col.key&&sortComisiones.dir==="desc"?COLORS.pinkLight:"transparent",color:sortComisiones.key===col.key&&sortComisiones.dir==="desc"?COLORS.pinkDark:"inherit",padding:"7px 9px",borderRadius:7,cursor:"pointer",fontSize:12 }}>Ordenar descendente ↓</button>
+          <div style={{ height:1,background:"rgba(120,120,120,0.12)",margin:"5px 0" }}/>
           <button disabled={!groupableCol(col.key) || activeGroup} onClick={()=>addGroupFromColumn(col.key)} style={{ width:"100%",textAlign:"left",border:"none",background:"transparent",padding:"7px 9px",borderRadius:7,cursor:groupableCol(col.key)&&!activeGroup?"pointer":"not-allowed",opacity:groupableCol(col.key)&&!activeGroup?1:0.45,fontSize:12 }}>Agregar como nivel {gruposComisiones.length + 1}</button>
           <button disabled={!activeGroup} onClick={()=>removeGroupFromColumn(col.key)} style={{ width:"100%",textAlign:"left",border:"none",background:"transparent",padding:"7px 9px",borderRadius:7,cursor:activeGroup?"pointer":"not-allowed",opacity:activeGroup?1:0.45,fontSize:12 }}>Desagrupar esta columna</button>
           <button disabled={!activeGroup} onClick={()=>collapseLevel(col.key)} style={{ width:"100%",textAlign:"left",border:"none",background:"transparent",padding:"7px 9px",borderRadius:7,cursor:activeGroup?"pointer":"not-allowed",opacity:activeGroup?1:0.45,fontSize:12 }}>Colapsar este nivel</button>
@@ -1915,15 +1945,15 @@ function Reportes({ data, user, onOpenAgenda, reportRestore }) {
           <div style={{ flex:1,minWidth:260 }}>
             <h3 style={{ margin:"0 0 4px",fontSize:15,fontWeight:600,color:semanaComisiones==="todas"?COLORS.info:semanaFinalizada?COLORS.success:COLORS.amber }}>Fecha de pago de comisiones</h3>
             {semanaComisiones==="todas" ? <p style={{ margin:0,fontSize:13,color:COLORS.info }}>Seleccioná una semana para calcular la fecha de pago.</p>
-            : !semanaFinalizada ? <p style={{ margin:0,fontSize:13,color:COLORS.amber }}>La semana seleccionada todavía no está cerrada. Se podrá calcular cuando haya pasado el sábado {sabadoPagoBase?fmtFecha(sabadoPagoBase):""}.</p>
+            : !semanaFinalizada ? <p style={{ margin:0,fontSize:13,color:COLORS.amber }}>La semana seleccionada todavía no está cerrada. Se muestra una fecha estimada en base a la agenda teórica del sábado {sabadoPagoBase?fmtFecha(sabadoPagoBase):""}. La fecha definitiva se confirmará cuando pase ese sábado.</p>
             : <p style={{ margin:0,fontSize:13,color:COLORS.success }}>Semana cerrada el sábado {fmtFecha(sabadoPagoBase)}. Si la manicura trabajó ese sábado, cobra el lunes siguiente; si no trabajó, el martes siguiente.</p>}
           </div>
           {semanaComisiones!=="todas"&&sabadoPagoBase&&<div style={{ textAlign:"right" }}><p style={{ margin:0,fontSize:11,color:"var(--color-text-secondary)",textTransform:"uppercase",letterSpacing:"0.04em" }}>Sábado de control</p><p style={{ margin:0,fontSize:18,fontWeight:600 }}>{fmtFecha(sabadoPagoBase)}</p></div>}
         </div>
-        {semanaComisiones!=="todas"&&semanaFinalizada&&fechasPagoComisiones.length>0&&<div style={{ marginTop:12,display:"flex",flexDirection:"column",gap:6 }}>
+        {semanaComisiones!=="todas"&&fechasPagoComisiones.length>0&&<div style={{ marginTop:12,display:"flex",flexDirection:"column",gap:6 }}>
           {fechasPagoComisiones.map((pago,i)=><div key={`${pago.userId||pago.nombre}-${i}`} style={{ display:"grid",gridTemplateColumns:"1fr 120px 120px 115px",gap:8,alignItems:"center",background:"rgba(255,255,255,0.68)",borderRadius:8,padding:"7px 9px" }}>
-            <div><p style={{ margin:0,fontSize:13,fontWeight:600 }}>{pago.nombre}</p><p style={{ margin:0,fontSize:11,color:"var(--color-text-secondary)" }}>{pago.local||"Sin local"} · {pago.trabajaSabado?"Trabajó sábado":"No trabajó sábado"}</p></div>
-            <Badge color={pago.trabajaSabado?"success":"amber"}>{pago.trabajaSabado?"Lunes":"Martes"}</Badge>
+            <div><p style={{ margin:0,fontSize:13,fontWeight:600 }}>{pago.nombre}</p><p style={{ margin:0,fontSize:11,color:"var(--color-text-secondary)" }}>{pago.local||"Sin local"} · {pago.trabajaSabado?"Trabaja sábado":"No trabaja sábado"}{pagoEstimado?" · estimado por agenda":""}</p></div>
+            <Badge color={pagoEstimado?"amber":pago.trabajaSabado?"success":"amber"}>{pagoEstimado?`Estimado ${pago.trabajaSabado?"lunes":"martes"}`:pago.trabajaSabado?"Lunes":"Martes"}</Badge>
             <strong style={{ fontSize:14,textAlign:"right" }}>{pago.fechaPago ? pago.fechaPago.split("-").reverse().join("/") : "—"}</strong>
             <strong style={{ fontSize:14,textAlign:"right",color:(pago.neto||0)>=0?COLORS.success:COLORS.danger }}>{fmtMoney(pago.neto)}</strong>
           </div>)}
@@ -1933,7 +1963,7 @@ function Reportes({ data, user, onOpenAgenda, reportRestore }) {
       <Card style={{ padding:0,overflow:"hidden" }}>
         <div style={{ padding:"12px 14px",borderBottom:"1px solid rgba(120,120,120,0.16)",display:"flex",justifyContent:"space-between",gap:8,alignItems:"center",flexWrap:"wrap" }}><h3 style={{ margin:0,fontSize:15,fontWeight:500 }}>Detalle de comisiones <span style={{ marginLeft:8,fontSize:11,color:COLORS.pinkDark,background:COLORS.pinkLight,borderRadius:999,padding:"3px 8px" }}>{gruposComisiones.length ? `agrupado: ${gruposComisiones.map(g=>agrupables.find(a=>a.id===g)?.label||g).join(" → ")}` : "tabla avanzada"}</span></h3><span style={{ fontSize:12,color:"var(--color-text-secondary)" }}>{registros.length} registros</span></div>
         <div style={{ padding:"8px 12px",borderBottom:"1px solid rgba(120,120,120,0.12)",background:"var(--color-background-secondary)" }}>
-          <p style={{ margin:0,fontSize:11,fontWeight:500,color:"var(--color-text-secondary)" }}>Arrastrá los títulos para cambiar el orden. Arrastrá el borde derecho para cambiar el ancho. Hacé clic en títulos distintos para sumar niveles de agrupación sobre esta misma grilla, por ejemplo Fecha → Cliente → Servicio.</p>
+          <p style={{ margin:0,fontSize:11,fontWeight:500,color:"var(--color-text-secondary)" }}>Arrastrá los títulos para cambiar el orden. Arrastrá el borde derecho para cambiar el ancho. Hacé clic en el título para ordenar asc/desc o sumar niveles de agrupación sobre esta misma grilla, por ejemplo Fecha → Cliente → Servicio.</p>
         </div>
         {registros.length===0?<p style={{ margin:0,padding:18,textAlign:"center",fontSize:13,color:"var(--color-text-secondary)" }}>Sin comisiones para los filtros seleccionados.</p>:<div style={{ overflowX:"auto" }}><div style={{ minWidth:Math.max(980, colsComisiones.reduce((a,c)=>a+c.width,0)+120) }}>
           <div style={{ display:"grid",gridTemplateColumns:gridColumns,gap:8,padding:"8px 12px",fontSize:11,fontWeight:600,color:"var(--color-text-secondary)",borderBottom:"1px solid rgba(120,120,120,0.14)",textTransform:"uppercase",position:"relative" }}>{colsComisiones.map(col=><HeaderCell key={col.key} col={col}/>)}</div>
