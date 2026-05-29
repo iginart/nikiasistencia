@@ -154,6 +154,10 @@ const api = {
   deleteAdelanto: (id) => sb(`adelantos_manicuras?id=eq.${id}`, { method: "DELETE", prefer: "" }),
   deleteAdelantosGrupo: (grupoId) => sb(`adelantos_manicuras?grupo_id=eq.${encodeURIComponent(grupoId)}`, { method: "DELETE", prefer: "" }),
   getGarantias: () => sb("garantias_servicios?select=*&order=fecha_reparacion.desc,id.desc"),
+  getInformesDiarios: () => sb("informes_diarios?select=*&order=fecha.desc,id.desc"),
+  createInformeDiario: (d) => sb("informes_diarios", { method: "POST", body: JSON.stringify(d) }),
+  updateInformeDiario: (id, d) => sb(`informes_diarios?id=eq.${id}`, { method: "PATCH", body: JSON.stringify(d) }),
+  deleteInformeDiario: (id) => sb(`informes_diarios?id=eq.${id}`, { method: "DELETE", prefer: "" }),
   createGarantia: (d) => sb("garantias_servicios", { method: "POST", body: JSON.stringify(d) }),
   updateGarantia: (id, d) => sb(`garantias_servicios?id=eq.${id}`, { method: "PATCH", body: JSON.stringify(d) }),
   deleteGarantia: (id) => sb(`garantias_servicios?id=eq.${id}`, { method: "DELETE", prefer: "" }),
@@ -183,6 +187,7 @@ function normalizeComision(c) { return { id:c.id, periodo:c.periodo, fechaPago:c
 function normalizeComisionImportacion(i) { return { id:i.id, periodo:i.periodo, registros:i.registros || 0, totalPrecio:Number(i.total_precio || 0), totalComision:Number(i.total_comision || 0), estado:i.estado || "", mensaje:i.mensaje || "", creadoEn:i.creado_en || "" }; }
 function normalizeAdelanto(a) { return { id:a.id, fecha:a.fecha, fechaDescuento:a.fecha_descuento || a.fecha, periodo:a.periodo || (a.fecha_descuento ? String(a.fecha_descuento).slice(0,7) : a.fecha ? String(a.fecha).slice(0,7) : ""), userId:a.user_id, localId:a.local_id, importe:Number(a.importe || 0), importeTotal:Number(a.importe_total || a.importe || 0), concepto:a.concepto || "", observacion:a.observacion || "", creadoPor:a.creado_por, creadoEn:a.creado_en || "", grupoId:a.grupo_id || "", cuotaNum:a.cuota_num || 1, cuotasTotal:a.cuotas_total || 1, tipoDescuento:a.tipo_descuento || "semana" }; }
 function normalizeGarantia(g) { return { id:g.id, fechaServicioOriginal:g.fecha_servicio_original, comisionOriginalId:g.comision_original_id, localId:g.local_id, manicuraOriginalId:g.manicura_original_id, nombreManicuraOriginal:g.nombre_manicura_original || "", cliente:g.cliente || "", servicio:g.servicio || "", importeComision:Number(g.importe_comision || 0), fechaReparacion:g.fecha_reparacion, manicuraReparacionId:g.manicura_reparacion_id, nombreManicuraReparacion:g.nombre_manicura_reparacion || "", motivo:g.motivo || "", fotos:Array.isArray(g.fotos) ? g.fotos : [], creadoPor:g.creado_por_user_id, creadoEn:g.creado_en || "", actualizadoEn:g.actualizado_en || "" }; }
+function normalizeInformeDiario(i) { return { id:i.id, fecha:i.fecha, localId:i.local_id, importanteManana:i.importante_manana || "", urgentesGenerales:i.urgentes_generales || "", efectivoCaja:Number(i.efectivo_caja || 0), coincideCaja:i.coincide_caja === true, mercadoPagoTotalReservas:i.mercado_pago_total_reservas || "", pagosRealizados:i.pagos_realizados || "", saldoAnterior:Number(i.saldo_anterior || 0), traspasoCajaGeneral:Number(i.traspaso_caja_general || 0), traspasoCajaEfectivo:Number(i.traspaso_caja_efectivo || 0), reclamos:i.reclamos || "", novedadesSalonManicuras:i.novedades_salon_manicuras || "", observacionesExtras:i.observaciones_extras || "", estado:i.estado || "borrador", creadoPor:i.creado_por_user_id, enviadoEn:i.enviado_en || "", creadoEn:i.creado_en || "", actualizadoEn:i.actualizado_en || "" }; }
 
 const COLORS = {
   pink: "#d4537e", pinkLight: "#fbeaf0", pinkDark: "#72243e",
@@ -2854,6 +2859,248 @@ function ABMEncargadas({ data, reloadData }) {
   </div>;
 }
 
+
+// ── INFORME DIARIO ─────────────────────────────────────────────────
+function InformeDiario({ data, reloadData, user }) {
+  const hoy = new Date();
+  const esAdmin = user.rol === "admin";
+  const allowedLocalIds = useMemo(() => {
+    if (esAdmin) return data.locales.map(l => l.id);
+    return (data.encargadoLocales || []).filter(x => x.userId === user.id).map(x => x.localId);
+  }, [data.locales, data.encargadoLocales, user.id, esAdmin]);
+  const locales = data.locales.filter(l => allowedLocalIds.includes(l.id));
+  const [fecha, setFecha] = useState(dateKey(hoy));
+  const [localId, setLocalId] = useState(locales[0]?.id || "");
+  const [mesFiltro, setMesFiltro] = useState(`${hoy.getFullYear()}-${String(hoy.getMonth()+1).padStart(2,"0")}`);
+  const [localFiltro, setLocalFiltro] = useState(locales[0]?.id || "");
+  const [form, setForm] = useState(null);
+  const [saving, setSaving] = useState(false);
+  const [preview, setPreview] = useState(null);
+  const [deleteTarget, setDeleteTarget] = useState(null);
+
+  useEffect(() => {
+    if (!localId && locales[0]?.id) setLocalId(locales[0].id);
+    if (!localFiltro && locales[0]?.id) setLocalFiltro(locales[0].id);
+  }, [locales, localId, localFiltro]);
+
+  const emptyForm = useCallback((f = fecha, lid = localId) => ({
+    fecha: f,
+    localId: parseInt(lid) || null,
+    importanteManana: "",
+    urgentesGenerales: "",
+    efectivoCaja: "",
+    coincideCaja: true,
+    mercadoPagoTotalReservas: "",
+    pagosRealizados: "",
+    saldoAnterior: "",
+    traspasoCajaGeneral: "",
+    traspasoCajaEfectivo: "",
+    reclamos: "",
+    novedadesSalonManicuras: "",
+    observacionesExtras: "",
+    estado: "borrador",
+  }), [fecha, localId]);
+
+  const findInforme = useCallback((f, lid) => (data.informesDiarios || []).find(i => i.fecha === f && i.localId === parseInt(lid)), [data.informesDiarios]);
+
+  const loadForDateLocal = useCallback((f = fecha, lid = localId) => {
+    const existing = findInforme(f, lid);
+    if (existing) setForm({ ...existing });
+    else setForm(emptyForm(f, lid));
+  }, [fecha, localId, findInforme, emptyForm]);
+
+  useEffect(() => { if (localId) loadForDateLocal(fecha, localId); }, [fecha, localId]);
+
+  const informesFiltrados = useMemo(() => {
+    return (data.informesDiarios || [])
+      .filter(i => allowedLocalIds.includes(i.localId))
+      .filter(i => !mesFiltro || String(i.fecha || "").startsWith(mesFiltro))
+      .filter(i => !localFiltro || i.localId === parseInt(localFiltro))
+      .sort((a,b) => (b.fecha || "").localeCompare(a.fecha || ""));
+  }, [data.informesDiarios, allowedLocalIds, mesFiltro, localFiltro]);
+
+  const selectedLocal = data.locales.find(l => l.id === parseInt(form?.localId || localId));
+  const calcTotalCaja = (inf) => Number(inf?.saldoAnterior || 0) + Number(inf?.traspasoCajaGeneral || 0) + Number(inf?.traspasoCajaEfectivo || 0);
+  const parseDateLabel = (f) => {
+    const d = parseDateLocal(f);
+    return d ? `${String(d.getDate()).padStart(2,"0")}/${String(d.getMonth()+1).padStart(2,"0")}/${d.getFullYear()}` : f;
+  };
+
+  const buildTextReport = (inf) => {
+    const local = data.locales.find(l => l.id === inf.localId);
+    return [
+      `INFORME DIARIO ${local?.nombre || ""}`,
+      `Fecha: ${parseDateLabel(inf.fecha)}`,
+      ``,
+      `IMPORTANTE PARA MAÑANA:`,
+      inf.importanteManana || "-",
+      ``,
+      `URGENTES GENERALES:`,
+      inf.urgentesGenerales || "-",
+      ``,
+      `EFECTIVO EN CAJA: ${fmtMoney(inf.efectivoCaja)}`,
+      `COINCIDE LA CAJA: ${inf.coincideCaja ? "Sí" : "No"}`,
+      `MERCADO PAGO / TOTAL / RESERVAS:`,
+      inf.mercadoPagoTotalReservas || "-",
+      ``,
+      `PAGOS REALIZADOS:`,
+      inf.pagosRealizados || "-",
+      ``,
+      `TRASPASOS A CAJA GENERAL:`,
+      `Saldo anterior: ${fmtMoney(inf.saldoAnterior)}`,
+      `Traspaso a Caja General: ${fmtMoney(inf.traspasoCajaGeneral)}`,
+      `Traspaso a Caja Efectivo: ${fmtMoney(inf.traspasoCajaEfectivo)}`,
+      `Total: ${fmtMoney(calcTotalCaja(inf))}`,
+      ``,
+      `RECLAMOS:`,
+      inf.reclamos || "-",
+      ``,
+      `NOVEDADES SALÓN / MANICURAS:`,
+      inf.novedadesSalonManicuras || "-",
+      ``,
+      `OBSERVACIONES / EXTRAS:`,
+      inf.observacionesExtras || "-",
+    ].join("\n");
+  };
+
+  const save = async (markSent = false) => {
+    if (!form?.fecha || !form?.localId) return alert("Seleccioná fecha y local.");
+    setSaving(true);
+    try {
+      const payload = {
+        fecha: form.fecha,
+        local_id: parseInt(form.localId),
+        importante_manana: form.importanteManana || "",
+        urgentes_generales: form.urgentesGenerales || "",
+        efectivo_caja: Number(form.efectivoCaja || 0),
+        coincide_caja: !!form.coincideCaja,
+        mercado_pago_total_reservas: form.mercadoPagoTotalReservas || "",
+        pagos_realizados: form.pagosRealizados || "",
+        saldo_anterior: Number(form.saldoAnterior || 0),
+        traspaso_caja_general: Number(form.traspasoCajaGeneral || 0),
+        traspaso_caja_efectivo: Number(form.traspasoCajaEfectivo || 0),
+        reclamos: form.reclamos || "",
+        novedades_salon_manicuras: form.novedadesSalonManicuras || "",
+        observaciones_extras: form.observacionesExtras || "",
+        estado: markSent ? "enviado" : (form.estado || "borrador"),
+        enviado_en: markSent ? new Date().toISOString() : (form.enviadoEn || null),
+        creado_por_user_id: form.creadoPor || user.id,
+        actualizado_en: new Date().toISOString(),
+      };
+      if (form.id) await api.updateInformeDiario(form.id, payload);
+      else await api.createInformeDiario(payload);
+      await reloadData();
+      const saved = findInforme(form.fecha, form.localId) || form;
+      if (markSent) setPreview({ ...form, ...payload, localId: payload.local_id, estado:"enviado" });
+    } catch(e) { alert("Error al guardar informe: " + e.message); }
+    setSaving(false);
+  };
+
+  const del = async () => {
+    if (!deleteTarget) return;
+    await api.deleteInformeDiario(deleteTarget.id);
+    setDeleteTarget(null);
+    await reloadData();
+    if (form?.id === deleteTarget.id) setForm(emptyForm(fecha, localId));
+  };
+
+  const printInforme = (inf) => {
+    const local = data.locales.find(l => l.id === inf.localId);
+    const html = `<!doctype html><html><head><title>Informe diario</title><style>body{font-family:Montserrat,Arial,sans-serif;margin:24px;color:#222}.title{text-align:center;font-size:22px;font-weight:700;border:1px solid #aaa;padding:8px;margin-bottom:12px}.row{display:grid;grid-template-columns:220px 1fr;border:1px solid #ddd;border-bottom:none}.row:last-child{border-bottom:1px solid #ddd}.label{background:#f7a8ce;color:white;font-weight:700;padding:10px;border-right:1px solid #ddd;text-align:center}.value{padding:10px;white-space:pre-wrap;min-height:28px}.danger{background:#ee3a37}.total{font-weight:700;background:#fbeaf0}</style></head><body><div class="title">INFORME DIARIO ${local?.nombre || ""}</div>${[
+      ["FECHA", parseDateLabel(inf.fecha)],
+      ["IMPORTANTE PARA MAÑANA", inf.importanteManana],
+      ["URGENTES GENERALES", inf.urgentesGenerales, "danger"],
+      ["EFECTIVO EN CAJA", fmtMoney(inf.efectivoCaja)],
+      ["COINCIDE LA CAJA", inf.coincideCaja ? "Sí" : "No"],
+      ["MERCADO PAGO / TOTAL / RESERVAS", inf.mercadoPagoTotalReservas],
+      ["PAGOS REALIZADOS", inf.pagosRealizados],
+      ["TRASPASOS A CAJA GENERAL", `Saldo anterior: ${fmtMoney(inf.saldoAnterior)}\nTraspaso a Caja General: ${fmtMoney(inf.traspasoCajaGeneral)}\nTraspaso a Caja Efectivo: ${fmtMoney(inf.traspasoCajaEfectivo)}\nTOTAL: ${fmtMoney(calcTotalCaja(inf))}`],
+      ["RECLAMOS", inf.reclamos],
+      ["NOVEDADES SALÓN / MANICURAS", inf.novedadesSalonManicuras],
+      ["OBSERVACIONES / EXTRAS", inf.observacionesExtras],
+    ].map(([l,v,c]) => `<div class="row"><div class="label ${c||""}">${l}</div><div class="value">${String(v || "-").replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;")}</div></div>`).join("")}</body></html>`;
+    const w = window.open("", "_blank");
+    if (!w) return alert("El navegador bloqueó la ventana de impresión.");
+    w.document.write(html); w.document.close(); w.focus(); setTimeout(()=>w.print(), 250);
+  };
+
+  const copyReport = async (inf) => {
+    await navigator.clipboard.writeText(buildTextReport(inf));
+    alert("Informe copiado al portapapeles.");
+  };
+
+  const Field = ({ label, children }) => <div><label style={{ fontSize:12,fontWeight:600,color:"var(--color-text-secondary)",display:"block",marginBottom:5 }}>{label}</label>{children}</div>;
+  const TextArea = ({ value, onChange, rows=3, placeholder }) => <textarea value={value||""} onChange={e=>onChange(e.target.value)} rows={rows} placeholder={placeholder} style={{ width:"100%",boxSizing:"border-box",border:"0.5px solid var(--color-border-secondary)",borderRadius:8,padding:"8px 12px",fontSize:14,background:"var(--color-background-primary)",color:"var(--color-text-primary)",resize:"vertical",fontFamily:"inherit" }}/>;
+
+  if (!locales.length) return <Card><p style={{ margin:0,color:COLORS.danger }}>No tenés locales asignados para cargar informes diarios.</p></Card>;
+
+  return <div>
+    <div style={{ display:"flex",alignItems:"center",justifyContent:"space-between",gap:8,flexWrap:"wrap",marginBottom:16 }}>
+      <h2 style={{ margin:0,fontSize:18,fontWeight:600 }}>Informe diario</h2>
+      <div style={{ display:"flex",gap:8,flexWrap:"wrap" }}>
+        <Btn onClick={()=>save(false)} disabled={saving}>{saving?"Guardando...":"Guardar"}</Btn>
+        <Btn onClick={()=>save(true)} variant="success" disabled={saving}>Guardar y preparar envío</Btn>
+      </div>
+    </div>
+
+    <Card style={{ marginBottom:14 }}>
+      <div style={{ display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(180px,1fr))",gap:12,marginBottom:14 }}>
+        <Field label="Local"><Select value={localId} onChange={v=>{setLocalId(v); setLocalFiltro(v);}}>{locales.map(l=><option key={l.id} value={l.id}>{l.nombre}</option>)}</Select></Field>
+        <Field label="Fecha"><input type="date" value={fecha} onChange={e=>{setFecha(e.target.value); setMesFiltro(String(e.target.value).slice(0,7));}} style={{ width:"100%",border:"0.5px solid var(--color-border-secondary)",borderRadius:8,padding:"8px 12px",fontSize:14,background:"var(--color-background-primary)",color:"var(--color-text-primary)",boxSizing:"border-box" }}/></Field>
+        <Field label="Estado"><div style={{ padding:"8px 12px",borderRadius:8,background:form?.estado==="enviado"?COLORS.successLight:COLORS.grayLight,color:form?.estado==="enviado"?COLORS.success:"#555",fontWeight:600 }}>{form?.estado==="enviado"?"Enviado":"Borrador"}</div></Field>
+      </div>
+      {form && <div style={{ display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(260px,1fr))",gap:14 }}>
+        <Field label="Importante para mañana"><TextArea value={form.importanteManana} onChange={v=>setForm(f=>({...f,importanteManana:v}))} placeholder="Ej: Ver si llegan tapas"/></Field>
+        <Field label="Urgentes generales"><TextArea value={form.urgentesGenerales} onChange={v=>setForm(f=>({...f,urgentesGenerales:v}))}/></Field>
+        <Field label="Efectivo en caja"><Input type="number" value={form.efectivoCaja} onChange={v=>setForm(f=>({...f,efectivoCaja:v}))}/></Field>
+        <Field label="¿Coincide la caja?"><Select value={form.coincideCaja?"si":"no"} onChange={v=>setForm(f=>({...f,coincideCaja:v==="si"}))}><option value="si">Sí</option><option value="no">No</option></Select></Field>
+        <Field label="Mercado Pago / Total / Reservas"><TextArea value={form.mercadoPagoTotalReservas} onChange={v=>setForm(f=>({...f,mercadoPagoTotalReservas:v}))}/></Field>
+        <Field label="Pagos realizados"><TextArea value={form.pagosRealizados} onChange={v=>setForm(f=>({...f,pagosRealizados:v}))}/></Field>
+        <Field label="Saldo anterior"><Input type="number" value={form.saldoAnterior} onChange={v=>setForm(f=>({...f,saldoAnterior:v}))}/></Field>
+        <Field label="Traspaso a Caja General"><Input type="number" value={form.traspasoCajaGeneral} onChange={v=>setForm(f=>({...f,traspasoCajaGeneral:v}))}/></Field>
+        <Field label="Traspaso a Caja Efectivo"><Input type="number" value={form.traspasoCajaEfectivo} onChange={v=>setForm(f=>({...f,traspasoCajaEfectivo:v}))}/></Field>
+        <Field label="Total caja general"><div style={{ padding:"8px 12px",borderRadius:8,background:COLORS.pinkLight,color:COLORS.pinkDark,fontWeight:700 }}>{fmtMoney(calcTotalCaja(form))}</div></Field>
+        <Field label="Reclamos"><TextArea value={form.reclamos} onChange={v=>setForm(f=>({...f,reclamos:v}))}/></Field>
+        <Field label="Novedades salón / manicuras"><TextArea value={form.novedadesSalonManicuras} onChange={v=>setForm(f=>({...f,novedadesSalonManicuras:v}))}/></Field>
+        <Field label="Observaciones / extras"><TextArea value={form.observacionesExtras} onChange={v=>setForm(f=>({...f,observacionesExtras:v}))} rows={4}/></Field>
+      </div>}
+    </Card>
+
+    <Card>
+      <div style={{ display:"flex",justifyContent:"space-between",gap:8,alignItems:"center",flexWrap:"wrap",marginBottom:12 }}>
+        <h3 style={{ margin:0,fontSize:15,fontWeight:600 }}>Informes guardados</h3>
+        <div style={{ display:"flex",gap:8,flexWrap:"wrap" }}>
+          <input type="month" value={mesFiltro} onChange={e=>setMesFiltro(e.target.value)} style={{ border:"0.5px solid var(--color-border-secondary)",borderRadius:8,padding:"7px 10px",fontSize:13,background:"var(--color-background-primary)",color:"var(--color-text-primary)" }}/>
+          <Select value={localFiltro} onChange={setLocalFiltro} style={{ width:180 }}>{locales.map(l=><option key={l.id} value={l.id}>{l.nombre}</option>)}</Select>
+        </div>
+      </div>
+      {informesFiltrados.length===0 ? <p style={{ margin:0,color:"var(--color-text-secondary)",fontSize:14 }}>No hay informes para los filtros seleccionados.</p> : <div style={{ display:"flex",flexDirection:"column",gap:8 }}>
+        {informesFiltrados.map(inf=>{ const loc=data.locales.find(l=>l.id===inf.localId); return <div key={inf.id} style={{ border:"0.5px solid var(--color-border-tertiary)",borderRadius:10,padding:12,display:"flex",gap:10,alignItems:"center",flexWrap:"wrap" }}>
+          <div style={{ flex:1,minWidth:220 }}><p style={{ margin:0,fontWeight:700 }}>{parseDateLabel(inf.fecha)} · {loc?.nombre}</p><p style={{ margin:"2px 0 0",fontSize:12,color:"var(--color-text-secondary)" }}>{inf.importanteManana || inf.novedadesSalonManicuras || "Sin observaciones principales"}</p></div>
+          <Badge color={inf.estado==="enviado"?"success":"gray"}>{inf.estado==="enviado"?"Enviado":"Borrador"}</Badge>
+          <Btn size="sm" variant="ghost" onClick={()=>{setFecha(inf.fecha);setLocalId(String(inf.localId));setForm({...inf});}}>Editar</Btn>
+          <Btn size="sm" variant="secondary" onClick={()=>setPreview(inf)}>Ver</Btn>
+          <Btn size="sm" variant="ghost" onClick={()=>printInforme(inf)}>Imprimir</Btn>
+          <Btn size="sm" variant="danger" onClick={()=>setDeleteTarget(inf)}>Eliminar</Btn>
+        </div>;})}
+      </div>}
+    </Card>
+
+    {preview && <Modal title="Informe diario" onClose={()=>setPreview(null)} width={720}>
+      <div style={{ display:"flex",justifyContent:"space-between",alignItems:"center",gap:8,flexWrap:"wrap",marginBottom:12 }}>
+        <div><p style={{ margin:0,fontSize:17,fontWeight:700 }}>Informe diario {data.locales.find(l=>l.id===preview.localId)?.nombre}</p><p style={{ margin:"2px 0 0",fontSize:13,color:"#777" }}>{parseDateLabel(preview.fecha)}</p></div>
+        <div style={{ display:"flex",gap:8 }}><Btn size="sm" onClick={()=>copyReport(preview)} variant="secondary">Copiar texto</Btn><Btn size="sm" onClick={()=>printInforme(preview)}>Imprimir</Btn></div>
+      </div>
+      <pre style={{ whiteSpace:"pre-wrap",fontFamily:"inherit",fontSize:14,lineHeight:1.5,background:"#fafafa",border:"1px solid #eee",borderRadius:10,padding:14,maxHeight:500,overflowY:"auto",color:"#222" }}>{buildTextReport(preview)}</pre>
+    </Modal>}
+
+    {deleteTarget && <Modal title="Eliminar informe" onClose={()=>setDeleteTarget(null)} width={420}>
+      <p style={{ margin:"0 0 14px",fontSize:14,color:"#444" }}>¿Querés eliminar el informe de <strong>{parseDateLabel(deleteTarget.fecha)}</strong>? Esta acción no se puede deshacer.</p>
+      <div style={{ display:"flex",gap:8 }}><Btn variant="danger" onClick={del} style={{ flex:1,justifyContent:"center" }}>Eliminar</Btn><Btn variant="secondary" onClick={()=>setDeleteTarget(null)} style={{ flex:1,justifyContent:"center" }}>Cancelar</Btn></div>
+    </Modal>}
+  </div>;
+}
+
 // ── APP PRINCIPAL ──────────────────────────────────────────────────
 export default function App() {
   const [data, setData] = useState(null);
@@ -2866,8 +3113,8 @@ export default function App() {
   const [reportRestore, setReportRestore] = useState(null);
 
   const reloadData = useCallback(async () => {
-    const [users, locales, horarios, asistencias, periodos, feriados, reglasCobertura, configCobertura, encargadoLocales, comisiones, comisionesImportaciones, adelantos, garantias] = await Promise.all([
-      api.getUsers(), api.getLocales(), api.getHorarios(), api.getAsistencias(), api.getPeriodos(), api.getFeriados(), api.getReglasCobertura(), api.getConfigCobertura(), api.getEncargadoLocales(), api.getComisiones(), api.getComisionesImportaciones(), api.getAdelantos(), api.getGarantias()
+    const [users, locales, horarios, asistencias, periodos, feriados, reglasCobertura, configCobertura, encargadoLocales, comisiones, comisionesImportaciones, adelantos, garantias, informesDiarios] = await Promise.all([
+      api.getUsers(), api.getLocales(), api.getHorarios(), api.getAsistencias(), api.getPeriodos(), api.getFeriados(), api.getReglasCobertura(), api.getConfigCobertura(), api.getEncargadoLocales(), api.getComisiones(), api.getComisionesImportaciones(), api.getAdelantos(), api.getGarantias(), api.getInformesDiarios()
     ]);
     setData({
       users: users.map(normalizeUser),
@@ -2883,6 +3130,7 @@ export default function App() {
       comisionesImportaciones: (comisionesImportaciones||[]).map(normalizeComisionImportacion),
       adelantos: (adelantos||[]).map(normalizeAdelanto),
       garantias: (garantias||[]).map(normalizeGarantia),
+      informesDiarios: (informesDiarios||[]).map(normalizeInformeDiario),
     });
   }, []);
 
@@ -2903,6 +3151,7 @@ export default function App() {
     {id:"reportes",label:"Reportes",icon:"📊"},
     {id:"adelantos",label:"Adelantos",icon:"💸"},
     {id:"garantias",label:"Garantías",icon:"🛠️"},
+    {id:"informes",label:"Informe diario",icon:"📝"},
     {id:"manicuras",label:"Manicuras",icon:"💅"},
     {id:"encargadas",label:"Encargadas",icon:"👩‍💼"},
     {id:"locales",label:"Locales",icon:"🏠"},
@@ -2915,6 +3164,7 @@ export default function App() {
     {id:"reportes",label:"Reportes",icon:"📊"},
     {id:"adelantos",label:"Adelantos",icon:"💸"},
     {id:"garantias",label:"Garantías",icon:"🛠️"},
+    {id:"informes",label:"Informe diario",icon:"📝"},
     {id:"manicuras",label:"Manicuras",icon:"💅"},
     {id:"cobertura_config",label:"Cobertura",icon:"⚙️"},
     {id:"perfil",label:"Mi perfil",icon:"👤"},
@@ -2932,6 +3182,7 @@ export default function App() {
     if (seccion==="reportes") return <Reportes data={data} user={user} reportRestore={reportRestore} onOpenAgenda={(req)=>{ const restore={ tab:"cobertura", fecha:req.fecha, localId:req.localId || "" }; setReportRestore(restore); setAgendaRequest({...req, fromReport:true}); setSeccion("horarios"); setMenuOpen(false); }}/>;
     if (seccion==="adelantos") return user.rol!=="manicura" ? <AdelantosManicuras data={data} reloadData={reloadData} user={user}/> : null;
     if (seccion==="garantias") return user.rol!=="manicura" ? <GarantiasServicios data={data} reloadData={reloadData} user={user}/> : null;
+    if (seccion==="informes") return user.rol!=="manicura" ? <InformeDiario data={data} reloadData={reloadData} user={user}/> : null;
     if (seccion==="manicuras") return <ABMManicuras data={data} reloadData={reloadData} user={user}/>;
     if (seccion==="locales") return user.rol==="admin" ? <ABMLocales data={data} reloadData={reloadData}/> : null;
     if (seccion==="encargadas") return user.rol==="admin" ? <ABMEncargadas data={data} reloadData={reloadData}/> : null;
