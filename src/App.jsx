@@ -96,6 +96,21 @@ const api = {
   updateAdelanto: (id, d) => sb(`adelantos_manicuras?id=eq.${id}`, { method: "PATCH", body: JSON.stringify(d) }),
   deleteAdelanto: (id) => sb(`adelantos_manicuras?id=eq.${id}`, { method: "DELETE", prefer: "" }),
   deleteAdelantosGrupo: (grupoId) => sb(`adelantos_manicuras?grupo_id=eq.${encodeURIComponent(grupoId)}`, { method: "DELETE", prefer: "" }),
+  getGarantias: () => sb("garantias_servicios?select=*&order=fecha_reparacion.desc,id.desc"),
+  createGarantia: (d) => sb("garantias_servicios", { method: "POST", body: JSON.stringify(d) }),
+  updateGarantia: (id, d) => sb(`garantias_servicios?id=eq.${id}`, { method: "PATCH", body: JSON.stringify(d) }),
+  deleteGarantia: (id) => sb(`garantias_servicios?id=eq.${id}`, { method: "DELETE", prefer: "" }),
+  uploadGarantiaFoto: async (garantiaId, file) => {
+    const safeName = String(file.name || "foto.jpg").normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/[^a-zA-Z0-9._-]/g, "_");
+    const path = `${garantiaId}/${Date.now()}_${safeName}`;
+    const res = await fetch(`${SUPABASE_URL}/storage/v1/object/garantias/${path}`, {
+      method: "POST",
+      headers: { apikey: SUPABASE_KEY, Authorization: `Bearer ${SUPABASE_KEY}`, "Content-Type": file.type || "application/octet-stream", "x-upsert": "true" },
+      body: file,
+    });
+    if (!res.ok) throw new Error(await res.text());
+    return { path, url: `${SUPABASE_URL}/storage/v1/object/public/garantias/${path}`, name: file.name, size: file.size, type: file.type };
+  },
   setEncargadoLocales: async (userId, localIds) => { await sb(`encargado_locales?user_id=eq.${userId}`, { method:"DELETE", prefer:"" }); if (!localIds?.length) return []; return sb("encargado_locales", { method:"POST", body:JSON.stringify(localIds.map(local_id=>({ user_id:userId, local_id:parseInt(local_id) }))) }); },
 };
 
@@ -109,6 +124,7 @@ function normalizeEncargadoLocal(x) { return { userId:x.user_id, localId:x.local
 function normalizeComision(c) { return { id:c.id, periodo:c.periodo, fechaPago:c.fecha_pago, localId:c.local_id, codigoExternoLocal:c.codigo_externo_local || "", nombreLocal:c.nombre_local || "", userId:c.user_id, codigoExternoManicura:c.codigo_externo_manicura || "", nombreManicura:c.nombre_manicura || "", servicio:c.servicio || "", cliente:c.cliente || "", precio:Number(c.precio || 0), comision:Number(c.comision || 0), hashRegistro:c.hash_registro || "", actualizadoEn:c.actualizado_en || "" }; }
 function normalizeComisionImportacion(i) { return { id:i.id, periodo:i.periodo, registros:i.registros || 0, totalPrecio:Number(i.total_precio || 0), totalComision:Number(i.total_comision || 0), estado:i.estado || "", mensaje:i.mensaje || "", creadoEn:i.creado_en || "" }; }
 function normalizeAdelanto(a) { return { id:a.id, fecha:a.fecha, fechaDescuento:a.fecha_descuento || a.fecha, periodo:a.periodo || (a.fecha_descuento ? String(a.fecha_descuento).slice(0,7) : a.fecha ? String(a.fecha).slice(0,7) : ""), userId:a.user_id, localId:a.local_id, importe:Number(a.importe || 0), importeTotal:Number(a.importe_total || a.importe || 0), concepto:a.concepto || "", observacion:a.observacion || "", creadoPor:a.creado_por, creadoEn:a.creado_en || "", grupoId:a.grupo_id || "", cuotaNum:a.cuota_num || 1, cuotasTotal:a.cuotas_total || 1, tipoDescuento:a.tipo_descuento || "semana" }; }
+function normalizeGarantia(g) { return { id:g.id, fechaServicioOriginal:g.fecha_servicio_original, comisionOriginalId:g.comision_original_id, localId:g.local_id, manicuraOriginalId:g.manicura_original_id, nombreManicuraOriginal:g.nombre_manicura_original || "", cliente:g.cliente || "", servicio:g.servicio || "", importeComision:Number(g.importe_comision || 0), fechaReparacion:g.fecha_reparacion, manicuraReparacionId:g.manicura_reparacion_id, nombreManicuraReparacion:g.nombre_manicura_reparacion || "", motivo:g.motivo || "", fotos:Array.isArray(g.fotos) ? g.fotos : [], creadoPor:g.creado_por_user_id, creadoEn:g.creado_en || "", actualizadoEn:g.actualizado_en || "" }; }
 
 const COLORS = {
   pink: "#d4537e", pinkLight: "#fbeaf0", pinkDark: "#72243e",
@@ -1616,11 +1632,40 @@ function Reportes({ data, user, onOpenAgenda, reportRestore }) {
       const localOk = !c.localId || c.localId === user.localId || normalize(c.nombreLocal) === normalize(localNameById.get(user.localId));
       return (c.userId === user.id || normalize(c.nombreManicura) === normalize(user.nombre)) && localOk;
     };
-    const baseRegistros = (data.comisiones||[])
+    const baseRegistrosComisiones = (data.comisiones||[])
       .filter(c=>puedeVerComision(c))
       .filter(c=>!periodoComisiones || c.periodo === periodoComisiones)
       .filter(c=>localComisiones === "todos" || c.localId === parseInt(localComisiones) || normalize(c.nombreLocal) === normalize(localNameById.get(parseInt(localComisiones))))
       .filter(c=>manicuraComisiones === "todas" || c.userId === parseInt(manicuraComisiones) || normalize(c.nombreManicura) === normalize(userNameById.get(parseInt(manicuraComisiones))));
+    const garantiaVisible = (g, tipo) => {
+      const uid = tipo === "reparacion" ? g.manicuraReparacionId : g.manicuraOriginalId;
+      if (esAdmin) return true;
+      if (esEncargada) return g.localId && allowedLocalIds.includes(g.localId);
+      return uid === user.id;
+    };
+    const ajustesGarantias = (data.garantias||[]).flatMap(g => {
+      const periodoG = (g.fechaReparacion || "").slice(0,7);
+      if (!periodoComisiones || periodoG !== periodoComisiones) return [];
+      if (localComisiones !== "todos" && g.localId !== parseInt(localComisiones)) return [];
+      const local = localNameById.get(g.localId) || "";
+      const original = data.users.find(u=>u.id===g.manicuraOriginalId);
+      const reparacion = data.users.find(u=>u.id===g.manicuraReparacionId);
+      const rows = [];
+      if (g.manicuraOriginalId && g.importeComision && garantiaVisible(g, "original")) rows.push({
+        id:`garantia-desc-${g.id}`, periodo:periodoG, fechaPago:g.fechaReparacion, localId:g.localId, nombreLocal:local,
+        userId:g.manicuraOriginalId, nombreManicura:original?.nombre || g.nombreManicuraOriginal || "Manicura original",
+        servicio:`Garantía - ${g.servicio || "Servicio"}`, cliente:g.cliente || "", precio:0, comision:-Math.abs(g.importeComision),
+        actualizadoEn:g.actualizadoEn || g.creadoEn || "", tipoRegistro:"garantia", motivoGarantia:g.motivo || "", garantiaId:g.id
+      });
+      if (g.manicuraReparacionId && g.importeComision && garantiaVisible(g, "reparacion")) rows.push({
+        id:`garantia-add-${g.id}`, periodo:periodoG, fechaPago:g.fechaReparacion, localId:g.localId, nombreLocal:local,
+        userId:g.manicuraReparacionId, nombreManicura:reparacion?.nombre || g.nombreManicuraReparacion || "Reparación",
+        servicio:`Reparación garantía - ${g.servicio || "Servicio"}`, cliente:g.cliente || "", precio:0, comision:Math.abs(g.importeComision),
+        actualizadoEn:g.actualizadoEn || g.creadoEn || "", tipoRegistro:"garantia", motivoGarantia:g.motivo || "", garantiaId:g.id
+      });
+      return rows.filter(r => manicuraComisiones === "todas" || r.userId === parseInt(manicuraComisiones));
+    });
+    const baseRegistros = [...baseRegistrosComisiones, ...ajustesGarantias];
     const semanasDisponibles = Array.from(new Set(baseRegistros.map(c=>weekOfMonthValue(c.fechaPago)).filter(Boolean))).sort((a,b)=>parseInt(a)-parseInt(b));
     const registrosFiltrados = baseRegistros
       .filter(c=>semanaComisiones === "todas" || weekOfMonthValue(c.fechaPago) === semanaComisiones);
@@ -2038,6 +2083,174 @@ function ConfiguracionCobertura({ data, reloadData, user }) {
 
 
 // ── ADELANTOS A MANICURAS ─────────────────────────────────────────
+
+// ── GARANTÍAS DE SERVICIOS ────────────────────────────────────────
+function GarantiasServicios({ data, reloadData, user }) {
+  const hoy = new Date();
+  const esAdmin = user.rol === "admin";
+  const esEncargada = user.rol === "encargada";
+  const allowedLocalIds = esAdmin ? data.locales.map(l=>l.id) : (data.encargadoLocales||[]).filter(x=>x.userId===user.id).map(x=>x.localId);
+  const locales = data.locales.filter(l=>allowedLocalIds.includes(l.id));
+  const manicuras = data.users.filter(u=>u.rol==="manicura" && u.activo && allowedLocalIds.includes(u.localId));
+  const [periodo, setPeriodo] = useState(fmtPeriodo(hoy));
+  const [localFiltro, setLocalFiltro] = useState(locales[0]?.id ? String(locales[0].id) : "todos");
+  const [modal, setModal] = useState(false);
+  const [editing, setEditing] = useState(null);
+  const [err, setErr] = useState("");
+  const [saving, setSaving] = useState(false);
+  const [files, setFiles] = useState([]);
+  const emptyForm = () => ({
+    fechaServicioOriginal: dateKey(hoy),
+    localId: localFiltro !== "todos" ? parseInt(localFiltro) : (locales[0]?.id || ""),
+    manicuraOriginalId: "",
+    comisionOriginalId: "",
+    cliente: "",
+    servicio: "",
+    importeComision: "",
+    fechaReparacion: dateKey(hoy),
+    manicuraReparacionId: "",
+    motivo: "",
+    fotos: [],
+  });
+  const [form, setForm] = useState(emptyForm());
+
+  const openNew = () => { setEditing(null); setForm(emptyForm()); setFiles([]); setErr(""); setModal(true); };
+  const openEdit = g => {
+    setEditing(g);
+    setForm({
+      fechaServicioOriginal:g.fechaServicioOriginal,
+      localId:g.localId || "",
+      manicuraOriginalId:g.manicuraOriginalId || "",
+      comisionOriginalId:g.comisionOriginalId || "",
+      cliente:g.cliente || "",
+      servicio:g.servicio || "",
+      importeComision:String(g.importeComision || 0),
+      fechaReparacion:g.fechaReparacion || dateKey(hoy),
+      manicuraReparacionId:g.manicuraReparacionId || "",
+      motivo:g.motivo || "",
+      fotos:g.fotos || [],
+    });
+    setFiles([]); setErr(""); setModal(true);
+  };
+  const manicurasLocal = manicuras.filter(m=>!form.localId || m.localId===parseInt(form.localId));
+  const comisionesOriginales = (data.comisiones||[]).filter(c =>
+    c.fechaPago === form.fechaServicioOriginal &&
+    (!form.localId || c.localId === parseInt(form.localId)) &&
+    (!form.manicuraOriginalId || c.userId === parseInt(form.manicuraOriginalId))
+  );
+  const selectComision = id => {
+    const c = (data.comisiones||[]).find(x=>String(x.id)===String(id));
+    if (!c) { setForm(f=>({...f,comisionOriginalId:"",cliente:"",servicio:"",importeComision:""})); return; }
+    setForm(f=>({
+      ...f,
+      comisionOriginalId:c.id,
+      localId:c.localId || f.localId,
+      manicuraOriginalId:c.userId || f.manicuraOriginalId,
+      cliente:c.cliente || "",
+      servicio:c.servicio || "",
+      importeComision:String(Math.abs(c.comision || 0)),
+    }));
+  };
+  const save = async () => {
+    setErr("");
+    if (!form.fechaServicioOriginal || !form.localId || !form.manicuraOriginalId || !form.cliente || !form.servicio || !form.fechaReparacion || !form.manicuraReparacionId) { setErr("Completá los datos obligatorios y seleccioná el servicio original."); return; }
+    const importe = Number(String(form.importeComision||"0").replace(",","."));
+    if (!(importe > 0)) { setErr("Ingresá un importe de comisión válido."); return; }
+    const original = data.users.find(u=>u.id===parseInt(form.manicuraOriginalId));
+    const reparacion = data.users.find(u=>u.id===parseInt(form.manicuraReparacionId));
+    if (!esAdmin && (!allowedLocalIds.includes(parseInt(form.localId)) || !allowedLocalIds.includes(original?.localId) || !allowedLocalIds.includes(reparacion?.localId))) { setErr("No tenés permiso para registrar garantías en ese local."); return; }
+    setSaving(true);
+    try {
+      const payload = {
+        fecha_servicio_original: form.fechaServicioOriginal,
+        comision_original_id: form.comisionOriginalId ? parseInt(form.comisionOriginalId) : null,
+        local_id: parseInt(form.localId),
+        manicura_original_id: parseInt(form.manicuraOriginalId),
+        nombre_manicura_original: original?.nombre || "",
+        cliente: form.cliente,
+        servicio: form.servicio,
+        importe_comision: importe,
+        fecha_reparacion: form.fechaReparacion,
+        manicura_reparacion_id: parseInt(form.manicuraReparacionId),
+        nombre_manicura_reparacion: reparacion?.nombre || "",
+        motivo: form.motivo || null,
+        fotos: form.fotos || [],
+        creado_por_user_id: user.id,
+        actualizado_en: new Date().toISOString(),
+      };
+      const saved = editing ? await api.updateGarantia(editing.id, payload) : await api.createGarantia(payload);
+      const savedId = editing?.id || saved?.[0]?.id;
+      let fotos = [...(form.fotos || [])];
+      if (savedId && files.length) {
+        for (const file of files) fotos.push(await api.uploadGarantiaFoto(savedId, file));
+        await api.updateGarantia(savedId, { fotos, actualizado_en:new Date().toISOString() });
+      }
+      await reloadData(); setModal(false);
+    } catch(e) { setErr("Error al guardar garantía: " + e.message); }
+    setSaving(false);
+  };
+  const del = async g => {
+    if (!window.confirm("¿Eliminar esta garantía? También dejará de impactar en el reporte de comisiones.")) return;
+    await api.deleteGarantia(g.id); await reloadData();
+  };
+  const garantias = (data.garantias||[])
+    .filter(g=>allowedLocalIds.includes(g.localId))
+    .filter(g=>!periodo || String(g.fechaReparacion||"").slice(0,7)===periodo)
+    .filter(g=>localFiltro==="todos" || g.localId===parseInt(localFiltro));
+  const totalAjustes = garantias.reduce((a,g)=>a+g.importeComision,0);
+  const meses = Array.from(new Set([fmtPeriodo(hoy), ...(data.garantias||[]).map(g=>String(g.fechaReparacion||"").slice(0,7)).filter(Boolean), ...(data.comisiones||[]).map(c=>c.periodo).filter(Boolean)])).sort().reverse();
+
+  return <div>
+    <div style={{ display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:16,flexWrap:"wrap",gap:8 }}>
+      <h2 style={{ margin:0,fontSize:18,fontWeight:500 }}>Garantías de servicios</h2>
+      <Btn onClick={openNew} size="sm">+ Nueva garantía</Btn>
+    </div>
+    <div style={{ display:"flex",gap:8,marginBottom:14,flexWrap:"wrap",alignItems:"center" }}>
+      <Select value={periodo} onChange={setPeriodo} style={{ width:140 }}>{meses.map(m=><option key={m} value={m}>{m}</option>)}</Select>
+      <Select value={localFiltro} onChange={setLocalFiltro} style={{ width:190 }}><option value="todos">Todos los locales</option>{locales.map(l=><option key={l.id} value={l.id}>{l.nombre}</option>)}</Select>
+    </div>
+    <div style={{ display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(170px,1fr))",gap:10,marginBottom:14 }}>
+      <Card><p style={{ margin:"0 0 4px",fontSize:11,color:"var(--color-text-secondary)",textTransform:"uppercase",letterSpacing:"0.04em" }}>Garantías</p><p style={{ margin:0,fontSize:24,fontWeight:600 }}>{garantias.length}</p></Card>
+      <Card><p style={{ margin:"0 0 4px",fontSize:11,color:"var(--color-text-secondary)",textTransform:"uppercase",letterSpacing:"0.04em" }}>Comisión reasignada</p><p style={{ margin:0,fontSize:24,fontWeight:600,color:COLORS.pink }}>{fmtMoney(totalAjustes)}</p></Card>
+      <Card><p style={{ margin:"0 0 4px",fontSize:11,color:"var(--color-text-secondary)",textTransform:"uppercase",letterSpacing:"0.04em" }}>Con fotos</p><p style={{ margin:0,fontSize:24,fontWeight:600,color:COLORS.info }}>{garantias.filter(g=>g.fotos?.length).length}</p></Card>
+    </div>
+    <Card style={{ padding:0,overflow:"hidden" }}>
+      <div style={{ padding:"12px 14px",borderBottom:"1px solid rgba(120,120,120,0.16)",display:"flex",justifyContent:"space-between",alignItems:"center" }}><h3 style={{ margin:0,fontSize:15,fontWeight:500 }}>Detalle de garantías</h3><span style={{ fontSize:12,color:"var(--color-text-secondary)" }}>{garantias.length} registros</span></div>
+      {garantias.length===0 ? <p style={{ margin:0,padding:18,textAlign:"center",fontSize:13,color:"var(--color-text-secondary)" }}>Sin garantías para los filtros seleccionados.</p> : <div style={{ overflowX:"auto" }}><div style={{ minWidth:1050 }}>
+        <div style={{ display:"grid",gridTemplateColumns:"90px 90px 1fr 1fr 1.2fr 1fr 110px 1.3fr 150px",gap:8,padding:"8px 12px",background:"var(--color-background-secondary)",fontSize:11,fontWeight:600,color:"var(--color-text-secondary)",textTransform:"uppercase" }}>{["F. original","F. reparación","Local","Original","Servicio / Cliente","Reparación","Comisión","Motivo","Acciones"].map(h=><span key={h}>{h}</span>)}</div>
+        {garantias.map(g=>{ const l=data.locales.find(x=>x.id===g.localId); const o=data.users.find(u=>u.id===g.manicuraOriginalId); const r=data.users.find(u=>u.id===g.manicuraReparacionId); return <div key={g.id} style={{ display:"grid",gridTemplateColumns:"90px 90px 1fr 1fr 1.2fr 1fr 110px 1.3fr 150px",gap:8,padding:"9px 12px",fontSize:12,alignItems:"center",borderBottom:"1px solid rgba(120,120,120,0.10)" }}><span>{(g.fechaServicioOriginal||"").split("-").reverse().join("/")}</span><span>{(g.fechaReparacion||"").split("-").reverse().join("/")}</span><span>{l?.nombre||"—"}</span><span>{o?.nombre||g.nombreManicuraOriginal||"—"}</span><span><strong>{g.servicio}</strong><br/><small style={{ color:"var(--color-text-secondary)" }}>{g.cliente}{g.fotos?.length?` · 📷 ${g.fotos.length}`:""}</small></span><span>{r?.nombre||g.nombreManicuraReparacion||"—"}</span><strong style={{ textAlign:"right",color:COLORS.pink }}>{fmtMoney(g.importeComision)}</strong><span>{g.motivo || "—"}</span><div style={{ display:"flex",gap:6,justifyContent:"flex-end",flexWrap:"wrap" }}><Btn onClick={()=>openEdit(g)} variant="ghost" size="sm">Editar</Btn><Btn onClick={()=>del(g)} variant="ghost" size="sm" style={{ color:COLORS.danger }}>Eliminar</Btn></div></div>;})}
+      </div></div>}
+    </Card>
+    {modal&&<Modal title={editing?"Editar garantía":"Nueva garantía"} onClose={()=>setModal(false)} width={620}>
+      <div style={{ display:"flex",flexDirection:"column",gap:13 }}>
+        <div style={{ display:"grid",gridTemplateColumns:"1fr 1fr",gap:12 }}>
+          <ModalInput label="Fecha servicio original" type="date" value={form.fechaServicioOriginal} onChange={v=>setForm(f=>({...f,fechaServicioOriginal:v,comisionOriginalId:"",cliente:"",servicio:"",importeComision:""}))}/>
+          <div><label style={{ fontSize:13,fontWeight:500,color:"#555",display:"block",marginBottom:6 }}>Local</label><select value={form.localId||""} onChange={e=>setForm(f=>({...f,localId:e.target.value,manicuraOriginalId:"",comisionOriginalId:"",cliente:"",servicio:"",importeComision:""}))} style={{ width:"100%",border:"1.5px solid #e0e0e0",borderRadius:8,padding:"9px 12px",fontSize:14,background:"#fafafa" }}><option value="">Seleccionar...</option>{locales.map(l=><option key={l.id} value={l.id}>{l.nombre}</option>)}</select></div>
+        </div>
+        <div style={{ display:"grid",gridTemplateColumns:"1fr 1fr",gap:12 }}>
+          <div><label style={{ fontSize:13,fontWeight:500,color:"#555",display:"block",marginBottom:6 }}>Manicura servicio original</label><select value={form.manicuraOriginalId||""} onChange={e=>setForm(f=>({...f,manicuraOriginalId:e.target.value,comisionOriginalId:"",cliente:"",servicio:"",importeComision:""}))} style={{ width:"100%",border:"1.5px solid #e0e0e0",borderRadius:8,padding:"9px 12px",fontSize:14,background:"#fafafa" }}><option value="">Seleccionar...</option>{manicurasLocal.map(m=><option key={m.id} value={m.id}>{m.nombre}</option>)}</select></div>
+          <div><label style={{ fontSize:13,fontWeight:500,color:"#555",display:"block",marginBottom:6 }}>Servicio realizado</label><select value={form.comisionOriginalId||""} onChange={e=>selectComision(e.target.value)} style={{ width:"100%",border:"1.5px solid #e0e0e0",borderRadius:8,padding:"9px 12px",fontSize:14,background:"#fafafa" }}><option value="">Seleccionar servicio...</option>{comisionesOriginales.map(c=><option key={c.id} value={c.id}>{c.servicio} · {c.cliente} · {fmtMoney(c.comision)}</option>)}</select></div>
+        </div>
+        <div style={{ display:"grid",gridTemplateColumns:"1fr 1fr 150px",gap:12 }}>
+          <ModalInput label="Cliente" value={form.cliente} onChange={()=>{}}/>
+          <ModalInput label="Servicio" value={form.servicio} onChange={()=>{}}/>
+          <ModalInput label="Importe comisión" type="number" value={form.importeComision} onChange={v=>setForm(f=>({...f,importeComision:v}))}/>
+        </div>
+        <div style={{ display:"grid",gridTemplateColumns:"1fr 1fr",gap:12 }}>
+          <ModalInput label="Fecha de reparación" type="date" value={form.fechaReparacion} onChange={v=>setForm(f=>({...f,fechaReparacion:v}))}/>
+          <div><label style={{ fontSize:13,fontWeight:500,color:"#555",display:"block",marginBottom:6 }}>Manicura que realiza reparación</label><select value={form.manicuraReparacionId||""} onChange={e=>setForm(f=>({...f,manicuraReparacionId:e.target.value}))} style={{ width:"100%",border:"1.5px solid #e0e0e0",borderRadius:8,padding:"9px 12px",fontSize:14,background:"#fafafa" }}><option value="">Seleccionar...</option>{manicuras.map(m=><option key={m.id} value={m.id}>{m.nombre} · {data.locales.find(l=>l.id===m.localId)?.nombre||""}</option>)}</select></div>
+        </div>
+        <div><label style={{ fontSize:13,fontWeight:500,color:"#555",display:"block",marginBottom:6 }}>Motivo / explicación</label><textarea value={form.motivo} onChange={e=>setForm(f=>({...f,motivo:e.target.value}))} rows={3} style={{ width:"100%",boxSizing:"border-box",border:"1.5px solid #e0e0e0",borderRadius:8,padding:"9px 12px",fontSize:14,background:"#fafafa" }}/></div>
+        <div style={{ background:COLORS.infoLight,borderRadius:8,padding:"9px 11px" }}><p style={{ margin:0,fontSize:12,color:COLORS.info }}><strong>Fotos:</strong> se guardan en Supabase Storage, bucket <code>garantias</code>. Conviene comprimirlas desde el celular si pesan demasiado.</p></div>
+        <input type="file" multiple accept="image/*" onChange={e=>setFiles(Array.from(e.target.files||[]))}/>
+        {!!form.fotos?.length&&<div style={{ display:"flex",gap:8,flexWrap:"wrap" }}>{form.fotos.map((f,i)=><a key={i} href={f.url} target="_blank" rel="noreferrer" style={{ fontSize:12,color:COLORS.pink }}>📷 Foto {i+1}</a>)}</div>}
+        {err&&<p style={{ margin:0,fontSize:13,color:COLORS.danger,background:COLORS.dangerLight,padding:"8px 12px",borderRadius:8 }}>{err}</p>}
+        <div style={{ display:"flex",gap:8 }}><Btn onClick={save} disabled={saving} style={{ flex:1,justifyContent:"center" }}>{saving?"Guardando...":"Guardar garantía"}</Btn><Btn onClick={()=>setModal(false)} variant="secondary" style={{ flex:1,justifyContent:"center" }}>Cancelar</Btn></div>
+      </div>
+    </Modal>}
+  </div>;
+}
+
 function AdelantosManicuras({ data, reloadData, user }) {
   const hoy = new Date();
   const esAdmin = user.rol === "admin";
@@ -2499,8 +2712,8 @@ export default function App() {
   const [reportRestore, setReportRestore] = useState(null);
 
   const reloadData = useCallback(async () => {
-    const [users, locales, horarios, asistencias, periodos, feriados, reglasCobertura, configCobertura, encargadoLocales, comisiones, comisionesImportaciones, adelantos] = await Promise.all([
-      api.getUsers(), api.getLocales(), api.getHorarios(), api.getAsistencias(), api.getPeriodos(), api.getFeriados(), api.getReglasCobertura(), api.getConfigCobertura(), api.getEncargadoLocales(), api.getComisiones(), api.getComisionesImportaciones(), api.getAdelantos()
+    const [users, locales, horarios, asistencias, periodos, feriados, reglasCobertura, configCobertura, encargadoLocales, comisiones, comisionesImportaciones, adelantos, garantias] = await Promise.all([
+      api.getUsers(), api.getLocales(), api.getHorarios(), api.getAsistencias(), api.getPeriodos(), api.getFeriados(), api.getReglasCobertura(), api.getConfigCobertura(), api.getEncargadoLocales(), api.getComisiones(), api.getComisionesImportaciones(), api.getAdelantos(), api.getGarantias()
     ]);
     setData({
       users: users.map(normalizeUser),
@@ -2515,6 +2728,7 @@ export default function App() {
       comisiones: (comisiones||[]).map(normalizeComision),
       comisionesImportaciones: (comisionesImportaciones||[]).map(normalizeComisionImportacion),
       adelantos: (adelantos||[]).map(normalizeAdelanto),
+      garantias: (garantias||[]).map(normalizeGarantia),
     });
   }, []);
 
@@ -2534,6 +2748,7 @@ export default function App() {
     {id:"horarios",label:"Horarios",icon:"🗓️"},
     {id:"reportes",label:"Reportes",icon:"📊"},
     {id:"adelantos",label:"Adelantos",icon:"💸"},
+    {id:"garantias",label:"Garantías",icon:"🛠️"},
     {id:"manicuras",label:"Manicuras",icon:"💅"},
     {id:"encargadas",label:"Encargadas",icon:"👩‍💼"},
     {id:"locales",label:"Locales",icon:"🏠"},
@@ -2545,6 +2760,7 @@ export default function App() {
     {id:"horarios",label:"Horarios",icon:"🗓️"},
     {id:"reportes",label:"Reportes",icon:"📊"},
     {id:"adelantos",label:"Adelantos",icon:"💸"},
+    {id:"garantias",label:"Garantías",icon:"🛠️"},
     {id:"manicuras",label:"Manicuras",icon:"💅"},
     {id:"cobertura_config",label:"Cobertura",icon:"⚙️"},
     {id:"perfil",label:"Mi perfil",icon:"👤"},
@@ -2561,6 +2777,7 @@ export default function App() {
     if (seccion==="horarios") return <CalendarioHorarios data={data} reloadData={reloadData} user={user} agendaRequest={agendaRequest} onBackToReport={()=>{ setSeccion("reportes"); setMenuOpen(false); }}/>;
     if (seccion==="reportes") return <Reportes data={data} user={user} reportRestore={reportRestore} onOpenAgenda={(req)=>{ const restore={ tab:"cobertura", fecha:req.fecha, localId:req.localId || "" }; setReportRestore(restore); setAgendaRequest({...req, fromReport:true}); setSeccion("horarios"); setMenuOpen(false); }}/>;
     if (seccion==="adelantos") return user.rol!=="manicura" ? <AdelantosManicuras data={data} reloadData={reloadData} user={user}/> : null;
+    if (seccion==="garantias") return user.rol!=="manicura" ? <GarantiasServicios data={data} reloadData={reloadData} user={user}/> : null;
     if (seccion==="manicuras") return <ABMManicuras data={data} reloadData={reloadData} user={user}/>;
     if (seccion==="locales") return user.rol==="admin" ? <ABMLocales data={data} reloadData={reloadData}/> : null;
     if (seccion==="encargadas") return user.rol==="admin" ? <ABMEncargadas data={data} reloadData={reloadData}/> : null;
