@@ -176,6 +176,26 @@ function calcHoras(e, s) { if (!e || !s) return 0; const [eh, em] = e.split(":")
 function fmtFecha(d) { return `${String(d.getDate()).padStart(2,"00")}/${String(d.getMonth()+1).padStart(2,"00")}`; }
 function dateKey(d) { return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}`; }
 function fmtMoney(n) { return new Intl.NumberFormat("es-AR", { style:"currency", currency:"ARS", maximumFractionDigits:0 }).format(Number(n || 0)); }
+function fmtDateTime(value) {
+  if (!value) return "";
+  const d = new Date(value);
+  if (Number.isNaN(d.getTime())) return "";
+  return new Intl.DateTimeFormat("es-AR", { day:"2-digit", month:"2-digit", year:"numeric", hour:"2-digit", minute:"2-digit" }).format(d);
+}
+function addDaysLocal(fecha, days) {
+  const d = parseDateLocal(fecha);
+  if (!d) return null;
+  d.setDate(d.getDate() + days);
+  return d;
+}
+function saturdayForWeekDates(semanaDias) {
+  if (!semanaDias || !semanaDias.length) return null;
+  const base = new Date(semanaDias[0]);
+  base.setHours(12,0,0,0);
+  const diff = (6 - base.getDay() + 7) % 7;
+  base.setDate(base.getDate() + diff);
+  return base;
+}
 function fmtPeriodo(d) { return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}`; }
 function parseDateLocal(value) { return value ? new Date(String(value).slice(0,10) + "T12:00:00") : null; }
 function weekOfMonthLabel(fecha) {
@@ -1621,8 +1641,52 @@ function Reportes({ data, user, onOpenAgenda, reportRestore }) {
     const netoPagar = totalComision - totalAdelantos;
     const servicios = registros.length;
     const clientes = new Set(registros.map(c=>normalize(c.cliente)).filter(Boolean)).size;
-    const ultimaImportacion = (data.comisionesImportaciones||[]).find(i=>i.periodo===periodoComisiones) || (data.comisionesImportaciones||[])[0];
+    const ultimaActualizacionSeleccion = registros
+      .map(c=>c.actualizadoEn)
+      .filter(Boolean)
+      .sort()
+      .reverse()[0] || "";
+    const ultimaImportacionPeriodo = (data.comisionesImportaciones||[]).find(i=>i.periodo===periodoComisiones) || null;
+    const ultimaImportacionTexto = ultimaActualizacionSeleccion
+      ? fmtDateTime(ultimaActualizacionSeleccion)
+      : ultimaImportacionPeriodo?.creadoEn ? fmtDateTime(ultimaImportacionPeriodo.creadoEn) : "";
     const manicurasComision = puedeGestionar ? manicuras.filter(m => baseRegistros.some(c => c.userId === m.id || normalize(c.nombreManicura) === normalize(m.nombre)) || m.activo) : [user];
+    const periodoParts = String(periodoComisiones || "").split("-").map(Number);
+    const periodoYear = periodoParts[0] || hoy.getFullYear();
+    const periodoMonth = (periodoParts[1] || (hoy.getMonth()+1)) - 1;
+    const semanasPeriodo = getSemanas(getDiasDelMes(periodoYear, periodoMonth));
+    const semanaSeleccionadaDias = semanaComisiones !== "todas" ? semanasPeriodo[parseInt(semanaComisiones)-1] : null;
+    const sabadoPagoBase = saturdayForWeekDates(semanaSeleccionadaDias);
+    const hoyPagoCheck = new Date();
+    hoyPagoCheck.setHours(0,0,0,0);
+    const sabadoPagoCheck = sabadoPagoBase ? new Date(sabadoPagoBase) : null;
+    if (sabadoPagoCheck) sabadoPagoCheck.setHours(0,0,0,0);
+    const semanaFinalizada = !!sabadoPagoCheck && hoyPagoCheck > sabadoPagoCheck;
+    const manicurasPagoMap = new Map();
+    registros.forEach(c => {
+      const key = c.userId || normalize(c.nombreLocal + "|" + c.nombreManicura);
+      if (!manicurasPagoMap.has(key)) {
+        const userMatch = c.userId ? data.users.find(u=>u.id===c.userId) : data.users.find(u=>u.rol==="manicura" && normalize(u.nombre)===normalize(c.nombreManicura) && (!c.localId || u.localId===c.localId));
+        manicurasPagoMap.set(key, { userId:c.userId || userMatch?.id || null, nombre:userMatch?.nombre || c.nombreManicura || "Sin manicura", local:c.nombreLocal || localNameById.get(userMatch?.localId) || "", comision:0, adelantos:0 });
+      }
+      const item = manicurasPagoMap.get(key);
+      item.comision += c.comision;
+    });
+    adelantos.forEach(a => {
+      const key = a.userId || `adelanto-${a.id}`;
+      const m = data.users.find(u=>u.id===a.userId);
+      const l = data.locales.find(x=>x.id===a.localId);
+      if (!manicurasPagoMap.has(key)) manicurasPagoMap.set(key, { userId:a.userId || null, nombre:m?.nombre || "Sin manicura", local:l?.nombre || "", comision:0, adelantos:0 });
+      manicurasPagoMap.get(key).adelantos += a.importe;
+    });
+    const fechasPagoComisiones = Array.from(manicurasPagoMap.values()).map(m => {
+      const sabadoKey = sabadoPagoBase ? dateKey(sabadoPagoBase) : "";
+      const horarioSabado = !!(sabadoKey && m.userId && data.horarios.some(h => h.userId===m.userId && h.fecha===sabadoKey && h.trabaja && h.entrada && h.salida));
+      const asistenciaSabado = sabadoKey && m.userId ? data.asistencias.find(a => a.userId===m.userId && a.fecha===sabadoKey) : null;
+      const trabajaSabado = asistenciaSabado ? asistenciaSabado.estado !== "ausente" : horarioSabado;
+      const fechaPago = sabadoPagoBase ? addDaysLocal(dateKey(sabadoPagoBase), trabajaSabado ? 2 : 3) : null;
+      return { ...m, trabajaSabado, asistenciaSabado:asistenciaSabado?.estado || "", fechaPago: fechaPago ? dateKey(fechaPago) : "", neto:m.comision - m.adelantos };
+    }).sort((a,b)=>(a.fechaPago||"").localeCompare(b.fechaPago||"") || String(a.nombre).localeCompare(String(b.nombre)));
     const mesesDisponibles = Array.from(new Set([fmtPeriodo(hoy), ...(data.comisiones||[]).map(c=>c.periodo).filter(Boolean)])).sort().reverse();
     const resumenMapComisiones = registros.reduce((map,c)=>{ const key=c.userId || c.nombreManicura; const prev=map.get(key)||{ userId:c.userId, nombre:c.nombreManicura, local:c.nombreLocal, precio:0, comision:0, adelantos:0, neto:0, servicios:0 }; prev.precio+=c.precio; prev.comision+=c.comision; prev.servicios+=1; map.set(key,prev); return map; }, new Map());
     adelantos.forEach(a=>{ const m=data.users.find(u=>u.id===a.userId); const l=data.locales.find(x=>x.id===a.localId); const key=a.userId || `adelanto-${a.id}`; const prev=resumenMapComisiones.get(key)||{ userId:a.userId, nombre:m?.nombre||"Sin manicura", local:l?.nombre||"", precio:0, comision:0, adelantos:0, neto:0, servicios:0 }; prev.adelantos+=a.importe; resumenMapComisiones.set(key,prev); });
@@ -1836,7 +1900,7 @@ function Reportes({ data, user, onOpenAgenda, reportRestore }) {
           </span>;})}
           <span style={{ fontSize:11,color:"var(--color-text-secondary)" }}>Se aplican en este orden: {gruposComisiones.map(g=>agrupables.find(a=>a.id===g)?.label||g).join(" → ")}</span>
         </div>}
-        {ultimaImportacion&&<span style={{ fontSize:12,color:"var(--color-text-secondary)",marginLeft:"auto" }}>Última importación: {ultimaImportacion.periodo} · {ultimaImportacion.registros} registros</span>}
+        <span style={{ fontSize:12,color:"var(--color-text-secondary)",marginLeft:"auto" }}>Última importación{semanaComisiones!=="todas"?" de la selección":""}: {ultimaImportacionTexto || "Sin datos"}{ultimaImportacionPeriodo?.registros && semanaComisiones==="todas" ? ` · ${ultimaImportacionPeriodo.registros} registros` : ""}</span>
       </div>
       <div style={{ display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(160px,1fr))",gap:10,marginBottom:14 }}>
         <Card><p style={{ margin:"0 0 4px",fontSize:11,color:"var(--color-text-secondary)",textTransform:"uppercase",letterSpacing:"0.04em" }}>Venta total</p><p style={{ margin:0,fontSize:22,fontWeight:600 }}>{fmtMoney(totalPrecio)}</p></Card>
@@ -1846,6 +1910,25 @@ function Reportes({ data, user, onOpenAgenda, reportRestore }) {
         <Card><p style={{ margin:"0 0 4px",fontSize:11,color:"var(--color-text-secondary)",textTransform:"uppercase",letterSpacing:"0.04em" }}>Servicios</p><p style={{ margin:0,fontSize:22,fontWeight:600 }}>{servicios}</p></Card>
         <Card><p style={{ margin:"0 0 4px",fontSize:11,color:"var(--color-text-secondary)",textTransform:"uppercase",letterSpacing:"0.04em" }}>Clientes</p><p style={{ margin:0,fontSize:22,fontWeight:600 }}>{clientes}</p></Card>
       </div>
+      <Card style={{ marginBottom:14,border:semanaComisiones==="todas"?`1px solid ${COLORS.info}33`:semanaFinalizada?`1px solid ${COLORS.success}33`:`1px solid ${COLORS.amber}33`,background:semanaComisiones==="todas"?COLORS.infoLight:semanaFinalizada?COLORS.successLight:COLORS.amberLight }}>
+        <div style={{ display:"flex",justifyContent:"space-between",alignItems:"flex-start",gap:12,flexWrap:"wrap" }}>
+          <div style={{ flex:1,minWidth:260 }}>
+            <h3 style={{ margin:"0 0 4px",fontSize:15,fontWeight:600,color:semanaComisiones==="todas"?COLORS.info:semanaFinalizada?COLORS.success:COLORS.amber }}>Fecha de pago de comisiones</h3>
+            {semanaComisiones==="todas" ? <p style={{ margin:0,fontSize:13,color:COLORS.info }}>Seleccioná una semana para calcular la fecha de pago.</p>
+            : !semanaFinalizada ? <p style={{ margin:0,fontSize:13,color:COLORS.amber }}>La semana seleccionada todavía no está cerrada. Se podrá calcular cuando haya pasado el sábado {sabadoPagoBase?fmtFecha(sabadoPagoBase):""}.</p>
+            : <p style={{ margin:0,fontSize:13,color:COLORS.success }}>Semana cerrada el sábado {fmtFecha(sabadoPagoBase)}. Si la manicura trabajó ese sábado, cobra el lunes siguiente; si no trabajó, el martes siguiente.</p>}
+          </div>
+          {semanaComisiones!=="todas"&&sabadoPagoBase&&<div style={{ textAlign:"right" }}><p style={{ margin:0,fontSize:11,color:"var(--color-text-secondary)",textTransform:"uppercase",letterSpacing:"0.04em" }}>Sábado de control</p><p style={{ margin:0,fontSize:18,fontWeight:600 }}>{fmtFecha(sabadoPagoBase)}</p></div>}
+        </div>
+        {semanaComisiones!=="todas"&&semanaFinalizada&&fechasPagoComisiones.length>0&&<div style={{ marginTop:12,display:"flex",flexDirection:"column",gap:6 }}>
+          {fechasPagoComisiones.map((pago,i)=><div key={`${pago.userId||pago.nombre}-${i}`} style={{ display:"grid",gridTemplateColumns:"1fr 120px 120px 115px",gap:8,alignItems:"center",background:"rgba(255,255,255,0.68)",borderRadius:8,padding:"7px 9px" }}>
+            <div><p style={{ margin:0,fontSize:13,fontWeight:600 }}>{pago.nombre}</p><p style={{ margin:0,fontSize:11,color:"var(--color-text-secondary)" }}>{pago.local||"Sin local"} · {pago.trabajaSabado?"Trabajó sábado":"No trabajó sábado"}</p></div>
+            <Badge color={pago.trabajaSabado?"success":"amber"}>{pago.trabajaSabado?"Lunes":"Martes"}</Badge>
+            <strong style={{ fontSize:14,textAlign:"right" }}>{pago.fechaPago ? pago.fechaPago.split("-").reverse().join("/") : "—"}</strong>
+            <strong style={{ fontSize:14,textAlign:"right",color:(pago.neto||0)>=0?COLORS.success:COLORS.danger }}>{fmtMoney(pago.neto)}</strong>
+          </div>)}
+        </div>}
+      </Card>
       {puedeGestionar&&resumenPorManicura.length>0&&<Card style={{ marginBottom:14 }}><h3 style={{ margin:"0 0 10px",fontSize:15,fontWeight:500 }}>Resumen por manicura</h3><div style={{ display:"flex",flexDirection:"column",gap:6 }}>{resumenPorManicura.slice(0,8).map((r,i)=><div key={i} style={{ display:"grid",gridTemplateColumns:"1fr 95px 105px 110px 115px",gap:8,alignItems:"center",padding:"7px 8px",borderRadius:8,background:"var(--color-background-secondary)" }}><div><p style={{ margin:0,fontSize:13,fontWeight:500 }}>{r.nombre}</p><p style={{ margin:0,fontSize:11,color:"var(--color-text-secondary)" }}>{r.local} · {r.servicios} servicios</p></div><span style={{ fontSize:13,textAlign:"right",color:"var(--color-text-secondary)" }}>{fmtMoney(r.precio)}</span><strong style={{ fontSize:14,textAlign:"right",color:COLORS.pink }}>{fmtMoney(r.comision)}</strong><strong style={{ fontSize:14,textAlign:"right",color:COLORS.amber }}>-{fmtMoney(r.adelantos)}</strong><strong style={{ fontSize:14,textAlign:"right",color:r.neto>=0?COLORS.success:COLORS.danger }}>{fmtMoney(r.neto)}</strong></div>)}</div></Card>}
       <Card style={{ padding:0,overflow:"hidden" }}>
         <div style={{ padding:"12px 14px",borderBottom:"1px solid rgba(120,120,120,0.16)",display:"flex",justifyContent:"space-between",gap:8,alignItems:"center",flexWrap:"wrap" }}><h3 style={{ margin:0,fontSize:15,fontWeight:500 }}>Detalle de comisiones <span style={{ marginLeft:8,fontSize:11,color:COLORS.pinkDark,background:COLORS.pinkLight,borderRadius:999,padding:"3px 8px" }}>{gruposComisiones.length ? `agrupado: ${gruposComisiones.map(g=>agrupables.find(a=>a.id===g)?.label||g).join(" → ")}` : "tabla avanzada"}</span></h3><span style={{ fontSize:12,color:"var(--color-text-secondary)" }}>{registros.length} registros</span></div>
