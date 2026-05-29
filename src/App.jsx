@@ -2883,6 +2883,17 @@ function InformeDiario({ data, reloadData, user }) {
     if (!localFiltro && locales[0]?.id) setLocalFiltro(locales[0].id);
   }, [locales, localId, localFiltro]);
 
+  const calcTotalCaja = useCallback((inf) => Number(inf?.saldoAnterior || 0) + Number(inf?.traspasoCajaGeneral || 0) - Number(inf?.traspasoCajaEfectivo || 0), []);
+  const getPreviousInforme = useCallback((f, lid, excludeId = null) => {
+    const localNum = parseInt(lid);
+    return (data.informesDiarios || [])
+      .filter(i => i.localId === localNum && i.fecha < f && (!excludeId || i.id !== excludeId))
+      .sort((a,b) => (b.fecha || "").localeCompare(a.fecha || ""))[0] || null;
+  }, [data.informesDiarios]);
+  const getSaldoAnterior = useCallback((f, lid, excludeId = null) => {
+    const prev = getPreviousInforme(f, lid, excludeId);
+    return prev ? calcTotalCaja(prev) : 0;
+  }, [getPreviousInforme, calcTotalCaja]);
   const emptyForm = useCallback((f = fecha, lid = localId) => ({
     fecha: f,
     localId: parseInt(lid) || null,
@@ -2892,22 +2903,22 @@ function InformeDiario({ data, reloadData, user }) {
     coincideCaja: true,
     mercadoPagoTotalReservas: "",
     pagosRealizados: "",
-    saldoAnterior: "",
+    saldoAnterior: getSaldoAnterior(f, lid),
     traspasoCajaGeneral: "",
     traspasoCajaEfectivo: "",
     reclamos: "",
     novedadesSalonManicuras: "",
     observacionesExtras: "",
     estado: "borrador",
-  }), [fecha, localId]);
+  }), [fecha, localId, getSaldoAnterior]);
 
   const findInforme = useCallback((f, lid) => (data.informesDiarios || []).find(i => i.fecha === f && i.localId === parseInt(lid)), [data.informesDiarios]);
 
   const loadForDateLocal = useCallback((f = fecha, lid = localId) => {
     const existing = findInforme(f, lid);
-    if (existing) setForm({ ...existing });
+    if (existing) setForm({ ...existing, saldoAnterior: getSaldoAnterior(f, lid, existing.id) });
     else setForm(emptyForm(f, lid));
-  }, [fecha, localId, findInforme, emptyForm]);
+  }, [fecha, localId, findInforme, emptyForm, getSaldoAnterior]);
 
   useEffect(() => { if (localId) loadForDateLocal(fecha, localId); }, [fecha, localId]);
 
@@ -2920,11 +2931,37 @@ function InformeDiario({ data, reloadData, user }) {
   }, [data.informesDiarios, allowedLocalIds, mesFiltro, localFiltro]);
 
   const selectedLocal = data.locales.find(l => l.id === parseInt(form?.localId || localId));
-  const calcTotalCaja = (inf) => Number(inf?.saldoAnterior || 0) + Number(inf?.traspasoCajaGeneral || 0) + Number(inf?.traspasoCajaEfectivo || 0);
   const parseDateLabel = (f) => {
     const d = parseDateLocal(f);
     return d ? `${String(d.getDate()).padStart(2,"0")}/${String(d.getMonth()+1).padStart(2,"0")}/${d.getFullYear()}` : f;
   };
+
+  const userLabel = useCallback((id, fallback) => {
+    const u = data.users.find(x => x.id === id);
+    return u?.codigoExterno || u?.nombre || fallback || "-";
+  }, [data.users]);
+
+  const getGarantiasDelDia = useCallback((inf) => {
+    if (!inf?.fecha || !inf?.localId) return [];
+    return (data.garantias || [])
+      .filter(g => g.localId === parseInt(inf.localId) && g.fechaReparacion === inf.fecha)
+      .sort((a,b) => String(a.cliente || "").localeCompare(String(b.cliente || "")));
+  }, [data.garantias]);
+
+  const buildGarantiasText = useCallback((inf) => {
+    const gs = getGarantiasDelDia(inf);
+    if (!gs.length) return "Sin garantías registradas para este día.";
+    return gs.map(g => [
+      `Cliente: ${g.cliente || "-"}`,
+      `Servicio: ${g.servicio || "-"}`,
+      `Comisión ajuste: ${fmtMoney(g.importeComision)}`,
+      `Original: ${userLabel(g.manicuraOriginalId, g.nombreManicuraOriginal)}`,
+      `Reparación: ${userLabel(g.manicuraReparacionId, g.nombreManicuraReparacion)}`,
+      g.motivo ? `Motivo: ${g.motivo}` : null,
+    ].filter(Boolean).join(" | ")).join("\n");
+  }, [getGarantiasDelDia, userLabel]);
+
+  const garantiasDelDia = useMemo(() => getGarantiasDelDia(form), [getGarantiasDelDia, form]);
 
   const buildTextReport = (inf) => {
     const local = data.locales.find(l => l.id === inf.localId);
@@ -2951,6 +2988,9 @@ function InformeDiario({ data, reloadData, user }) {
       `Traspaso a Caja General: ${fmtMoney(inf.traspasoCajaGeneral)}`,
       `Traspaso a Caja Efectivo: ${fmtMoney(inf.traspasoCajaEfectivo)}`,
       `Total: ${fmtMoney(calcTotalCaja(inf))}`,
+      ``,
+      `GARANTÍAS DEL DÍA:`,
+      buildGarantiasText(inf),
       ``,
       `RECLAMOS:`,
       inf.reclamos || "-",
@@ -3029,8 +3069,9 @@ function InformeDiario({ data, reloadData, user }) {
     alert("Informe copiado al portapapeles.");
   };
 
-  const Field = ({ label, children }) => <div><label style={{ fontSize:12,fontWeight:600,color:"var(--color-text-secondary)",display:"block",marginBottom:5 }}>{label}</label>{children}</div>;
-  const TextArea = ({ value, onChange, rows=3, placeholder }) => <textarea value={value||""} onChange={e=>onChange(e.target.value)} rows={rows} placeholder={placeholder} style={{ width:"100%",boxSizing:"border-box",border:"0.5px solid var(--color-border-secondary)",borderRadius:8,padding:"8px 12px",fontSize:14,background:"var(--color-background-primary)",color:"var(--color-text-primary)",resize:"vertical",fontFamily:"inherit" }}/>;
+  const Field = useCallback(({ label, children, style }) => <div style={style}><label style={{ fontSize:12,fontWeight:600,color:"var(--color-text-secondary)",display:"block",marginBottom:5 }}>{label}</label>{children}</div>, []);
+  const TextArea = useCallback(({ value, onChange, rows=3, placeholder }) => <textarea value={value||""} onChange={e=>onChange(e.target.value)} rows={rows} placeholder={placeholder} style={{ width:"100%",boxSizing:"border-box",border:"0.5px solid var(--color-border-secondary)",borderRadius:8,padding:"8px 12px",fontSize:14,background:"var(--color-background-primary)",color:"var(--color-text-primary)",resize:"vertical",fontFamily:"inherit" }}/>, []);
+  const MoneyInput = useCallback(({ value, onChange, readOnly=false }) => <input type="text" inputMode="decimal" value={value ?? ""} readOnly={readOnly} onChange={e=>onChange(e.target.value)} style={{ border:"0.5px solid var(--color-border-secondary)",borderRadius:8,padding:"8px 12px",fontSize:14,width:"100%",background:readOnly?"var(--color-background-secondary)":"var(--color-background-primary)",color:"var(--color-text-primary)",boxSizing:"border-box",fontFamily:"inherit" }}/>, []);
 
   if (!locales.length) return <Card><p style={{ margin:0,color:COLORS.danger }}>No tenés locales asignados para cargar informes diarios.</p></Card>;
 
@@ -3046,23 +3087,78 @@ function InformeDiario({ data, reloadData, user }) {
     <Card style={{ marginBottom:14 }}>
       <div style={{ display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(180px,1fr))",gap:12,marginBottom:14 }}>
         <Field label="Local"><Select value={localId} onChange={v=>{setLocalId(v); setLocalFiltro(v);}}>{locales.map(l=><option key={l.id} value={l.id}>{l.nombre}</option>)}</Select></Field>
-        <Field label="Fecha"><input type="date" value={fecha} onChange={e=>{setFecha(e.target.value); setMesFiltro(String(e.target.value).slice(0,7));}} style={{ width:"100%",border:"0.5px solid var(--color-border-secondary)",borderRadius:8,padding:"8px 12px",fontSize:14,background:"var(--color-background-primary)",color:"var(--color-text-primary)",boxSizing:"border-box" }}/></Field>
+        <Field label="Fecha"><input type="date" value={fecha} onChange={e=>{setFecha(e.target.value); setMesFiltro(String(e.target.value).slice(0,7));}} style={{ width:"100%",border:`1.5px solid ${COLORS.pink}`,borderRadius:10,padding:"10px 12px",fontSize:17,fontWeight:700,background:COLORS.pinkLight,color:COLORS.pinkDark,boxSizing:"border-box",fontFamily:"inherit" }}/></Field>
         <Field label="Estado"><div style={{ padding:"8px 12px",borderRadius:8,background:form?.estado==="enviado"?COLORS.successLight:COLORS.grayLight,color:form?.estado==="enviado"?COLORS.success:"#555",fontWeight:600 }}>{form?.estado==="enviado"?"Enviado":"Borrador"}</div></Field>
       </div>
-      {form && <div style={{ display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(260px,1fr))",gap:14 }}>
-        <Field label="Importante para mañana"><TextArea value={form.importanteManana} onChange={v=>setForm(f=>({...f,importanteManana:v}))} placeholder="Ej: Ver si llegan tapas"/></Field>
-        <Field label="Urgentes generales"><TextArea value={form.urgentesGenerales} onChange={v=>setForm(f=>({...f,urgentesGenerales:v}))}/></Field>
-        <Field label="Efectivo en caja"><Input type="number" value={form.efectivoCaja} onChange={v=>setForm(f=>({...f,efectivoCaja:v}))}/></Field>
-        <Field label="¿Coincide la caja?"><Select value={form.coincideCaja?"si":"no"} onChange={v=>setForm(f=>({...f,coincideCaja:v==="si"}))}><option value="si">Sí</option><option value="no">No</option></Select></Field>
-        <Field label="Mercado Pago / Total / Reservas"><TextArea value={form.mercadoPagoTotalReservas} onChange={v=>setForm(f=>({...f,mercadoPagoTotalReservas:v}))}/></Field>
-        <Field label="Pagos realizados"><TextArea value={form.pagosRealizados} onChange={v=>setForm(f=>({...f,pagosRealizados:v}))}/></Field>
-        <Field label="Saldo anterior"><Input type="number" value={form.saldoAnterior} onChange={v=>setForm(f=>({...f,saldoAnterior:v}))}/></Field>
-        <Field label="Traspaso a Caja General"><Input type="number" value={form.traspasoCajaGeneral} onChange={v=>setForm(f=>({...f,traspasoCajaGeneral:v}))}/></Field>
-        <Field label="Traspaso a Caja Efectivo"><Input type="number" value={form.traspasoCajaEfectivo} onChange={v=>setForm(f=>({...f,traspasoCajaEfectivo:v}))}/></Field>
-        <Field label="Total caja general"><div style={{ padding:"8px 12px",borderRadius:8,background:COLORS.pinkLight,color:COLORS.pinkDark,fontWeight:700 }}>{fmtMoney(calcTotalCaja(form))}</div></Field>
-        <Field label="Reclamos"><TextArea value={form.reclamos} onChange={v=>setForm(f=>({...f,reclamos:v}))}/></Field>
-        <Field label="Novedades salón / manicuras"><TextArea value={form.novedadesSalonManicuras} onChange={v=>setForm(f=>({...f,novedadesSalonManicuras:v}))}/></Field>
-        <Field label="Observaciones / extras"><TextArea value={form.observacionesExtras} onChange={v=>setForm(f=>({...f,observacionesExtras:v}))} rows={4}/></Field>
+      {form && <div style={{ display:"flex",flexDirection:"column",gap:16 }}>
+        <div style={{ background:COLORS.pinkLight,border:`1px solid ${COLORS.pink}`,borderRadius:14,padding:"12px 14px",display:"flex",alignItems:"center",justifyContent:"space-between",gap:12,flexWrap:"wrap" }}>
+          <div>
+            <p style={{ margin:0,fontSize:12,fontWeight:700,color:COLORS.pinkDark,textTransform:"uppercase",letterSpacing:"0.04em" }}>Fecha del informe</p>
+            <p style={{ margin:"3px 0 0",fontSize:24,fontWeight:800,color:COLORS.pinkDark }}>{parseDateLabel(form.fecha)}</p>
+          </div>
+          <div style={{ textAlign:"right" }}>
+            <p style={{ margin:0,fontSize:12,color:COLORS.pinkDark }}>Local</p>
+            <p style={{ margin:"2px 0 0",fontSize:16,fontWeight:700,color:"var(--color-text-primary)" }}>{selectedLocal?.nombre || "-"}</p>
+          </div>
+        </div>
+
+        <div style={{ display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(260px,1fr))",gap:14 }}>
+          <Field label="Importante para mañana"><TextArea value={form.importanteManana} onChange={v=>setForm(f=>({...f,importanteManana:v}))} placeholder="Ej: Ver si llegan tapas"/></Field>
+          <Field label="Urgentes generales"><TextArea value={form.urgentesGenerales} onChange={v=>setForm(f=>({...f,urgentesGenerales:v}))}/></Field>
+        </div>
+
+        <div style={{ border:"1px solid var(--color-border-tertiary)",borderRadius:14,overflow:"hidden",background:"var(--color-background-primary)" }}>
+          <div style={{ background:"var(--color-background-secondary)",padding:"10px 12px",borderBottom:"1px solid var(--color-border-tertiary)",display:"flex",justifyContent:"space-between",alignItems:"center",gap:8,flexWrap:"wrap" }}>
+            <div>
+              <h3 style={{ margin:0,fontSize:15,fontWeight:700 }}>Caja y traspasos</h3>
+              <p style={{ margin:"2px 0 0",fontSize:12,color:"var(--color-text-secondary)" }}>El saldo anterior se toma del saldo final del informe anterior del mismo local.</p>
+            </div>
+            <Badge color="pink">Saldo final {fmtMoney(calcTotalCaja(form))}</Badge>
+          </div>
+          <div style={{ padding:12,display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(220px,1fr))",gap:12 }}>
+            <Field label="Efectivo en caja"><MoneyInput value={form.efectivoCaja} onChange={v=>setForm(f=>({...f,efectivoCaja:v}))}/></Field>
+            <Field label="¿Coincide la caja?"><Select value={form.coincideCaja?"si":"no"} onChange={v=>setForm(f=>({...f,coincideCaja:v==="si"}))}><option value="si">Sí</option><option value="no">No</option></Select></Field>
+            <Field label="Saldo anterior"><MoneyInput readOnly value={form.saldoAnterior} onChange={()=>{}}/></Field>
+            <Field label="+ Traspaso a Caja General"><MoneyInput value={form.traspasoCajaGeneral} onChange={v=>setForm(f=>({...f,traspasoCajaGeneral:v}))}/></Field>
+            <Field label="- Traspaso a Caja Efectivo"><MoneyInput value={form.traspasoCajaEfectivo} onChange={v=>setForm(f=>({...f,traspasoCajaEfectivo:v}))}/></Field>
+            <Field label="Saldo final"><div style={{ padding:"8px 12px",borderRadius:8,background:COLORS.pinkLight,color:COLORS.pinkDark,fontWeight:800,fontSize:16 }}>{fmtMoney(calcTotalCaja(form))}</div></Field>
+            <Field label="Mercado Pago / Total / Reservas" style={{ gridColumn:"1 / -1" }}><TextArea value={form.mercadoPagoTotalReservas} onChange={v=>setForm(f=>({...f,mercadoPagoTotalReservas:v}))}/></Field>
+            <Field label="Pagos realizados" style={{ gridColumn:"1 / -1" }}><TextArea value={form.pagosRealizados} onChange={v=>setForm(f=>({...f,pagosRealizados:v}))}/></Field>
+          </div>
+        </div>
+
+        <div style={{ border:"1px solid var(--color-border-tertiary)",borderRadius:14,overflow:"hidden",background:"var(--color-background-primary)" }}>
+          <div style={{ background:COLORS.amberLight,padding:"10px 12px",borderBottom:"1px solid var(--color-border-tertiary)",display:"flex",justifyContent:"space-between",alignItems:"center",gap:8,flexWrap:"wrap" }}>
+            <div>
+              <h3 style={{ margin:0,fontSize:15,fontWeight:700,color:COLORS.amber }}>Garantías del día</h3>
+              <p style={{ margin:"2px 0 0",fontSize:12,color:COLORS.amber }}>Detalle informativo de reparaciones registradas para este local y fecha.</p>
+            </div>
+            <Badge color={garantiasDelDia.length ? "amber" : "gray"}>{garantiasDelDia.length} garantía{garantiasDelDia.length!==1?"s":""}</Badge>
+          </div>
+          <div style={{ padding:12 }}>
+            {garantiasDelDia.length === 0 ? <p style={{ margin:0,fontSize:13,color:"var(--color-text-secondary)" }}>No hay garantías registradas para este día.</p> :
+              <div style={{ display:"flex",flexDirection:"column",gap:8 }}>
+                {garantiasDelDia.map(g => <div key={g.id} style={{ border:"1px solid var(--color-border-tertiary)",borderRadius:10,padding:"8px 10px",background:"var(--color-background-secondary)" }}>
+                  <div style={{ display:"flex",justifyContent:"space-between",gap:8,flexWrap:"wrap",alignItems:"center" }}>
+                    <div>
+                      <p style={{ margin:0,fontSize:13,fontWeight:700 }}>{g.cliente || "Cliente sin informar"}</p>
+                      <p style={{ margin:"2px 0 0",fontSize:12,color:"var(--color-text-secondary)" }}>{g.servicio || "Servicio sin informar"}</p>
+                    </div>
+                    <Badge color="amber">{fmtMoney(g.importeComision)}</Badge>
+                  </div>
+                  <p style={{ margin:"6px 0 0",fontSize:12,color:"var(--color-text-secondary)" }}>Original: <strong>{userLabel(g.manicuraOriginalId, g.nombreManicuraOriginal)}</strong> · Reparación: <strong>{userLabel(g.manicuraReparacionId, g.nombreManicuraReparacion)}</strong></p>
+                  {g.motivo && <p style={{ margin:"4px 0 0",fontSize:12,color:"var(--color-text-secondary)" }}>{g.motivo}</p>}
+                </div>)}
+              </div>
+            }
+          </div>
+        </div>
+
+        <div style={{ display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(260px,1fr))",gap:14 }}>
+          <Field label="Reclamos"><TextArea value={form.reclamos} onChange={v=>setForm(f=>({...f,reclamos:v}))}/></Field>
+          <Field label="Novedades salón / manicuras"><TextArea value={form.novedadesSalonManicuras} onChange={v=>setForm(f=>({...f,novedadesSalonManicuras:v}))}/></Field>
+          <Field label="Observaciones / extras"><TextArea value={form.observacionesExtras} onChange={v=>setForm(f=>({...f,observacionesExtras:v}))} rows={4}/></Field>
+        </div>
       </div>}
     </Card>
 
