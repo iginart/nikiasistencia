@@ -107,7 +107,7 @@ function normalizeConfigCobertura(c) { return { id:c.id, localId:c.local_id, hor
 function normalizeEncargadoLocal(x) { return { userId:x.user_id, localId:x.local_id }; }
 function normalizeComision(c) { return { id:c.id, periodo:c.periodo, fechaPago:c.fecha_pago, localId:c.local_id, codigoExternoLocal:c.codigo_externo_local || "", nombreLocal:c.nombre_local || "", userId:c.user_id, codigoExternoManicura:c.codigo_externo_manicura || "", nombreManicura:c.nombre_manicura || "", servicio:c.servicio || "", cliente:c.cliente || "", precio:Number(c.precio || 0), comision:Number(c.comision || 0), hashRegistro:c.hash_registro || "", actualizadoEn:c.actualizado_en || "" }; }
 function normalizeComisionImportacion(i) { return { id:i.id, periodo:i.periodo, registros:i.registros || 0, totalPrecio:Number(i.total_precio || 0), totalComision:Number(i.total_comision || 0), estado:i.estado || "", mensaje:i.mensaje || "", creadoEn:i.creado_en || "" }; }
-function normalizeAdelanto(a) { return { id:a.id, fecha:a.fecha, periodo:a.periodo || (a.fecha ? String(a.fecha).slice(0,7) : ""), userId:a.user_id, localId:a.local_id, importe:Number(a.importe || 0), concepto:a.concepto || "", observacion:a.observacion || "", creadoPor:a.creado_por, creadoEn:a.creado_en || "" }; }
+function normalizeAdelanto(a) { return { id:a.id, fecha:a.fecha, fechaDescuento:a.fecha_descuento || a.fecha, periodo:a.periodo || (a.fecha_descuento ? String(a.fecha_descuento).slice(0,7) : a.fecha ? String(a.fecha).slice(0,7) : ""), userId:a.user_id, localId:a.local_id, importe:Number(a.importe || 0), importeTotal:Number(a.importe_total || a.importe || 0), concepto:a.concepto || "", observacion:a.observacion || "", creadoPor:a.creado_por, creadoEn:a.creado_en || "", grupoId:a.grupo_id || "", cuotaNum:a.cuota_num || 1, cuotasTotal:a.cuotas_total || 1, tipoDescuento:a.tipo_descuento || "semana" }; }
 
 const COLORS = {
   pink: "#d4537e", pinkLight: "#fbeaf0", pinkDark: "#72243e",
@@ -1612,7 +1612,7 @@ function Reportes({ data, user, onOpenAgenda, reportRestore }) {
       .filter(a=>!periodoComisiones || a.periodo === periodoComisiones)
       .filter(a=>localComisiones === "todos" || a.localId === parseInt(localComisiones))
       .filter(a=>manicuraComisiones === "todas" || a.userId === parseInt(manicuraComisiones));
-    const adelantos = baseAdelantos.filter(a=>semanaComisiones === "todas" || weekOfMonthValue(a.fecha) === semanaComisiones);
+    const adelantos = baseAdelantos.filter(a=>semanaComisiones === "todas" || weekOfMonthValue(a.fechaDescuento || a.fecha) === semanaComisiones);
     const totalPrecio = registros.reduce((a,c)=>a+c.precio,0);
     const totalComision = registros.reduce((a,c)=>a+c.comision,0);
     const totalAdelantos = adelantos.reduce((a,x)=>a+x.importe,0);
@@ -1932,10 +1932,31 @@ function AdelantosManicuras({ data, reloadData, user }) {
   const [periodo, setPeriodo] = useState(fmtPeriodo(hoy));
   const [localId, setLocalId] = useState(localesPermitidos[0]?.id || "");
   const manicurasPermitidas = data.users.filter(u => u.rol === "manicura" && u.activo && (!localId || u.localId === parseInt(localId)) && (esAdmin || allowedLocalIds.includes(u.localId)));
-  const [form, setForm] = useState({ fecha:dateKey(hoy), userId:"", importe:"", concepto:"Adelanto", observacion:"" });
+  const defaultFecha = dateKey(hoy);
+  const [form, setForm] = useState({ fecha:defaultFecha, userId:"", importe:"", concepto:"Adelanto", observacion:"", plan:"semana", cuotasTotal:"2", primeraFechaDescuento:defaultFecha, cuotas:[{ fecha:defaultFecha, importe:"" }] });
   const [editing, setEditing] = useState(null);
   const [saving, setSaving] = useState(false);
   const [err, setErr] = useState("");
+
+  const addWeeks = (fecha, n) => {
+    const d = parseDateLocal(fecha) || new Date();
+    d.setDate(d.getDate() + n * 7);
+    return dateKey(d);
+  };
+  const makeGrupoId = () => `adelanto_${Date.now()}_${Math.random().toString(36).slice(2,8)}`;
+  const moneyInputToNumber = v => Number(String(v ?? "").replace(/\./g, "").replace(",", "."));
+  const localActual = data.locales.find(l => l.id === parseInt(localId));
+  const adelantos = (data.adelantos||[])
+    .filter(a => a.periodo === periodo)
+    .filter(a => !localId || a.localId === parseInt(localId))
+    .filter(a => esAdmin || allowedLocalIds.includes(a.localId))
+    .sort((a,b)=>(a.fechaDescuento||a.fecha||"").localeCompare(b.fechaDescuento||b.fecha||"") || (a.fecha||"").localeCompare(b.fecha||""));
+  const total = adelantos.reduce((acc,a)=>acc+a.importe,0);
+  const porManicura = Array.from(adelantos.reduce((map,a)=>{
+    const m=data.users.find(u=>u.id===a.userId); const key=a.userId;
+    const prev=map.get(key)||{ nombre:m?.nombre||"Sin manicura", importe:0, cantidad:0 };
+    prev.importe+=a.importe; prev.cantidad+=1; map.set(key,prev); return map;
+  }, new Map()).values()).sort((a,b)=>b.importe-a.importe);
 
   useEffect(() => {
     if (!manicurasPermitidas.some(m => m.id === parseInt(form.userId))) {
@@ -1943,49 +1964,68 @@ function AdelantosManicuras({ data, reloadData, user }) {
     }
   }, [localId, data.users]);
 
-  const localActual = data.locales.find(l => l.id === parseInt(localId));
-  const adelantos = (data.adelantos||[])
-    .filter(a => a.periodo === periodo)
-    .filter(a => !localId || a.localId === parseInt(localId))
-    .filter(a => esAdmin || allowedLocalIds.includes(a.localId))
-    .sort((a,b)=>(b.fecha||"").localeCompare(a.fecha||"") || b.id-a.id);
-  const total = adelantos.reduce((acc,a)=>acc+a.importe,0);
-  const porManicura = Array.from(adelantos.reduce((map,a)=>{
-    const m = data.users.find(u=>u.id===a.userId);
-    const key = a.userId || `sin-${a.id}`;
-    const prev = map.get(key) || { nombre:m?.nombre || "Sin manicura", importe:0, cantidad:0 };
-    prev.importe += a.importe; prev.cantidad += 1; map.set(key, prev); return map;
-  }, new Map()).values()).sort((a,b)=>b.importe-a.importe);
+  const buildCuotasFromForm = () => {
+    const importeTotal = moneyInputToNumber(form.importe);
+    if (!Number.isFinite(importeTotal) || importeTotal <= 0) return { error:"Ingresá un importe válido mayor a cero." };
+    if (form.plan === "semana") {
+      return { cuotas:[{ fecha:form.primeraFechaDescuento || form.fecha, importe:importeTotal }], importeTotal };
+    }
+    if (form.plan === "cuotas_iguales") {
+      const n = Math.max(1, parseInt(form.cuotasTotal) || 1);
+      const base = Math.floor((importeTotal / n) * 100) / 100;
+      const cuotas = Array.from({ length:n }, (_, i) => ({ fecha:addWeeks(form.primeraFechaDescuento || form.fecha, i), importe:i === n-1 ? Number((importeTotal - base * (n-1)).toFixed(2)) : base }));
+      return { cuotas, importeTotal };
+    }
+    const cuotas = (form.cuotas||[])
+      .map(c => ({ fecha:c.fecha, importe:moneyInputToNumber(c.importe) }))
+      .filter(c => c.fecha && Number.isFinite(c.importe) && c.importe > 0);
+    if (!cuotas.length) return { error:"Cargá al menos una cuota con fecha e importe." };
+    const suma = cuotas.reduce((a,c)=>a+c.importe,0);
+    if (Math.abs(suma - importeTotal) > 0.01) return { error:`La suma de cuotas (${fmtMoney(suma)}) debe coincidir con el adelanto (${fmtMoney(importeTotal)}).` };
+    return { cuotas, importeTotal };
+  };
 
   const save = async () => {
     setErr("");
-    if (!form.fecha || !form.userId || !localId || !form.importe) { setErr("Completá fecha, local, manicura e importe."); return; }
+    if (!form.fecha || !form.userId || !form.importe) { setErr("Completá fecha, manicura e importe."); return; }
     const manicura = data.users.find(u=>u.id===parseInt(form.userId));
-    if (!manicura || manicura.localId !== parseInt(localId)) { setErr("La manicura no corresponde al local seleccionado."); return; }
+    if (!manicura) { setErr("Seleccioná una manicura válida."); return; }
+    if (manicura.localId !== parseInt(localId)) { setErr("La manicura no corresponde al local seleccionado."); return; }
     if (!esAdmin && !allowedLocalIds.includes(manicura.localId)) { setErr("No tenés permiso para cargar adelantos en ese local."); return; }
-    const importe = Number(String(form.importe).replace(",","."));
-    if (!Number.isFinite(importe) || importe <= 0) { setErr("Ingresá un importe válido mayor a cero."); return; }
+    const plan = buildCuotasFromForm();
+    if (plan.error) { setErr(plan.error); return; }
+    const grupoId = makeGrupoId();
     setSaving(true);
     try {
-      await api.createAdelanto({
-        fecha: form.fecha,
-        periodo: form.fecha.slice(0,7),
-        user_id: manicura.id,
-        local_id: manicura.localId,
-        importe,
-        concepto: form.concepto || "Adelanto",
-        observacion: form.observacion || null,
-        creado_por: user.id,
-      });
+      for (let i = 0; i < plan.cuotas.length; i++) {
+        const cuota = plan.cuotas[i];
+        await api.createAdelanto({
+          fecha: form.fecha,
+          fecha_descuento: cuota.fecha,
+          periodo: cuota.fecha.slice(0,7),
+          user_id: manicura.id,
+          local_id: manicura.localId,
+          importe: cuota.importe,
+          importe_total: plan.importeTotal,
+          concepto: form.concepto || "Adelanto",
+          observacion: form.observacion || null,
+          grupo_id: grupoId,
+          cuota_num: i + 1,
+          cuotas_total: plan.cuotas.length,
+          tipo_descuento: form.plan,
+          creado_por: user.id,
+        });
+      }
       await reloadData();
-      setPeriodo(form.fecha.slice(0,7));
-      setForm(f => ({ ...f, importe:"", observacion:"" }));
+      setPeriodo((plan.cuotas[0]?.fecha || form.fecha).slice(0,7));
+      setForm(f => ({ ...f, importe:"", observacion:"", plan:"semana", cuotasTotal:"2", primeraFechaDescuento:f.fecha, cuotas:[{ fecha:f.fecha, importe:"" }] }));
     } catch(e) { setErr("Error al guardar: " + e.message); }
     setSaving(false);
   };
 
   const del = async (a) => {
-    if (!confirm("¿Eliminar este adelanto?")) return;
+    const msg = a.cuotasTotal > 1 ? "¿Eliminar esta cuota de descuento del adelanto?" : "¿Eliminar este adelanto?";
+    if (!confirm(msg)) return;
     await api.deleteAdelanto(a.id);
     await reloadData();
   };
@@ -1997,37 +2037,45 @@ function AdelantosManicuras({ data, reloadData, user }) {
     setEditing({
       id: a.id,
       fecha: a.fecha || dateKey(hoy),
+      fechaDescuento: a.fechaDescuento || a.fecha || dateKey(hoy),
       importe: String(a.importe || ""),
       concepto: a.concepto || "Adelanto",
       observacion: a.observacion || "",
       localNombre: local?.nombre || "—",
       manicuraNombre: manicura?.nombre || "—",
       localId: a.localId,
+      cuotaNum: a.cuotaNum || 1,
+      cuotasTotal: a.cuotasTotal || 1,
+      importeTotal: a.importeTotal || a.importe || 0,
     });
   };
 
   const saveEdit = async () => {
     if (!editing) return;
     setErr("");
-    if (!editing.fecha || !editing.importe) { setErr("Completá fecha e importe."); return; }
+    if (!editing.fecha || !editing.fechaDescuento || !editing.importe) { setErr("Completá fecha del adelanto, fecha de descuento e importe."); return; }
     if (!esAdmin && !allowedLocalIds.includes(editing.localId)) { setErr("No tenés permiso para editar adelantos en ese local."); return; }
-    const importe = Number(String(editing.importe).replace(",","."));
+    const importe = moneyInputToNumber(editing.importe);
     if (!Number.isFinite(importe) || importe <= 0) { setErr("Ingresá un importe válido mayor a cero."); return; }
     setSaving(true);
     try {
       await api.updateAdelanto(editing.id, {
         fecha: editing.fecha,
-        periodo: editing.fecha.slice(0,7),
+        fecha_descuento: editing.fechaDescuento,
+        periodo: editing.fechaDescuento.slice(0,7),
         importe,
         concepto: editing.concepto || "Adelanto",
         observacion: editing.observacion || null,
+        actualizado_en: new Date().toISOString(),
       });
       await reloadData();
-      setPeriodo(editing.fecha.slice(0,7));
+      setPeriodo(editing.fechaDescuento.slice(0,7));
       setEditing(null);
     } catch(e) { setErr("Error al guardar: " + e.message); }
     setSaving(false);
   };
+
+  const planPreview = buildCuotasFromForm();
 
   if (!esAdmin && !esEncargada) return null;
 
@@ -2039,39 +2087,48 @@ function AdelantosManicuras({ data, reloadData, user }) {
       </Select>
     </div>
     <div style={{ display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(220px,1fr))",gap:12,marginBottom:14 }}>
-      <Card><p style={{ margin:"0 0 4px",fontSize:11,color:"var(--color-text-secondary)",textTransform:"uppercase",letterSpacing:"0.04em" }}>Total adelantos</p><p style={{ margin:0,fontSize:24,fontWeight:600,color:COLORS.amber }}>{fmtMoney(total)}</p></Card>
-      <Card><p style={{ margin:"0 0 4px",fontSize:11,color:"var(--color-text-secondary)",textTransform:"uppercase",letterSpacing:"0.04em" }}>Registros</p><p style={{ margin:0,fontSize:24,fontWeight:600 }}>{adelantos.length}</p></Card>
+      <Card><p style={{ margin:"0 0 4px",fontSize:11,color:"var(--color-text-secondary)",textTransform:"uppercase",letterSpacing:"0.04em" }}>Total a descontar</p><p style={{ margin:0,fontSize:24,fontWeight:600,color:COLORS.amber }}>{fmtMoney(total)}</p><p style={{ margin:"3px 0 0",fontSize:11,color:"var(--color-text-secondary)" }}>Según período de descuento seleccionado</p></Card>
+      <Card><p style={{ margin:"0 0 4px",fontSize:11,color:"var(--color-text-secondary)",textTransform:"uppercase",letterSpacing:"0.04em" }}>Cuotas / descuentos</p><p style={{ margin:0,fontSize:24,fontWeight:600 }}>{adelantos.length}</p></Card>
       <Card><p style={{ margin:"0 0 4px",fontSize:11,color:"var(--color-text-secondary)",textTransform:"uppercase",letterSpacing:"0.04em" }}>Local</p><p style={{ margin:0,fontSize:18,fontWeight:600 }}>{localActual?.nombre || "—"}</p></Card>
     </div>
     <Card style={{ marginBottom:14 }}>
       <h3 style={{ margin:"0 0 12px",fontSize:15,fontWeight:500 }}>Cargar adelanto</h3>
       <div style={{ display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(160px,1fr))",gap:10,alignItems:"end" }}>
-        <div><label style={{ fontSize:12,color:"var(--color-text-secondary)",display:"block",marginBottom:4 }}>Fecha</label><input type="date" value={form.fecha} onChange={e=>setForm(f=>({...f,fecha:e.target.value}))} style={{ width:"100%",border:"0.5px solid var(--color-border-secondary)",borderRadius:8,padding:"8px 12px",fontSize:14,background:"var(--color-background-primary)",color:"var(--color-text-primary)" }}/></div>
+        <div><label style={{ fontSize:12,color:"var(--color-text-secondary)",display:"block",marginBottom:4 }}>Fecha del adelanto</label><input type="date" value={form.fecha} onChange={e=>setForm(f=>({...f,fecha:e.target.value,primeraFechaDescuento:f.primeraFechaDescuento||e.target.value,cuotas:(f.cuotas||[]).map((c,i)=>i===0?{...c,fecha:c.fecha||e.target.value}:c)}))} style={{ width:"100%",border:"0.5px solid var(--color-border-secondary)",borderRadius:8,padding:"8px 12px",fontSize:14,background:"var(--color-background-primary)",color:"var(--color-text-primary)" }}/></div>
         <div><label style={{ fontSize:12,color:"var(--color-text-secondary)",display:"block",marginBottom:4 }}>Local</label><Select value={localId} onChange={v=>setLocalId(v)}>{localesPermitidos.map(l=><option key={l.id} value={l.id}>{l.nombre}</option>)}</Select></div>
         <div><label style={{ fontSize:12,color:"var(--color-text-secondary)",display:"block",marginBottom:4 }}>Manicura</label><Select value={form.userId} onChange={v=>setForm(f=>({...f,userId:v}))}>{manicurasPermitidas.map(m=><option key={m.id} value={m.id}>{m.nombre}</option>)}</Select></div>
-        <div><label style={{ fontSize:12,color:"var(--color-text-secondary)",display:"block",marginBottom:4 }}>Importe</label><Input value={form.importe} onChange={v=>setForm(f=>({...f,importe:v}))} placeholder="0"/></div>
+        <div><label style={{ fontSize:12,color:"var(--color-text-secondary)",display:"block",marginBottom:4 }}>Importe total adelantado</label><Input value={form.importe} onChange={v=>setForm(f=>({...f,importe:v,cuotas:f.plan==="cuotas_personalizadas"&&f.cuotas?.length===1?[{...f.cuotas[0],importe:v}]:f.cuotas}))} placeholder="0"/></div>
         <div><label style={{ fontSize:12,color:"var(--color-text-secondary)",display:"block",marginBottom:4 }}>Concepto</label><Input value={form.concepto} onChange={v=>setForm(f=>({...f,concepto:v}))}/></div>
+        <div><label style={{ fontSize:12,color:"var(--color-text-secondary)",display:"block",marginBottom:4 }}>Descuento</label><Select value={form.plan} onChange={v=>setForm(f=>({...f,plan:v, primeraFechaDescuento:f.primeraFechaDescuento||f.fecha, cuotas:v==="cuotas_personalizadas"?(f.cuotas?.length?f.cuotas:[{fecha:f.fecha,importe:f.importe}]):f.cuotas }))}><option value="semana">Descontar esta semana</option><option value="cuotas_iguales">Descontar en cuotas iguales</option><option value="cuotas_personalizadas">Descuento personalizado</option></Select></div>
+        {(form.plan === "semana" || form.plan === "cuotas_iguales") && <div><label style={{ fontSize:12,color:"var(--color-text-secondary)",display:"block",marginBottom:4 }}>{form.plan === "semana" ? "Semana de descuento" : "Primera semana de descuento"}</label><input type="date" value={form.primeraFechaDescuento||form.fecha} onChange={e=>setForm(f=>({...f,primeraFechaDescuento:e.target.value}))} style={{ width:"100%",border:"0.5px solid var(--color-border-secondary)",borderRadius:8,padding:"8px 12px",fontSize:14,background:"var(--color-background-primary)",color:"var(--color-text-primary)" }}/></div>}
+        {form.plan === "cuotas_iguales" && <div><label style={{ fontSize:12,color:"var(--color-text-secondary)",display:"block",marginBottom:4 }}>Cantidad de cuotas</label><Input type="number" value={form.cuotasTotal} onChange={v=>setForm(f=>({...f,cuotasTotal:v}))}/></div>}
         <div style={{ gridColumn:"1 / -1" }}><label style={{ fontSize:12,color:"var(--color-text-secondary)",display:"block",marginBottom:4 }}>Observación</label><Input value={form.observacion} onChange={v=>setForm(f=>({...f,observacion:v}))} placeholder="Opcional"/></div>
       </div>
+      {form.plan === "cuotas_personalizadas" && <div style={{ marginTop:12,border:"0.5px solid var(--color-border-tertiary)",borderRadius:10,overflow:"hidden" }}>
+        <div style={{ padding:"9px 12px",background:"var(--color-background-secondary)",display:"flex",justifyContent:"space-between",alignItems:"center",gap:8 }}><strong style={{ fontSize:13 }}>Cuotas personalizadas</strong><Btn size="sm" variant="secondary" onClick={()=>setForm(f=>({...f,cuotas:[...(f.cuotas||[]),{fecha:addWeeks((f.cuotas||[]).slice(-1)[0]?.fecha||f.fecha,1),importe:""}]}))}>+ Agregar cuota</Btn></div>
+        {(form.cuotas||[]).map((c,i)=><div key={i} style={{ display:"grid",gridTemplateColumns:"140px 1fr 70px",gap:8,padding:"8px 12px",alignItems:"center",borderTop:"0.5px solid var(--color-border-tertiary)" }}><input type="date" value={c.fecha} onChange={e=>setForm(f=>({...f,cuotas:(f.cuotas||[]).map((x,idx)=>idx===i?{...x,fecha:e.target.value}:x)}))} style={{ border:"0.5px solid var(--color-border-secondary)",borderRadius:8,padding:"8px 10px",fontSize:13,background:"var(--color-background-primary)",color:"var(--color-text-primary)" }}/><Input value={c.importe} onChange={v=>setForm(f=>({...f,cuotas:(f.cuotas||[]).map((x,idx)=>idx===i?{...x,importe:v}:x)}))} placeholder="Importe"/><Btn size="sm" variant="ghost" style={{ color:COLORS.danger }} onClick={()=>setForm(f=>({...f,cuotas:(f.cuotas||[]).filter((_,idx)=>idx!==i)}))}>Quitar</Btn></div>)}
+      </div>}
+      {planPreview && !planPreview.error && <div style={{ marginTop:12,background:COLORS.infoLight,borderRadius:10,padding:"10px 12px" }}><p style={{ margin:"0 0 6px",fontSize:13,fontWeight:500,color:COLORS.info }}>Plan de descuento</p><div style={{ display:"flex",flexDirection:"column",gap:4 }}>{planPreview.cuotas.map((c,i)=><div key={i} style={{ display:"flex",justifyContent:"space-between",fontSize:12,color:COLORS.info }}><span>Cuota {i+1} · {weekOfMonthLabel(c.fecha)} · {(c.fecha||"").split("-").reverse().join("/")}</span><strong>{fmtMoney(c.importe)}</strong></div>)}</div></div>}
       {err && <p style={{ margin:"10px 0 0",fontSize:13,color:COLORS.danger,background:COLORS.dangerLight,padding:"8px 12px",borderRadius:8 }}>{err}</p>}
       <Btn onClick={save} disabled={saving} style={{ marginTop:12 }}>{saving?"Guardando...":"Guardar adelanto"}</Btn>
     </Card>
-    {porManicura.length>0&&<Card style={{ marginBottom:14 }}><h3 style={{ margin:"0 0 10px",fontSize:15,fontWeight:500 }}>Resumen por manicura</h3><div style={{ display:"flex",flexDirection:"column",gap:6 }}>{porManicura.map((r,i)=><div key={i} style={{ display:"grid",gridTemplateColumns:"1fr 80px 120px",gap:8,alignItems:"center",padding:"7px 8px",borderRadius:8,background:"var(--color-background-secondary)" }}><span style={{ fontSize:13,fontWeight:500 }}>{r.nombre}</span><span style={{ fontSize:12,color:"var(--color-text-secondary)",textAlign:"right" }}>{r.cantidad} reg.</span><strong style={{ textAlign:"right",color:COLORS.amber }}>{fmtMoney(r.importe)}</strong></div>)}</div></Card>}
+    {porManicura.length>0&&<Card style={{ marginBottom:14 }}><h3 style={{ margin:"0 0 10px",fontSize:15,fontWeight:500 }}>Resumen por manicura</h3><div style={{ display:"flex",flexDirection:"column",gap:6 }}>{porManicura.map((r,i)=><div key={i} style={{ display:"grid",gridTemplateColumns:"1fr 80px 120px",gap:8,alignItems:"center",padding:"7px 8px",borderRadius:8,background:"var(--color-background-secondary)" }}><span style={{ fontSize:13,fontWeight:500 }}>{r.nombre}</span><span style={{ fontSize:12,color:"var(--color-text-secondary)",textAlign:"right" }}>{r.cantidad} desc.</span><strong style={{ textAlign:"right",color:COLORS.amber }}>{fmtMoney(r.importe)}</strong></div>)}</div></Card>}
     <Card style={{ padding:0,overflow:"hidden" }}>
-      <div style={{ padding:"12px 14px",borderBottom:"1px solid rgba(120,120,120,0.16)",display:"flex",justifyContent:"space-between",alignItems:"center" }}><h3 style={{ margin:0,fontSize:15,fontWeight:500 }}>Detalle de adelantos</h3><span style={{ fontSize:12,color:"var(--color-text-secondary)" }}>{adelantos.length} registros</span></div>
-      {adelantos.length===0 ? <p style={{ margin:0,padding:18,textAlign:"center",fontSize:13,color:"var(--color-text-secondary)" }}>Sin adelantos para el período/local seleccionado.</p> : <div style={{ overflowX:"auto" }}><div style={{ minWidth:760 }}>
-        <div style={{ display:"grid",gridTemplateColumns:"90px 1fr 1fr 120px 1fr 130px",gap:8,padding:"8px 12px",fontSize:11,fontWeight:600,color:"var(--color-text-secondary)",borderBottom:"1px solid rgba(120,120,120,0.14)",textTransform:"uppercase" }}><span>Fecha</span><span>Local</span><span>Manicura</span><span style={{ textAlign:"right" }}>Importe</span><span>Concepto / Obs.</span><span></span></div>
-        {adelantos.map(a=>{ const m=data.users.find(u=>u.id===a.userId), l=data.locales.find(x=>x.id===a.localId); return <div key={a.id} style={{ display:"grid",gridTemplateColumns:"90px 1fr 1fr 120px 1fr 130px",gap:8,padding:"8px 12px",fontSize:12,alignItems:"center",borderBottom:"1px solid rgba(120,120,120,0.10)" }}><span>{(a.fecha||"").split("-").reverse().join("/")}</span><span>{l?.nombre||"—"}</span><span>{m?.nombre||"—"}</span><strong style={{ textAlign:"right",color:COLORS.amber }}>{fmtMoney(a.importe)}</strong><span>{a.concepto}{a.observacion?` · ${a.observacion}`:""}</span><div style={{ display:"flex",gap:6,justifyContent:"flex-end" }}><Btn onClick={()=>openEdit(a)} variant="ghost" size="sm">Editar</Btn><Btn onClick={()=>del(a)} variant="ghost" size="sm" style={{ color:COLORS.danger }}>Eliminar</Btn></div></div>;})}
+      <div style={{ padding:"12px 14px",borderBottom:"1px solid rgba(120,120,120,0.16)",display:"flex",justifyContent:"space-between",alignItems:"center" }}><h3 style={{ margin:0,fontSize:15,fontWeight:500 }}>Detalle de descuentos de adelantos</h3><span style={{ fontSize:12,color:"var(--color-text-secondary)" }}>{adelantos.length} descuentos</span></div>
+      {adelantos.length===0 ? <p style={{ margin:0,padding:18,textAlign:"center",fontSize:13,color:"var(--color-text-secondary)" }}>Sin descuentos para el período/local seleccionado.</p> : <div style={{ overflowX:"auto" }}><div style={{ minWidth:980 }}>
+        <div style={{ display:"grid",gridTemplateColumns:"90px 110px 1fr 1fr 110px 80px 110px 1fr 130px",gap:8,padding:"8px 12px",fontSize:11,fontWeight:600,color:"var(--color-text-secondary)",borderBottom:"1px solid rgba(120,120,120,0.14)",textTransform:"uppercase" }}><span>Adelanto</span><span>Descuento</span><span>Local</span><span>Manicura</span><span style={{ textAlign:"right" }}>Importe</span><span>Cuota</span><span>Total adel.</span><span>Concepto / Obs.</span><span></span></div>
+        {adelantos.map(a=>{ const m=data.users.find(u=>u.id===a.userId), l=data.locales.find(x=>x.id===a.localId); return <div key={a.id} style={{ display:"grid",gridTemplateColumns:"90px 110px 1fr 1fr 110px 80px 110px 1fr 130px",gap:8,padding:"8px 12px",fontSize:12,alignItems:"center",borderBottom:"1px solid rgba(120,120,120,0.10)" }}><span>{(a.fecha||"").split("-").reverse().join("/")}</span><span><strong>{(a.fechaDescuento||a.fecha||"").split("-").reverse().join("/")}</strong><br/><small style={{ color:"var(--color-text-secondary)" }}>{weekOfMonthLabel(a.fechaDescuento||a.fecha)}</small></span><span>{l?.nombre||"—"}</span><span>{m?.nombre||"—"}</span><strong style={{ textAlign:"right",color:COLORS.amber }}>{fmtMoney(a.importe)}</strong><span>{a.cuotaNum}/{a.cuotasTotal}</span><span>{fmtMoney(a.importeTotal)}</span><span>{a.concepto}{a.observacion?` · ${a.observacion}`:""}</span><div style={{ display:"flex",gap:6,justifyContent:"flex-end" }}><Btn onClick={()=>openEdit(a)} variant="ghost" size="sm">Editar</Btn><Btn onClick={()=>del(a)} variant="ghost" size="sm" style={{ color:COLORS.danger }}>Eliminar</Btn></div></div>;})}
       </div></div>}
     </Card>
-    {editing && <Modal title="Editar adelanto" onClose={()=>setEditing(null)}>
+    {editing && <Modal title="Editar descuento de adelanto" onClose={()=>setEditing(null)}>
       <div style={{ display:"flex",flexDirection:"column",gap:14 }}>
         <div style={{ background:"var(--color-background-secondary)",border:"0.5px solid var(--color-border-tertiary)",borderRadius:10,padding:"10px 12px" }}>
           <p style={{ margin:0,fontSize:13,fontWeight:500 }}>{editing.manicuraNombre}</p>
-          <p style={{ margin:"2px 0 0",fontSize:12,color:"var(--color-text-secondary)" }}>{editing.localNombre}</p>
+          <p style={{ margin:"2px 0 0",fontSize:12,color:"var(--color-text-secondary)" }}>{editing.localNombre} · Cuota {editing.cuotaNum}/{editing.cuotasTotal} · Adelanto total {fmtMoney(editing.importeTotal)}</p>
         </div>
         <div><label style={{ fontSize:12,color:"var(--color-text-secondary)",display:"block",marginBottom:4 }}>Fecha del adelanto</label><input type="date" value={editing.fecha} onChange={e=>setEditing(x=>({...x,fecha:e.target.value}))} style={{ width:"100%",border:"1.5px solid #e0e0e0",borderRadius:8,padding:"9px 12px",fontSize:14,background:"#fafafa",color:"#1a1a1a",boxSizing:"border-box" }}/></div>
-        <ModalInput label="Importe" value={editing.importe} onChange={v=>setEditing(x=>({...x,importe:v}))}/>
+        <div><label style={{ fontSize:12,color:"var(--color-text-secondary)",display:"block",marginBottom:4 }}>Fecha en la que se descuenta</label><input type="date" value={editing.fechaDescuento} onChange={e=>setEditing(x=>({...x,fechaDescuento:e.target.value}))} style={{ width:"100%",border:"1.5px solid #e0e0e0",borderRadius:8,padding:"9px 12px",fontSize:14,background:"#fafafa",color:"#1a1a1a",boxSizing:"border-box" }}/></div>
+        <ModalInput label="Importe a descontar" value={editing.importe} onChange={v=>setEditing(x=>({...x,importe:v}))}/>
         <ModalInput label="Concepto" value={editing.concepto} onChange={v=>setEditing(x=>({...x,concepto:v}))}/>
         <ModalInput label="Observación" value={editing.observacion} onChange={v=>setEditing(x=>({...x,observacion:v}))}/>
         {err && <p style={{ margin:0,fontSize:13,color:COLORS.danger,background:COLORS.dangerLight,padding:"8px 12px",borderRadius:8 }}>{err}</p>}
