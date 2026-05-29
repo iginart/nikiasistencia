@@ -1484,6 +1484,7 @@ function Reportes({ data, user, onOpenAgenda, reportRestore }) {
   const [menuColComisiones, setMenuColComisiones] = useState(null);
   const [collapsedComisiones, setCollapsedComisiones] = useState({});
   const [sortComisiones, setSortComisiones] = useState({ key:"fecha", dir:"desc" });
+  const [garantiaDetalleComisiones, setGarantiaDetalleComisiones] = useState(null);
   const [colsComisiones, setColsComisiones] = useState([
     { key:"fecha", label:"Fecha", width:90 },
     { key:"semana", label:"Semana", width:90 },
@@ -1618,6 +1619,22 @@ function Reportes({ data, user, onOpenAgenda, reportRestore }) {
           {cobertura.items.map(it=><div key={it.fecha} style={{ display:"grid",gridTemplateColumns:`88px repeat(${cobertura.horas.length},1fr)`,borderBottom:"1px solid rgba(120,120,120,0.10)" }}><div style={{ padding:"7px 8px",fontSize:12,fontWeight:500 }}>{fmtFecha(it.dia)}</div>{it.hourly.map((qty,idx)=>{const minBase=Math.max(1,Math.round(it.regla.minimoDiario/2)); const shade=(palette,i)=>palette[Math.max(0,Math.min(palette.length-1,i))]; const palettes={danger:["#fff1f1","#ffdada","#f8b8b8","#e24b4a"],amber:["#fff6e8","#fae6c7","#f2c884","#ba7517"],success:["#f1f8e8","#dceec9","#b6d98c","#639922"],pink:["#fbeaf0","#f4c4d4","#e590ad","#72243e"]}; let bg,fg; let shadeIdx=0; if(qty===0){bg=palettes.danger[2];fg=COLORS.danger;} else if(qty<minBase){shadeIdx=qty;bg=shade(palettes.amber,shadeIdx);fg=shadeIdx>=3?"#fff":COLORS.amber;} else if(qty>it.regla.maximoDiario){shadeIdx=Math.min(3,qty-it.regla.maximoDiario);bg=shade(palettes.pink,shadeIdx);fg=shadeIdx>=3?"#fff":COLORS.pinkDark;} else {shadeIdx=Math.max(0,qty-minBase);bg=shade(palettes.success,shadeIdx);fg=shadeIdx>=3?"#fff":COLORS.success;} return <div key={idx} style={{ padding:7,textAlign:"center",fontSize:12,fontWeight:700,color:fg,background:bg,borderLeft:"1px solid rgba(120,120,120,0.10)",textShadow:fg==="#fff"?"0 1px 1px rgba(0,0,0,0.25)":"none" }}>{qty}</div>;})}</div>)}
         </div></div>
       </Card>
+      {garantiaDetalleComisiones&&<Modal title="Detalle de garantía" onClose={()=>setGarantiaDetalleComisiones(null)} width={560}>
+        {(()=>{ const g=garantiaDetalleComisiones; const local=localNameById.get(g.localId)||g.nombreLocal||""; const original=data.users.find(u=>u.id===g.manicuraOriginalId); const reparacion=data.users.find(u=>u.id===g.manicuraReparacionId); return <div style={{ display:"flex",flexDirection:"column",gap:12 }}>
+          <div style={{ display:"grid",gridTemplateColumns:"1fr 1fr",gap:10 }}>
+            <div><p style={{ margin:"0 0 3px",fontSize:11,color:"#888",textTransform:"uppercase" }}>Local</p><p style={{ margin:0,fontSize:14,fontWeight:600 }}>{local||"—"}</p></div>
+            <div><p style={{ margin:"0 0 3px",fontSize:11,color:"#888",textTransform:"uppercase" }}>Cliente</p><p style={{ margin:0,fontSize:14,fontWeight:600 }}>{g.cliente||"—"}</p></div>
+            <div><p style={{ margin:"0 0 3px",fontSize:11,color:"#888",textTransform:"uppercase" }}>Fecha servicio original</p><p style={{ margin:0,fontSize:14 }}>{g.fechaServicioOriginal?g.fechaServicioOriginal.split("-").reverse().join("/"):"—"}</p></div>
+            <div><p style={{ margin:"0 0 3px",fontSize:11,color:"#888",textTransform:"uppercase" }}>Fecha reparación</p><p style={{ margin:0,fontSize:14 }}>{g.fechaReparacion?g.fechaReparacion.split("-").reverse().join("/"):"—"}</p></div>
+            <div><p style={{ margin:"0 0 3px",fontSize:11,color:"#888",textTransform:"uppercase" }}>Manicura original</p><p style={{ margin:0,fontSize:14 }}>{displayManicuraComision(original,g.nombreManicuraOriginal)||"—"}</p></div>
+            <div><p style={{ margin:"0 0 3px",fontSize:11,color:"#888",textTransform:"uppercase" }}>Manicura reparación</p><p style={{ margin:0,fontSize:14 }}>{displayManicuraComision(reparacion,g.nombreManicuraReparacion)||"—"}</p></div>
+          </div>
+          <div><p style={{ margin:"0 0 3px",fontSize:11,color:"#888",textTransform:"uppercase" }}>Servicio</p><p style={{ margin:0,fontSize:14 }}>{g.servicio||"—"}</p></div>
+          <div><p style={{ margin:"0 0 3px",fontSize:11,color:"#888",textTransform:"uppercase" }}>Comisión ajustada</p><p style={{ margin:0,fontSize:18,fontWeight:700,color:COLORS.pink }}>{fmtMoney(g.importeComision||Math.abs(g.comision||0))}</p></div>
+          <div><p style={{ margin:"0 0 3px",fontSize:11,color:"#888",textTransform:"uppercase" }}>Motivo / explicación</p><p style={{ margin:0,fontSize:14,lineHeight:1.45,whiteSpace:"pre-wrap" }}>{g.motivo||"Sin detalle"}</p></div>
+          {Array.isArray(g.fotos)&&g.fotos.length>0&&<div><p style={{ margin:"0 0 6px",fontSize:11,color:"#888",textTransform:"uppercase" }}>Fotos</p><div style={{ display:"flex",gap:8,flexWrap:"wrap" }}>{g.fotos.map((url,i)=><a key={i} href={url} target="_blank" rel="noreferrer" style={{ color:COLORS.pink,fontSize:13,fontWeight:600 }}>Foto {i+1}</a>)}</div></div>}
+        </div>; })()}
+      </Modal>}
     </>;
   };
 
@@ -1626,6 +1643,7 @@ function Reportes({ data, user, onOpenAgenda, reportRestore }) {
     const userNameById = new Map((data.users||[]).map(u=>[u.id, u.nombre]));
     const allowedLocalNames = new Set(localesVisibles.map(l=>String(l.nombre||"").trim().toLowerCase()));
     const normalize = v => String(v || "").trim().toLowerCase();
+    const displayManicuraComision = (u, fallback="") => (u?.codigoExterno || fallback || u?.nombre || "").trim();
     const puedeVerComision = (c) => {
       if (esAdmin) return true;
       if (esEncargada) return (c.localId && allowedLocalIds.includes(c.localId)) || allowedLocalNames.has(normalize(c.nombreLocal));
@@ -1653,13 +1671,13 @@ function Reportes({ data, user, onOpenAgenda, reportRestore }) {
       const rows = [];
       if (g.manicuraOriginalId && g.importeComision && garantiaVisible(g, "original")) rows.push({
         id:`garantia-desc-${g.id}`, periodo:periodoG, fechaPago:g.fechaReparacion, localId:g.localId, nombreLocal:local,
-        userId:g.manicuraOriginalId, nombreManicura:original?.nombre || g.nombreManicuraOriginal || "Manicura original",
+        userId:g.manicuraOriginalId, nombreManicura:displayManicuraComision(original, g.nombreManicuraOriginal) || "Manicura original",
         servicio:`Garantía - ${g.servicio || "Servicio"}`, cliente:g.cliente || "", precio:0, comision:-Math.abs(g.importeComision),
         actualizadoEn:g.actualizadoEn || g.creadoEn || "", tipoRegistro:"garantia", motivoGarantia:g.motivo || "", garantiaId:g.id
       });
       if (g.manicuraReparacionId && g.importeComision && garantiaVisible(g, "reparacion")) rows.push({
         id:`garantia-add-${g.id}`, periodo:periodoG, fechaPago:g.fechaReparacion, localId:g.localId, nombreLocal:local,
-        userId:g.manicuraReparacionId, nombreManicura:reparacion?.nombre || g.nombreManicuraReparacion || "Reparación",
+        userId:g.manicuraReparacionId, nombreManicura:displayManicuraComision(reparacion, g.nombreManicuraReparacion) || "Reparación",
         servicio:`Reparación garantía - ${g.servicio || "Servicio"}`, cliente:g.cliente || "", precio:0, comision:Math.abs(g.importeComision),
         actualizadoEn:g.actualizadoEn || g.creadoEn || "", tipoRegistro:"garantia", motivoGarantia:g.motivo || "", garantiaId:g.id
       });
@@ -1706,6 +1724,8 @@ function Reportes({ data, user, onOpenAgenda, reportRestore }) {
     const totalComision = registros.reduce((a,c)=>a+c.comision,0);
     const totalAdelantos = adelantos.reduce((a,x)=>a+x.importe,0);
     const netoPagar = totalComision - totalAdelantos;
+    const totalGarantiasDescontadas = registros.filter(r=>r.tipoRegistro==="garantia" && Number(r.comision||0)<0).reduce((a,r)=>a+Math.abs(Number(r.comision||0)),0);
+    const totalGarantiasAsignadas = registros.filter(r=>r.tipoRegistro==="garantia" && Number(r.comision||0)>0).reduce((a,r)=>a+Number(r.comision||0),0);
     const servicios = registros.length;
     const clientes = new Set(registros.map(c=>normalize(c.cliente)).filter(Boolean)).size;
     const ultimaActualizacionSeleccion = registros
@@ -1926,7 +1946,7 @@ function Reportes({ data, user, onOpenAgenda, reportRestore }) {
       const indent = extra.indent || 0;
       const muted = !!extra.muted;
       return <div key={extra.key || c.id} style={{ display:"grid",gridTemplateColumns:gridColumns,gap:8,padding:"8px 12px",fontSize:12,alignItems:"center",borderBottom:"1px solid rgba(120,120,120,0.08)",background:muted?"rgba(120,120,120,0.025)":"transparent" }}>
-        {colsComisiones.map((col,idx)=>{ const money=["precio","comision"].includes(col.key); const strong=col.key==="comision"||col.key==="manicura"; const content=renderCell(c,col.key); const baseStyle={ textAlign:money?"right":"left",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap",paddingLeft:idx===0?indent:0,color:money?"var(--color-text-secondary)":"var(--color-text-primary)" }; return strong?<strong key={col.key} style={{...baseStyle,color:col.key==="comision"?COLORS.pink:"var(--color-text-primary)"}}>{content}</strong>:<span key={col.key} style={baseStyle}>{content}</span>;})}
+        {colsComisiones.map((col,idx)=>{ const money=["precio","comision"].includes(col.key); const strong=col.key==="comision"||col.key==="manicura"; const content=renderCell(c,col.key); const baseStyle={ textAlign:money?"right":"left",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap",paddingLeft:idx===0?indent:0,color:money?"var(--color-text-secondary)":"var(--color-text-primary)" }; if (c.tipoRegistro==="garantia" && col.key==="servicio") { const garantia = (data.garantias||[]).find(g=>g.id===c.garantiaId); const esDescuento = Number(c.comision||0)<0; return <span key={col.key} style={{...baseStyle,display:"flex",alignItems:"center",gap:6,minWidth:0}}><Badge color={esDescuento?"danger":"success"}>{esDescuento?"Desc. garantía":"Rep. garantía"}</Badge><span style={{ minWidth:0,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap" }}>{content}</span><button onClick={e=>{e.stopPropagation();setGarantiaDetalleComisiones(garantia || c);}} style={{ border:"none",background:COLORS.pinkLight,color:COLORS.pinkDark,borderRadius:6,padding:"2px 6px",fontSize:10,fontWeight:700,cursor:"pointer",flexShrink:0 }}>Ver</button></span>; } return strong?<strong key={col.key} style={{...baseStyle,color:col.key==="comision"?COLORS.pink:"var(--color-text-primary)"}}>{content}</strong>:<span key={col.key} style={baseStyle}>{content}</span>;})}
       </div>;
     };
 
@@ -1982,6 +2002,7 @@ function Reportes({ data, user, onOpenAgenda, reportRestore }) {
         <Card><p style={{ margin:"0 0 4px",fontSize:11,color:"var(--color-text-secondary)",textTransform:"uppercase",letterSpacing:"0.04em" }}>Comisión bruta</p><p style={{ margin:0,fontSize:22,fontWeight:600,color:COLORS.pink }}>{fmtMoney(totalComision)}</p></Card>
         <Card><p style={{ margin:"0 0 4px",fontSize:11,color:"var(--color-text-secondary)",textTransform:"uppercase",letterSpacing:"0.04em" }}>Adelantos</p><p style={{ margin:0,fontSize:22,fontWeight:600,color:COLORS.amber }}>-{fmtMoney(totalAdelantos)}</p></Card>
         <Card><p style={{ margin:"0 0 4px",fontSize:11,color:"var(--color-text-secondary)",textTransform:"uppercase",letterSpacing:"0.04em" }}>Neto a pagar</p><p style={{ margin:0,fontSize:22,fontWeight:600,color:netoPagar>=0?COLORS.success:COLORS.danger }}>{fmtMoney(netoPagar)}</p></Card>
+        <Card><p style={{ margin:"0 0 4px",fontSize:11,color:"var(--color-text-secondary)",textTransform:"uppercase",letterSpacing:"0.04em" }}>Ajustes garantías</p><p style={{ margin:0,fontSize:18,fontWeight:600,color:COLORS.success }}>+{fmtMoney(totalGarantiasAsignadas)}</p><p style={{ margin:"2px 0 0",fontSize:12,fontWeight:600,color:COLORS.danger }}>-{fmtMoney(totalGarantiasDescontadas)}</p></Card>
         <Card><p style={{ margin:"0 0 4px",fontSize:11,color:"var(--color-text-secondary)",textTransform:"uppercase",letterSpacing:"0.04em" }}>Servicios</p><p style={{ margin:0,fontSize:22,fontWeight:600 }}>{servicios}</p></Card>
         <Card><p style={{ margin:"0 0 4px",fontSize:11,color:"var(--color-text-secondary)",textTransform:"uppercase",letterSpacing:"0.04em" }}>Clientes</p><p style={{ margin:0,fontSize:22,fontWeight:600 }}>{clientes}</p></Card>
       </div>
