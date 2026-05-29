@@ -1089,34 +1089,6 @@ function ABMManicuras({ data, reloadData, user }) {
   const openNew = () => { setForm({ nombre:"",usuario:"",email:"",codigoExterno:"",password:"",password2:"",localId:localesPermitidos[0]?.id||"",activo:true }); setFormErr(""); setModal("new"); };
   const openEdit = u => { setForm({...u,password:"",password2:""}); setFormErr(""); setModal("edit"); };
 
-  const buildCuotasFromPlan = () => {
-    if (!planEditing) return { error:"No hay plan para editar." };
-    const importeTotal = moneyInputToNumber(planEditing.importeTotal);
-    if (!Number.isFinite(importeTotal) || importeTotal <= 0) return { error:"Ingresá un importe total válido mayor a cero." };
-
-    if (planEditing.plan === "semana") {
-      return { cuotas:[{ fecha:planEditing.primeraFechaDescuento || planEditing.fecha, importe:importeTotal }], importeTotal };
-    }
-
-    if (planEditing.plan === "cuotas_iguales") {
-      const n = Math.max(1, parseInt(planEditing.cuotasTotal) || 1);
-      const base = Math.floor((importeTotal / n) * 100) / 100;
-      const cuotas = Array.from({ length:n }, (_, i) => ({
-        fecha:addWeeks(planEditing.primeraFechaDescuento || planEditing.fecha, i),
-        importe:i === n - 1 ? Number((importeTotal - base * (n - 1)).toFixed(2)) : base
-      }));
-      return { cuotas, importeTotal };
-    }
-
-    const cuotas = (planEditing.cuotas || [])
-      .map(c => ({ fecha:c.fecha, importe:moneyInputToNumber(c.importe) }))
-      .filter(c => c.fecha && Number.isFinite(c.importe) && c.importe > 0);
-    if (!cuotas.length) return { error:"Cargá al menos una cuota con fecha e importe." };
-    const suma = cuotas.reduce((a,c)=>a+c.importe,0);
-    if (Math.abs(suma - importeTotal) > 0.01) return { error:`La suma de cuotas (${fmtMoney(suma)}) debe coincidir con el adelanto (${fmtMoney(importeTotal)}).` };
-    return { cuotas, importeTotal };
-  };
-
   const save = async () => {
     setFormErr("");
     if (!form.nombre.trim()||!form.usuario.trim()) { setFormErr("Nombre y usuario son obligatorios."); return; }
@@ -1966,6 +1938,7 @@ function AdelantosManicuras({ data, reloadData, user }) {
   const [form, setForm] = useState({ fecha:defaultFecha, userId:"", importe:"", concepto:"Adelanto", observacion:"", plan:"semana", cuotasTotal:"2", primeraFechaDescuento:defaultFecha, cuotas:[{ fecha:defaultFecha, importe:"" }] });
   const [editing, setEditing] = useState(null);
   const [planEditing, setPlanEditing] = useState(null);
+  const [confirmDeletePlan, setConfirmDeletePlan] = useState(null);
   const [saving, setSaving] = useState(false);
   const [err, setErr] = useState("");
 
@@ -2135,6 +2108,34 @@ function AdelantosManicuras({ data, reloadData, user }) {
     });
   };
 
+  const buildCuotasFromPlan = () => {
+    if (!planEditing) return { error:"No hay plan para editar." };
+    const importeTotal = moneyInputToNumber(planEditing.importeTotal);
+    if (!Number.isFinite(importeTotal) || importeTotal <= 0) return { error:"Ingresá un importe total válido mayor a cero." };
+
+    if (planEditing.plan === "semana") {
+      return { cuotas:[{ fecha:planEditing.primeraFechaDescuento || planEditing.fecha, importe:importeTotal }], importeTotal };
+    }
+
+    if (planEditing.plan === "cuotas_iguales") {
+      const n = Math.max(1, parseInt(planEditing.cuotasTotal) || 1);
+      const base = Math.floor((importeTotal / n) * 100) / 100;
+      const cuotas = Array.from({ length:n }, (_, i) => ({
+        fecha:addWeeks(planEditing.primeraFechaDescuento || planEditing.fecha, i),
+        importe:i === n - 1 ? Number((importeTotal - base * (n - 1)).toFixed(2)) : base
+      }));
+      return { cuotas, importeTotal };
+    }
+
+    const cuotas = (planEditing.cuotas || [])
+      .map(c => ({ fecha:c.fecha, importe:moneyInputToNumber(c.importe) }))
+      .filter(c => c.fecha && Number.isFinite(c.importe) && c.importe > 0);
+    if (!cuotas.length) return { error:"Cargá al menos una cuota con fecha e importe." };
+    const suma = cuotas.reduce((a,c)=>a+c.importe,0);
+    if (Math.abs(suma - importeTotal) > 0.01) return { error:`La suma de cuotas (${fmtMoney(suma)}) debe coincidir con el adelanto (${fmtMoney(importeTotal)}).` };
+    return { cuotas, importeTotal };
+  };
+
   const savePlanEdit = async () => {
     if (!planEditing) return;
     setErr("");
@@ -2176,10 +2177,14 @@ function AdelantosManicuras({ data, reloadData, user }) {
     setSaving(false);
   };
 
+  const askDeletePlan = (aOrPlan = null) => {
+    setConfirmDeletePlan(aOrPlan || { ...(planEditing || {}), fromPlanModal:true });
+  };
+
   const deletePlan = async (aOrPlan = null) => {
-    const groupId = aOrPlan?.grupoId ?? planEditing?.grupoId;
-    const ids = aOrPlan?.originalIds ?? planEditing?.originalIds ?? (aOrPlan?.id ? [aOrPlan.id] : []);
-    if (!confirm("¿Eliminar todo el plan de descuento de este adelanto? Esta acción elimina todas sus cuotas.")) return;
+    const target = aOrPlan || confirmDeletePlan || planEditing;
+    const groupId = target?.grupoId ?? planEditing?.grupoId;
+    const ids = target?.originalIds ?? planEditing?.originalIds ?? (target?.id ? [target.id] : []);
     setSaving(true);
     try {
       if (groupId) await api.deleteAdelantosGrupo(groupId);
@@ -2187,6 +2192,7 @@ function AdelantosManicuras({ data, reloadData, user }) {
         for (const id of ids) await api.deleteAdelanto(id);
       }
       await reloadData();
+      setConfirmDeletePlan(null);
       setPlanEditing(null);
       setEditing(null);
     } catch(e) { setErr("Error al eliminar plan: " + e.message); }
@@ -2202,9 +2208,14 @@ function AdelantosManicuras({ data, reloadData, user }) {
   return <div>
     <div style={{ display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:16,flexWrap:"wrap",gap:8 }}>
       <h2 style={{ margin:0,fontSize:18,fontWeight:500 }}>Adelantos a manicuras</h2>
-      <Select value={periodo} onChange={setPeriodo} style={{ width:140 }}>
-        {Array.from(new Set([fmtPeriodo(hoy), ...(data.adelantos||[]).map(a=>a.periodo).filter(Boolean)])).sort().reverse().map(p=><option key={p} value={p}>{p}</option>)}
-      </Select>
+      <div style={{ display:"flex",gap:8,alignItems:"center",flexWrap:"wrap" }}>
+        <Select value={periodo} onChange={setPeriodo} style={{ width:140 }}>
+          {Array.from(new Set([fmtPeriodo(hoy), ...(data.adelantos||[]).map(a=>a.periodo).filter(Boolean)])).sort().reverse().map(p=><option key={p} value={p}>{p}</option>)}
+        </Select>
+        <Select value={localId} onChange={v=>setLocalId(v)} style={{ minWidth:180 }}>
+          {localesPermitidos.map(l=><option key={l.id} value={l.id}>{l.nombre}</option>)}
+        </Select>
+      </div>
     </div>
     <div style={{ display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(220px,1fr))",gap:12,marginBottom:14 }}>
       <Card><p style={{ margin:"0 0 4px",fontSize:11,color:"var(--color-text-secondary)",textTransform:"uppercase",letterSpacing:"0.04em" }}>Total a descontar</p><p style={{ margin:0,fontSize:24,fontWeight:600,color:COLORS.amber }}>{fmtMoney(total)}</p><p style={{ margin:"3px 0 0",fontSize:11,color:"var(--color-text-secondary)" }}>Según período de descuento seleccionado</p></Card>
@@ -2215,7 +2226,7 @@ function AdelantosManicuras({ data, reloadData, user }) {
       <h3 style={{ margin:"0 0 12px",fontSize:15,fontWeight:500 }}>Cargar adelanto</h3>
       <div style={{ display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(160px,1fr))",gap:10,alignItems:"end" }}>
         <div><label style={{ fontSize:12,color:"var(--color-text-secondary)",display:"block",marginBottom:4 }}>Fecha del adelanto</label><input type="date" value={form.fecha} onChange={e=>setForm(f=>({...f,fecha:e.target.value,primeraFechaDescuento:f.primeraFechaDescuento||e.target.value,cuotas:(f.cuotas||[]).map((c,i)=>i===0?{...c,fecha:c.fecha||e.target.value}:c)}))} style={{ width:"100%",border:"0.5px solid var(--color-border-secondary)",borderRadius:8,padding:"8px 12px",fontSize:14,background:"var(--color-background-primary)",color:"var(--color-text-primary)" }}/></div>
-        <div><label style={{ fontSize:12,color:"var(--color-text-secondary)",display:"block",marginBottom:4 }}>Local</label><Select value={localId} onChange={v=>setLocalId(v)}>{localesPermitidos.map(l=><option key={l.id} value={l.id}>{l.nombre}</option>)}</Select></div>
+        <div><label style={{ fontSize:12,color:"var(--color-text-secondary)",display:"block",marginBottom:4 }}>Local del adelanto</label><Select value={localId} onChange={v=>setLocalId(v)}>{localesPermitidos.map(l=><option key={l.id} value={l.id}>{l.nombre}</option>)}</Select></div>
         <div><label style={{ fontSize:12,color:"var(--color-text-secondary)",display:"block",marginBottom:4 }}>Manicura</label><Select value={form.userId} onChange={v=>setForm(f=>({...f,userId:v}))}>{manicurasPermitidas.map(m=><option key={m.id} value={m.id}>{m.nombre}</option>)}</Select></div>
         <div><label style={{ fontSize:12,color:"var(--color-text-secondary)",display:"block",marginBottom:4 }}>Importe total adelantado</label><Input value={form.importe} onChange={v=>setForm(f=>({...f,importe:v,cuotas:f.plan==="cuotas_personalizadas"&&f.cuotas?.length===1?[{...f.cuotas[0],importe:v}]:f.cuotas}))} placeholder="0"/></div>
         <div><label style={{ fontSize:12,color:"var(--color-text-secondary)",display:"block",marginBottom:4 }}>Concepto</label><Input value={form.concepto} onChange={v=>setForm(f=>({...f,concepto:v}))}/></div>
@@ -2237,7 +2248,7 @@ function AdelantosManicuras({ data, reloadData, user }) {
       <div style={{ padding:"12px 14px",borderBottom:"1px solid rgba(120,120,120,0.16)",display:"flex",justifyContent:"space-between",alignItems:"center" }}><h3 style={{ margin:0,fontSize:15,fontWeight:500 }}>Detalle de descuentos de adelantos</h3><span style={{ fontSize:12,color:"var(--color-text-secondary)" }}>{adelantos.length} descuentos</span></div>
       {adelantos.length===0 ? <p style={{ margin:0,padding:18,textAlign:"center",fontSize:13,color:"var(--color-text-secondary)" }}>Sin descuentos para el período/local seleccionado.</p> : <div style={{ overflowX:"auto" }}><div style={{ minWidth:980 }}>
         <div style={{ display:"grid",gridTemplateColumns:"90px 110px 1fr 1fr 110px 80px 110px 1fr 220px",gap:8,padding:"8px 12px",fontSize:11,fontWeight:600,color:"var(--color-text-secondary)",borderBottom:"1px solid rgba(120,120,120,0.14)",textTransform:"uppercase" }}><span>Adelanto</span><span>Descuento</span><span>Local</span><span>Manicura</span><span style={{ textAlign:"right" }}>Importe</span><span>Cuota</span><span>Total adel.</span><span>Concepto / Obs.</span><span></span></div>
-        {adelantos.map(a=>{ const m=data.users.find(u=>u.id===a.userId), l=data.locales.find(x=>x.id===a.localId); return <div key={a.id} style={{ display:"grid",gridTemplateColumns:"90px 110px 1fr 1fr 110px 80px 110px 1fr 220px",gap:8,padding:"8px 12px",fontSize:12,alignItems:"center",borderBottom:"1px solid rgba(120,120,120,0.10)" }}><span>{(a.fecha||"").split("-").reverse().join("/")}</span><span><strong>{(a.fechaDescuento||a.fecha||"").split("-").reverse().join("/")}</strong><br/><small style={{ color:"var(--color-text-secondary)" }}>{weekOfMonthLabel(a.fechaDescuento||a.fecha)}</small></span><span>{l?.nombre||"—"}</span><span>{m?.nombre||"—"}</span><strong style={{ textAlign:"right",color:COLORS.amber }}>{fmtMoney(a.importe)}</strong><span>{a.cuotaNum}/{a.cuotasTotal}</span><span>{fmtMoney(a.importeTotal)}</span><span>{a.concepto}{a.observacion?` · ${a.observacion}`:""}</span><div style={{ display:"flex",gap:6,justifyContent:"flex-end",flexWrap:"wrap" }}><Btn onClick={()=>openEdit(a)} variant="ghost" size="sm">Editar cuota</Btn><Btn onClick={()=>openPlanEdit(a)} variant="secondary" size="sm">Editar plan</Btn><Btn onClick={()=>deletePlan(a)} variant="ghost" size="sm" style={{ color:COLORS.danger }}>Eliminar plan</Btn></div></div>;})}
+        {adelantos.map(a=>{ const m=data.users.find(u=>u.id===a.userId), l=data.locales.find(x=>x.id===a.localId); return <div key={a.id} style={{ display:"grid",gridTemplateColumns:"90px 110px 1fr 1fr 110px 80px 110px 1fr 220px",gap:8,padding:"8px 12px",fontSize:12,alignItems:"center",borderBottom:"1px solid rgba(120,120,120,0.10)" }}><span>{(a.fecha||"").split("-").reverse().join("/")}</span><span><strong>{(a.fechaDescuento||a.fecha||"").split("-").reverse().join("/")}</strong><br/><small style={{ color:"var(--color-text-secondary)" }}>{weekOfMonthLabel(a.fechaDescuento||a.fecha)}</small></span><span>{l?.nombre||"—"}</span><span>{m?.nombre||"—"}</span><strong style={{ textAlign:"right",color:COLORS.amber }}>{fmtMoney(a.importe)}</strong><span>{a.cuotaNum}/{a.cuotasTotal}</span><span>{fmtMoney(a.importeTotal)}</span><span>{a.concepto}{a.observacion?` · ${a.observacion}`:""}</span><div style={{ display:"flex",gap:6,justifyContent:"flex-end",flexWrap:"wrap" }}><Btn onClick={()=>openEdit(a)} variant="ghost" size="sm">Editar cuota</Btn><Btn onClick={()=>openPlanEdit(a)} variant="secondary" size="sm">Editar plan</Btn><Btn onClick={()=>askDeletePlan(a)} variant="ghost" size="sm" style={{ color:COLORS.danger }}>Eliminar plan</Btn></div></div>;})}
       </div></div>}
     </Card>
 
@@ -2272,7 +2283,7 @@ function AdelantosManicuras({ data, reloadData, user }) {
         {err && <p style={{ margin:0,fontSize:13,color:COLORS.danger,background:COLORS.dangerLight,padding:"8px 12px",borderRadius:8 }}>{err}</p>}
         <div style={{ display:"flex",gap:8,marginTop:4,flexWrap:"wrap" }}>
           <Btn onClick={savePlanEdit} disabled={saving} style={{ flex:1,justifyContent:"center" }}>{saving?"Guardando...":"Guardar plan"}</Btn>
-          <Btn onClick={()=>deletePlan()} variant="danger" disabled={saving}>Eliminar plan completo</Btn>
+          <Btn onClick={()=>askDeletePlan()} variant="danger" disabled={saving}>Eliminar plan completo</Btn>
           <Btn onClick={()=>setPlanEditing(null)} variant="secondary" style={{ flex:1,justifyContent:"center" }}>Cancelar</Btn>
         </div>
       </div>
@@ -2295,6 +2306,16 @@ function AdelantosManicuras({ data, reloadData, user }) {
         </div>
       </div>
     </Modal>}
+    {confirmDeletePlan && <ConfirmDialog
+      config={{
+        title:"Eliminar plan de descuento",
+        message:"¿Confirmás que querés eliminar todo el plan de este adelanto? Se van a eliminar todas sus cuotas y no aparecerán más en los reportes de comisiones.",
+        confirmText:"Eliminar plan",
+        variant:"danger"
+      }}
+      onCancel={()=>setConfirmDeletePlan(null)}
+      onConfirm={()=>deletePlan(confirmDeletePlan)}
+    />}
   </div>;
 }
 
