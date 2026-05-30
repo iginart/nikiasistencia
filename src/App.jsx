@@ -252,6 +252,24 @@ const MOTIVOS_AUSENCIA = ["Enfermedad","Personal","Trámite","Licencia","Otro"];
 
 function getDiasDelMes(y, m) { const dias = [], d = new Date(y, m, 1); while (d.getMonth() === m) { if (d.getDay() !== 0) dias.push(new Date(d)); d.setDate(d.getDate() + 1); } return dias; }
 function getSemanas(dias) { const s = []; let sem = []; dias.forEach((d, i) => { sem.push(d); if (d.getDay() === 6 || i === dias.length - 1) { s.push([...sem]); sem = []; } }); if (sem.length) s.push(sem); return s; }
+function getSemanasCalendario(dias) {
+  const semanas = [];
+  let semana = Array(6).fill(null);
+  dias.forEach((d) => {
+    const idx = d.getDay() === 0 ? 6 : d.getDay() - 1;
+    if (idx === 0 && semana.some(Boolean)) {
+      semanas.push(semana);
+      semana = Array(6).fill(null);
+    }
+    semana[idx] = d;
+    if (idx === 5) {
+      semanas.push(semana);
+      semana = Array(6).fill(null);
+    }
+  });
+  if (semana.some(Boolean)) semanas.push(semana);
+  return semanas;
+}
 function calcHoras(e, s) { if (!e || !s) return 0; const [eh, em] = e.split(":").map(Number), [sh, sm] = s.split(":").map(Number); const m = (sh * 60 + sm) - (eh * 60 + em); return m > 0 ? m / 60 : 0; }
 function fmtFecha(d) { return `${String(d.getDate()).padStart(2,"00")}/${String(d.getMonth()+1).padStart(2,"00")}`; }
 function dateKey(d) { return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}`; }
@@ -586,7 +604,7 @@ function CalendarioHorarios({ data, reloadData, user, agendaRequest, onBackToRep
   const [mes, setMes] = useState(hoy.getMonth() === 11 ? 0 : hoy.getMonth() + 1);
   const [anio, setAnio] = useState(hoy.getMonth() === 11 ? hoy.getFullYear() + 1 : hoy.getFullYear());
   const [manicuraId, setManicuraId] = useState(puedeGestionar ? (data.users.filter(u=>u.rol==="manicura"&&u.activo&&(esAdmin||allowedLocalIds.includes(u.localId)))[0]?.id||null) : user.id);
-  const [navVisible, setNavVisible] = useState(true);
+  const [navVisible, setNavVisible] = useState(!isMobile);
   const [modalDk, setModalDk] = useState(null);
   const [localH, setLocalH] = useState({});
   const [localHAll, setLocalHAll] = useState({});
@@ -837,6 +855,25 @@ function CalendarioHorarios({ data, reloadData, user, agendaRequest, onBackToRep
   };
   const todayDk = dateKey(hoy);
 
+  const miniBaseDate = vista === "semana"
+    ? weekStart
+    : vista === "dia"
+      ? diaVistaDate
+      : new Date(anio, mes, 1);
+  const miniMes = miniBaseDate.getMonth();
+  const miniAnio = miniBaseDate.getFullYear();
+  const miniSemanas = useMemo(() => getSemanasCalendario(getDiasDelMes(miniAnio, miniMes)), [miniAnio, miniMes]);
+  const seleccionarSemanaMini = useCallback((d) => {
+    if (!d) return;
+    const wk = getMon(d);
+    setWeekStart(wk);
+    setDiaVista(dateKey(d));
+    setMes(d.getMonth());
+    setAnio(d.getFullYear());
+    setVista("semana");
+    if (isMobile) setNavVisible(false);
+  }, [isMobile]);
+
   // ── SEMANAL ──────────────────────────────────────────────────────
   const renderSemanal = () => (
     <div style={{ display:"flex",flex:1,overflow:"hidden",flexDirection:"column" }}>
@@ -972,7 +1009,7 @@ function CalendarioHorarios({ data, reloadData, user, agendaRequest, onBackToRep
 
   // ── MENSUAL ──────────────────────────────────────────────────────
   const renderMensual = () => {
-    const dias=getDiasDelMes(anio,mes), sems=getSemanas(dias);
+    const dias=getDiasDelMes(anio,mes), sems=getSemanasCalendario(dias);
     const rowH = Math.max(isMobile ? 58 : 74, Math.floor((520 - 34) / Math.max(sems.length, 1)));
     return <div style={{ flex:1,overflow:"hidden" }}>
       <div style={{ display:"grid",gridTemplateColumns:"repeat(6,1fr) 70px",borderBottom:"0.5px solid rgba(120,120,120,0.24)",position:"sticky",top:0,background:"var(--color-background-primary)",zIndex:2 }}>
@@ -980,7 +1017,7 @@ function CalendarioHorarios({ data, reloadData, user, agendaRequest, onBackToRep
         <div style={{ textAlign:"center",padding:"8px 4px",fontSize:11,fontWeight:500,color:"var(--color-text-secondary)",borderLeft:"0.5px solid rgba(120,120,120,0.24)" }}>Sem.</div>
       </div>
       {sems.map((semana,si)=>{
-        const totalSem=semana.reduce((a,d)=>a+calHoras(getB(dateKey(d))),0);
+        const totalSem=semana.reduce((a,d)=>d ? a+calHoras(getB(dateKey(d))) : a,0);
         return <div key={si} style={{ display:"grid",gridTemplateColumns:"repeat(6,1fr) 70px",borderBottom:"0.5px solid rgba(120,120,120,0.24)",height:rowH }}>
           {Array.from({length:6},(_,i)=>{
             const d=semana[i]; if(!d) return <div key={i} style={{ borderLeft:"0.5px solid rgba(120,120,120,0.24)" }}/>;
@@ -1106,6 +1143,48 @@ function CalendarioHorarios({ data, reloadData, user, agendaRequest, onBackToRep
             <button onClick={()=>{ setWeekStart(getMon(hoy)); setDiaVista(dateKey(hoy)); setMes(hoy.getMonth()); setAnio(hoy.getFullYear()); }} style={{ width:"100%",background:"none",border:"0.5px solid rgba(120,120,120,0.24)",borderRadius:6,padding:"4px",cursor:"pointer",fontSize:11,color:"var(--color-text-secondary)" }}>Hoy</button>
           </div>
           <div style={{ padding:"8px 10px",borderTop:"0.5px solid rgba(120,120,120,0.18)" }}>
+            <p style={{ margin:"0 0 6px",fontSize:11,fontWeight:500,color:"var(--color-text-secondary)",textTransform:"uppercase",letterSpacing:"0.05em" }}>Mini calendario</p>
+            <div style={{ background:"var(--color-background-primary)",border:"0.5px solid rgba(120,120,120,0.18)",borderRadius:10,padding:8 }}>
+              <div style={{ display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:6 }}>
+                <span style={{ fontSize:11,fontWeight:600,color:"var(--color-text-primary)" }}>{MESES[miniMes]} {miniAnio}</span>
+                <span style={{ fontSize:10,color:"var(--color-text-secondary)" }}>clic día</span>
+              </div>
+              <div style={{ display:"grid",gridTemplateColumns:"repeat(6,1fr)",gap:2,marginBottom:3 }}>
+                {DIAS_SEMANA.map(d=><span key={d} style={{ textAlign:"center",fontSize:9,color:"var(--color-text-secondary)",fontWeight:600 }}>{d[0]}</span>)}
+              </div>
+              <div style={{ display:"flex",flexDirection:"column",gap:2 }}>
+                {miniSemanas.map((sem,si)=>{
+                  const semKeys = sem.filter(Boolean).map(dateKey);
+                  const activeWeek = vista === "semana" && weekDays.some(wd=>semKeys.includes(dateKey(wd)));
+                  return <div key={si} style={{ display:"grid",gridTemplateColumns:"repeat(6,1fr)",gap:2,background:activeWeek?COLORS.pinkLight:"transparent",borderRadius:7,padding:activeWeek?2:0 }}>
+                    {sem.map((d,i)=>{
+                      const f = d ? dateKey(d) : "";
+                      const isToday = f === todayDk;
+                      const isSelected = vista === "dia" ? f === diaVista : weekDays.some(wd=>dateKey(wd)===f);
+                      return <button
+                        key={`${si}-${i}`}
+                        onClick={()=>d&&seleccionarSemanaMini(d)}
+                        disabled={!d}
+                        title={d?`Seleccionar semana de ${fechaLarga(f)}`:""}
+                        style={{
+                          height:22,
+                          border:"none",
+                          borderRadius:6,
+                          background:!d?"transparent":isSelected?COLORS.pink:(isToday?COLORS.pinkLight:"transparent"),
+                          color:!d?"transparent":isSelected?"#fff":(isToday?COLORS.pinkDark:"var(--color-text-primary)"),
+                          cursor:d?"pointer":"default",
+                          fontSize:10,
+                          fontWeight:isSelected||isToday?700:500,
+                          padding:0
+                        }}
+                      >{d?d.getDate():""}</button>;
+                    })}
+                  </div>;
+                })}
+              </div>
+            </div>
+          </div>
+          <div style={{ padding:"8px 10px",borderTop:"0.5px solid rgba(120,120,120,0.18)" }}>
             <p style={{ margin:"0 0 6px",fontSize:11,fontWeight:500,color:"var(--color-text-secondary)",textTransform:"uppercase",letterSpacing:"0.05em" }}>Resumen</p>
             <div style={{ display:"flex",flexDirection:"column",gap:6 }}>
               {[["Días cargados",diasCargados,null],["Horas totales",`${totalHoras.toFixed(1)}h`,totalHoras>0?COLORS.success:null]].map(([lbl,val,color])=><div key={lbl} style={{ background:"var(--color-background-primary)",borderRadius:8,padding:"7px 10px",border:"0.5px solid rgba(120,120,120,0.18)" }}><p style={{ margin:0,fontSize:10,color:"var(--color-text-secondary)" }}>{lbl}</p><p style={{ margin:0,fontSize:18,fontWeight:500,color:color||"var(--color-text-primary)" }}>{val}</p></div>)}
@@ -1125,7 +1204,11 @@ function CalendarioHorarios({ data, reloadData, user, agendaRequest, onBackToRep
               {navVisible?"‹ Ocultar":"Panel ›"}
             </button>
             <div style={{ width:1,height:18,background:"var(--color-border-secondary)",margin:"0 2px",flexShrink:0 }}/>
-            <span style={{ fontSize:12,fontWeight:500,color:"var(--color-text-secondary)" }}>{navLabel}</span>
+            <div style={{ display:"flex",alignItems:"center",gap:6,minWidth:0,flexShrink:0 }}>
+              <button onClick={prevNav} title="Anterior" style={{ background:"none",border:"0.5px solid rgba(120,120,120,0.24)",borderRadius:6,padding:"3px 9px",cursor:"pointer",fontSize:16,lineHeight:1,color:"var(--color-text-secondary)" }}>‹</button>
+              <span style={{ fontSize:12,fontWeight:600,color:"var(--color-text-primary)",whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis",maxWidth:isMobile?180:360 }}>{navLabel}</span>
+              <button onClick={nextNav} title="Siguiente" style={{ background:"none",border:"0.5px solid rgba(120,120,120,0.24)",borderRadius:6,padding:"3px 9px",cursor:"pointer",fontSize:16,lineHeight:1,color:"var(--color-text-secondary)" }}>›</button>
+            </div>
             {bloqueado && <span style={{ marginLeft:"auto",fontSize:11,color:COLORS.amber,background:COLORS.amberLight,padding:"3px 8px",borderRadius:6 }}>🔒 Período bloqueado para esta manicura</span>}
             {vista==="semana"&&!bloqueado&&!isMobile&&<span style={{ marginLeft:"auto",fontSize:11,color:"var(--color-text-secondary)",opacity:0.7 }}>Clic en celda vacía para agregar · Arrastrá para mover</span>}
             {vista==="semana"&&!bloqueado&&isMobile&&<span style={{ marginLeft:"auto",fontSize:11,color:"var(--color-text-secondary)",opacity:0.7 }}>Arrastrá el bloque para mover · bordes para ajustar</span>}
