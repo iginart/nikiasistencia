@@ -256,6 +256,80 @@ function calcHoras(e, s) { if (!e || !s) return 0; const [eh, em] = e.split(":")
 function fmtFecha(d) { return `${String(d.getDate()).padStart(2,"00")}/${String(d.getMonth()+1).padStart(2,"00")}`; }
 function dateKey(d) { return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}`; }
 function fmtMoney(n) { return new Intl.NumberFormat("es-AR", { style:"currency", currency:"ARS", maximumFractionDigits:0 }).format(Number(n || 0)); }
+
+function buildAdelantoPlanes(adelantos, todayKey = dateKey(new Date())) {
+  const groups = new Map();
+  (adelantos || []).forEach(a => {
+    const gid = a.grupoId || `adelanto-${a.id}`;
+    const prev = groups.get(gid) || {
+      grupoId: gid,
+      userId: a.userId,
+      localId: a.localId,
+      fecha: a.fecha || a.fechaDescuento || "",
+      concepto: a.concepto || "Adelanto",
+      observacion: a.observacion || "",
+      importeTotal: Number(a.importeTotal || 0),
+      cuotasTotal: Number(a.cuotasTotal || 0),
+      cuotas: [],
+    };
+    prev.userId = prev.userId || a.userId;
+    prev.localId = prev.localId || a.localId;
+    if (a.fecha && (!prev.fecha || a.fecha < prev.fecha)) prev.fecha = a.fecha;
+    if (!prev.concepto && a.concepto) prev.concepto = a.concepto;
+    if (!prev.observacion && a.observacion) prev.observacion = a.observacion;
+    prev.importeTotal = Math.max(prev.importeTotal || 0, Number(a.importeTotal || 0));
+    prev.cuotasTotal = Math.max(prev.cuotasTotal || 0, Number(a.cuotasTotal || 0));
+    prev.cuotas.push({
+      id: a.id,
+      fecha: a.fechaDescuento || a.fecha || "",
+      importe: Number(a.importe || 0),
+      cuotaNum: Number(a.cuotaNum || 1),
+      cuotasTotal: Number(a.cuotasTotal || 1),
+    });
+    groups.set(gid, prev);
+  });
+  return Array.from(groups.values()).map(p => {
+    const cuotas = [...p.cuotas].sort((a,b)=>(a.fecha||"").localeCompare(b.fecha||"") || a.cuotaNum-b.cuotaNum);
+    const totalCuotas = cuotas.reduce((acc,c)=>acc + Number(c.importe || 0), 0);
+    const importeTotal = Number(p.importeTotal || totalCuotas || 0);
+    const descontado = cuotas.filter(c => c.fecha && c.fecha <= todayKey).reduce((acc,c)=>acc + Number(c.importe || 0), 0);
+    const pendientes = cuotas.filter(c => !c.fecha || c.fecha > todayKey);
+    return {
+      ...p,
+      cuotas,
+      importeTotal,
+      descontado,
+      cuotasPendientes: pendientes.length,
+      saldoPendiente: Math.max(0, importeTotal - descontado),
+      proximoDescuento: pendientes[0]?.fecha || "",
+    };
+  }).sort((a,b)=>Number(b.saldoPendiente||0)-Number(a.saldoPendiente||0) || (b.fecha||"").localeCompare(a.fecha||""));
+}
+
+function AdelantoPlanTooltip({ planes, children }) {
+  const [open, setOpen] = useState(false);
+  const list = planes || [];
+  return <span style={{ position:"relative",display:"inline-flex",alignItems:"center",justifyContent:"flex-end" }} onMouseEnter={()=>setOpen(true)} onMouseLeave={()=>setOpen(false)} onTouchStart={()=>setOpen(o=>!o)}>
+    {children}
+    {open && list.length > 0 && <div style={{ position:"absolute",right:0,top:"115%",zIndex:9999,width:320,maxWidth:"86vw",background:"#fff",border:"1px solid rgba(120,120,120,0.18)",borderRadius:12,boxShadow:"0 12px 32px rgba(0,0,0,0.18)",padding:12,textAlign:"left" }}>
+      <p style={{ margin:"0 0 8px",fontSize:12,fontWeight:700,color:COLORS.pinkDark,textTransform:"uppercase",letterSpacing:"0.04em" }}>Evolución de adelantos</p>
+      <div style={{ display:"flex",flexDirection:"column",gap:8,maxHeight:280,overflowY:"auto" }}>
+        {list.slice(0,5).map(p=><div key={p.grupoId} style={{ border:"1px solid rgba(120,120,120,0.12)",borderRadius:10,padding:"8px 9px",background:"var(--color-background-secondary)" }}>
+          <div style={{ display:"flex",justifyContent:"space-between",gap:8,alignItems:"baseline" }}><strong style={{ fontSize:12 }}>{p.concepto || "Adelanto"}</strong><span style={{ fontSize:11,color:"var(--color-text-secondary)" }}>{p.fecha ? p.fecha.split("-").reverse().join("/") : "—"}</span></div>
+          <div style={{ display:"grid",gridTemplateColumns:"1fr 1fr",gap:6,marginTop:6,fontSize:11 }}>
+            <span>Total: <strong>{fmtMoney(p.importeTotal)}</strong></span>
+            <span>Descontado: <strong style={{ color:COLORS.success }}>{fmtMoney(p.descontado)}</strong></span>
+            <span>Pendientes: <strong>{p.cuotasPendientes}</strong></span>
+            <span>Saldo: <strong style={{ color:p.saldoPendiente>0?COLORS.amber:COLORS.success }}>{fmtMoney(p.saldoPendiente)}</strong></span>
+          </div>
+          {p.proximoDescuento && <p style={{ margin:"6px 0 0",fontSize:11,color:"var(--color-text-secondary)" }}>Próximo descuento: <strong>{p.proximoDescuento.split("-").reverse().join("/")}</strong></p>}
+        </div>)}
+        {list.length > 5 && <p style={{ margin:0,fontSize:11,color:"var(--color-text-secondary)" }}>+ {list.length - 5} plan(es) más.</p>}
+      </div>
+    </div>}
+  </span>;
+}
+
 function fmtDateTime(value) {
   if (!value) return "";
   const d = new Date(value);
@@ -1784,6 +1858,9 @@ function Reportes({ data, user, onOpenAgenda, reportRestore }) {
       .filter(a=>localComisiones === "todos" || a.localId === parseInt(localComisiones))
       .filter(a=>manicuraComisiones === "todas" || a.userId === parseInt(manicuraComisiones));
     const adelantos = baseAdelantos.filter(a=>semanaComisiones === "todas" || weekOfMonthValue(a.fechaDescuento || a.fecha) === semanaComisiones);
+    const adelantoGroupKeysSeleccion = new Set(baseAdelantos.map(a=>a.grupoId || `adelanto-${a.id}`));
+    const adelantosPlanesComisiones = buildAdelantoPlanes((data.adelantos||[]).filter(a=>puedeVerAdelanto(a)).filter(a=>adelantoGroupKeysSeleccion.has(a.grupoId || `adelanto-${a.id}`)));
+    const planesPorUserComisiones = adelantosPlanesComisiones.reduce((map,p)=>{ const arr=map.get(p.userId)||[]; arr.push(p); map.set(p.userId,arr); return map; }, new Map());
     const totalPrecio = registros.reduce((a,c)=>a+c.precio,0);
     const totalComision = registros.reduce((a,c)=>a+c.comision,0);
     const totalAdelantos = adelantos.reduce((a,x)=>a+x.importe,0);
@@ -2120,7 +2197,7 @@ function Reportes({ data, user, onOpenAgenda, reportRestore }) {
           <span style={{ fontSize:13,textAlign:"right",color:"var(--color-text-secondary)" }}>{fmtMoney(r.precio)}</span>
           <strong style={{ fontSize:14,textAlign:"right",color:COLORS.pink }}>{fmtMoney(r.comisionBase)}</strong>
           <strong style={{ fontSize:14,textAlign:"right",color:r.garantias>0?COLORS.success:r.garantias<0?COLORS.danger:"var(--color-text-secondary)" }}>{r.garantias>0?"+":r.garantias<0?"-":""}{fmtMoney(Math.abs(r.garantias))}</strong>
-          <strong style={{ fontSize:14,textAlign:"right",color:COLORS.amber }}>-{fmtMoney(r.adelantos)}</strong>
+          <AdelantoPlanTooltip planes={planesPorUserComisiones.get(r.userId) || []}><strong style={{ fontSize:14,textAlign:"right",color:COLORS.amber,cursor:(planesPorUserComisiones.get(r.userId)||[]).length?"help":"default" }}>-{fmtMoney(r.adelantos)}</strong></AdelantoPlanTooltip>
           <strong style={{ fontSize:14,textAlign:"right",color:r.neto>=0?COLORS.success:COLORS.danger }}>{fmtMoney(r.neto)}</strong>
         </div>)}</div>
       </Card>}
@@ -2447,6 +2524,12 @@ function AdelantosManicuras({ data, reloadData, user }) {
     const prev=map.get(key)||{ nombre:m?.nombre||"Sin manicura", importe:0, cantidad:0 };
     prev.importe+=a.importe; prev.cantidad+=1; map.set(key,prev); return map;
   }, new Map()).values()).sort((a,b)=>b.importe-a.importe);
+  const adelantosPlanesScope = (data.adelantos||[])
+    .filter(a => !localId || a.localId === parseInt(localId))
+    .filter(a => esAdmin || allowedLocalIds.includes(a.localId));
+  const planesAdelantos = buildAdelantoPlanes(adelantosPlanesScope);
+  const planesActivos = planesAdelantos.filter(p => p.saldoPendiente > 0 || p.cuotas.some(c => (c.fecha||"").slice(0,7) === periodo));
+  const saldoPendienteTotal = planesAdelantos.reduce((acc,p)=>acc + Number(p.saldoPendiente || 0), 0);
 
   useEffect(() => {
     if (!manicurasPermitidas.some(m => m.id === parseInt(form.userId))) {
@@ -2730,6 +2813,13 @@ function AdelantosManicuras({ data, reloadData, user }) {
       <Btn onClick={save} disabled={saving} style={{ marginTop:12 }}>{saving?"Guardando...":"Guardar adelanto"}</Btn>
     </Card>
     {porManicura.length>0&&<Card style={{ marginBottom:14 }}><h3 style={{ margin:"0 0 10px",fontSize:15,fontWeight:500 }}>Resumen por manicura</h3><div style={{ display:"flex",flexDirection:"column",gap:6 }}>{porManicura.map((r,i)=><div key={i} style={{ display:"grid",gridTemplateColumns:"1fr 80px 120px",gap:8,alignItems:"center",padding:"7px 8px",borderRadius:8,background:"var(--color-background-secondary)" }}><span style={{ fontSize:13,fontWeight:500 }}>{r.nombre}</span><span style={{ fontSize:12,color:"var(--color-text-secondary)",textAlign:"right" }}>{r.cantidad} desc.</span><strong style={{ textAlign:"right",color:COLORS.amber }}>{fmtMoney(r.importe)}</strong></div>)}</div></Card>}
+    <Card style={{ marginBottom:14,padding:0,overflow:"hidden" }}>
+      <div style={{ padding:"12px 14px",borderBottom:"1px solid rgba(120,120,120,0.16)",display:"flex",justifyContent:"space-between",alignItems:"center",gap:8,flexWrap:"wrap" }}><div><h3 style={{ margin:0,fontSize:15,fontWeight:500 }}>Evolución de adelantos</h3><p style={{ margin:"3px 0 0",fontSize:12,color:"var(--color-text-secondary)" }}>Importe total, descontado según fecha prevista, cuotas pendientes y saldo por plan.</p></div><strong style={{ color:saldoPendienteTotal>0?COLORS.amber:COLORS.success }}>{fmtMoney(saldoPendienteTotal)} pendiente</strong></div>
+      {planesActivos.length===0 ? <p style={{ margin:0,padding:16,fontSize:13,color:"var(--color-text-secondary)",textAlign:"center" }}>Sin planes de adelantos para el local seleccionado.</p> : <div style={{ overflowX:"auto" }}><div style={{ minWidth:860 }}>
+        <div style={{ display:"grid",gridTemplateColumns:"90px 1fr 1fr 120px 120px 90px 120px 90px",gap:8,padding:"8px 12px",fontSize:11,fontWeight:700,color:"var(--color-text-secondary)",textTransform:"uppercase",borderBottom:"1px solid rgba(120,120,120,0.14)" }}><span>Fecha</span><span>Manicura</span><span>Concepto</span><span style={{ textAlign:"right" }}>Total</span><span style={{ textAlign:"right" }}>Descontado</span><span style={{ textAlign:"right" }}>Pend.</span><span style={{ textAlign:"right" }}>Saldo</span><span></span></div>
+        {planesActivos.map(p=>{ const m=data.users.find(u=>u.id===p.userId); return <div key={p.grupoId} style={{ display:"grid",gridTemplateColumns:"90px 1fr 1fr 120px 120px 90px 120px 90px",gap:8,padding:"8px 12px",fontSize:12,alignItems:"center",borderBottom:"1px solid rgba(120,120,120,0.10)" }}><span>{p.fecha ? p.fecha.split("-").reverse().join("/") : "—"}</span><span style={{ fontWeight:600 }}>{m?.nombre||"—"}</span><span>{p.concepto||"Adelanto"}</span><strong style={{ textAlign:"right" }}>{fmtMoney(p.importeTotal)}</strong><strong style={{ textAlign:"right",color:COLORS.success }}>{fmtMoney(p.descontado)}</strong><span style={{ textAlign:"right" }}>{p.cuotasPendientes}</span><strong style={{ textAlign:"right",color:p.saldoPendiente>0?COLORS.amber:COLORS.success }}>{fmtMoney(p.saldoPendiente)}</strong><AdelantoPlanTooltip planes={[p]}><button style={{ border:"none",background:COLORS.pinkLight,color:COLORS.pinkDark,borderRadius:999,padding:"4px 8px",fontSize:11,fontWeight:700,cursor:"pointer" }}>Resumen</button></AdelantoPlanTooltip></div>;})}
+      </div></div>}
+    </Card>
     <Card style={{ padding:0,overflow:"hidden" }}>
       <div style={{ padding:"12px 14px",borderBottom:"1px solid rgba(120,120,120,0.16)",display:"flex",justifyContent:"space-between",alignItems:"center" }}><h3 style={{ margin:0,fontSize:15,fontWeight:500 }}>Detalle de descuentos de adelantos</h3><span style={{ fontSize:12,color:"var(--color-text-secondary)" }}>{adelantos.length} descuentos</span></div>
       {adelantos.length===0 ? <p style={{ margin:0,padding:18,textAlign:"center",fontSize:13,color:"var(--color-text-secondary)" }}>Sin descuentos para el período/local seleccionado.</p> : <div style={{ overflowX:"auto" }}><div style={{ minWidth:980 }}>
