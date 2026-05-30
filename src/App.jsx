@@ -603,6 +603,7 @@ function CalendarioHorarios({ data, reloadData, user, agendaRequest, onBackToRep
   const [localDiaId, setLocalDiaId] = useState("");
   const [mes, setMes] = useState(hoy.getMonth() === 11 ? 0 : hoy.getMonth() + 1);
   const [anio, setAnio] = useState(hoy.getMonth() === 11 ? hoy.getFullYear() + 1 : hoy.getFullYear());
+  const [miniCursor, setMiniCursor] = useState(new Date(hoy.getFullYear(), hoy.getMonth(), 1));
   const [manicuraId, setManicuraId] = useState(puedeGestionar ? (data.users.filter(u=>u.rol==="manicura"&&u.activo&&(esAdmin||allowedLocalIds.includes(u.localId)))[0]?.id||null) : user.id);
   const [navVisible, setNavVisible] = useState(!isMobile);
   const [modalDk, setModalDk] = useState(null);
@@ -860,19 +861,55 @@ function CalendarioHorarios({ data, reloadData, user, agendaRequest, onBackToRep
     : vista === "dia"
       ? diaVistaDate
       : new Date(anio, mes, 1);
-  const miniMes = miniBaseDate.getMonth();
-  const miniAnio = miniBaseDate.getFullYear();
+
+  useEffect(() => {
+    setMiniCursor(new Date(miniBaseDate.getFullYear(), miniBaseDate.getMonth(), 1));
+  }, [miniBaseDate.getFullYear(), miniBaseDate.getMonth()]);
+
+  const miniMes = miniCursor.getMonth();
+  const miniAnio = miniCursor.getFullYear();
   const miniSemanas = useMemo(() => getSemanasCalendario(getDiasDelMes(miniAnio, miniMes)), [miniAnio, miniMes]);
-  const seleccionarSemanaMini = useCallback((d) => {
+  const prevMiniMes = useCallback(() => {
+    setMiniCursor(d => new Date(d.getFullYear(), d.getMonth() - 1, 1));
+  }, []);
+  const nextMiniMes = useCallback(() => {
+    setMiniCursor(d => new Date(d.getFullYear(), d.getMonth() + 1, 1));
+  }, []);
+  const cambiarVistaHorarios = useCallback((v) => {
+    if (v === "semana") {
+      if (vista === "mes") {
+        const base = new Date(anio, mes, 1);
+        setWeekStart(getMon(base));
+        setDiaVista(dateKey(base));
+      }
+      setVista("semana");
+      return;
+    }
+    if (v === "dia") {
+      const base = vista === "semana" ? weekStart : vista === "mes" ? new Date(anio, mes, 1) : new Date(diaVista + "T12:00:00");
+      setDiaVista(dateKey(base));
+      setMes(base.getMonth());
+      setAnio(base.getFullYear());
+      setVista("dia");
+      return;
+    }
+    if (v === "mes") {
+      const base = vista === "semana" ? weekStart : vista === "dia" ? new Date(diaVista + "T12:00:00") : new Date(anio, mes, 1);
+      setMes(base.getMonth());
+      setAnio(base.getFullYear());
+      setVista("mes");
+    }
+  }, [vista, weekStart, diaVista, mes, anio]);
+  const seleccionarDiaMini = useCallback((d) => {
     if (!d) return;
-    const wk = getMon(d);
-    setWeekStart(wk);
-    setDiaVista(dateKey(d));
+    const f = dateKey(d);
+    setDiaVista(f);
+    setWeekStart(getMon(d));
     setMes(d.getMonth());
     setAnio(d.getFullYear());
-    setVista("semana");
+    if (vista !== "dia" && vista === "mes") setVista("semana");
     if (isMobile) setNavVisible(false);
-  }, [isMobile]);
+  }, [vista, isMobile]);
 
   // ── SEMANAL ──────────────────────────────────────────────────────
   const renderSemanal = () => (
@@ -1130,7 +1167,7 @@ function CalendarioHorarios({ data, reloadData, user, agendaRequest, onBackToRep
           <div style={{ padding:"10px 10px 6px",borderTop:puedeGestionar?"0.5px solid rgba(120,120,120,0.18)":"none" }}>
             <p style={{ margin:"0 0 6px",fontSize:11,fontWeight:500,color:"var(--color-text-secondary)",textTransform:"uppercase",letterSpacing:"0.05em" }}>Vista</p>
             <div style={{ display:"flex",flexDirection:"column",gap:3 }}>
-              {["semana",...(puedeGestionar?["dia"]:[]),"mes"].map(v=><button key={v} onClick={()=>{ if(v==="dia") setDiaVista(todayDk); setVista(v); }} style={{ textAlign:"left",padding:"6px 8px",border:"none",borderRadius:6,cursor:"pointer",fontSize:12,fontWeight:500,background:vista===v?COLORS.pinkLight:"transparent",color:vista===v?COLORS.pinkDark:"var(--color-text-primary)" }}>{v==="semana"?"📅 Semana":v==="dia"?"👥 Día / todas":"🗓️ Mes"}</button>)}
+              {["semana",...(puedeGestionar?["dia"]:[]),"mes"].map(v=><button key={v} onClick={()=>cambiarVistaHorarios(v)} style={{ textAlign:"left",padding:"6px 8px",border:"none",borderRadius:6,cursor:"pointer",fontSize:12,fontWeight:500,background:vista===v?COLORS.pinkLight:"transparent",color:vista===v?COLORS.pinkDark:"var(--color-text-primary)" }}>{v==="semana"?"📅 Semana":v==="dia"?"👥 Día / todas":"🗓️ Mes"}</button>)}
             </div>
           </div>
           <div style={{ padding:"8px 10px",borderTop:"0.5px solid rgba(120,120,120,0.18)" }}>
@@ -1143,11 +1180,11 @@ function CalendarioHorarios({ data, reloadData, user, agendaRequest, onBackToRep
             <button onClick={()=>{ setWeekStart(getMon(hoy)); setDiaVista(dateKey(hoy)); setMes(hoy.getMonth()); setAnio(hoy.getFullYear()); }} style={{ width:"100%",background:"none",border:"0.5px solid rgba(120,120,120,0.24)",borderRadius:6,padding:"4px",cursor:"pointer",fontSize:11,color:"var(--color-text-secondary)" }}>Hoy</button>
           </div>
           <div style={{ padding:"8px 10px",borderTop:"0.5px solid rgba(120,120,120,0.18)" }}>
-            <p style={{ margin:"0 0 6px",fontSize:11,fontWeight:500,color:"var(--color-text-secondary)",textTransform:"uppercase",letterSpacing:"0.05em" }}>Mini calendario</p>
             <div style={{ background:"var(--color-background-primary)",border:"0.5px solid rgba(120,120,120,0.18)",borderRadius:10,padding:8 }}>
-              <div style={{ display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:6 }}>
-                <span style={{ fontSize:11,fontWeight:600,color:"var(--color-text-primary)" }}>{MESES[miniMes]} {miniAnio}</span>
-                <span style={{ fontSize:10,color:"var(--color-text-secondary)" }}>clic día</span>
+              <div style={{ display:"flex",alignItems:"center",justifyContent:"space-between",gap:6,marginBottom:6 }}>
+                <button onClick={prevMiniMes} title="Mes anterior" style={{ background:"transparent",border:"0.5px solid rgba(120,120,120,0.24)",borderRadius:6,width:26,height:24,cursor:"pointer",fontSize:14,color:"var(--color-text-secondary)" }}>‹</button>
+                <span style={{ fontSize:11,fontWeight:600,color:"var(--color-text-primary)",textAlign:"center",flex:1 }}>{MESES[miniMes]} {miniAnio}</span>
+                <button onClick={nextMiniMes} title="Mes siguiente" style={{ background:"transparent",border:"0.5px solid rgba(120,120,120,0.24)",borderRadius:6,width:26,height:24,cursor:"pointer",fontSize:14,color:"var(--color-text-secondary)" }}>›</button>
               </div>
               <div style={{ display:"grid",gridTemplateColumns:"repeat(6,1fr)",gap:2,marginBottom:3 }}>
                 {DIAS_SEMANA.map(d=><span key={d} style={{ textAlign:"center",fontSize:9,color:"var(--color-text-secondary)",fontWeight:600 }}>{d[0]}</span>)}
@@ -1163,9 +1200,9 @@ function CalendarioHorarios({ data, reloadData, user, agendaRequest, onBackToRep
                       const isSelected = vista === "dia" ? f === diaVista : weekDays.some(wd=>dateKey(wd)===f);
                       return <button
                         key={`${si}-${i}`}
-                        onClick={()=>d&&seleccionarSemanaMini(d)}
+                        onClick={()=>d&&seleccionarDiaMini(d)}
                         disabled={!d}
-                        title={d?`Seleccionar semana de ${fechaLarga(f)}`:""}
+                        title={d?(vista==="dia"?`Ir a ${fechaLarga(f)}`:`Seleccionar semana de ${fechaLarga(f)}`):""}
                         style={{
                           height:22,
                           border:"none",
