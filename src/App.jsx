@@ -3733,9 +3733,9 @@ function AgendaTurnos({ data, reloadData, user }) {
   const getLista = id => data.agendaListasPrecios?.find(l=>l.id===id);
   const estadoTurnoMeta = {
     pendiente:{label:"Pendiente",bg:COLORS.infoLight,fg:COLORS.info,border:COLORS.info},
-    confirmado:{label:"Confirmado",bg:COLORS.amberLight,fg:COLORS.amber,border:COLORS.amber},
-    asiste:{label:"Asiste",bg:COLORS.pinkLight,fg:COLORS.pinkDark,border:COLORS.pink},
-    "no asiste":{label:"No asiste",bg:COLORS.amberLight,fg:COLORS.amber,border:COLORS.amber},
+    confirmado:{label:"Confirmado",bg:COLORS.successLight,fg:COLORS.success,border:"#9ccf75",activeBg:"#dff1cf",activeFg:COLORS.success},
+    asiste:{label:"Asiste",bg:COLORS.pinkLight,fg:COLORS.pinkDark,border:COLORS.pink,activeBg:COLORS.pink,activeFg:"#fff"},
+    "no asiste":{label:"No asiste",bg:"#fff6d8",fg:"#8a5f00",border:"#e4bd37",activeBg:"#fff0bd",activeFg:"#7a5500"},
     "en espera":{label:"En espera",bg:COLORS.successLight,fg:COLORS.success,border:COLORS.success},
   };
   const calendarStart = 10 * 60;
@@ -4279,7 +4279,7 @@ function AgendaTurnos({ data, reloadData, user }) {
       <ModalInput label="Fin sugerido / ajustable" type="time" value={modalTurno.fin||""} onChange={v=>setModalTurno(d=>({...d,fin:v}))}/>
       <div style={{ gridColumn:"1 / -1" }}>
         <label style={{ fontSize:13,fontWeight:500,color:"#555",display:"block",marginBottom:6 }}>Estado</label>
-        <div style={{ display:"flex",gap:8,flexWrap:"wrap" }}>{TURNO_ESTADOS.map(e=>{ const meta=estadoTurnoMeta[e]||estadoTurnoMeta.pendiente; const active=modalTurno.estado===e; return <button key={e} onClick={()=>setModalTurno(d=>{ const next={...d,estado:e}; if(e==="no asiste" && d.inicio) next.fin=agendaTime(agendaMin(d.inicio)+5); return next; })} style={{ border:`1.5px solid ${meta.border}`,background:active?meta.border:meta.bg,color:active?"#fff":meta.fg,borderRadius:999,padding:"7px 11px",fontSize:12,fontWeight:700,cursor:"pointer" }}>{meta.label}</button>; })}</div>
+        <div style={{ display:"flex",gap:8,flexWrap:"wrap" }}>{TURNO_ESTADOS.map(e=>{ const meta=estadoTurnoMeta[e]||estadoTurnoMeta.pendiente; const active=modalTurno.estado===e; return <button key={e} onClick={()=>setModalTurno(d=>{ const next={...d,estado:e}; if(e==="no asiste" && d.inicio) next.fin=agendaTime(agendaMin(d.inicio)+5); return next; })} style={{ border:`1.5px solid ${meta.border}`,background:active?(meta.activeBg||meta.border):meta.bg,color:active?(meta.activeFg||"#fff"):meta.fg,borderRadius:999,padding:"7px 11px",fontSize:12,fontWeight:700,cursor:"pointer" }}>{meta.label}</button>; })}</div>
       </div>
       <div style={{ background:"#fafafa",border:"1px solid #eee",borderRadius:10,padding:"9px 12px" }}><p style={{ margin:"0 0 3px",fontSize:12,color:"var(--color-text-secondary)" }}>Lista aplicada</p><p style={{ margin:0,fontSize:14,fontWeight:700 }}>{getLista(modalTurno.listaId)?.nombre || "Sin lista para el local"}</p></div>
       <div style={{ background:"#fafafa",border:"1px solid #eee",borderRadius:10,padding:"9px 12px" }}><p style={{ margin:"0 0 3px",fontSize:12,color:"var(--color-text-secondary)" }}>Precio lista / efectivo</p><p style={{ margin:0,fontSize:14,fontWeight:700 }}>${Number(modalTurno.precio||0).toLocaleString("es-AR")} · ${Number(modalTurno.precioEfectivo||0).toLocaleString("es-AR")}</p></div>
