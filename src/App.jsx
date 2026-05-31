@@ -210,6 +210,9 @@ const api = {
   deleteAgendaCliente: (id) => sb(`agenda_clientes?id=eq.${id}`, { method:"DELETE", prefer:"" }),
   getAgendaTurnos: () => sb("agenda_turnos?select=*&order=fecha.desc,inicio.desc,id.desc"),
   getAgendaTurnosPagos: () => sb("agenda_turnos_pagos?select=*&order=turno_id,orden,id"),
+  getAgendaTurnoServicios: () => sb("agenda_turno_servicios?select=*&order=turno_id,orden,id"),
+  createAgendaTurnoServicio: (d) => sb("agenda_turno_servicios", { method:"POST", body:JSON.stringify(d) }),
+  deleteAgendaTurnoServicios: (turnoId) => sb(`agenda_turno_servicios?turno_id=eq.${turnoId}`, { method:"DELETE", prefer:"" }),
   getAgendaBloqueos: () => sb("agenda_bloqueos?select=*&order=fecha.desc,inicio.desc,id.desc"),
   createAgendaBloqueo: (d) => sb("agenda_bloqueos", { method:"POST", body:JSON.stringify(d) }),
   updateAgendaBloqueo: (id, d) => sb(`agenda_bloqueos?id=eq.${id}`, { method:"PATCH", body:JSON.stringify(d) }),
@@ -253,6 +256,7 @@ function normalizeAgendaPrecioServicio(p) { return { id:p.id, listaId:p.lista_id
 function normalizeAgendaCliente(c) { return { id:c.id, nombre:c.nombre || "", apellido:c.apellido || "", email:c.email || "", telefono:c.telefono || "", activo:c.activo !== false, creadoEn:c.creado_en || "" }; }
 function normalizeAgendaTurno(t) { return { id:t.id, fecha:t.fecha, localId:t.local_id, userId:t.user_id, clienteId:t.cliente_id, servicioId:t.servicio_id, listaId:t.lista_id, inicio:(t.inicio||"").slice(0,5), fin:(t.fin||"").slice(0,5), estado:t.estado || "pendiente", formaPago:t.forma_pago || "", precio:Number(t.precio || 0), precioEfectivo:Number(t.precio_efectivo || 0), precioCobrado:Number(t.precio_cobrado || 0), observacion:t.observacion || "", creadoPor:t.creado_por_user_id, creadoEn:t.creado_en || "", actualizadoEn:t.actualizado_en || "" }; }
 function normalizeAgendaTurnoPago(p) { return { id:p.id, turnoId:p.turno_id, formaPago:p.forma_pago || "", importe:Number(p.importe || 0), observacion:p.observacion || "", orden:p.orden || 1, creadoEn:p.creado_en || "" }; }
+function normalizeAgendaTurnoServicio(x) { return { id:x.id, turnoId:x.turno_id, servicioId:x.servicio_id, userId:x.user_id, posicion:x.posicion || "despues", sumaTiempo:x.suma_tiempo !== false, cantidad:Number(x.cantidad || 1), duracionMinutos:Number(x.duracion_minutos || 0), precioUnitario:Number(x.precio_unitario || 0), precioTotal:Number(x.precio_total || 0), orden:x.orden || 1, creadoEn:x.creado_en || "" }; }
 function normalizeAgendaBloqueo(b) { return { id:b.id, fecha:b.fecha, localId:b.local_id, userId:b.user_id, inicio:(b.inicio||"").slice(0,5), fin:(b.fin||"").slice(0,5), tipo:b.tipo || "no_disponible", motivo:b.motivo || "", creadoPor:b.creado_por_user_id, creadoEn:b.creado_en || "", actualizadoEn:b.actualizado_en || "" }; }
 
 const COLORS = {
@@ -3765,6 +3769,32 @@ function AgendaTurnos({ data, reloadData, user }) {
   const calendarRows = Array.from({length:Math.floor((calendarEnd-calendarStart)/calendarStep)+1},(_,i)=>calendarStart+i*calendarStep);
   const getDefaultLista = (lid) => { const rels=(data.agendaLocalListas||[]).filter(x=>x.localId===parseInt(lid)&&x.activo); const def=rels.find(x=>x.predeterminada) || rels[0]; if(def) return (data.agendaListasPrecios||[]).find(l=>l.id===def.listaId&&l.activo) || null; return (data.agendaListasPrecios||[]).find(l=>l.localId===parseInt(lid)&&l.activo) || null; };
   const getPrecioFor = (lid, sid) => { const lista=getDefaultLista(lid); const p=lista ? precioByKey.get(`${lista.id}-${sid}`) : null; return { lista, precio:p?.precioLista||0, precioEfectivo:p?.precioEfectivo||0 }; };
+  const buildAdicionalDraft = (base={}) => {
+    const servicioId = base.servicioId || "";
+    const userId = base.userId || modalTurno?.userId || "";
+    const cantidad = Math.max(1, parseInt(base.cantidad || 1) || 1);
+    const dur = servicioId ? getDuracionServicioManicura(userId, servicioId) : 0;
+    const price = servicioId ? getPrecioFor(modalTurno?.localId || localId, servicioId) : { precio:0, precioEfectivo:0 };
+    return {
+      servicioId,
+      userId,
+      posicion: base.posicion || "despues",
+      sumaTiempo: base.sumaTiempo !== false,
+      cantidad,
+      duracionMinutos: base.duracionMinutos ?? dur,
+      precioUnitario: base.precioUnitario ?? (price.precio || 0),
+      precioTotal: base.precioTotal ?? ((price.precio || 0) * cantidad),
+      orden: base.orden || 1,
+    };
+  };
+  const getAdicionalesTurno = (turnoId) => (data.agendaTurnoServicios||[]).filter(x=>x.turnoId===parseInt(turnoId)).sort((a,b)=>(a.orden||0)-(b.orden||0));
+  const calcTurnoTotales = (draft) => {
+    const mainPrice = getPrecioFor(draft.localId, draft.servicioId);
+    const adicionales = draft.adicionales || [];
+    const extraPrecio = adicionales.reduce((a,x)=>a+Number(x.precioTotal||0),0);
+    const extraDur = adicionales.filter(x=>x.sumaTiempo).reduce((a,x)=>a+(Number(x.duracionMinutos||0)*Number(x.cantidad||1)),0);
+    return { precio: Number(mainPrice.precio||0) + extraPrecio, precioEfectivo: Number(mainPrice.precioEfectivo||0) + extraPrecio, extraDuracion: extraDur };
+  };
   useEffect(()=>{ if(localesPermitidos.length && !localesPermitidos.some(l=>l.id===parseInt(localId))) setLocalId(localesPermitidos[0].id); },[localesPermitidos.map(l=>l.id).join(",")]);
   useEffect(()=>{ const onResize=()=>setAgendaViewportH(window.innerHeight||720); onResize(); window.addEventListener("resize",onResize); return()=>window.removeEventListener("resize",onResize); },[]);
   useEffect(()=>{ const d=new Date(fecha+"T12:00:00"); setMiniDate(new Date(d.getFullYear(), d.getMonth(), 1)); },[fecha]);
@@ -3833,7 +3863,8 @@ function AgendaTurnos({ data, reloadData, user }) {
       precio:base.precio ?? price.precio ?? 0,
       precioEfectivo:base.precioEfectivo ?? price.precioEfectivo ?? 0,
       precioCobrado:base.precioCobrado ?? 0,
-      observacion:base.observacion || ""
+      observacion:base.observacion || "",
+      adicionales: base.adicionales || []
     };
   };
 
@@ -3841,7 +3872,8 @@ function AgendaTurnos({ data, reloadData, user }) {
     setEditingTurno(t);
     setEmailTurnoMsg("");
     const base = t || { fecha, localId:parseInt(localId)||localesPermitidos[0]?.id, userId:manicurasLocal[0]?.id||"", clienteId:"", servicioId:"", inicio:"", fin:"", estado:"pendiente", formaPago:"", precio:0, precioEfectivo:0, precioCobrado:0, observacion:"" };
-    const draft = buildTurnoDraft(base);
+    const adicionales = t ? getAdicionalesTurno(t.id).map((x,i)=>buildAdicionalDraft({ ...x, orden:i+1 })) : [];
+    const draft = buildTurnoDraft({ ...base, adicionales });
     setModalTurno(draft);
     const cli = data.agendaClientes?.find(c=>c.id===parseInt(draft.clienteId));
     setSendTurnoEmail(!!cli?.email);
@@ -3854,13 +3886,14 @@ function AgendaTurnos({ data, reloadData, user }) {
     setEditingTurno(null);
     setEmailTurnoMsg("");
     setSendTurnoEmail(false);
-    setModalTurno(buildTurnoDraft({ fecha, localId:parseInt(localId), userId:uid, clienteId:"", servicioId:"", listaId:lista?.id||"", inicio:agendaTime(startMin), fin:agendaTime(startMin+60), estado:"pendiente", formaPago:"", precio:0, precioEfectivo:0, precioCobrado:0, observacion:"" }));
+    setModalTurno(buildTurnoDraft({ fecha, localId:parseInt(localId), userId:uid, clienteId:"", servicioId:"", listaId:lista?.id||"", inicio:agendaTime(startMin), fin:agendaTime(startMin+60), estado:"pendiente", formaPago:"", precio:0, precioEfectivo:0, precioCobrado:0, observacion:"", adicionales:[] }));
     setClienteQuick(null);
   };
 
   const applyPrice = (draft) => {
     const price=getPrecioFor(draft.localId, draft.servicioId);
-    return { ...draft, listaId:price.lista?.id||"", precio:price.precio||0, precioEfectivo:price.precioEfectivo||0 };
+    const extraPrecio = (draft.adicionales||[]).reduce((a,x)=>a+Number(x.precioTotal||0),0);
+    return { ...draft, listaId:price.lista?.id||"", precio:(price.precio||0)+extraPrecio, precioEfectivo:(price.precioEfectivo||0)+extraPrecio };
   };
 
   const createQuickCliente = async () => {
@@ -3880,7 +3913,27 @@ function AgendaTurnos({ data, reloadData, user }) {
     const finalDraft = d.estado === "no asiste" && d.inicio ? { ...d, fin:agendaTime(agendaMin(d.inicio)+5) } : d;
     const payload={ fecha:finalDraft.fecha, local_id:parseInt(finalDraft.localId), user_id:parseInt(finalDraft.userId), cliente_id:parseInt(finalDraft.clienteId), servicio_id:parseInt(finalDraft.servicioId), lista_id:finalDraft.listaId?parseInt(finalDraft.listaId):null, inicio:finalDraft.inicio, fin:finalDraft.fin, estado:finalDraft.estado, forma_pago:finalDraft.formaPago||null, precio:finalDraft.precio||0, precio_efectivo:finalDraft.precioEfectivo||0, precio_cobrado:finalDraft.precioCobrado||0, observacion:finalDraft.observacion||null, creado_por_user_id:user.id };
     const saved = turnoId ? await api.updateAgendaTurno(turnoId,payload) : await api.createAgendaTurno(payload);
-    return Array.isArray(saved) ? saved[0] : saved;
+    const savedRow = Array.isArray(saved) ? saved[0] : saved;
+    const savedId = turnoId || savedRow?.id;
+    if (savedId) {
+      await api.deleteAgendaTurnoServicios(savedId);
+      const adicionales = (finalDraft.adicionales||[]).filter(x=>x.servicioId && x.userId);
+      for (const [idx,x] of adicionales.entries()) {
+        await api.createAgendaTurnoServicio({
+          turno_id: savedId,
+          servicio_id: parseInt(x.servicioId),
+          user_id: parseInt(x.userId),
+          posicion: x.posicion || "despues",
+          suma_tiempo: x.sumaTiempo !== false,
+          cantidad: Math.max(1, parseInt(x.cantidad||1)||1),
+          duracion_minutos: Number(x.duracionMinutos||0),
+          precio_unitario: Number(x.precioUnitario||0),
+          precio_total: Number(x.precioTotal||0),
+          orden: idx + 1,
+        });
+      }
+    }
+    return savedRow || { id:savedId };
   };
 
   const saveTurno = async (force=false) => {
@@ -3891,6 +3944,10 @@ function AgendaTurnos({ data, reloadData, user }) {
     }
     if(!d.fecha||!d.localId||!d.userId||!d.clienteId||!d.servicioId||!d.inicio||!d.fin) { alert("Completá fecha, local, manicura, cliente, servicio y horario."); return; }
     if(!puedeManicuraServicio(d.userId, d.servicioId)) { alert("La manicura seleccionada no tiene habilitado ese servicio."); return; }
+    for (const ad of (d.adicionales||[])) {
+      if(!ad.servicioId || !ad.userId) { alert("Completá manicura y servicio en todos los servicios adicionales."); return; }
+      if(!puedeManicuraServicio(ad.userId, ad.servicioId)) { alert("Una manicura adicional no tiene habilitado el servicio seleccionado."); return; }
+    }
     if (agendaMin(d.fin) <= agendaMin(d.inicio)) { alert("El horario de fin debe ser posterior al inicio."); return; }
     if (isBlockedByAgenda(d.userId, agendaMin(d.inicio), agendaMin(d.fin))) { alert("Ese horario está bloqueado/no disponible para la manicura."); return; }
     if (!isWithinHorario(d.userId, agendaMin(d.inicio), agendaMin(d.fin)) && !force) {
@@ -4335,15 +4392,50 @@ function AgendaTurnos({ data, reloadData, user }) {
         <ModalInput label="Apellido nuevo cliente" value={clienteQuick.apellido} onChange={v=>setClienteQuick(c=>({...c,apellido:v}))}/><ModalInput label="Email" type="email" value={clienteQuick.email||""} onChange={v=>setClienteQuick(c=>({...c,email:v}))}/><ModalInput label="Teléfono" value={clienteQuick.telefono||""} onChange={v=>setClienteQuick(c=>({...c,telefono:v}))}/>
         <div style={{ display:"flex",alignItems:"end",gap:8 }}><Btn onClick={()=>setClienteQuick(null)} variant="secondary" size="sm">Cancelar alta rápida</Btn></div>
       </div>}
-      <SearchableSelect label="Servicio" value={modalTurno.servicioId||""} onChange={v=>{ const dur=getDuracionServicioManicura(modalTurno.userId, parseInt(v)); const fin=modalTurno.inicio ? agendaTime(agendaMin(modalTurno.inicio)+dur) : modalTurno.fin; const nd={...modalTurno,servicioId:v,fin}; setModalTurno(applyPrice(nd)); }} options={serviciosParaManicura(modalTurno.userId).map(s=>({ value:s.id, label:s.nombre, sub:`${s.tipo || "Servicio"} · ${s.duracionMinutos} min`, search:`${s.nombre} ${s.tipo || ""} ${s.descripcion || ""}` }))} placeholder={modalTurno.userId?"Buscar servicio...":"Primero seleccioná manicura"} disabled={!modalTurno.userId}/>
-      <ModalInput label="Inicio" type="time" value={modalTurno.inicio||""} onChange={v=>{ const dur=modalTurno.servicioId ? getDuracionServicioManicura(modalTurno.userId, modalTurno.servicioId) : null; setModalTurno(d=>({...d,inicio:v,fin:dur?agendaTime(agendaMin(v)+dur):d.fin})); }}/>
+      <SearchableSelect label="Servicio principal" value={modalTurno.servicioId||""} onChange={v=>{ const dur=getDuracionServicioManicura(modalTurno.userId, parseInt(v)); const extra=(modalTurno.adicionales||[]).filter(x=>x.sumaTiempo).reduce((a,x)=>a+Number(x.duracionMinutos||0)*Number(x.cantidad||1),0); const fin=modalTurno.inicio ? agendaTime(agendaMin(modalTurno.inicio)+dur+extra) : modalTurno.fin; const nd={...modalTurno,servicioId:v,fin}; setModalTurno(applyPrice(nd)); }} options={serviciosParaManicura(modalTurno.userId).map(s=>({ value:s.id, label:s.nombre, sub:`${s.tipo || "Servicio"} · ${s.duracionMinutos} min`, search:`${s.nombre} ${s.tipo || ""} ${s.descripcion || ""}` }))} placeholder={modalTurno.userId?"Buscar servicio...":"Primero seleccioná manicura"} disabled={!modalTurno.userId}/>
+      <ModalInput label="Inicio" type="time" value={modalTurno.inicio||""} onChange={v=>{ const dur=modalTurno.servicioId ? getDuracionServicioManicura(modalTurno.userId, modalTurno.servicioId) : null; const extra=(modalTurno.adicionales||[]).filter(x=>x.sumaTiempo).reduce((a,x)=>a+Number(x.duracionMinutos||0)*Number(x.cantidad||1),0); setModalTurno(d=>({...d,inicio:v,fin:dur?agendaTime(agendaMin(v)+dur+extra):d.fin})); }}/>
       <ModalInput label="Fin sugerido / ajustable" type="time" value={modalTurno.fin||""} onChange={v=>setModalTurno(d=>({...d,fin:v}))}/>
+      <div style={{ gridColumn:"1 / -1",border:"1px solid #eee",borderRadius:12,padding:10,background:"#fff" }}>
+        <div style={{ display:"flex",justifyContent:"space-between",alignItems:"center",gap:8,marginBottom:8 }}>
+          <div><p style={{ margin:0,fontSize:13,fontWeight:800,color:COLORS.pinkDark }}>Servicios adicionales de la cita</p><p style={{ margin:"2px 0 0",fontSize:11,color:"var(--color-text-secondary)" }}>Retiro, nail art, reconstrucciones u otros extras. Suman al precio total.</p></div>
+          <Btn size="sm" variant="secondary" onClick={()=>setModalTurno(d=>({...d, adicionales:[...(d.adicionales||[]), buildAdicionalDraft({ userId:d.userId, posicion:"despues", sumaTiempo:true, orden:(d.adicionales||[]).length+1 })]}))}>+ Servicio</Btn>
+        </div>
+        {!(modalTurno.adicionales||[]).length && <p style={{ margin:0,fontSize:12,color:"var(--color-text-secondary)" }}>No hay servicios adicionales cargados.</p>}
+        {(modalTurno.adicionales||[]).map((ad,idx)=>{
+          const manicurasCompatibles = manicurasPermitidas.filter(m=>m.localId===parseInt(modalTurno.localId) && (!ad.servicioId || puedeManicuraServicio(m.id, ad.servicioId)));
+          const serviciosAd = ad.userId ? serviciosParaManicura(ad.userId) : serviciosActivos;
+          const updateAd = (patch) => setModalTurno(d=>{
+            const arr=[...(d.adicionales||[])];
+            let next={...arr[idx],...patch};
+            if(patch.servicioId || patch.userId || patch.cantidad !== undefined){
+              const dur=next.servicioId && next.userId ? getDuracionServicioManicura(next.userId,next.servicioId) : Number(next.duracionMinutos||0);
+              const price=next.servicioId ? getPrecioFor(d.localId,next.servicioId) : { precio:next.precioUnitario||0 };
+              const cantidad=Math.max(1,parseInt(next.cantidad||1)||1);
+              next={...next,duracionMinutos:dur,precioUnitario:Number(price.precio||0),precioTotal:Number(price.precio||0)*cantidad,cantidad};
+            }
+            arr[idx]=next;
+            const mainDur=d.servicioId ? getDuracionServicioManicura(d.userId,d.servicioId) : 0;
+            const extraDur=arr.filter(x=>x.sumaTiempo).reduce((a,x)=>a+Number(x.duracionMinutos||0)*Number(x.cantidad||1),0);
+            const nd={...d,adicionales:arr,fin:d.inicio&&mainDur?agendaTime(agendaMin(d.inicio)+mainDur+extraDur):d.fin};
+            return applyPrice(nd);
+          });
+          return <div key={idx} style={{ display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(150px,1fr)) 34px",gap:8,alignItems:"end",borderTop:idx?"1px solid #eee":"none",paddingTop:idx?10:0,marginTop:idx?10:0 }}>
+            <ModalSelect label="Manicura" value={ad.userId||""} onChange={v=>updateAd({ userId:v, servicioId: ad.servicioId && puedeManicuraServicio(v,ad.servicioId) ? ad.servicioId : "" })}><option value="">Seleccionar...</option>{manicurasPermitidas.filter(m=>m.localId===parseInt(modalTurno.localId)).map(m=><option key={m.id} value={m.id}>{m.nombre}</option>)}</ModalSelect>
+            <SearchableSelect label="Servicio" value={ad.servicioId||""} onChange={v=>updateAd({ servicioId:v })} options={serviciosAd.map(s=>({ value:s.id,label:s.nombre,sub:`${s.tipo || "Servicio"} · ${s.duracionMinutos} min`,search:`${s.nombre} ${s.tipo||""} ${s.descripcion||""}` }))} placeholder="Buscar servicio..." disabled={!ad.userId}/>
+            <ModalSelect label="Orden" value={ad.posicion||"despues"} onChange={v=>updateAd({posicion:v})}><option value="antes">Antes del principal</option><option value="despues">Después del principal</option></ModalSelect>
+            <ModalSelect label="Tiempo" value={ad.sumaTiempo?"suma":"incluido"} onChange={v=>updateAd({sumaTiempo:v==="suma"})}><option value="suma">Suma tiempo</option><option value="incluido">Incluido</option></ModalSelect>
+            <ModalInput label="Cantidad" type="number" value={ad.cantidad||1} onChange={v=>updateAd({cantidad:v})}/>
+            <div style={{ background:"#fafafa",border:"1px solid #eee",borderRadius:8,padding:"8px 10px",fontSize:12 }}><b>${Number(ad.precioTotal||0).toLocaleString("es-AR")}</b><br/><span style={{ color:"var(--color-text-secondary)" }}>{ad.sumaTiempo?`${Number(ad.duracionMinutos||0)*Number(ad.cantidad||1)} min`:"sin tiempo extra"}</span></div>
+            <button onClick={()=>setModalTurno(d=>{ const arr=(d.adicionales||[]).filter((_,j)=>j!==idx); const mainDur=d.servicioId ? getDuracionServicioManicura(d.userId,d.servicioId) : 0; const extraDur=arr.filter(x=>x.sumaTiempo).reduce((a,x)=>a+Number(x.duracionMinutos||0)*Number(x.cantidad||1),0); return applyPrice({...d,adicionales:arr,fin:d.inicio&&mainDur?agendaTime(agendaMin(d.inicio)+mainDur+extraDur):d.fin}); })} style={{ height:34,border:"none",borderRadius:8,background:COLORS.dangerLight,color:COLORS.danger,cursor:"pointer",fontWeight:800 }}>×</button>
+          </div>;
+        })}
+      </div>
       <div style={{ gridColumn:"1 / -1" }}>
         <label style={{ fontSize:13,fontWeight:500,color:"#555",display:"block",marginBottom:6 }}>Estado</label>
         <div style={{ display:"flex",gap:8,flexWrap:"wrap" }}>{TURNO_ESTADOS.map(e=>{ const meta=estadoTurnoMeta[e]||estadoTurnoMeta.pendiente; const active=modalTurno.estado===e; return <button key={e} onClick={()=>setModalTurno(d=>{ const next={...d,estado:e}; if(e==="no asiste" && d.inicio) next.fin=agendaTime(agendaMin(d.inicio)+5); return next; })} style={{ border:`1.5px solid ${meta.border}`,background:active?(meta.activeBg||meta.border):meta.bg,color:active?(meta.activeFg||"#fff"):meta.fg,borderRadius:999,padding:"7px 11px",fontSize:12,fontWeight:700,cursor:"pointer" }}>{meta.label}</button>; })}</div>
       </div>
       <div style={{ background:"#fafafa",border:"1px solid #eee",borderRadius:10,padding:"9px 12px" }}><p style={{ margin:"0 0 3px",fontSize:12,color:"var(--color-text-secondary)" }}>Lista aplicada</p><p style={{ margin:0,fontSize:14,fontWeight:700 }}>{getLista(modalTurno.listaId)?.nombre || "Sin lista para el local"}</p></div>
-      <div style={{ background:"#fafafa",border:"1px solid #eee",borderRadius:10,padding:"9px 12px" }}><p style={{ margin:"0 0 3px",fontSize:12,color:"var(--color-text-secondary)" }}>Precio lista / efectivo</p><p style={{ margin:0,fontSize:14,fontWeight:700 }}>${Number(modalTurno.precio||0).toLocaleString("es-AR")} · ${Number(modalTurno.precioEfectivo||0).toLocaleString("es-AR")}</p></div>
+      <div style={{ background:"#fafafa",border:"1px solid #eee",borderRadius:10,padding:"9px 12px" }}><p style={{ margin:"0 0 3px",fontSize:12,color:"var(--color-text-secondary)" }}>Total cita lista / efectivo</p><p style={{ margin:0,fontSize:14,fontWeight:700 }}>${Number(modalTurno.precio||0).toLocaleString("es-AR")} · ${Number(modalTurno.precioEfectivo||0).toLocaleString("es-AR")}</p></div>
       <div style={{ background:COLORS.successLight,border:`1px solid ${COLORS.success}22`,borderRadius:10,padding:"9px 12px" }}><p style={{ margin:"0 0 3px",fontSize:12,color:COLORS.success }}>Cobranza</p><p style={{ margin:"0 0 8px",fontSize:14,fontWeight:700,color:COLORS.success }}>${Number(modalTurno.precioCobrado||0).toLocaleString("es-AR")} {modalTurno.formaPago?`· ${modalTurno.formaPago}`:"· pendiente"}</p>{editingTurno ? (modalTurno.estado==="asiste" ? <Btn onClick={()=>openPago(editingTurno)} size="sm" variant="success">Pagar</Btn> : <span style={{ fontSize:11,color:"var(--color-text-secondary)" }}>Para cobrar, primero marcá el turno como Asiste.</span>) : <span style={{ fontSize:11,color:"var(--color-text-secondary)" }}>Guardá el turno para registrar pagos combinados.</span>}</div>
       {(() => { const cli=getCliente(modalTurno.clienteId); return <div style={{ gridColumn:"1 / -1",background:"#fafafa",border:"1px solid #eee",borderRadius:10,padding:"9px 12px" }}>
         <label style={{ display:"flex",alignItems:"center",gap:8,fontSize:13,fontWeight:600,color:cli?.email?"#333":"#999" }}>
@@ -4414,8 +4506,8 @@ export default function App() {
   const [reportRestore, setReportRestore] = useState(null);
 
   const reloadData = useCallback(async () => {
-    const [users, locales, horarios, asistencias, periodos, feriados, reglasCobertura, configCobertura, encargadoLocales, comisiones, comisionesImportaciones, adelantos, garantias, informesDiarios, agendaServicios, agendaManicuraServicios, agendaListasPrecios, agendaLocalListas, agendaPreciosServicios, agendaClientes, agendaTurnos, agendaTurnosPagos, agendaBloqueos] = await Promise.all([
-      api.getUsers(), api.getLocales(), api.getHorarios(), api.getAsistencias(), api.getPeriodos(), api.getFeriados(), api.getReglasCobertura(), api.getConfigCobertura(), api.getEncargadoLocales(), api.getComisiones(), api.getComisionesImportaciones(), api.getAdelantos(), api.getGarantias(), api.getInformesDiarios(), api.getAgendaServicios(), api.getAgendaManicuraServicios(), api.getAgendaListasPrecios(), api.getAgendaLocalListas(), api.getAgendaPreciosServicios(), api.getAgendaClientes(), api.getAgendaTurnos(), api.getAgendaTurnosPagos(), api.getAgendaBloqueos()
+    const [users, locales, horarios, asistencias, periodos, feriados, reglasCobertura, configCobertura, encargadoLocales, comisiones, comisionesImportaciones, adelantos, garantias, informesDiarios, agendaServicios, agendaManicuraServicios, agendaListasPrecios, agendaLocalListas, agendaPreciosServicios, agendaClientes, agendaTurnos, agendaTurnosPagos, agendaTurnoServicios, agendaBloqueos] = await Promise.all([
+      api.getUsers(), api.getLocales(), api.getHorarios(), api.getAsistencias(), api.getPeriodos(), api.getFeriados(), api.getReglasCobertura(), api.getConfigCobertura(), api.getEncargadoLocales(), api.getComisiones(), api.getComisionesImportaciones(), api.getAdelantos(), api.getGarantias(), api.getInformesDiarios(), api.getAgendaServicios(), api.getAgendaManicuraServicios(), api.getAgendaListasPrecios(), api.getAgendaLocalListas(), api.getAgendaPreciosServicios(), api.getAgendaClientes(), api.getAgendaTurnos(), api.getAgendaTurnosPagos(), api.getAgendaTurnoServicios(), api.getAgendaBloqueos()
     ]);
     setData({
       users: users.map(normalizeUser),
@@ -4440,6 +4532,7 @@ export default function App() {
       agendaClientes: (agendaClientes||[]).map(normalizeAgendaCliente),
       agendaTurnos: (agendaTurnos||[]).map(normalizeAgendaTurno),
       agendaTurnosPagos: (agendaTurnosPagos||[]).map(normalizeAgendaTurnoPago),
+      agendaTurnoServicios: (agendaTurnoServicios||[]).map(normalizeAgendaTurnoServicio),
       agendaBloqueos: (agendaBloqueos||[]).map(normalizeAgendaBloqueo),
     });
   }, []);
