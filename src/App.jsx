@@ -3496,6 +3496,7 @@ function AgendaTurnos({ data, reloadData, user }) {
   const [importMsg, setImportMsg] = useState("");
   const [bulkModal, setBulkModal] = useState(null);
   const [turnosPanelVisible, setTurnosPanelVisible] = useState(() => window.innerWidth >= 640);
+  const [showAllManicurasTurnos, setShowAllManicurasTurnos] = useState(false);
   const [miniDate, setMiniDate] = useState(() => new Date(hoyKey + "T12:00:00"));
   const [dragTurno, setDragTurno] = useState(null);
   const dragTurnoRef = useRef(null);
@@ -3783,7 +3784,11 @@ function AgendaTurnos({ data, reloadData, user }) {
       for (const [i,p] of pagos.entries()) {
         await api.createAgendaTurnoPago({ turno_id:pagoModal.turno.id, forma_pago:p.formaPago, importe:Number(p.importe||0), observacion:p.observacion||null, orden:i+1 });
       }
-      await api.updateAgendaTurno(pagoModal.turno.id, { precio_cobrado:total, forma_pago:pagos.length>1?"combinado":pagos[0].formaPago, estado:pagoModal.turno.estado==="pendiente"?"asiste":pagoModal.turno.estado });
+      const nextFormaPago = pagos.length>1 ? "combinado" : pagos[0].formaPago;
+      const nextEstado = pagoModal.turno.estado==="pendiente" ? "asiste" : pagoModal.turno.estado;
+      await api.updateAgendaTurno(pagoModal.turno.id, { precio_cobrado:total, forma_pago:nextFormaPago, estado:nextEstado });
+      setModalTurno(d => d ? { ...d, precioCobrado: total, formaPago: nextFormaPago, estado: nextEstado } : d);
+      setEditingTurno(t => t && t.id===pagoModal.turno.id ? { ...t, precioCobrado: total, formaPago: nextFormaPago, estado: nextEstado } : t);
       await reloadData(); setPagoModal(null);
     } catch(e) { alert("Error al registrar cobranza: " + (e.message||e)); }
     setSaving(false);
@@ -3887,9 +3892,16 @@ function AgendaTurnos({ data, reloadData, user }) {
   const renderTurnos = () => {
     const dayTurnosBase = (data.agendaTurnos||[]).filter(t=>t.fecha===fecha && (!localId || t.localId===parseInt(localId)) && (manicuraId==="todas" || t.userId===parseInt(manicuraId)));
     const dayTurnos = dayTurnosBase.map(t=>dragTurno?.id===t.id ? { ...t, ...dragTurno.draft } : t);
-    const calManicuras = manicurasLocal.filter(m=>manicuraId==="todas" || m.id===parseInt(manicuraId));
+    const manicurasConActividad = new Set([
+      ...(data.horarios||[]).filter(h=>h.fecha===fecha&&h.trabaja&&h.entrada&&h.salida).map(h=>h.userId),
+      ...dayTurnos.map(t=>t.userId)
+    ]);
+    let calManicuras = manicurasLocal.filter(m=>manicuraId==="todas" || m.id===parseInt(manicuraId));
+    if (manicuraId === "todas" && !showAllManicurasTurnos) calManicuras = calManicuras.filter(m=>manicurasConActividad.has(m.id));
+    if (!calManicuras.length) calManicuras = manicurasLocal.filter(m=>manicuraId==="todas" || m.id===parseInt(manicuraId));
+    const ocultasSinActividad = manicuraId==="todas" ? manicurasLocal.filter(m=>!manicurasConActividad.has(m.id)).length : 0;
     const gridHeight = ((calendarEnd-calendarStart)/calendarStep) * calendarSlotH;
-    const colMin = 185;
+    const colMin = calManicuras.length <= 4 ? 170 : calManicuras.length <= 6 ? 145 : 125;
     const dayLabel = (()=>{ const d=new Date(fecha+"T12:00:00"); return `${DIAS_SEMANA[d.getDay()===0?5:d.getDay()-1]||"Dom"} ${d.getDate()} de ${MESES[d.getMonth()]} ${d.getFullYear()}`; })();
     return <div style={{ display:"flex",gap:12,alignItems:"stretch" }}>
       {turnosPanelVisible && <div style={{ width:210,flexShrink:0 }}>
@@ -3914,15 +3926,15 @@ function AgendaTurnos({ data, reloadData, user }) {
           <input type="date" value={fecha} onChange={e=>setFecha(e.target.value)} style={{ border:"0.5px solid var(--color-border-secondary)",borderRadius:8,padding:"8px 12px",fontSize:14,fontWeight:700,minWidth:155 }}/>
           <button onClick={()=>goTurnosDay(1)} style={{ background:"#fff",border:"0.5px solid var(--color-border-secondary)",borderRadius:8,padding:"7px 12px",cursor:"pointer",fontSize:16 }}>›</button>
           {!turnosPanelVisible && <><Select value={localId} onChange={v=>{setLocalId(v);setManicuraId("todas");}} style={{ maxWidth:220 }}>{localesPermitidos.map(l=><option key={l.id} value={l.id}>{l.nombre}</option>)}</Select><Select value={manicuraId} onChange={setManicuraId} style={{ maxWidth:240 }}><option value="todas">Todas las manicuras</option>{manicurasLocal.map(m=><option key={m.id} value={m.id}>{m.nombre}</option>)}</Select></>}
-          <Badge color="info">{dayTurnos.length} turno{dayTurnos.length!==1?"s":""}</Badge>
+          <Badge color="info">{dayTurnos.length} turno{dayTurnos.length!==1?"s":""}</Badge>{manicuraId==="todas"&&ocultasSinActividad>0&&<button onClick={()=>setShowAllManicurasTurnos(v=>!v)} style={{ border:"none",background:showAllManicurasTurnos?COLORS.amberLight:COLORS.pinkLight,color:showAllManicurasTurnos?COLORS.amber:COLORS.pinkDark,borderRadius:999,padding:"6px 10px",fontSize:12,fontWeight:700,cursor:"pointer" }}>{showAllManicurasTurnos?"Ocultar sin actividad":`Mostrar ${ocultasSinActividad} sin actividad`}</button>}
         </div>
         <Card style={{ padding:0,overflow:"hidden" }}>
           <div style={{ padding:"12px 14px",borderBottom:"0.5px solid var(--color-border-tertiary)",display:"flex",justifyContent:"space-between",gap:8,alignItems:"center",flexWrap:"wrap" }}>
             <div><h3 style={{ margin:0,fontSize:15,fontWeight:600 }}>Agenda de turnos</h3><p style={{ margin:"3px 0 0",fontSize:12,color:"var(--color-text-secondary)" }}>{localActual?.nombre||""} · {dayLabel}</p></div>
             <span style={{ fontSize:12,color:"var(--color-text-secondary)" }}>Tocá un espacio libre para agendar. Arrastrá un turno para cambiar hora o manicura.</span>
           </div>
-          <div style={{ overflowX:"auto",background:"#fff" }}>
-            <div style={{ minWidth:60+calManicuras.length*colMin }}>
+          <div style={{ overflow:"auto",background:"#fff",maxHeight:"calc(100vh - 265px)",minHeight:360 }}>
+            <div style={{ minWidth:`max(100%, ${60+calManicuras.length*colMin}px)` }}>
               <div style={{ display:"grid",gridTemplateColumns:`60px repeat(${calManicuras.length}, minmax(${colMin}px, 1fr))`,position:"sticky",top:0,zIndex:3,background:"#fff",borderBottom:"1px solid #e9e9e9" }}>
                 <div style={{ padding:"8px 6px",fontSize:11,color:"var(--color-text-secondary)" }}>Hora</div>
                 {calManicuras.map(m=><div key={m.id} style={{ padding:"8px 8px",borderLeft:"1px solid #ededed",fontSize:12,fontWeight:700,color:COLORS.pinkDark,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis" }}>{m.nombre}</div>)}
@@ -3949,6 +3961,7 @@ function AgendaTurnos({ data, reloadData, user }) {
                         <p style={{ margin:0,fontSize:11,fontWeight:700,color:meta.fg,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis" }}>{t.inicio}-{t.fin} · {cliente}</p>
                         <p style={{ margin:0,fontSize:10,color:meta.fg,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis",opacity:0.9 }}>{serv?.nombre||""}{pagos.length?` · $${Number(t.precioCobrado||0).toLocaleString("es-AR")}`:""}</p>
                       </div>
+                      {Number(t.precioCobrado||0)>0 && <div title="Turno pagado" style={{ position:"absolute",top:9,right:5,width:18,height:18,borderRadius:"50%",background:COLORS.success,color:"#fff",display:"flex",alignItems:"center",justifyContent:"center",fontSize:11,fontWeight:900,boxShadow:"0 1px 4px rgba(0,0,0,0.18)",zIndex:4 }}>$</div>}
                       <div onPointerDown={e=>startDragTurno(e,t,calManicuras,"bottom")} title="Arrastrar para ajustar fin" style={{ position:"absolute",bottom:0,left:0,right:0,height:7,cursor:"ns-resize",background:meta.border,opacity:0.75,borderRadius:"0 0 7px 7px",touchAction:"none" }} />
                     </div>})}
                   </div>;
@@ -4025,7 +4038,7 @@ function AgendaTurnos({ data, reloadData, user }) {
     {turnoWarning&&<Modal title="Advertencia de turno" onClose={()=>setTurnoWarning(null)} width={420}><div style={{ display:"flex",flexDirection:"column",gap:12 }}><p style={{ margin:0,fontSize:14,color:"#333" }}>{turnoWarning.message}</p><div style={{ display:"flex",gap:8,justifyContent:"flex-end" }}><Btn onClick={()=>turnoWarning.onConfirm ? turnoWarning.onConfirm() : saveTurno(true)} disabled={saving}>{saving?"Guardando...":"Guardar igual"}</Btn><Btn onClick={()=>setTurnoWarning(null)} variant="secondary">Volver a editar</Btn></div></div></Modal>}
 
     {pagoModal&&<Modal title="Registrar cobranza" onClose={()=>setPagoModal(null)} width={560}><div style={{ display:"flex",flexDirection:"column",gap:12 }}>
-      <div style={{ background:COLORS.pinkLight,borderRadius:10,padding:"9px 12px" }}><p style={{ margin:0,fontSize:13,fontWeight:700,color:COLORS.pinkDark }}>{getClienteLabel(pagoModal.turno.clienteId)} · {getServicio(pagoModal.turno.servicioId)?.nombre||"Servicio"}</p><p style={{ margin:"3px 0 0",fontSize:12,color:COLORS.pinkDark }}>Total referencia: lista ${Number(pagoModal.turno.precio||0).toLocaleString("es-AR")} · efectivo ${Number(pagoModal.turno.precioEfectivo||0).toLocaleString("es-AR")}</p></div>
+      <div style={{ background:COLORS.pinkLight,borderRadius:10,padding:"9px 12px" }}><p style={{ margin:0,fontSize:13,fontWeight:700,color:COLORS.pinkDark }}>{getClienteLabel(pagoModal.turno.clienteId)} · {getServicio(pagoModal.turno.servicioId)?.nombre||"Servicio"}</p><p style={{ margin:"3px 0 0",fontSize:12,color:COLORS.pinkDark }}>Total referencia: lista ${Number(pagoModal.turno.precio||0).toLocaleString("es-AR")} · efectivo ${Number(pagoModal.turno.precioEfectivo||0).toLocaleString("es-AR")}</p><p style={{ margin:"3px 0 0",fontSize:12,color:COLORS.success,fontWeight:700 }}>Total a registrar: ${Number((pagoModal.pagos||[]).reduce((a,p)=>a+Number(p.importe||0),0)).toLocaleString("es-AR")}</p></div>
       {(pagoModal.pagos||[]).map((p,i)=><div key={i} style={{ display:"grid",gridTemplateColumns:"1fr 120px 32px",gap:8,alignItems:"end" }}><ModalSelect label={i===0?"Forma de pago":" "} value={p.formaPago} onChange={v=>setPagoModal(m=>({...m,pagos:m.pagos.map((x,idx)=>idx===i?{...x,formaPago:v}:x)}))}>{FORMAS_PAGO.filter(Boolean).map(f=><option key={f} value={f}>{f}</option>)}</ModalSelect><ModalInput label={i===0?"Importe":" "} type="number" value={p.importe} onChange={v=>setPagoModal(m=>({...m,pagos:m.pagos.map((x,idx)=>idx===i?{...x,importe:v}:x)}))}/><button onClick={()=>setPagoModal(m=>({...m,pagos:m.pagos.filter((_,idx)=>idx!==i)}))} style={{ height:36,border:"none",borderRadius:8,background:COLORS.dangerLight,color:COLORS.danger,cursor:"pointer",fontWeight:800 }}>×</button></div>)}
       <button onClick={()=>setPagoModal(m=>({...m,pagos:[...m.pagos,{formaPago:"efectivo",importe:0,observacion:""}]}))} style={{ alignSelf:"flex-start",background:"transparent",border:"none",color:COLORS.pink,cursor:"pointer",fontWeight:700 }}>+ Agregar forma de pago</button>
       <div style={{ display:"flex",justifyContent:"space-between",alignItems:"center",borderTop:"1px solid #eee",paddingTop:10 }}><strong>Total: ${Number((pagoModal.pagos||[]).reduce((a,p)=>a+Number(p.importe||0),0)).toLocaleString("es-AR")}</strong><div style={{ display:"flex",gap:8 }}><Btn onClick={savePagos} disabled={saving}>{saving?"Guardando...":"Guardar cobranza"}</Btn><Btn onClick={()=>setPagoModal(null)} variant="secondary">Cancelar</Btn></div></div>
