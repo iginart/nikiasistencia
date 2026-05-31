@@ -192,6 +192,10 @@ const api = {
   deleteAgendaCliente: (id) => sb(`agenda_clientes?id=eq.${id}`, { method:"DELETE", prefer:"" }),
   getAgendaTurnos: () => sb("agenda_turnos?select=*&order=fecha.desc,inicio.desc,id.desc"),
   getAgendaTurnosPagos: () => sb("agenda_turnos_pagos?select=*&order=turno_id,orden,id"),
+  getAgendaBloqueos: () => sb("agenda_bloqueos?select=*&order=fecha.desc,inicio.desc,id.desc"),
+  createAgendaBloqueo: (d) => sb("agenda_bloqueos", { method:"POST", body:JSON.stringify(d) }),
+  updateAgendaBloqueo: (id, d) => sb(`agenda_bloqueos?id=eq.${id}`, { method:"PATCH", body:JSON.stringify(d) }),
+  deleteAgendaBloqueo: (id) => sb(`agenda_bloqueos?id=eq.${id}`, { method:"DELETE", prefer:"" }),
   createAgendaTurnoPago: (d) => sb("agenda_turnos_pagos", { method:"POST", body:JSON.stringify(d) }),
   deleteAgendaTurnoPagos: (turnoId) => sb(`agenda_turnos_pagos?turno_id=eq.${turnoId}`, { method:"DELETE", prefer:"" }),
   createAgendaTurno: (d) => sb("agenda_turnos", { method:"POST", body:JSON.stringify(d) }),
@@ -219,6 +223,7 @@ function normalizeAgendaPrecioServicio(p) { return { id:p.id, listaId:p.lista_id
 function normalizeAgendaCliente(c) { return { id:c.id, nombre:c.nombre || "", apellido:c.apellido || "", activo:c.activo !== false, creadoEn:c.creado_en || "" }; }
 function normalizeAgendaTurno(t) { return { id:t.id, fecha:t.fecha, localId:t.local_id, userId:t.user_id, clienteId:t.cliente_id, servicioId:t.servicio_id, listaId:t.lista_id, inicio:(t.inicio||"").slice(0,5), fin:(t.fin||"").slice(0,5), estado:t.estado || "pendiente", formaPago:t.forma_pago || "", precio:Number(t.precio || 0), precioEfectivo:Number(t.precio_efectivo || 0), precioCobrado:Number(t.precio_cobrado || 0), observacion:t.observacion || "", creadoPor:t.creado_por_user_id, creadoEn:t.creado_en || "", actualizadoEn:t.actualizado_en || "" }; }
 function normalizeAgendaTurnoPago(p) { return { id:p.id, turnoId:p.turno_id, formaPago:p.forma_pago || "", importe:Number(p.importe || 0), observacion:p.observacion || "", orden:p.orden || 1, creadoEn:p.creado_en || "" }; }
+function normalizeAgendaBloqueo(b) { return { id:b.id, fecha:b.fecha, localId:b.local_id, userId:b.user_id, inicio:(b.inicio||"").slice(0,5), fin:(b.fin||"").slice(0,5), tipo:b.tipo || "no_disponible", motivo:b.motivo || "", creadoPor:b.creado_por_user_id, creadoEn:b.creado_en || "", actualizadoEn:b.actualizado_en || "" }; }
 
 const COLORS = {
   pink: "#d4537e", pinkLight: "#fbeaf0", pinkDark: "#72243e",
@@ -3503,6 +3508,8 @@ function AgendaTurnos({ data, reloadData, user }) {
   const [dragTurno, setDragTurno] = useState(null);
   const dragTurnoRef = useRef(null);
   const [pagoModal, setPagoModal] = useState(null);
+  const [bloqueoModal, setBloqueoModal] = useState(null);
+  const [manicuraAgendaModal, setManicuraAgendaModal] = useState(null);
   const agendaGridRef = useRef(null);
 
   const normTxt = (v) => String(v ?? "").trim();
@@ -3640,26 +3647,53 @@ function AgendaTurnos({ data, reloadData, user }) {
   const calendarRows = Array.from({length:Math.floor((calendarEnd-calendarStart)/calendarStep)+1},(_,i)=>calendarStart+i*calendarStep);
   const getDefaultLista = (lid) => (data.agendaListasPrecios||[]).find(l=>l.localId===parseInt(lid)&&l.activo) || null;
   const getPrecioFor = (lid, sid) => { const lista=getDefaultLista(lid); const p=lista ? precioByKey.get(`${lista.id}-${sid}`) : null; return { lista, precio:p?.precioLista||0, precioEfectivo:p?.precioEfectivo||0 }; };
-  const isWithinHorario = (uid, start, end=start+15) => { const h=(data.horarios||[]).find(x=>x.userId===parseInt(uid)&&x.fecha===fecha&&x.trabaja&&x.entrada&&x.salida); if(!h) return false; return start>=agendaMin(h.entrada) && end<=agendaMin(h.salida); };
-  const hasOverlap = (draft, excludeId=null) => { const s=agendaMin(draft.inicio), e=agendaMin(draft.fin); return (data.agendaTurnos||[]).some(t=>t.fecha===draft.fecha&&t.userId===parseInt(draft.userId)&&t.id!==excludeId&&t.estado!=="no asiste"&&s<agendaMin(t.fin)&&e>agendaMin(t.inicio)); };
-
   useEffect(()=>{ if(localesPermitidos.length && !localesPermitidos.some(l=>l.id===parseInt(localId))) setLocalId(localesPermitidos[0].id); },[localesPermitidos.map(l=>l.id).join(",")]);
   useEffect(()=>{ const onResize=()=>setAgendaViewportH(window.innerHeight||720); onResize(); window.addEventListener("resize",onResize); return()=>window.removeEventListener("resize",onResize); },[]);
   useEffect(()=>{ const d=new Date(fecha+"T12:00:00"); setMiniDate(new Date(d.getFullYear(), d.getMonth(), 1)); },[fecha]);
 
+  const getAgendaBloqueosDia = (uid=null) => (data.agendaBloqueos||[]).filter(b => b.fecha===fecha && (!localId || b.localId===parseInt(localId)) && (!uid || b.userId===parseInt(uid)));
+  const getAsistenciaDia = (uid) => (data.asistencias||[]).find(a => a.userId===parseInt(uid) && a.fecha===fecha);
+  const getHorarioRangoDisponible = (uid) => {
+    const h=(data.horarios||[]).find(x=>x.userId===parseInt(uid)&&x.fecha===fecha&&x.trabaja&&x.entrada&&x.salida);
+    if(!h) return null;
+    const a = getAsistenciaDia(uid);
+    if(a?.estado === "ausente") return null;
+    let ini = agendaMin(h.entrada);
+    let fin = agendaMin(h.salida);
+    if(a?.estado === "tarde" && a.entradaReal) ini = Math.max(ini, agendaMin(a.entradaReal));
+    if(a?.estado === "tarde" && a.salidaReal) fin = Math.min(fin, agendaMin(a.salidaReal));
+    if(fin <= ini) return null;
+    return { ...h, ini, fin, entrada:agendaTime(ini), salida:agendaTime(fin), asistencia:a||null };
+  };
+  const isBlockedByAgenda = (uid, start, end) => getAgendaBloqueosDia(uid).some(b => start < agendaMin(b.fin) && end > agendaMin(b.inicio));
+  const getBloqueoFullDay = (uid) => {
+    const rango = getHorarioRangoDisponible(uid);
+    return getAgendaBloqueosDia(uid).find(b => b.tipo === "agenda_bloqueada" || (rango && agendaMin(b.inicio) <= rango.ini && agendaMin(b.fin) >= rango.fin));
+  };
+  const isWithinHorario = (uid, start, end=start+15) => {
+    const rango=getHorarioRangoDisponible(uid);
+    if(!rango) return false;
+    if(start < rango.ini || end > rango.fin) return false;
+    if(isBlockedByAgenda(uid, start, end)) return false;
+    return true;
+  };
+  const hasOverlap = (draft, excludeId=null) => { const s=agendaMin(draft.inicio), e=agendaMin(draft.fin); return (data.agendaTurnos||[]).some(t=>t.fecha===draft.fecha&&t.userId===parseInt(draft.userId)&&t.id!==excludeId&&t.estado!=="no asiste"&&s<agendaMin(t.fin)&&e>agendaMin(t.inicio)); };
+
   const availableSlots = (uid, servicioId, turnoId=null, startOverride=null) => {
     const servicio=getServicio(parseInt(servicioId));
     if(!uid || !servicio) return [];
-    const h=(data.horarios||[]).find(x=>x.userId===parseInt(uid)&&x.fecha===fecha&&x.trabaja&&x.entrada&&x.salida);
-    if(!h) return [];
+    const rango=getHorarioRangoDisponible(uid);
+    if(!rango) return [];
     const dur=servicio.duracionMinutos||60;
-    const ini=agendaMin(h.entrada), fin=agendaMin(h.salida);
+    const ini=rango.ini, fin=rango.fin;
     const ocupados=(data.agendaTurnos||[]).filter(t=>t.fecha===fecha&&t.userId===parseInt(uid)&&t.id!==turnoId&&t.estado!=="no asiste");
+    const bloqueos=getAgendaBloqueosDia(uid);
     const slots=[];
     for(let m=ini; m+dur<=fin; m+=15){
       const e=m+dur;
       const overlap=ocupados.some(t=>m<agendaMin(t.fin)&&e>agendaMin(t.inicio));
-      if(!overlap) slots.push({ inicio:agendaTime(m), fin:agendaTime(e) });
+      const blocked=bloqueos.some(b=>m<agendaMin(b.fin)&&e>agendaMin(b.inicio));
+      if(!overlap && !blocked) slots.push({ inicio:agendaTime(m), fin:agendaTime(e) });
     }
     return slots;
   };
@@ -3729,6 +3763,7 @@ function AgendaTurnos({ data, reloadData, user }) {
     }
     if(!d.fecha||!d.localId||!d.userId||!d.clienteId||!d.servicioId||!d.inicio||!d.fin) { alert("Completá fecha, local, manicura, cliente, servicio y horario."); return; }
     if (agendaMin(d.fin) <= agendaMin(d.inicio)) { alert("El horario de fin debe ser posterior al inicio."); return; }
+    if (isBlockedByAgenda(d.userId, agendaMin(d.inicio), agendaMin(d.fin))) { alert("Ese horario está bloqueado/no disponible para la manicura."); return; }
     if (!isWithinHorario(d.userId, agendaMin(d.inicio), agendaMin(d.fin)) && !force) {
       setTurnoWarning({ type:"fuera_horario", draft:d, message:"El turno queda fuera del horario disponible de la manicura. ¿Querés guardarlo igual?" });
       return;
@@ -3746,6 +3781,44 @@ function AgendaTurnos({ data, reloadData, user }) {
   };
 
   const delTurno = async (t) => { if(!confirm("¿Eliminar este turno?")) return; await api.deleteAgendaTurno(t.id); await reloadData(); };
+
+  const openBloqueo = (uid=null, inicio=null, fin=null, existing=null) => {
+    const rango = uid ? getHorarioRangoDisponible(uid) : null;
+    setBloqueoModal(existing ? { ...existing } : {
+      fecha,
+      localId:parseInt(localId),
+      userId:uid || (manicuraId !== "todas" ? parseInt(manicuraId) : (manicurasLocal[0]?.id || "")),
+      inicio:inicio ? agendaTime(inicio) : (rango?.entrada || "13:00"),
+      fin:fin ? agendaTime(fin) : (rango ? agendaTime(Math.min(rango.fin, agendaMin(rango.entrada)+60)) : "14:00"),
+      tipo:"no_disponible",
+      motivo:""
+    });
+  };
+  const saveBloqueo = async () => {
+    const b = bloqueoModal;
+    if(!b?.fecha || !b.localId || !b.userId || !b.inicio || !b.fin) { alert("Completá manicura, fecha, inicio y fin."); return; }
+    if(agendaMin(b.fin) <= agendaMin(b.inicio)) { alert("El fin debe ser posterior al inicio."); return; }
+    const payload = { fecha:b.fecha, local_id:parseInt(b.localId), user_id:parseInt(b.userId), inicio:b.inicio, fin:b.fin, tipo:b.tipo || "no_disponible", motivo:b.motivo || null, creado_por_user_id:user.id };
+    setSaving(true);
+    try { if(b.id) await api.updateAgendaBloqueo(b.id, payload); else await api.createAgendaBloqueo(payload); await reloadData(); setBloqueoModal(null); }
+    catch(e) { alert("Error al guardar bloqueo: " + (e.message||e)); }
+    setSaving(false);
+  };
+  const deleteBloqueo = async (b) => {
+    if(!b?.id) return;
+    if(!confirm("¿Eliminar este bloqueo de agenda?")) return;
+    await api.deleteAgendaBloqueo(b.id); await reloadData(); setBloqueoModal(null); setManicuraAgendaModal(null);
+  };
+  const toggleAgendaManicura = async (uid) => {
+    const existing = getBloqueoFullDay(uid);
+    if(existing) { await api.deleteAgendaBloqueo(existing.id); await reloadData(); setManicuraAgendaModal(null); return; }
+    const rango = getHorarioRangoDisponible(uid);
+    const h=(data.horarios||[]).find(x=>x.userId===parseInt(uid)&&x.fecha===fecha&&x.trabaja&&x.entrada&&x.salida);
+    const ini = rango?.entrada || h?.entrada || "10:00";
+    const fin = rango?.salida || h?.salida || "20:00";
+    await api.createAgendaBloqueo({ fecha, local_id:parseInt(localId), user_id:parseInt(uid), inicio:ini, fin, tipo:"agenda_bloqueada", motivo:"Agenda bloqueada / no asiste", creado_por_user_id:user.id });
+    await reloadData(); setManicuraAgendaModal(null);
+  };
 
   const goTurnosDay = (delta) => {
     const d = new Date(fecha + "T12:00:00");
@@ -3884,6 +3957,7 @@ function AgendaTurnos({ data, reloadData, user }) {
       }
 
       if(d.inicio===original.inicio && d.fin===original.fin && d.userId===original.userId) return;
+      if(isBlockedByAgenda(d.userId, agendaMin(d.inicio), agendaMin(d.fin))) { alert("Ese horario está bloqueado/no disponible para la manicura."); return; }
       const warning = !isWithinHorario(d.userId, agendaMin(d.inicio), agendaMin(d.fin))
         ? "El turno queda fuera del horario disponible de la manicura. ¿Querés guardarlo igual?"
         : hasOverlap(d, turno.id)
@@ -3899,9 +3973,11 @@ function AgendaTurnos({ data, reloadData, user }) {
   const renderTurnos = () => {
     const dayTurnosBase = (data.agendaTurnos||[]).filter(t=>t.fecha===fecha && (!localId || t.localId===parseInt(localId)) && (manicuraId==="todas" || t.userId===parseInt(manicuraId)));
     const dayTurnos = dayTurnosBase.map(t=>dragTurno?.id===t.id ? { ...t, ...dragTurno.draft } : t);
+    const dayBloqueos = getAgendaBloqueosDia();
     const manicurasConActividad = new Set([
       ...(data.horarios||[]).filter(h=>h.fecha===fecha&&h.trabaja&&h.entrada&&h.salida).map(h=>h.userId),
-      ...dayTurnos.map(t=>t.userId)
+      ...dayTurnos.map(t=>t.userId),
+      ...dayBloqueos.map(b=>b.userId)
     ]);
     let calManicuras = manicurasLocal.filter(m=>manicuraId==="todas" || m.id===parseInt(manicuraId));
     if (manicuraId === "todas" && !showAllManicurasTurnos) calManicuras = calManicuras.filter(m=>manicurasConActividad.has(m.id));
@@ -3935,6 +4011,7 @@ function AgendaTurnos({ data, reloadData, user }) {
           <button onClick={()=>goTurnosDay(1)} style={{ background:"#fff",border:"0.5px solid var(--color-border-secondary)",borderRadius:8,padding:"7px 12px",cursor:"pointer",fontSize:16 }}>›</button>
           {!turnosPanelVisible && <><Select value={localId} onChange={v=>{setLocalId(v);setManicuraId("todas");}} style={{ maxWidth:220 }}>{localesPermitidos.map(l=><option key={l.id} value={l.id}>{l.nombre}</option>)}</Select><Select value={manicuraId} onChange={setManicuraId} style={{ maxWidth:240 }}><option value="todas">Todas las manicuras</option>{manicurasLocal.map(m=><option key={m.id} value={m.id}>{m.nombre}</option>)}</Select></>}
           <Select value={agendaScale} onChange={setAgendaScale} style={{ width:150 }}><option value="5">Escala 5 min</option><option value="10">Escala 10 min</option><option value="15">Escala 15 min</option><option value="30">Escala 30 min</option><option value="45">Escala 45 min</option><option value="60">Escala 60 min</option><option value="fit">Ajustar a pantalla</option></Select>
+          <Btn onClick={()=>openBloqueo()} variant="secondary" size="sm">+ No disponible</Btn>
           <Badge color="info">{dayTurnos.length} turno{dayTurnos.length!==1?"s":""}</Badge>{manicuraId==="todas"&&ocultasSinActividad>0&&<button onClick={()=>setShowAllManicurasTurnos(v=>!v)} style={{ border:"none",background:showAllManicurasTurnos?COLORS.amberLight:COLORS.pinkLight,color:showAllManicurasTurnos?COLORS.amber:COLORS.pinkDark,borderRadius:999,padding:"6px 10px",fontSize:12,fontWeight:700,cursor:"pointer" }}>{showAllManicurasTurnos?"Ocultar sin actividad":`Mostrar ${ocultasSinActividad} sin actividad`}</button>}
         </div>
         <Card style={{ padding:0,overflow:"hidden" }}>
@@ -3946,24 +4023,26 @@ function AgendaTurnos({ data, reloadData, user }) {
             <div style={{ minWidth:`max(100%, ${60+calManicuras.length*colMin}px)` }}>
               <div style={{ display:"grid",gridTemplateColumns:`60px repeat(${calManicuras.length}, minmax(${colMin}px, 1fr))`,position:"sticky",top:0,zIndex:3,background:"#fff",borderBottom:"1px solid #e9e9e9" }}>
                 <div style={{ padding:"8px 6px",fontSize:11,color:"var(--color-text-secondary)" }}>Hora</div>
-                {calManicuras.map(m=><div key={m.id} style={{ padding:"8px 8px",borderLeft:"1px solid #ededed",fontSize:12,fontWeight:700,color:COLORS.pinkDark,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis" }}>{m.nombre}</div>)}
+                {calManicuras.map(m=>{ const fullBlock=getBloqueoFullDay(m.id); const aus=getAsistenciaDia(m.id)?.estado === "ausente"; return <div key={m.id} onClick={()=>setManicuraAgendaModal({ userId:m.id })} title="Clic para bloquear/desbloquear o agregar no disponible" style={{ padding:"8px 8px",borderLeft:"1px solid #ededed",fontSize:12,fontWeight:700,color:fullBlock||aus?COLORS.danger:COLORS.pinkDark,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis",cursor:"pointer",background:fullBlock||aus?COLORS.dangerLight:"#fff" }}>{m.nombre}{(fullBlock||aus)&&" 🔒"}</div>})}
               </div>
               <div ref={agendaGridRef} style={{ display:"grid",gridTemplateColumns:`60px repeat(${calManicuras.length}, minmax(${colMin}px, 1fr))`,height:gridHeight,position:"relative" }}>
                 <div style={{ position:"relative",borderRight:"1px solid #ededed" }}>
                   {calendarRows.slice(0,-1).map((m,i)=><div key={m} style={{ position:"absolute",top:i*calendarSlotH,left:0,right:0,height:calendarSlotH,borderTop:"1px solid #eeeeee",fontSize:10,color:"var(--color-text-secondary)",paddingRight:5,textAlign:"right",boxSizing:"border-box",lineHeight:"12px" }}>{agendaTime(m)}</div>)}
                 </div>
                 {calManicuras.map(man=>{
-                  const h=(data.horarios||[]).find(x=>x.userId===man.id&&x.fecha===fecha&&x.trabaja&&x.entrada&&x.salida);
-                  const hIni=h?Math.max(calendarStart,agendaMin(h.entrada)):null;
-                  const hFin=h?Math.min(calendarEnd,agendaMin(h.salida)):null;
+                  const rango=getHorarioRangoDisponible(man.id);
+                  const hIni=rango?Math.max(calendarStart,rango.ini):null;
+                  const hFin=rango?Math.min(calendarEnd,rango.fin):null;
+                  const bloqueos=dayBloqueos.filter(b=>b.userId===man.id);
                   const turnos=dayTurnos.filter(t=>t.userId===man.id);
                   const layout=buildOverlapLayout(turnos);
-                  return <div key={man.id} style={{ position:"relative",height:gridHeight,borderLeft:"1px solid #ededed",background:h?"#fff":"#fafafa" }}>
+                  return <div key={man.id} style={{ position:"relative",height:gridHeight,borderLeft:"1px solid #ededed",background:rango?"#fff":"#fafafa" }}>
                     {calendarRows.slice(0,-1).map((m,i)=>{
-                      const libre=h && m>=hIni && m+calendarStep<=hFin;
-                      return <div key={m} onClick={()=>libre&&openTurnoAt(man.id,m)} title={libre?"Agendar turno":"Sin disponibilidad"} style={{ position:"absolute",top:i*calendarSlotH,left:0,right:0,height:calendarSlotH,borderTop:"1px solid #eeeeee",background:libre?"transparent":"rgba(0,0,0,0.025)",cursor:libre?"cell":"not-allowed" }} />;
+                      const libre=rango && m>=hIni && m+calendarStep<=hFin && !isBlockedByAgenda(man.id,m,m+calendarStep);
+                      return <div key={m} onClick={()=>libre&&openTurnoAt(man.id,m)} title={libre?"Agendar turno":"Sin disponibilidad"} style={{ position:"absolute",top:i*calendarSlotH,left:0,right:0,height:calendarSlotH,borderTop:"1px solid #eeeeee",background:libre?"transparent":"rgba(0,0,0,0.035)",cursor:libre?"cell":"not-allowed" }} />;
                     })}
-                    {h && <div style={{ position:"absolute",top:Math.max(0,(hIni-calendarStart)/calendarStep*calendarSlotH),height:Math.max(0,(hFin-hIni)/calendarStep*calendarSlotH),left:3,right:3,border:`1px dashed ${COLORS.success}`,borderRadius:8,pointerEvents:"none",opacity:0.45 }} />}
+                    {rango && <div style={{ position:"absolute",top:Math.max(0,(hIni-calendarStart)/calendarStep*calendarSlotH),height:Math.max(0,(hFin-hIni)/calendarStep*calendarSlotH),left:3,right:3,border:`1px dashed ${COLORS.success}`,borderRadius:8,pointerEvents:"none",opacity:0.45 }} />}
+                    {bloqueos.map(b=>{ const top=Math.max(0,(agendaMin(b.inicio)-calendarStart)/calendarStep*calendarSlotH); const height=Math.max(18,(agendaMin(b.fin)-agendaMin(b.inicio))/calendarStep*calendarSlotH-2); const isFull=b.tipo==="agenda_bloqueada"; return <div key={`b-${b.id}`} onClick={e=>{e.stopPropagation();openBloqueo(man.id,null,null,b);}} title={`${isFull?"Agenda bloqueada":"No disponible"}: ${b.motivo||"sin motivo"}`} style={{ position:"absolute",top,left:4,right:4,height,background:isFull?"rgba(226,75,74,0.16)":"rgba(136,135,128,0.18)",border:`1px dashed ${isFull?COLORS.danger:COLORS.gray}`,borderRadius:8,zIndex:1,cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center",fontSize:10,fontWeight:700,color:isFull?COLORS.danger:"#666",pointerEvents:"auto",padding:"0 4px",boxSizing:"border-box",overflow:"hidden",textAlign:"center" }}>{isFull?"🔒 Agenda bloqueada":(b.motivo||"No disponible")}</div>})}
                     {turnos.map(t=>{ const serv=getServicio(t.servicioId); const cliente=getClienteLabel(t.clienteId); const meta=estadoTurnoMeta[t.estado]||estadoTurnoMeta.pendiente; const top=Math.max(0,(agendaMin(t.inicio)-calendarStart)/calendarStep*calendarSlotH); const height=Math.max(28,(agendaMin(t.fin)-agendaMin(t.inicio))/calendarStep*calendarSlotH-2); const lay=layout.get(t.id)||{lane:0,laneCount:1}; const gap=4; const widthPct=100/lay.laneCount; const leftCss=`calc(${lay.lane*widthPct}% + ${gap}px)`; const rightCss=`calc(${100-(lay.lane+1)*widthPct}% + ${gap}px)`; const pagos=getPagosTurno(t.id); return <div key={t.id} title="Clic para editar · Arrastrar para mover · Bordes para ajustar horario" style={{ position:"absolute",top,left:leftCss,right:rightCss,height,background:meta.bg,border:`1.5px solid ${meta.border}`,borderRadius:8,padding:"7px 6px",boxSizing:"border-box",cursor:"grab",overflow:"hidden",zIndex:dragTurno?.id===t.id?5:2,boxShadow:"0 2px 8px rgba(0,0,0,0.08)",touchAction:"none" }}>
                       <div onPointerDown={e=>startDragTurno(e,t,calManicuras,"top")} title="Arrastrar para ajustar inicio" style={{ position:"absolute",top:0,left:0,right:0,height:7,cursor:"ns-resize",background:meta.border,opacity:0.75,borderRadius:"7px 7px 0 0",touchAction:"none" }} />
                       <div onPointerDown={e=>startDragTurno(e,t,calManicuras,"move")} style={{ position:"absolute",inset:"7px 0",padding:"0 6px",boxSizing:"border-box",cursor:"grab",touchAction:"none" }}>
@@ -4004,6 +4083,46 @@ function AgendaTurnos({ data, reloadData, user }) {
     <div style={{ display:"flex",justifyContent:"space-between",alignItems:"center",gap:8,flexWrap:"wrap",marginBottom:14 }}><div><h2 style={{ margin:0,fontSize:18,fontWeight:600 }}>Gestión de turnos</h2><p style={{ margin:"4px 0 0",fontSize:13,color:"var(--color-text-secondary)" }}>Servicios, clientes, precios y agenda de turnos.</p></div></div>
     <div style={{ display:"flex",gap:6,flexWrap:"wrap",marginBottom:16 }}><TabBtn id="turnos" label="Turnos"/><TabBtn id="servicios" label="Servicios"/><TabBtn id="precios" label="Precios"/><TabBtn id="clientes" label="Clientes"/></div>
     {tab==="turnos"&&renderTurnos()}{tab==="servicios"&&renderServicios()}{tab==="precios"&&renderPrecios()}{tab==="clientes"&&renderClientes()}
+    {manicuraAgendaModal&&(() => {
+      const uid = manicuraAgendaModal.userId;
+      const man = getManicura(uid);
+      const fullBlock = getBloqueoFullDay(uid);
+      const asistencia = getAsistenciaDia(uid);
+      const rango = getHorarioRangoDisponible(uid);
+      const bloqueos = getAgendaBloqueosDia(uid);
+      return <Modal title={`Agenda de ${man?.nombre || "manicura"}`} onClose={()=>setManicuraAgendaModal(null)} width={480}>
+        <div style={{ display:"flex",flexDirection:"column",gap:12 }}>
+          <div style={{ background:fullBlock||asistencia?.estado==="ausente"?COLORS.dangerLight:COLORS.pinkLight,color:fullBlock||asistencia?.estado==="ausente"?COLORS.danger:COLORS.pinkDark,borderRadius:10,padding:"9px 12px",fontSize:13 }}>
+            {asistencia?.estado==="ausente" ? "La manicura figura ausente en asistencia diaria. La agenda queda sin disponibilidad." : fullBlock ? "La agenda está bloqueada para este día." : rango ? `Disponible de ${rango.entrada} a ${rango.salida}.` : "Sin horario disponible para este día."}
+          </div>
+          <div style={{ display:"flex",gap:8,flexWrap:"wrap" }}>
+            <Btn onClick={()=>toggleAgendaManicura(uid)} variant={fullBlock?"success":"danger"}>{fullBlock?"Desbloquear agenda":"Bloquear agenda"}</Btn>
+            <Btn onClick={()=>{ setManicuraAgendaModal(null); openBloqueo(uid); }} variant="secondary">+ Agregar no disponible</Btn>
+          </div>
+          {bloqueos.length>0&&<div style={{ display:"flex",flexDirection:"column",gap:6 }}>
+            <p style={{ margin:"4px 0 0",fontSize:12,fontWeight:700,color:"var(--color-text-secondary)",textTransform:"uppercase" }}>Bloqueos del día</p>
+            {bloqueos.map(b=><div key={b.id} style={{ display:"flex",alignItems:"center",gap:8,border:"0.5px solid var(--color-border-tertiary)",borderRadius:8,padding:"8px 9px" }}><div style={{ flex:1 }}><p style={{ margin:0,fontSize:13,fontWeight:700 }}>{b.inicio} - {b.fin}</p><p style={{ margin:0,fontSize:12,color:"var(--color-text-secondary)" }}>{b.tipo==="agenda_bloqueada"?"Agenda bloqueada":(b.motivo||"No disponible")}</p></div><Btn onClick={()=>{ setManicuraAgendaModal(null); openBloqueo(uid,null,null,b); }} variant="ghost" size="sm">Editar</Btn></div>)}
+          </div>}
+        </div>
+      </Modal>;
+    })()}
+    {bloqueoModal&&<Modal title={bloqueoModal.id?"Editar bloqueo":"Nuevo bloqueo de agenda"} onClose={()=>setBloqueoModal(null)} width={520}>
+      <div style={{ display:"flex",flexDirection:"column",gap:12 }}>
+        <ModalInput label="Fecha" type="date" value={bloqueoModal.fecha||fecha} onChange={v=>setBloqueoModal(b=>({...b,fecha:v}))}/>
+        <ModalSelect label="Manicura" value={bloqueoModal.userId||""} onChange={v=>setBloqueoModal(b=>({...b,userId:v}))}><option value="">Seleccionar...</option>{manicurasLocal.map(m=><option key={m.id} value={m.id}>{m.nombre}</option>)}</ModalSelect>
+        <div style={{ display:"grid",gridTemplateColumns:"1fr 1fr",gap:10 }}>
+          <ModalInput label="Desde" type="time" value={bloqueoModal.inicio||""} onChange={v=>setBloqueoModal(b=>({...b,inicio:v}))}/>
+          <ModalInput label="Hasta" type="time" value={bloqueoModal.fin||""} onChange={v=>setBloqueoModal(b=>({...b,fin:v}))}/>
+        </div>
+        <ModalSelect label="Tipo" value={bloqueoModal.tipo||"no_disponible"} onChange={v=>setBloqueoModal(b=>({...b,tipo:v}))}><option value="no_disponible">No disponible</option><option value="almuerzo">Almuerzo</option><option value="llegada_tarde">Llegada tarde</option><option value="agenda_bloqueada">Bloqueo del día</option><option value="otro">Otro</option></ModalSelect>
+        <div><label style={{ fontSize:13,fontWeight:500,color:"#555",display:"block",marginBottom:6 }}>Motivo / explicación</label><textarea value={bloqueoModal.motivo||""} onChange={e=>setBloqueoModal(b=>({...b,motivo:e.target.value}))} style={{ width:"100%",minHeight:70,border:"1.5px solid #e0e0e0",borderRadius:8,padding:"9px 12px",boxSizing:"border-box" }} placeholder="Ej.: almuerzo, llega tarde, capacitación, trámite..."/></div>
+        <div style={{ background:COLORS.infoLight,color:COLORS.info,borderRadius:10,padding:"9px 12px",fontSize:13 }}>Este horario quedará no disponible para nuevos turnos y también bloqueará movimientos de turnos sobre esa franja.</div>
+        <div style={{ display:"flex",gap:8,justifyContent:"space-between",alignItems:"center" }}>
+          <div>{bloqueoModal.id&&<Btn onClick={()=>deleteBloqueo(bloqueoModal)} variant="danger">Eliminar</Btn>}</div>
+          <div style={{ display:"flex",gap:8 }}><Btn onClick={saveBloqueo} disabled={saving}>{saving?"Guardando...":"Guardar bloqueo"}</Btn><Btn onClick={()=>setBloqueoModal(null)} variant="secondary">Cancelar</Btn></div>
+        </div>
+      </div>
+    </Modal>}
     {importModal&&<Modal title={importTitle(importModal)} onClose={()=>setImportModal(null)} width={680}><div style={{ display:"flex",flexDirection:"column",gap:12 }}>
       <div style={{ background:COLORS.infoLight,color:COLORS.info,borderRadius:10,padding:"9px 12px",fontSize:13 }}>{importHelp(importModal)}</div>
       <input type="file" accept=".xlsx,.xls,.csv" onChange={async e=>{ const file=e.target.files?.[0]; if(!file)return; setImportMsg("Leyendo archivo..."); try{ const rows=await readExcelRows(file); setImportRows(rows); setImportMsg(`${rows.length} fila${rows.length!==1?"s":""} lista${rows.length!==1?"s":""} para importar.`); }catch(err){ setImportMsg("Error leyendo archivo: "+(err.message||err)); } }} style={{ border:"0.5px solid var(--color-border-secondary)",borderRadius:8,padding:"8px",fontSize:13 }}/>
@@ -4071,8 +4190,8 @@ export default function App() {
   const [reportRestore, setReportRestore] = useState(null);
 
   const reloadData = useCallback(async () => {
-    const [users, locales, horarios, asistencias, periodos, feriados, reglasCobertura, configCobertura, encargadoLocales, comisiones, comisionesImportaciones, adelantos, garantias, informesDiarios, agendaServicios, agendaManicuraServicios, agendaListasPrecios, agendaPreciosServicios, agendaClientes, agendaTurnos, agendaTurnosPagos] = await Promise.all([
-      api.getUsers(), api.getLocales(), api.getHorarios(), api.getAsistencias(), api.getPeriodos(), api.getFeriados(), api.getReglasCobertura(), api.getConfigCobertura(), api.getEncargadoLocales(), api.getComisiones(), api.getComisionesImportaciones(), api.getAdelantos(), api.getGarantias(), api.getInformesDiarios(), api.getAgendaServicios(), api.getAgendaManicuraServicios(), api.getAgendaListasPrecios(), api.getAgendaPreciosServicios(), api.getAgendaClientes(), api.getAgendaTurnos(), api.getAgendaTurnosPagos()
+    const [users, locales, horarios, asistencias, periodos, feriados, reglasCobertura, configCobertura, encargadoLocales, comisiones, comisionesImportaciones, adelantos, garantias, informesDiarios, agendaServicios, agendaManicuraServicios, agendaListasPrecios, agendaPreciosServicios, agendaClientes, agendaTurnos, agendaTurnosPagos, agendaBloqueos] = await Promise.all([
+      api.getUsers(), api.getLocales(), api.getHorarios(), api.getAsistencias(), api.getPeriodos(), api.getFeriados(), api.getReglasCobertura(), api.getConfigCobertura(), api.getEncargadoLocales(), api.getComisiones(), api.getComisionesImportaciones(), api.getAdelantos(), api.getGarantias(), api.getInformesDiarios(), api.getAgendaServicios(), api.getAgendaManicuraServicios(), api.getAgendaListasPrecios(), api.getAgendaPreciosServicios(), api.getAgendaClientes(), api.getAgendaTurnos(), api.getAgendaTurnosPagos(), api.getAgendaBloqueos()
     ]);
     setData({
       users: users.map(normalizeUser),
@@ -4096,6 +4215,7 @@ export default function App() {
       agendaClientes: (agendaClientes||[]).map(normalizeAgendaCliente),
       agendaTurnos: (agendaTurnos||[]).map(normalizeAgendaTurno),
       agendaTurnosPagos: (agendaTurnosPagos||[]).map(normalizeAgendaTurnoPago),
+      agendaBloqueos: (agendaBloqueos||[]).map(normalizeAgendaBloqueo),
     });
   }, []);
 
