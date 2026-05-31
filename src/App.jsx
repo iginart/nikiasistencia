@@ -3986,9 +3986,9 @@ function AgendaTurnos({ data, reloadData, user }) {
     const gridHeight = ((calendarEnd-calendarStart)/calendarStep) * calendarSlotH;
     const colMin = calManicuras.length <= 4 ? 170 : calManicuras.length <= 6 ? 145 : 125;
     const dayLabel = (()=>{ const d=new Date(fecha+"T12:00:00"); return `${DIAS_SEMANA[d.getDay()===0?5:d.getDay()-1]||"Dom"} ${d.getDate()} de ${MESES[d.getMonth()]} ${d.getFullYear()}`; })();
-    return <div style={{ display:"flex",gap:12,alignItems:"stretch" }}>
-      {turnosPanelVisible && <div style={{ width:210,flexShrink:0 }}>
-        <Card style={{ padding:"12px",position:"sticky",top:70 }}>
+    return <div style={{ display:"flex",gap:8,alignItems:"stretch" }}>
+      {turnosPanelVisible && <div style={{ width:196,flexShrink:0 }}>
+        <Card style={{ padding:"10px",position:"sticky",top:66 }}>
           <div style={{ display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:8 }}>
             <button onClick={()=>setMiniDate(d=>new Date(d.getFullYear(),d.getMonth()-1,1))} style={{ border:"0.5px solid var(--color-border-secondary)",background:"#fff",borderRadius:6,padding:"3px 8px",cursor:"pointer" }}>‹</button>
             <span style={{ fontSize:12,fontWeight:700 }}>{MESES[miniDate.getMonth()]} {miniDate.getFullYear()}</span>
@@ -4004,22 +4004,22 @@ function AgendaTurnos({ data, reloadData, user }) {
         </Card>
       </div>}
       <div style={{ flex:1,minWidth:0 }}>
-        <div style={{ display:"flex",gap:8,flexWrap:"wrap",marginBottom:14,alignItems:"center" }}>
+        <div style={{ display:"flex",gap:6,flexWrap:"wrap",marginBottom:8,alignItems:"center" }}>
           <Btn onClick={()=>setTurnosPanelVisible(v=>!v)} variant="secondary" size="sm">{turnosPanelVisible?"Ocultar panel":"Mostrar panel"}</Btn>
-          <button onClick={()=>goTurnosDay(-1)} style={{ background:"#fff",border:"0.5px solid var(--color-border-secondary)",borderRadius:8,padding:"7px 12px",cursor:"pointer",fontSize:16 }}>‹</button>
-          <input type="date" value={fecha} onChange={e=>setFecha(e.target.value)} style={{ border:"0.5px solid var(--color-border-secondary)",borderRadius:8,padding:"8px 12px",fontSize:14,fontWeight:700,minWidth:155 }}/>
-          <button onClick={()=>goTurnosDay(1)} style={{ background:"#fff",border:"0.5px solid var(--color-border-secondary)",borderRadius:8,padding:"7px 12px",cursor:"pointer",fontSize:16 }}>›</button>
+          <button onClick={()=>goTurnosDay(-1)} style={{ background:"#fff",border:"0.5px solid var(--color-border-secondary)",borderRadius:8,padding:"5px 10px",cursor:"pointer",fontSize:15 }}>‹</button>
+          <input type="date" value={fecha} onChange={e=>setFecha(e.target.value)} style={{ border:"0.5px solid var(--color-border-secondary)",borderRadius:8,padding:"6px 10px",fontSize:13,fontWeight:700,minWidth:150 }}/>
+          <button onClick={()=>goTurnosDay(1)} style={{ background:"#fff",border:"0.5px solid var(--color-border-secondary)",borderRadius:8,padding:"5px 10px",cursor:"pointer",fontSize:15 }}>›</button>
           {!turnosPanelVisible && <><Select value={localId} onChange={v=>{setLocalId(v);setManicuraId("todas");}} style={{ maxWidth:220 }}>{localesPermitidos.map(l=><option key={l.id} value={l.id}>{l.nombre}</option>)}</Select><Select value={manicuraId} onChange={setManicuraId} style={{ maxWidth:240 }}><option value="todas">Todas las manicuras</option>{manicurasLocal.map(m=><option key={m.id} value={m.id}>{m.nombre}</option>)}</Select></>}
-          <Select value={agendaScale} onChange={setAgendaScale} style={{ width:150 }}><option value="5">Escala 5 min</option><option value="10">Escala 10 min</option><option value="15">Escala 15 min</option><option value="30">Escala 30 min</option><option value="45">Escala 45 min</option><option value="60">Escala 60 min</option><option value="fit">Ajustar a pantalla</option></Select>
+          <Select value={agendaScale} onChange={setAgendaScale} style={{ width:132 }}><option value="5">Escala 5 min</option><option value="10">Escala 10 min</option><option value="15">Escala 15 min</option><option value="30">Escala 30 min</option><option value="45">Escala 45 min</option><option value="60">Escala 60 min</option><option value="fit">Ajustar a pantalla</option></Select>
           <Btn onClick={()=>openBloqueo()} variant="secondary" size="sm">+ No disponible</Btn>
           <Badge color="info">{dayTurnos.length} turno{dayTurnos.length!==1?"s":""}</Badge>{manicuraId==="todas"&&ocultasSinActividad>0&&<button onClick={()=>setShowAllManicurasTurnos(v=>!v)} style={{ border:"none",background:showAllManicurasTurnos?COLORS.amberLight:COLORS.pinkLight,color:showAllManicurasTurnos?COLORS.amber:COLORS.pinkDark,borderRadius:999,padding:"6px 10px",fontSize:12,fontWeight:700,cursor:"pointer" }}>{showAllManicurasTurnos?"Ocultar sin actividad":`Mostrar ${ocultasSinActividad} sin actividad`}</button>}
         </div>
         <Card style={{ padding:0,overflow:"hidden" }}>
-          <div style={{ padding:"12px 14px",borderBottom:"0.5px solid var(--color-border-tertiary)",display:"flex",justifyContent:"space-between",gap:8,alignItems:"center",flexWrap:"wrap" }}>
-            <div><h3 style={{ margin:0,fontSize:15,fontWeight:600 }}>Agenda de turnos</h3><p style={{ margin:"3px 0 0",fontSize:12,color:"var(--color-text-secondary)" }}>{localActual?.nombre||""} · {dayLabel}</p></div>
-            <span style={{ fontSize:12,color:"var(--color-text-secondary)" }}>Tocá un espacio libre para agendar. Arrastrá un turno o sus bordes para mover/ajustar.</span>
+          <div style={{ padding:"8px 12px",borderBottom:"0.5px solid var(--color-border-tertiary)",display:"flex",justifyContent:"space-between",gap:8,alignItems:"center",flexWrap:"wrap" }}>
+            <div style={{ display:"flex",alignItems:"baseline",gap:8,flexWrap:"wrap" }}><h3 style={{ margin:0,fontSize:14,fontWeight:700 }}>Agenda de turnos</h3><p style={{ margin:0,fontSize:12,color:"var(--color-text-secondary)" }}>{localActual?.nombre||""} · {dayLabel}</p></div>
+            <span style={{ fontSize:11,color:"var(--color-text-secondary)" }}>Clic: editar · Arrastrar: mover · Bordes: ajustar</span>
           </div>
-          <div style={{ overflow:"auto",background:"#fff",maxHeight:"calc(100vh - 265px)",minHeight:360 }}>
+          <div style={{ overflow:"auto",background:"#fff",maxHeight:"calc(100vh - 210px)",minHeight:460 }}>
             <div style={{ minWidth:`max(100%, ${60+calManicuras.length*colMin}px)` }}>
               <div style={{ display:"grid",gridTemplateColumns:`60px repeat(${calManicuras.length}, minmax(${colMin}px, 1fr))`,position:"sticky",top:0,zIndex:3,background:"#fff",borderBottom:"1px solid #e9e9e9" }}>
                 <div style={{ padding:"8px 6px",fontSize:11,color:"var(--color-text-secondary)" }}>Hora</div>
