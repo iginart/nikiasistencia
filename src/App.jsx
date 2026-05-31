@@ -220,7 +220,7 @@ function normalizeAgendaServicio(s) { return { id:s.id, nombre:s.nombre || "", d
 function normalizeAgendaManicuraServicio(x) { return { userId:x.user_id, servicioId:x.servicio_id, activo:x.activo !== false }; }
 function normalizeAgendaListaPrecio(l) { return { id:l.id, localId:l.local_id, nombre:l.nombre || "", descripcion:l.descripcion || "", activo:l.activo !== false }; }
 function normalizeAgendaPrecioServicio(p) { return { id:p.id, listaId:p.lista_id, servicioId:p.servicio_id, precioLista:Number(p.precio_lista || 0), precioEfectivo:Number(p.precio_efectivo || 0) }; }
-function normalizeAgendaCliente(c) { return { id:c.id, nombre:c.nombre || "", apellido:c.apellido || "", activo:c.activo !== false, creadoEn:c.creado_en || "" }; }
+function normalizeAgendaCliente(c) { return { id:c.id, nombre:c.nombre || "", apellido:c.apellido || "", email:c.email || "", telefono:c.telefono || "", activo:c.activo !== false, creadoEn:c.creado_en || "" }; }
 function normalizeAgendaTurno(t) { return { id:t.id, fecha:t.fecha, localId:t.local_id, userId:t.user_id, clienteId:t.cliente_id, servicioId:t.servicio_id, listaId:t.lista_id, inicio:(t.inicio||"").slice(0,5), fin:(t.fin||"").slice(0,5), estado:t.estado || "pendiente", formaPago:t.forma_pago || "", precio:Number(t.precio || 0), precioEfectivo:Number(t.precio_efectivo || 0), precioCobrado:Number(t.precio_cobrado || 0), observacion:t.observacion || "", creadoPor:t.creado_por_user_id, creadoEn:t.creado_en || "", actualizadoEn:t.actualizado_en || "" }; }
 function normalizeAgendaTurnoPago(p) { return { id:p.id, turnoId:p.turno_id, formaPago:p.forma_pago || "", importe:Number(p.importe || 0), observacion:p.observacion || "", orden:p.orden || 1, creadoEn:p.creado_en || "" }; }
 function normalizeAgendaBloqueo(b) { return { id:b.id, fecha:b.fecha, localId:b.local_id, userId:b.user_id, inicio:(b.inicio||"").slice(0,5), fin:(b.fin||"").slice(0,5), tipo:b.tipo || "no_disponible", motivo:b.motivo || "", creadoPor:b.creado_por_user_id, creadoEn:b.creado_en || "", actualizadoEn:b.actualizado_en || "" }; }
@@ -450,6 +450,35 @@ function Btn({ children, onClick, variant="primary", size="md", disabled, style 
 }
 function Input({ value, onChange, type="text", placeholder, style }) { return <input type={type} value={value} onChange={e=>onChange(e.target.value)} placeholder={placeholder} style={{ border:"0.5px solid rgba(120,120,120,0.24)",borderRadius:8,padding:"8px 12px",fontSize:14,width:"100%",background:"var(--color-background-primary)",color:"var(--color-text-primary)",boxSizing:"border-box",...style }}/>; }
 function Select({ value, onChange, children, style }) { return <select value={value} onChange={e=>onChange(e.target.value)} style={{ border:"0.5px solid rgba(120,120,120,0.24)",borderRadius:8,padding:"8px 12px",fontSize:14,width:"100%",background:"var(--color-background-primary)",color:"var(--color-text-primary)",...style }}>{children}</select>; }
+function SearchableSelect({ label, value, onChange, options = [], placeholder = "Buscar...", disabled = false, style }) {
+  const [open, setOpen] = useState(false);
+  const selected = options.find(o => String(o.value) === String(value));
+  const [query, setQuery] = useState(selected?.label || "");
+  useEffect(() => {
+    const current = options.find(o => String(o.value) === String(value));
+    setQuery(current?.label || "");
+  }, [value, options]);
+  const q = query.trim().toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
+  const filtered = !q ? options.slice(0, 60) : options.filter(o => String(o.search || o.label || "").toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").includes(q)).slice(0, 80);
+  return <div style={{ position:"relative",...style }}>
+    {label && <label style={{ fontSize:13,fontWeight:500,color:"#555",display:"block",marginBottom:6 }}>{label}</label>}
+    <input
+      value={query}
+      disabled={disabled}
+      onFocus={() => !disabled && setOpen(true)}
+      onChange={e => { setQuery(e.target.value); setOpen(true); if (!e.target.value) onChange(""); }}
+      placeholder={placeholder}
+      style={{ width:"100%",border:"1.5px solid #e0e0e0",borderRadius:8,padding:"9px 12px",fontSize:14,background:disabled?"#f3f3f3":"#fafafa",color:"#1a1a1a",outline:"none",boxSizing:"border-box" }}
+    />
+    {open && !disabled && <div style={{ position:"absolute",zIndex:10020,top:label?62:40,left:0,right:0,maxHeight:230,overflowY:"auto",background:"#fff",border:"1px solid #ddd",borderRadius:10,boxShadow:"0 8px 24px rgba(0,0,0,0.15)" }}>
+      {filtered.length === 0 ? <div style={{ padding:"10px 12px",fontSize:13,color:"#888" }}>Sin resultados</div> : filtered.map(o => <button key={o.value} type="button" onMouseDown={e=>e.preventDefault()} onClick={() => { onChange(o.value); setQuery(o.label); setOpen(false); }} style={{ width:"100%",textAlign:"left",border:"none",background:String(o.value)===String(value)?COLORS.pinkLight:"#fff",padding:"9px 12px",cursor:"pointer",fontSize:13,color:"#333",borderBottom:"1px solid #f2f2f2" }}>
+        <span style={{ display:"block",fontWeight:600 }}>{o.label}</span>
+        {o.sub && <span style={{ display:"block",fontSize:11,color:"#777",marginTop:2 }}>{o.sub}</span>}
+      </button>)}
+    </div>}
+    {open && <div onMouseDown={() => setOpen(false)} style={{ position:"fixed",inset:0,zIndex:10010,background:"transparent" }}/>} 
+  </div>;
+}
 function Modal({ title, children, onClose, width=480 }) {
   useEffect(()=>{ const p=document.body.style.overflow; document.body.style.overflow="hidden"; return()=>{ document.body.style.overflow=p; }; },[]);
   return <div style={{ position:"fixed",inset:0,background:"rgba(0,0,0,0.55)",display:"flex",alignItems:"center",justifyContent:"center",zIndex:9999,padding:16 }} onClick={e=>{ if(e.target===e.currentTarget)onClose(); }}><div style={{ background:"#fff",borderRadius:14,padding:"1.5rem",width:"100%",maxWidth:width,maxHeight:"90vh",overflowY:"auto",boxShadow:"0 8px 32px rgba(0,0,0,0.18)" }}><div style={{ display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:20 }}><h3 style={{ margin:0,fontSize:16,fontWeight:500,color:"#1a1a1a" }}>{title}</h3><button onClick={onClose} style={{ background:"#f5f5f5",border:"none",cursor:"pointer",fontSize:18,color:"#666",width:30,height:30,borderRadius:"50%",display:"flex",alignItems:"center",justifyContent:"center" }}>×</button></div>{children}</div></div>;
@@ -3492,6 +3521,7 @@ function AgendaTurnos({ data, reloadData, user }) {
   const [turnoWarning, setTurnoWarning] = useState(null);
   const [servicioModal, setServicioModal] = useState(null);
   const [clienteModal, setClienteModal] = useState(null);
+  const [clienteSearch, setClienteSearch] = useState("");
   const [listaModal, setListaModal] = useState(null);
   const [asigModal, setAsigModal] = useState(null);
   const [precioEdit, setPrecioEdit] = useState({});
@@ -3552,7 +3582,7 @@ function AgendaTurnos({ data, reloadData, user }) {
   const importTitle = (type) => ({ servicios:"Importar servicios", clientes:"Importar clientes", listas:"Importar listas de precios", precios:"Importar precios" }[type] || "Importar");
   const importHelp = (type) => ({
     servicios: "Columnas esperadas: Nombre, Descripcion, Tipo, DuracionMinutos, Activo. Si el servicio ya existe por nombre, se actualiza.",
-    clientes: "Columnas esperadas: Nombre, Apellido, Activo. Si el cliente ya existe por nombre y apellido, se actualiza.",
+    clientes: "Columnas esperadas: Nombre, Apellido, Email, Telefono, Activo. Si el cliente ya existe por nombre y apellido, se actualiza.",
     listas: "Columnas esperadas: Local, Lista, Descripcion, Activa. Si la lista ya existe para el local, se actualiza.",
     precios: "Columnas esperadas: Local, Lista, Servicio, PrecioLista, PrecioEfectivo. Actualiza o crea el precio del servicio en esa lista.",
   }[type] || "");
@@ -3576,7 +3606,7 @@ function AgendaTurnos({ data, reloadData, user }) {
           } else if (importModal === "clientes") {
             const nombre = normTxt(rowVal(r,["Nombre"])); const apellido = normTxt(rowVal(r,["Apellido"]));
             if (!nombre && !apellido) { errors.push(`Fila ${rowNo}: falta Nombre o Apellido`); continue; }
-            const payload = { nombre, apellido, activo:toBool(rowVal(r,["Activo","Activa"])) };
+            const payload = { nombre, apellido, email:normTxt(rowVal(r,["Email","Mail","Correo"])), telefono:normTxt(rowVal(r,["Telefono","Teléfono","Celular","WhatsApp"])), activo:toBool(rowVal(r,["Activo","Activa"])) };
             const existing = (data.agendaClientes||[]).find(c=>normKey(c.nombre)===normKey(nombre)&&normKey(c.apellido)===normKey(apellido));
             if (existing) { await api.updateAgendaCliente(existing.id,payload); updated++; } else { await api.createAgendaCliente(payload); created++; }
           } else if (importModal === "listas") {
@@ -3624,6 +3654,7 @@ function AgendaTurnos({ data, reloadData, user }) {
   const turnosDia = (data.agendaTurnos||[]).filter(t=>t.fecha===fecha && (!localId || t.localId===parseInt(localId)) && (manicuraId==="todas" || t.userId===parseInt(manicuraId)));
   const serviciosActivos = (data.agendaServicios||[]).filter(s=>s.activo);
   const clientesActivos = (data.agendaClientes||[]).filter(c=>c.activo);
+  const clienteOptions = useMemo(() => clientesActivos.map(c => ({ value:c.id, label:`${c.nombre} ${c.apellido}`.trim(), sub:[c.email, c.telefono].filter(Boolean).join(" · "), search:`${c.nombre} ${c.apellido} ${c.email || ""} ${c.telefono || ""}` })), [clientesActivos]);
   const precioByKey = useMemo(()=>{ const m=new Map(); (data.agendaPreciosServicios||[]).forEach(p=>m.set(`${p.listaId}-${p.servicioId}`,p)); return m; },[data.agendaPreciosServicios]);
   const serviciosPorManicura = useMemo(()=>{ const m=new Map(); (data.agendaManicuraServicios||[]).filter(x=>x.activo).forEach(x=>{ if(!m.has(x.userId))m.set(x.userId,new Set()); m.get(x.userId).add(x.servicioId); }); return m; },[data.agendaManicuraServicios]);
   const puedeManicuraServicio = (uid, sid) => serviciosPorManicura.get(parseInt(uid))?.has(parseInt(sid));
@@ -3741,7 +3772,7 @@ function AgendaTurnos({ data, reloadData, user }) {
 
   const createQuickCliente = async () => {
     if (!clienteQuick?.nombre?.trim() && !clienteQuick?.apellido?.trim()) return null;
-    const created = await api.createAgendaCliente({ nombre:(clienteQuick.nombre||"").trim(), apellido:(clienteQuick.apellido||"").trim(), activo:true });
+    const created = await api.createAgendaCliente({ nombre:(clienteQuick.nombre||"").trim(), apellido:(clienteQuick.apellido||"").trim(), email:(clienteQuick.email||"").trim(), telefono:(clienteQuick.telefono||"").trim(), activo:true });
     await reloadData();
     const id = Array.isArray(created) ? created[0]?.id : created?.id;
     if (id) setModalTurno(d=>({...d,clienteId:id}));
@@ -4075,7 +4106,11 @@ function AgendaTurnos({ data, reloadData, user }) {
     {listasLocal.map(l=><Card key={l.id}><div style={{ display:"flex",justifyContent:"space-between",gap:8,alignItems:"center",marginBottom:10 }}><div><h3 style={{ margin:0,fontSize:15 }}>{l.nombre}</h3><p style={{ margin:"3px 0 0",fontSize:12,color:"var(--color-text-secondary)" }}>{l.descripcion||"Sin descripción"}</p></div><Btn onClick={()=>setListaModal({...l})} variant="ghost" size="sm">Editar lista</Btn></div><div style={{ overflowX:"auto" }}><table style={{ width:"100%",borderCollapse:"collapse",fontSize:13 }}><tbody>{serviciosActivos.map(s=>{ const key=`${l.id}-${s.id}`; const p=precioEdit[key]||precioByKey.get(key)||{precioLista:0,precioEfectivo:0}; return <tr key={s.id}><td style={{ padding:"7px 8px",borderTop:"1px solid #f1f1f1",minWidth:180 }}>{s.nombre}</td><td style={{ padding:"7px 8px",borderTop:"1px solid #f1f1f1" }}><input type="number" value={p.precioLista} onChange={e=>setPrecioEdit(v=>({...v,[key]:{...p,precioLista:e.target.value}}))} placeholder="Lista" style={{ width:110,border:"0.5px solid #ddd",borderRadius:6,padding:"6px 8px" }}/></td><td style={{ padding:"7px 8px",borderTop:"1px solid #f1f1f1" }}><input type="number" value={p.precioEfectivo} onChange={e=>setPrecioEdit(v=>({...v,[key]:{...p,precioEfectivo:e.target.value}}))} placeholder="Efectivo" style={{ width:110,border:"0.5px solid #ddd",borderRadius:6,padding:"6px 8px" }}/></td><td style={{ padding:"7px 8px",borderTop:"1px solid #f1f1f1" }}><Btn onClick={async()=>{ await api.upsertAgendaPrecioServicio({ lista_id:l.id, servicio_id:s.id, precio_lista:Number(p.precioLista||0), precio_efectivo:Number(p.precioEfectivo||0) }); await reloadData(); }} size="sm" variant="secondary">Guardar</Btn></td></tr>})}</tbody></table></div></Card>)}
   </div>;
 
-  const renderClientes = () => <Card><div style={{ display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:12,flexWrap:"wrap",gap:8 }}><h3 style={{ margin:0,fontSize:15 }}>Clientes</h3><div style={{ display:"flex",gap:8,flexWrap:"wrap" }}><Btn onClick={()=>openImport("clientes")} variant="secondary" size="sm">Importar Excel</Btn><Btn onClick={()=>setClienteModal({ nombre:"", apellido:"", activo:true })} size="sm">+ Cliente</Btn></div></div><div style={{ display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(220px,1fr))",gap:8 }}>{(data.agendaClientes||[]).map(c=><div key={c.id} style={{ border:"0.5px solid var(--color-border-tertiary)",borderRadius:10,padding:"10px" }}><p style={{ margin:0,fontWeight:600 }}>{c.nombre} {c.apellido}</p><p style={{ margin:"3px 0 8px",fontSize:12,color:"var(--color-text-secondary)" }}>{c.activo?"Activo":"Inactivo"}</p><Btn onClick={()=>setClienteModal({...c})} variant="ghost" size="sm">Editar</Btn></div>)}</div></Card>;
+  const renderClientes = () => {
+    const q = normKey(clienteSearch);
+    const clientesFiltrados = (data.agendaClientes||[]).filter(c => !q || normKey(`${c.nombre} ${c.apellido} ${c.email || ""} ${c.telefono || ""}`).includes(q));
+    return <Card><div style={{ display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:12,flexWrap:"wrap",gap:8 }}><h3 style={{ margin:0,fontSize:15 }}>Clientes</h3><div style={{ display:"flex",gap:8,flexWrap:"wrap" }}><Input value={clienteSearch} onChange={setClienteSearch} placeholder="Buscar por nombre, mail o teléfono" style={{ width:260 }}/><Btn onClick={()=>openImport("clientes")} variant="secondary" size="sm">Importar Excel</Btn><Btn onClick={()=>setClienteModal({ nombre:"", apellido:"", email:"", telefono:"", activo:true })} size="sm">+ Cliente</Btn></div></div><div style={{ display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(250px,1fr))",gap:8 }}>{clientesFiltrados.map(c=><div key={c.id} style={{ border:"0.5px solid var(--color-border-tertiary)",borderRadius:10,padding:"10px" }}><p style={{ margin:0,fontWeight:600 }}>{c.nombre} {c.apellido}</p><p style={{ margin:"3px 0 8px",fontSize:12,color:"var(--color-text-secondary)" }}>{[c.email,c.telefono].filter(Boolean).join(" · ") || "Sin contacto"}<br/>{c.activo?"Activo":"Inactivo"}</p><Btn onClick={()=>setClienteModal({...c})} variant="ghost" size="sm">Editar</Btn></div>)}</div>{!clientesFiltrados.length&&<p style={{ margin:"12px 0 0",fontSize:13,color:"var(--color-text-secondary)" }}>No hay clientes para la búsqueda.</p>}</Card>;
+  };
 
   const TabBtn = ({id,label}) => <button onClick={()=>setTab(id)} style={{ padding:"8px 12px",border:"none",borderRadius:8,cursor:"pointer",fontSize:13,fontWeight:600,background:tab===id?COLORS.pink:COLORS.pinkLight,color:tab===id?"#fff":COLORS.pinkDark }}>{label}</button>;
 
@@ -4142,15 +4177,15 @@ function AgendaTurnos({ data, reloadData, user }) {
       <ModalSelect label="Local" value={modalTurno.localId||""} onChange={v=>{ const lista=getDefaultLista(v); setModalTurno(d=>({...d,localId:v,userId:"",servicioId:"",listaId:lista?.id||"",inicio:"",fin:"",precio:0,precioEfectivo:0})); }}>{localesPermitidos.map(l=><option key={l.id} value={l.id}>{l.nombre}</option>)}</ModalSelect>
       <ModalSelect label="Manicura" value={modalTurno.userId||""} onChange={v=>setModalTurno(d=>({...d,userId:v,servicioId:"",fin:d.inicio?agendaTime(agendaMin(d.inicio)+60):"",precio:0,precioEfectivo:0}))}><option value="">Seleccionar...</option>{manicurasPermitidas.filter(m=>m.localId===parseInt(modalTurno.localId)).map(m=><option key={m.id} value={m.id}>{m.nombre}</option>)}</ModalSelect>
       <div>
-        <ModalSelect label="Cliente" value={modalTurno.clienteId||""} onChange={v=>{ setClienteQuick(null); setModalTurno(d=>({...d,clienteId:v})); }}><option value="">Seleccionar...</option>{clientesActivos.map(c=><option key={c.id} value={c.id}>{c.nombre} {c.apellido}</option>)}</ModalSelect>
-        {!clienteQuick && <button onClick={()=>{setClienteQuick({nombre:"",apellido:""});setModalTurno(d=>({...d,clienteId:""}));}} style={{ marginTop:6,background:"transparent",border:"none",color:COLORS.pink,cursor:"pointer",fontSize:12,fontWeight:600 }}>+ Alta rápida de cliente</button>}
+        <SearchableSelect label="Cliente" value={modalTurno.clienteId||""} onChange={v=>{ setClienteQuick(null); setModalTurno(d=>({...d,clienteId:v})); }} options={clienteOptions} placeholder="Buscar cliente por nombre, mail o teléfono..."/>
+        {!clienteQuick && <button onClick={()=>{setClienteQuick({nombre:"",apellido:"",email:"",telefono:""});setModalTurno(d=>({...d,clienteId:""}));}} style={{ marginTop:6,background:"transparent",border:"none",color:COLORS.pink,cursor:"pointer",fontSize:12,fontWeight:600 }}>+ Alta rápida de cliente</button>}
       </div>
       {clienteQuick && <div style={{ gridColumn:"1 / -1",background:COLORS.pinkLight,borderRadius:10,padding:10,display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(180px,1fr))",gap:8 }}>
         <ModalInput label="Nombre nuevo cliente" value={clienteQuick.nombre} onChange={v=>setClienteQuick(c=>({...c,nombre:v}))}/>
-        <ModalInput label="Apellido nuevo cliente" value={clienteQuick.apellido} onChange={v=>setClienteQuick(c=>({...c,apellido:v}))}/>
+        <ModalInput label="Apellido nuevo cliente" value={clienteQuick.apellido} onChange={v=>setClienteQuick(c=>({...c,apellido:v}))}/><ModalInput label="Email" type="email" value={clienteQuick.email||""} onChange={v=>setClienteQuick(c=>({...c,email:v}))}/><ModalInput label="Teléfono" value={clienteQuick.telefono||""} onChange={v=>setClienteQuick(c=>({...c,telefono:v}))}/>
         <div style={{ display:"flex",alignItems:"end",gap:8 }}><Btn onClick={()=>setClienteQuick(null)} variant="secondary" size="sm">Cancelar alta rápida</Btn></div>
       </div>}
-      <ModalSelect label="Servicio" value={modalTurno.servicioId||""} onChange={v=>{ const serv=getServicio(parseInt(v)); const fin=modalTurno.inicio && serv ? agendaTime(agendaMin(modalTurno.inicio)+(serv.duracionMinutos||60)) : modalTurno.fin; const nd={...modalTurno,servicioId:v,fin}; setModalTurno(applyPrice(nd)); }}><option value="">Seleccionar...</option>{serviciosParaManicura(modalTurno.userId).map(s=><option key={s.id} value={s.id}>{s.nombre} · {s.duracionMinutos} min</option>)}</ModalSelect>
+      <SearchableSelect label="Servicio" value={modalTurno.servicioId||""} onChange={v=>{ const serv=getServicio(parseInt(v)); const fin=modalTurno.inicio && serv ? agendaTime(agendaMin(modalTurno.inicio)+(serv.duracionMinutos||60)) : modalTurno.fin; const nd={...modalTurno,servicioId:v,fin}; setModalTurno(applyPrice(nd)); }} options={serviciosParaManicura(modalTurno.userId).map(s=>({ value:s.id, label:s.nombre, sub:`${s.tipo || "Servicio"} · ${s.duracionMinutos} min`, search:`${s.nombre} ${s.tipo || ""} ${s.descripcion || ""}` }))} placeholder={modalTurno.userId?"Buscar servicio...":"Primero seleccioná manicura"} disabled={!modalTurno.userId}/>
       <ModalInput label="Inicio" type="time" value={modalTurno.inicio||""} onChange={v=>{ const serv=getServicio(parseInt(modalTurno.servicioId)); setModalTurno(d=>({...d,inicio:v,fin:serv?agendaTime(agendaMin(v)+(serv.duracionMinutos||60)):d.fin})); }}/>
       <ModalInput label="Fin sugerido / ajustable" type="time" value={modalTurno.fin||""} onChange={v=>setModalTurno(d=>({...d,fin:v}))}/>
       <div style={{ gridColumn:"1 / -1" }}>
@@ -4172,13 +4207,27 @@ function AgendaTurnos({ data, reloadData, user }) {
       <div style={{ display:"flex",justifyContent:"space-between",alignItems:"center",borderTop:"1px solid #eee",paddingTop:10 }}><strong>Total: ${Number((pagoModal.pagos||[]).reduce((a,p)=>a+Number(p.importe||0),0)).toLocaleString("es-AR")}</strong><div style={{ display:"flex",gap:8 }}><Btn onClick={savePagos} disabled={saving}>{saving?"Guardando...":"Guardar cobranza"}</Btn><Btn onClick={()=>setPagoModal(null)} variant="secondary">Cancelar</Btn></div></div>
     </div></Modal>}
     {servicioModal&&<Modal title={servicioModal.id?"Editar servicio":"Nuevo servicio"} onClose={()=>setServicioModal(null)}><div style={{ display:"flex",flexDirection:"column",gap:12 }}><ModalInput label="Nombre" value={servicioModal.nombre} onChange={v=>setServicioModal(d=>({...d,nombre:v}))}/><ModalSelect label="Tipo" value={servicioModal.tipo} onChange={v=>setServicioModal(d=>({...d,tipo:v}))}>{SERVICIO_TIPOS.map(t=><option key={t} value={t}>{t}</option>)}</ModalSelect><ModalInput label="Duración en minutos" type="number" value={servicioModal.duracionMinutos} onChange={v=>setServicioModal(d=>({...d,duracionMinutos:v}))}/><ModalInput label="Descripción" value={servicioModal.descripcion} onChange={v=>setServicioModal(d=>({...d,descripcion:v}))}/><label style={{ display:"flex",gap:8,alignItems:"center",fontSize:14 }}><input type="checkbox" checked={servicioModal.activo} onChange={e=>setServicioModal(d=>({...d,activo:e.target.checked}))}/>Activo</label><div style={{ display:"flex",gap:8 }}><Btn onClick={async()=>{ const payload={nombre:servicioModal.nombre,descripcion:servicioModal.descripcion,tipo:servicioModal.tipo,duracion_minutos:parseInt(servicioModal.duracionMinutos)||60,activo:servicioModal.activo}; if(servicioModal.id) await api.updateAgendaServicio(servicioModal.id,payload); else await api.createAgendaServicio(payload); await reloadData(); setServicioModal(null); }}>Guardar</Btn><Btn onClick={()=>setServicioModal(null)} variant="secondary">Cancelar</Btn></div></div></Modal>}
-    {clienteModal&&<Modal title={clienteModal.id?"Editar cliente":"Nuevo cliente"} onClose={()=>setClienteModal(null)}><div style={{ display:"flex",flexDirection:"column",gap:12 }}><ModalInput label="Nombre" value={clienteModal.nombre} onChange={v=>setClienteModal(d=>({...d,nombre:v}))}/><ModalInput label="Apellido" value={clienteModal.apellido} onChange={v=>setClienteModal(d=>({...d,apellido:v}))}/><label style={{ display:"flex",gap:8,alignItems:"center",fontSize:14 }}><input type="checkbox" checked={clienteModal.activo} onChange={e=>setClienteModal(d=>({...d,activo:e.target.checked}))}/>Activo</label><div style={{ display:"flex",gap:8 }}><Btn onClick={async()=>{ const payload={nombre:clienteModal.nombre,apellido:clienteModal.apellido,activo:clienteModal.activo}; if(clienteModal.id) await api.updateAgendaCliente(clienteModal.id,payload); else await api.createAgendaCliente(payload); await reloadData(); setClienteModal(null); }}>Guardar</Btn><Btn onClick={()=>setClienteModal(null)} variant="secondary">Cancelar</Btn></div></div></Modal>}
+    {clienteModal&&<Modal title={clienteModal.id?"Editar cliente":"Nuevo cliente"} onClose={()=>setClienteModal(null)}><div style={{ display:"flex",flexDirection:"column",gap:12 }}><ModalInput label="Nombre" value={clienteModal.nombre} onChange={v=>setClienteModal(d=>({...d,nombre:v}))}/><ModalInput label="Apellido" value={clienteModal.apellido} onChange={v=>setClienteModal(d=>({...d,apellido:v}))}/><ModalInput label="Email" type="email" value={clienteModal.email||""} onChange={v=>setClienteModal(d=>({...d,email:v}))}/><ModalInput label="Teléfono" value={clienteModal.telefono||""} onChange={v=>setClienteModal(d=>({...d,telefono:v}))}/><label style={{ display:"flex",gap:8,alignItems:"center",fontSize:14 }}><input type="checkbox" checked={clienteModal.activo} onChange={e=>setClienteModal(d=>({...d,activo:e.target.checked}))}/>Activo</label><div style={{ display:"flex",gap:8 }}><Btn onClick={async()=>{ const payload={nombre:clienteModal.nombre,apellido:clienteModal.apellido,email:clienteModal.email||"",telefono:clienteModal.telefono||"",activo:clienteModal.activo}; if(clienteModal.id) await api.updateAgendaCliente(clienteModal.id,payload); else await api.createAgendaCliente(payload); await reloadData(); setClienteModal(null); }}>Guardar</Btn><Btn onClick={()=>setClienteModal(null)} variant="secondary">Cancelar</Btn></div></div></Modal>}
     {listaModal&&<Modal title={listaModal.id?"Editar lista":"Nueva lista"} onClose={()=>setListaModal(null)}><div style={{ display:"flex",flexDirection:"column",gap:12 }}><ModalInput label="Nombre" value={listaModal.nombre} onChange={v=>setListaModal(d=>({...d,nombre:v}))}/><ModalInput label="Descripción" value={listaModal.descripcion} onChange={v=>setListaModal(d=>({...d,descripcion:v}))}/><label style={{ display:"flex",gap:8,alignItems:"center",fontSize:14 }}><input type="checkbox" checked={listaModal.activo} onChange={e=>setListaModal(d=>({...d,activo:e.target.checked}))}/>Activa</label><div style={{ display:"flex",gap:8 }}><Btn onClick={async()=>{ const payload={local_id:parseInt(listaModal.localId||localId),nombre:listaModal.nombre,descripcion:listaModal.descripcion,activo:listaModal.activo}; if(listaModal.id) await api.updateAgendaListaPrecio(listaModal.id,payload); else await api.createAgendaListaPrecio(payload); await reloadData(); setListaModal(null); }}>Guardar</Btn><Btn onClick={()=>setListaModal(null)} variant="secondary">Cancelar</Btn></div></div></Modal>}
     {asigModal&&<Modal title="Servicios de manicura" onClose={()=>setAsigModal(null)}><div style={{ display:"flex",flexDirection:"column",gap:8 }}>{serviciosActivos.map(s=><label key={s.id} style={{ display:"flex",alignItems:"center",gap:8,fontSize:14,padding:"6px 0" }}><input type="checkbox" checked={asigModal.servicios.includes(s.id)} onChange={e=>setAsigModal(d=>({ ...d, servicios:e.target.checked?[...d.servicios,s.id]:d.servicios.filter(x=>x!==s.id) }))}/>{s.nombre} <span style={{ color:"var(--color-text-secondary)",fontSize:12 }}>({s.duracionMinutos} min)</span></label>)}<div style={{ display:"flex",gap:8,marginTop:8 }}><Btn onClick={async()=>{ await api.setAgendaManicuraServicios(asigModal.userId,asigModal.servicios); await reloadData(); setAsigModal(null); }}>Guardar</Btn><Btn onClick={()=>setAsigModal(null)} variant="secondary">Cancelar</Btn></div></div></Modal>}
   </div>;
 }
 
 // ── APP PRINCIPAL ──────────────────────────────────────────────────
+function readSectionHash() {
+  const h = (window.location.hash || "").replace(/^#/, "").trim();
+  return h || null;
+}
+function defaultSectionForRole(role) {
+  return role === "manicura" ? "horarios" : "asistencia";
+}
+function sectionAllowedForRole(section, role) {
+  const admin = ["asistencia","horarios","turnos","reportes","adelantos","garantias","informes","manicuras","encargadas","locales","cobertura_config","perfil"];
+  const encargada = ["asistencia","horarios","turnos","reportes","adelantos","garantias","informes","manicuras","cobertura_config","perfil"];
+  const manicura = ["horarios","reportes","perfil"];
+  const allowed = role === "admin" ? admin : role === "encargada" ? encargada : manicura;
+  return allowed.includes(section);
+}
 export default function App() {
   const [data, setData] = useState(null);
   const [user, setUser] = useState(null);
@@ -4227,8 +4276,22 @@ export default function App() {
     return () => window.removeEventListener("resize", onResize);
   }, []);
 
+  useEffect(() => {
+    if (!user) return;
+    const syncHash = () => {
+      const target = readSectionHash();
+      if (target && sectionAllowedForRole(target, user.rol)) {
+        setSeccion(target);
+        if (target !== "horarios") setAgendaRequest(null);
+      }
+    };
+    window.addEventListener("hashchange", syncHash);
+    syncHash();
+    return () => window.removeEventListener("hashchange", syncHash);
+  }, [user]);
+
   if (loading) return <div style={{ minHeight:"100vh",display:"flex",alignItems:"center",justifyContent:"center" }}><p style={{ color:"var(--color-text-secondary)",fontSize:14 }}>Conectando con Supabase...</p></div>;
-  if (!user) return <Login onLogin={u=>{ setUser(u); setSeccion(u.rol==="manicura"?"horarios":"asistencia"); }} reloadData={reloadData}/>;
+  if (!user) return <Login onLogin={u=>{ setUser(u); const target=readSectionHash(); setSeccion(target && sectionAllowedForRole(target,u.rol) ? target : defaultSectionForRole(u.rol)); }} reloadData={reloadData}/>;
 
   const navAdmin = [
     {id:"asistencia",label:"Asistencia",icon:"📋"},
@@ -4327,7 +4390,7 @@ export default function App() {
           pointerEvents:isDesktopMenu||menuOpen?"auto":"none",
         }}>
           <div style={{ padding:"12px 8px",display:"flex",flexDirection:"column",gap:2,minWidth:220 }}>
-            {nav.map(item=><button key={item.id} onClick={()=>{ setSeccion(item.id); if(!isDesktopMenu) setMenuOpen(false); if(item.id!=="horarios") setAgendaRequest(null); }} style={{ display:"flex",alignItems:"center",gap:10,padding:"10px 12px",border:"none",borderRadius:8,cursor:"pointer",fontSize:14,textAlign:"left",background:seccion===item.id?COLORS.pinkLight:"transparent",color:seccion===item.id?COLORS.pinkDark:"var(--color-text-primary)",fontWeight:seccion===item.id?500:400,width:"100%" }}><span style={{ width:20,textAlign:"center",flexShrink:0 }}>{item.icon}</span>{item.label}</button>)}
+            {nav.map(item=><a key={item.id} href={`#${item.id}`} onClick={e=>{ if(e.ctrlKey||e.metaKey||e.shiftKey||e.button===1) return; e.preventDefault(); window.history.replaceState(null,"",`#${item.id}`); setSeccion(item.id); if(!isDesktopMenu) setMenuOpen(false); if(item.id!=="horarios") setAgendaRequest(null); }} style={{ display:"flex",alignItems:"center",gap:10,padding:"10px 12px",border:"none",borderRadius:8,cursor:"pointer",fontSize:14,textAlign:"left",background:seccion===item.id?COLORS.pinkLight:"transparent",color:seccion===item.id?COLORS.pinkDark:"var(--color-text-primary)",fontWeight:seccion===item.id?500:400,width:"100%",textDecoration:"none",boxSizing:"border-box" }}><span style={{ width:20,textAlign:"center",flexShrink:0 }}>{item.icon}</span>{item.label}</a>)}
           </div>
         </nav>
         <main style={{ flex:1,padding:"20px 16px",maxWidth:1280,width:"100%",margin:"0 auto" }}>
