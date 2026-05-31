@@ -3808,31 +3808,69 @@ function AgendaTurnos({ data, reloadData, user }) {
     sorted.forEach(t=>{ const s=agendaMin(t.inicio), e=agendaMin(t.fin); if(cluster.length && s>=clusterEnd) flush(); cluster.push(t); clusterEnd=Math.max(clusterEnd,e); });
     flush(); return out;
   };
-  const startDragTurno = (e, turno, calManicuras) => {
+  const startDragTurno = (e, turno, calManicuras, mode="move") => {
     if(e.button !== undefined && e.button !== 0) return;
     e.preventDefault(); e.stopPropagation();
     const rect = agendaGridRef.current?.getBoundingClientRect();
     if(!rect) return;
-    const dur = agendaMin(turno.fin) - agendaMin(turno.inicio);
+
     const original = { ...turno };
+    const originalStart = agendaMin(turno.inicio);
+    const originalEnd = agendaMin(turno.fin);
+    const dur = originalEnd - originalStart;
     const colW = (rect.width - 60) / Math.max(1, calManicuras.length);
+    const pointerStartX = e.clientX;
+    const pointerStartY = e.clientY;
+    const threshold = 7;
+    let moved = false;
+
+    const snapYToMin = (clientY) => {
+      const y = clientY - rect.top;
+      return calendarStart + Math.round((y / calendarSlotH) * calendarStep / 15) * 15;
+    };
+
     const update = (ev) => {
       ev.preventDefault();
-      const x = ev.clientX - rect.left - 60;
-      const y = ev.clientY - rect.top;
-      const col = Math.max(0, Math.min(calManicuras.length-1, Math.floor(x / colW)));
-      const raw = calendarStart + Math.round((y / calendarSlotH) * calendarStep / 15) * 15;
-      const start = Math.max(calendarStart, Math.min(calendarEnd - dur, raw));
-      const newUser = calManicuras[col]?.id || turno.userId;
-      const draft = { ...turno, userId:newUser, inicio:agendaTime(start), fin:agendaTime(start + dur), localId:parseInt(localId), fecha };
-      const nextDrag = { id:turno.id, draft, original }; dragTurnoRef.current = nextDrag; setDragTurno(nextDrag);
+      const dx = ev.clientX - pointerStartX;
+      const dy = ev.clientY - pointerStartY;
+      if(!moved && Math.hypot(dx, dy) < threshold) return;
+      moved = true;
+
+      let draft = { ...turno, localId:parseInt(localId), fecha };
+      const raw = snapYToMin(ev.clientY);
+
+      if (mode === "top") {
+        const start = Math.max(calendarStart, Math.min(originalEnd - 15, raw));
+        draft = { ...draft, inicio:agendaTime(start), fin:agendaTime(originalEnd), userId:turno.userId };
+      } else if (mode === "bottom") {
+        const end = Math.max(originalStart + 15, Math.min(calendarEnd, raw));
+        draft = { ...draft, inicio:agendaTime(originalStart), fin:agendaTime(end), userId:turno.userId };
+      } else {
+        const x = ev.clientX - rect.left - 60;
+        const col = Math.max(0, Math.min(calManicuras.length-1, Math.floor(x / colW)));
+        const start = Math.max(calendarStart, Math.min(calendarEnd - dur, raw));
+        const newUser = calManicuras[col]?.id || turno.userId;
+        draft = { ...draft, userId:newUser, inicio:agendaTime(start), fin:agendaTime(start + dur) };
+      }
+
+      const nextDrag = { id:turno.id, draft, original };
+      dragTurnoRef.current = nextDrag;
+      setDragTurno(nextDrag);
     };
+
     const up = async () => {
       window.removeEventListener("pointermove", update);
       window.removeEventListener("pointerup", up);
       const current = dragTurnoRef.current?.id === turno.id ? dragTurnoRef.current.draft : null;
       const d = current || original;
-      dragTurnoRef.current = null; setDragTurno(null);
+      dragTurnoRef.current = null;
+      setDragTurno(null);
+
+      if(!moved) {
+        if (mode === "move") openTurno(turno);
+        return;
+      }
+
       if(d.inicio===original.inicio && d.fin===original.fin && d.userId===original.userId) return;
       const warning = !isWithinHorario(d.userId, agendaMin(d.inicio), agendaMin(d.fin))
         ? "El turno queda fuera del horario disponible de la manicura. ¿Querés guardarlo igual?"
@@ -3905,9 +3943,13 @@ function AgendaTurnos({ data, reloadData, user }) {
                       return <div key={m} onClick={()=>libre&&openTurnoAt(man.id,m)} title={libre?"Agendar turno":"Sin disponibilidad"} style={{ position:"absolute",top:i*calendarSlotH,left:0,right:0,height:calendarSlotH,borderTop:"1px solid #eeeeee",background:libre?"transparent":"rgba(0,0,0,0.025)",cursor:libre?"cell":"not-allowed" }} />;
                     })}
                     {h && <div style={{ position:"absolute",top:Math.max(0,(hIni-calendarStart)/calendarStep*calendarSlotH),height:Math.max(0,(hFin-hIni)/calendarStep*calendarSlotH),left:3,right:3,border:`1px dashed ${COLORS.success}`,borderRadius:8,pointerEvents:"none",opacity:0.45 }} />}
-                    {turnos.map(t=>{ const serv=getServicio(t.servicioId); const cliente=getClienteLabel(t.clienteId); const meta=estadoTurnoMeta[t.estado]||estadoTurnoMeta.pendiente; const top=Math.max(0,(agendaMin(t.inicio)-calendarStart)/calendarStep*calendarSlotH); const height=Math.max(24,(agendaMin(t.fin)-agendaMin(t.inicio))/calendarStep*calendarSlotH-2); const lay=layout.get(t.id)||{lane:0,laneCount:1}; const gap=4; const widthPct=100/lay.laneCount; const leftCss=`calc(${lay.lane*widthPct}% + ${gap}px)`; const rightCss=`calc(${100-(lay.lane+1)*widthPct}% + ${gap}px)`; const pagos=getPagosTurno(t.id); return <div key={t.id} onPointerDown={e=>startDragTurno(e,t,calManicuras)} onDoubleClick={e=>{e.stopPropagation();openTurno(t);}} title="Arrastrar para mover. Doble clic para editar." style={{ position:"absolute",top,left:leftCss,right:rightCss,height,background:meta.bg,border:`1.5px solid ${meta.border}`,borderRadius:8,padding:"4px 6px",boxSizing:"border-box",cursor:"grab",overflow:"hidden",zIndex:dragTurno?.id===t.id?5:2,boxShadow:"0 2px 8px rgba(0,0,0,0.08)",touchAction:"none" }}>
-                      <p style={{ margin:0,fontSize:11,fontWeight:700,color:meta.fg,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis" }}>{t.inicio}-{t.fin} · {cliente}</p>
-                      <p style={{ margin:0,fontSize:10,color:meta.fg,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis",opacity:0.9 }}>{serv?.nombre||""}{pagos.length?` · $${Number(t.precioCobrado||0).toLocaleString("es-AR")}`:""}</p>
+                    {turnos.map(t=>{ const serv=getServicio(t.servicioId); const cliente=getClienteLabel(t.clienteId); const meta=estadoTurnoMeta[t.estado]||estadoTurnoMeta.pendiente; const top=Math.max(0,(agendaMin(t.inicio)-calendarStart)/calendarStep*calendarSlotH); const height=Math.max(28,(agendaMin(t.fin)-agendaMin(t.inicio))/calendarStep*calendarSlotH-2); const lay=layout.get(t.id)||{lane:0,laneCount:1}; const gap=4; const widthPct=100/lay.laneCount; const leftCss=`calc(${lay.lane*widthPct}% + ${gap}px)`; const rightCss=`calc(${100-(lay.lane+1)*widthPct}% + ${gap}px)`; const pagos=getPagosTurno(t.id); return <div key={t.id} title="Clic para editar · Arrastrar para mover · Bordes para ajustar horario" style={{ position:"absolute",top,left:leftCss,right:rightCss,height,background:meta.bg,border:`1.5px solid ${meta.border}`,borderRadius:8,padding:"7px 6px",boxSizing:"border-box",cursor:"grab",overflow:"hidden",zIndex:dragTurno?.id===t.id?5:2,boxShadow:"0 2px 8px rgba(0,0,0,0.08)",touchAction:"none" }}>
+                      <div onPointerDown={e=>startDragTurno(e,t,calManicuras,"top")} title="Arrastrar para ajustar inicio" style={{ position:"absolute",top:0,left:0,right:0,height:7,cursor:"ns-resize",background:meta.border,opacity:0.75,borderRadius:"7px 7px 0 0",touchAction:"none" }} />
+                      <div onPointerDown={e=>startDragTurno(e,t,calManicuras,"move")} style={{ position:"absolute",inset:"7px 0",padding:"0 6px",boxSizing:"border-box",cursor:"grab",touchAction:"none" }}>
+                        <p style={{ margin:0,fontSize:11,fontWeight:700,color:meta.fg,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis" }}>{t.inicio}-{t.fin} · {cliente}</p>
+                        <p style={{ margin:0,fontSize:10,color:meta.fg,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis",opacity:0.9 }}>{serv?.nombre||""}{pagos.length?` · $${Number(t.precioCobrado||0).toLocaleString("es-AR")}`:""}</p>
+                      </div>
+                      <div onPointerDown={e=>startDragTurno(e,t,calManicuras,"bottom")} title="Arrastrar para ajustar fin" style={{ position:"absolute",bottom:0,left:0,right:0,height:7,cursor:"ns-resize",background:meta.border,opacity:0.75,borderRadius:"0 0 7px 7px",touchAction:"none" }} />
                     </div>})}
                   </div>;
                 })}
