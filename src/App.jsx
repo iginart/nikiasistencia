@@ -219,6 +219,17 @@ const api = {
   createAgendaTurno: (d) => sb("agenda_turnos", { method:"POST", body:JSON.stringify(d) }),
   updateAgendaTurno: (id, d) => sb(`agenda_turnos?id=eq.${id}`, { method:"PATCH", body:JSON.stringify(d) }),
   deleteAgendaTurno: (id) => sb(`agenda_turnos?id=eq.${id}`, { method:"DELETE", prefer:"" }),
+  enviarEmailTurno: async (turnoId, tipo) => {
+    const res = await fetch(`${SUPABASE_URL}/functions/v1/enviar-email-turno`, {
+      method: "POST",
+      headers: { apikey: SUPABASE_KEY, Authorization: `Bearer ${SUPABASE_KEY}`, "Content-Type": "application/json" },
+      body: JSON.stringify({ turno_id: turnoId, tipo }),
+    });
+    const txt = await res.text();
+    const data = txt ? JSON.parse(txt) : null;
+    if (!res.ok || data?.ok === false) throw new Error(data?.error || txt || "No se pudo enviar el email");
+    return data;
+  },
   setEncargadoLocales: async (userId, localIds) => { await sb(`encargado_locales?user_id=eq.${userId}`, { method:"DELETE", prefer:"" }); if (!localIds?.length) return []; return sb("encargado_locales", { method:"POST", body:JSON.stringify(localIds.map(local_id=>({ user_id:userId, local_id:parseInt(local_id) }))) }); },
 };
 
@@ -3566,6 +3577,8 @@ function AgendaTurnos({ data, reloadData, user }) {
   const [manicuraId, setManicuraId] = useState("todas");
   const [modalTurno, setModalTurno] = useState(null);
   const [editingTurno, setEditingTurno] = useState(null);
+  const [sendTurnoEmail, setSendTurnoEmail] = useState(true);
+  const [emailTurnoMsg, setEmailTurnoMsg] = useState("");
   const [clienteQuick, setClienteQuick] = useState(null);
   const [turnoWarning, setTurnoWarning] = useState(null);
   const [servicioModal, setServicioModal] = useState(null);
@@ -3731,12 +3744,13 @@ function AgendaTurnos({ data, reloadData, user }) {
   const serviciosAsignadosFor = (uid) => Array.from(serviciosPorManicura.get(parseInt(uid))?.values() || []);
   const serviciosParaManicura = (uid) => serviciosActivos.filter(s=>puedeManicuraServicio(uid,s.id)).map(s=>({ ...s, duracionMinutos:getDuracionServicioManicura(uid,s.id) }));
   const getClienteLabel = (id) => { const c=data.agendaClientes?.find(x=>x.id===id); return c ? `${c.nombre} ${c.apellido}`.trim() : "Sin cliente"; };
+  const getCliente = (id) => data.agendaClientes?.find(x=>x.id===parseInt(id));
   const getServicio = id => data.agendaServicios?.find(s=>s.id===id);
   const getManicura = id => data.users.find(u=>u.id===id);
   const getLista = id => data.agendaListasPrecios?.find(l=>l.id===id);
   const estadoTurnoMeta = {
     pendiente:{label:"Pendiente",bg:COLORS.infoLight,fg:COLORS.info,border:COLORS.info,activeBg:COLORS.info,activeFg:"#fff"},
-    confirmado:{label:"Confirmado",bg:COLORS.amberLight,fg:COLORS.amber,border:COLORS.amber,activeBg:COLORS.amber,activeFg:"#fff"},
+    confirmado:{label:"Confirmado",bg:"#fff0dd",fg:"#a85f00",border:"#f0a34a",activeBg:"#f0a34a",activeFg:"#fff"},
     asiste:{label:"Asiste",bg:COLORS.pinkLight,fg:COLORS.pinkDark,border:COLORS.pink,activeBg:COLORS.pink,activeFg:"#fff"},
     "no asiste":{label:"No asiste",bg:"#f3eadc",fg:"#7a5732",border:"#b89363",activeBg:"#d2b48c",activeFg:"#fff"},
     "en espera":{label:"En espera",bg:COLORS.successLight,fg:COLORS.success,border:COLORS.success,activeBg:COLORS.success,activeFg:"#fff"},
@@ -3825,8 +3839,12 @@ function AgendaTurnos({ data, reloadData, user }) {
 
   const openTurno = (t=null) => {
     setEditingTurno(t);
-    const base = t || { fecha, localId:parseInt(localId)||localesPermitidos[0]?.id, userId:manicurasLocal[0]?.id||"", clienteId:clientesActivos[0]?.id||"", servicioId:"", inicio:"", fin:"", estado:"pendiente", formaPago:"", precio:0, precioEfectivo:0, precioCobrado:0, observacion:"" };
-    setModalTurno(buildTurnoDraft(base));
+    setEmailTurnoMsg("");
+    const base = t || { fecha, localId:parseInt(localId)||localesPermitidos[0]?.id, userId:manicurasLocal[0]?.id||"", clienteId:"", servicioId:"", inicio:"", fin:"", estado:"pendiente", formaPago:"", precio:0, precioEfectivo:0, precioCobrado:0, observacion:"" };
+    const draft = buildTurnoDraft(base);
+    setModalTurno(draft);
+    const cli = data.agendaClientes?.find(c=>c.id===parseInt(draft.clienteId));
+    setSendTurnoEmail(!!cli?.email);
     setClienteQuick(null);
   };
 
@@ -3834,6 +3852,8 @@ function AgendaTurnos({ data, reloadData, user }) {
     if (!isWithinHorario(uid,startMin,startMin+15)) return;
     const lista = getDefaultLista(localId);
     setEditingTurno(null);
+    setEmailTurnoMsg("");
+    setSendTurnoEmail(false);
     setModalTurno(buildTurnoDraft({ fecha, localId:parseInt(localId), userId:uid, clienteId:"", servicioId:"", listaId:lista?.id||"", inicio:agendaTime(startMin), fin:agendaTime(startMin+60), estado:"pendiente", formaPago:"", precio:0, precioEfectivo:0, precioCobrado:0, observacion:"" }));
     setClienteQuick(null);
   };
@@ -3848,7 +3868,10 @@ function AgendaTurnos({ data, reloadData, user }) {
     const created = await api.createAgendaCliente({ nombre:(clienteQuick.nombre||"").trim(), apellido:(clienteQuick.apellido||"").trim(), email:(clienteQuick.email||"").trim(), telefono:(clienteQuick.telefono||"").trim(), activo:true });
     await reloadData();
     const id = Array.isArray(created) ? created[0]?.id : created?.id;
-    if (id) setModalTurno(d=>({...d,clienteId:id}));
+    if (id) {
+      setModalTurno(d=>({...d,clienteId:id}));
+      setSendTurnoEmail(!!clienteQuick?.email);
+    }
     setClienteQuick(null);
     return id;
   };
@@ -3856,7 +3879,8 @@ function AgendaTurnos({ data, reloadData, user }) {
   const persistTurnoDraft = async (d, turnoId=null) => {
     const finalDraft = d.estado === "no asiste" && d.inicio ? { ...d, fin:agendaTime(agendaMin(d.inicio)+5) } : d;
     const payload={ fecha:finalDraft.fecha, local_id:parseInt(finalDraft.localId), user_id:parseInt(finalDraft.userId), cliente_id:parseInt(finalDraft.clienteId), servicio_id:parseInt(finalDraft.servicioId), lista_id:finalDraft.listaId?parseInt(finalDraft.listaId):null, inicio:finalDraft.inicio, fin:finalDraft.fin, estado:finalDraft.estado, forma_pago:finalDraft.formaPago||null, precio:finalDraft.precio||0, precio_efectivo:finalDraft.precioEfectivo||0, precio_cobrado:finalDraft.precioCobrado||0, observacion:finalDraft.observacion||null, creado_por_user_id:user.id };
-    if(turnoId) await api.updateAgendaTurno(turnoId,payload); else await api.createAgendaTurno(payload);
+    const saved = turnoId ? await api.updateAgendaTurno(turnoId,payload) : await api.createAgendaTurno(payload);
+    return Array.isArray(saved) ? saved[0] : saved;
   };
 
   const saveTurno = async (force=false) => {
@@ -3879,7 +3903,15 @@ function AgendaTurnos({ data, reloadData, user }) {
     }
     setSaving(true);
     try{
-      await persistTurnoDraft(d, editingTurno?.id);
+      const savedTurno = await persistTurnoDraft(d, editingTurno?.id);
+      if (sendTurnoEmail && savedTurno?.id) {
+        try {
+          await api.enviarEmailTurno(savedTurno.id, editingTurno ? "modificacion" : "alta");
+          setEmailTurnoMsg("Email enviado al cliente.");
+        } catch(emailErr) {
+          alert("El turno se guardó, pero no se pudo enviar el email: " + (emailErr.message || emailErr));
+        }
+      }
       await reloadData(); setModalTurno(null); setEditingTurno(null); setTurnoWarning(null);
     } catch(e){ alert("Error al guardar turno: "+e.message); }
     setSaving(false);
@@ -3891,6 +3923,11 @@ function AgendaTurnos({ data, reloadData, user }) {
     setSaving(true);
     try {
       await api.updateAgendaTurno(t.id, { estado:"cancelado", actualizado_en:new Date().toISOString() });
+      const cli = getCliente(t.clienteId);
+      if (cli?.email) {
+        try { await api.enviarEmailTurno(t.id, "cancelacion"); }
+        catch(emailErr) { alert("El turno se canceló, pero no se pudo enviar el email: " + (emailErr.message || emailErr)); }
+      }
       await reloadData();
       setCancelTurnoTarget(null);
       setModalTurno(null);
@@ -4290,7 +4327,7 @@ function AgendaTurnos({ data, reloadData, user }) {
       <ModalSelect label="Local" value={modalTurno.localId||""} onChange={v=>{ const lista=getDefaultLista(v); setModalTurno(d=>({...d,localId:v,userId:"",servicioId:"",listaId:lista?.id||"",inicio:"",fin:"",precio:0,precioEfectivo:0})); }}>{localesPermitidos.map(l=><option key={l.id} value={l.id}>{l.nombre}</option>)}</ModalSelect>
       <ModalSelect label="Manicura" value={modalTurno.userId||""} onChange={v=>setModalTurno(d=>{ const servicioOk = d.servicioId && puedeManicuraServicio(v,d.servicioId); const dur = servicioOk ? getDuracionServicioManicura(v,d.servicioId) : 60; return {...d,userId:v,servicioId:servicioOk?d.servicioId:"",fin:d.inicio?agendaTime(agendaMin(d.inicio)+dur):"",precio:servicioOk?d.precio:0,precioEfectivo:servicioOk?d.precioEfectivo:0}; })}><option value="">Seleccionar...</option>{manicurasPermitidas.filter(m=>m.localId===parseInt(modalTurno.localId) && (!modalTurno.servicioId || puedeManicuraServicio(m.id,modalTurno.servicioId))).map(m=><option key={m.id} value={m.id}>{m.nombre}</option>)}</ModalSelect>
       <div>
-        <SearchableSelect label="Cliente" value={modalTurno.clienteId||""} onChange={v=>{ setClienteQuick(null); setModalTurno(d=>({...d,clienteId:v})); }} options={clienteOptions} placeholder="Buscar cliente por nombre, mail o teléfono..."/>
+        <SearchableSelect label="Cliente" value={modalTurno.clienteId||""} onChange={v=>{ setClienteQuick(null); setModalTurno(d=>({...d,clienteId:v})); const cli=data.agendaClientes?.find(c=>c.id===parseInt(v)); setSendTurnoEmail(!!cli?.email); setEmailTurnoMsg(""); }} options={clienteOptions} placeholder="Buscar cliente por nombre, mail o teléfono..."/>
         {!clienteQuick && <button onClick={()=>{setClienteQuick({nombre:"",apellido:"",email:"",telefono:""});setModalTurno(d=>({...d,clienteId:""}));}} style={{ marginTop:6,background:"transparent",border:"none",color:COLORS.pink,cursor:"pointer",fontSize:12,fontWeight:600 }}>+ Alta rápida de cliente</button>}
       </div>
       {clienteQuick && <div style={{ gridColumn:"1 / -1",background:COLORS.pinkLight,borderRadius:10,padding:10,display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(180px,1fr))",gap:8 }}>
@@ -4308,6 +4345,14 @@ function AgendaTurnos({ data, reloadData, user }) {
       <div style={{ background:"#fafafa",border:"1px solid #eee",borderRadius:10,padding:"9px 12px" }}><p style={{ margin:"0 0 3px",fontSize:12,color:"var(--color-text-secondary)" }}>Lista aplicada</p><p style={{ margin:0,fontSize:14,fontWeight:700 }}>{getLista(modalTurno.listaId)?.nombre || "Sin lista para el local"}</p></div>
       <div style={{ background:"#fafafa",border:"1px solid #eee",borderRadius:10,padding:"9px 12px" }}><p style={{ margin:"0 0 3px",fontSize:12,color:"var(--color-text-secondary)" }}>Precio lista / efectivo</p><p style={{ margin:0,fontSize:14,fontWeight:700 }}>${Number(modalTurno.precio||0).toLocaleString("es-AR")} · ${Number(modalTurno.precioEfectivo||0).toLocaleString("es-AR")}</p></div>
       <div style={{ background:COLORS.successLight,border:`1px solid ${COLORS.success}22`,borderRadius:10,padding:"9px 12px" }}><p style={{ margin:"0 0 3px",fontSize:12,color:COLORS.success }}>Cobranza</p><p style={{ margin:"0 0 8px",fontSize:14,fontWeight:700,color:COLORS.success }}>${Number(modalTurno.precioCobrado||0).toLocaleString("es-AR")} {modalTurno.formaPago?`· ${modalTurno.formaPago}`:"· pendiente"}</p>{editingTurno ? (modalTurno.estado==="asiste" ? <Btn onClick={()=>openPago(editingTurno)} size="sm" variant="success">Pagar</Btn> : <span style={{ fontSize:11,color:"var(--color-text-secondary)" }}>Para cobrar, primero marcá el turno como Asiste.</span>) : <span style={{ fontSize:11,color:"var(--color-text-secondary)" }}>Guardá el turno para registrar pagos combinados.</span>}</div>
+      {(() => { const cli=getCliente(modalTurno.clienteId); return <div style={{ gridColumn:"1 / -1",background:"#fafafa",border:"1px solid #eee",borderRadius:10,padding:"9px 12px" }}>
+        <label style={{ display:"flex",alignItems:"center",gap:8,fontSize:13,fontWeight:600,color:cli?.email?"#333":"#999" }}>
+          <input type="checkbox" checked={sendTurnoEmail && !!cli?.email} disabled={!cli?.email} onChange={e=>setSendTurnoEmail(e.target.checked)}/>
+          Enviar email al cliente {editingTurno ? "al guardar cambios" : "al crear el turno"}
+        </label>
+        <p style={{ margin:"4px 0 0",fontSize:11,color:"var(--color-text-secondary)" }}>{cli?.email ? `Se enviará a ${cli.email}` : "El cliente no tiene email cargado."}</p>
+        {emailTurnoMsg && <p style={{ margin:"4px 0 0",fontSize:11,color:COLORS.success }}>{emailTurnoMsg}</p>}
+      </div>; })()}
       <div style={{ gridColumn:"1 / -1" }}><label style={{ fontSize:13,fontWeight:500,color:"#555",display:"block",marginBottom:6 }}>Observación</label><textarea value={modalTurno.observacion||""} onChange={e=>setModalTurno(d=>({...d,observacion:e.target.value}))} style={{ width:"100%",minHeight:70,border:"1.5px solid #e0e0e0",borderRadius:8,padding:"9px 12px",boxSizing:"border-box" }}/></div>
       <div style={{ gridColumn:"1 / -1",display:"flex",gap:8,justifyContent:"space-between",alignItems:"center",flexWrap:"wrap" }}>
         <div>{editingTurno && editingTurno.estado!=="cancelado" && <Btn onClick={()=>setCancelTurnoTarget(editingTurno)} variant="danger">Cancelar turno</Btn>}</div>
