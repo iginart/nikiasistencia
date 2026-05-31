@@ -3735,7 +3735,7 @@ function AgendaTurnos({ data, reloadData, user }) {
     pendiente:{label:"Pendiente",bg:COLORS.infoLight,fg:COLORS.info,border:COLORS.info},
     confirmado:{label:"Confirmado",bg:COLORS.amberLight,fg:COLORS.amber,border:COLORS.amber},
     asiste:{label:"Asiste",bg:COLORS.pinkLight,fg:COLORS.pinkDark,border:COLORS.pink},
-    "no asiste":{label:"No asiste",bg:COLORS.dangerLight,fg:COLORS.danger,border:COLORS.danger},
+    "no asiste":{label:"No asiste",bg:COLORS.amberLight,fg:COLORS.amber,border:COLORS.amber},
     "en espera":{label:"En espera",bg:COLORS.successLight,fg:COLORS.success,border:COLORS.success},
   };
   const calendarStart = 10 * 60;
