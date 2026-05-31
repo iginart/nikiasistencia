@@ -196,8 +196,9 @@ const api = {
   getAgendaLocalListas: () => sb("agenda_local_listas?select=*"),
   setAgendaLocalListas: async (localId, listaIds) => {
     await sb(`agenda_local_listas?local_id=eq.${parseInt(localId)}`, { method:"DELETE", prefer:"" });
-    if (!listaIds?.length) return [];
-    return sb("agenda_local_listas", { method:"POST", body:JSON.stringify(listaIds.map((lista_id,idx)=>({ local_id:parseInt(localId), lista_id:parseInt(lista_id), predeterminada:idx===0, activo:true }))) });
+    const ids = Array.isArray(listaIds) ? listaIds.filter(Boolean) : (listaIds ? [listaIds] : []);
+    if (!ids.length) return [];
+    return sb("agenda_local_listas", { method:"POST", body:JSON.stringify(ids.slice(0,1).map((lista_id,idx)=>({ local_id:parseInt(localId), lista_id:parseInt(lista_id), predeterminada:idx===0, activo:true }))) });
   },
   createAgendaLocalLista: (d) => sb("agenda_local_listas", { method:"POST", body:JSON.stringify(d) }),
   deleteAgendaLocalLista: (localId, listaId) => sb(`agenda_local_listas?local_id=eq.${parseInt(localId)}&lista_id=eq.${parseInt(listaId)}`, { method:"DELETE", prefer:"" }),
@@ -1543,6 +1544,11 @@ function ABMLocales({ data, reloadData }) {
   const [modal, setModal] = useState(null);
   const [form, setForm] = useState({});
   const [saving, setSaving] = useState(false);
+  const [listaLocalModal, setListaLocalModal] = useState(null);
+  const getListaLocal = (localId) => {
+    const rel = (data.agendaLocalListas||[]).find(x=>x.localId===localId&&x.activo);
+    return rel ? (data.agendaListasPrecios||[]).find(l=>l.id===rel.listaId) : null;
+  };
   const openNew = () => { setForm({nombre:"",direccion:"",codigoExterno:""}); setModal("new"); };
   const openEdit = l => { setForm({...l,codigoExterno:l.codigo_externo||l.codigoExterno||""}); setModal("edit"); };
   const save = async () => {
@@ -1567,12 +1573,15 @@ function ABMLocales({ data, reloadData }) {
       <div style={{ display:"flex",flexDirection:"column",gap:8 }}>
         {data.locales.map(l=>{
           const qty=data.users.filter(u=>u.localId===l.id&&u.rol==="manicura").length;
+          const lista = getListaLocal(l.id);
           return <Card key={l.id} style={{ display:"flex",alignItems:"center",gap:12,flexWrap:"wrap" }}>
             <div style={{ flex:1 }}>
               <p style={{ margin:0,fontWeight:500,fontSize:14 }}>{l.nombre}</p>
               <p style={{ margin:0,fontSize:12,color:"var(--color-text-secondary)" }}>{l.direccion}{(l.codigo_externo||l.codigoExterno)?` · Código externo: ${l.codigo_externo||l.codigoExterno}`:""}</p>
+              <p style={{ margin:"3px 0 0",fontSize:12,color:lista?COLORS.success:"var(--color-text-secondary)" }}>Lista de precios: <strong>{lista?.nombre || "Sin lista asignada"}</strong></p>
             </div>
             <Badge color="info">{qty} manicura{qty!==1?"s":""}</Badge>
+            <Btn onClick={()=>setListaLocalModal({ localId:l.id, listaId:lista?.id||"" })} variant="secondary" size="sm">Lista de precios</Btn>
             <Btn onClick={()=>openEdit(l)} variant="ghost" size="sm">Editar</Btn>
             <Btn onClick={()=>del(l.id)} variant="ghost" size="sm" style={{ color:COLORS.danger }}>Eliminar</Btn>
           </Card>;
@@ -1586,6 +1595,19 @@ function ABMLocales({ data, reloadData }) {
           <div style={{ display:"flex",gap:8,marginTop:4 }}>
             <Btn onClick={save} disabled={saving} style={{ flex:1,justifyContent:"center" }}>{saving?"Guardando...":"Guardar"}</Btn>
             <Btn onClick={()=>setModal(null)} variant="secondary" style={{ flex:1,justifyContent:"center" }}>Cancelar</Btn>
+          </div>
+        </div>
+      </Modal>}
+      {listaLocalModal && <Modal title="Lista de precios del local" onClose={()=>setListaLocalModal(null)}>
+        <div style={{ display:"flex",flexDirection:"column",gap:14 }}>
+          <p style={{ margin:0,fontSize:13,color:"var(--color-text-secondary)" }}>Elegí la lista global que utilizará <strong>{data.locales.find(l=>l.id===parseInt(listaLocalModal.localId))?.nombre}</strong> para los turnos.</p>
+          <ModalSelect label="Lista asignada" value={listaLocalModal.listaId||""} onChange={v=>setListaLocalModal(d=>({...d,listaId:v}))}>
+            <option value="">Sin lista asignada</option>
+            {(data.agendaListasPrecios||[]).filter(l=>l.activo).map(l=><option key={l.id} value={l.id}>{l.nombre}</option>)}
+          </ModalSelect>
+          <div style={{ display:"flex",gap:8,marginTop:4 }}>
+            <Btn onClick={async()=>{ await api.setAgendaLocalListas(listaLocalModal.localId, listaLocalModal.listaId?[listaLocalModal.listaId]:[]); await reloadData(); setListaLocalModal(null); }} style={{ flex:1,justifyContent:"center" }}>Guardar</Btn>
+            <Btn onClick={()=>setListaLocalModal(null)} variant="secondary" style={{ flex:1,justifyContent:"center" }}>Cancelar</Btn>
           </div>
         </div>
       </Modal>}
@@ -3611,18 +3633,16 @@ function AgendaTurnos({ data, reloadData, user }) {
   const importHelp = (type) => ({
     servicios: "Columnas esperadas: Nombre, Descripcion, Tipo, DuracionMinutos, Activo. Si el servicio ya existe por nombre, se actualiza.",
     clientes: "Columnas esperadas: Nombre, Apellido, Email, Telefono, Activo. Si el cliente ya existe por nombre y apellido, se actualiza.",
-    listas: "Columnas esperadas: Lista, Descripcion, Activa. Opcional: Local para asociarla automáticamente a un local.",
+    listas: "Columnas esperadas: Lista, Descripcion, Activa. Las listas son globales y no llevan local.",
     precios: "Columnas esperadas: Lista, Servicio, PrecioLista, PrecioEfectivo. El precio pertenece a la lista, no al local.",
   }[type] || "");
   const findLocal = (name) => data.locales.find(l => normKey(l.nombre) === normKey(name)) || data.locales.find(l => String(l.id) === String(name));
   const findServicio = (name) => (data.agendaServicios||[]).find(s => normKey(s.nombre) === normKey(name)) || (data.agendaServicios||[]).find(s => String(s.id) === String(name));
-  const findLista = (localId2, name) => (data.agendaListasPrecios||[]).find(l => String(l.id) === String(name)) || (data.agendaListasPrecios||[]).find(l => normKey(l.nombre) === normKey(name));
+  const findLista = (name) => (data.agendaListasPrecios||[]).find(l => String(l.id) === String(name)) || (data.agendaListasPrecios||[]).find(l => normKey(l.nombre) === normKey(name));
   const listasAsignadasA = (localId2) => {
     const lid = parseInt(localId2);
     const rels = (data.agendaLocalListas||[]).filter(x => x.localId===lid && x.activo);
     const ids = new Set(rels.map(x=>x.listaId));
-    const legacy = (data.agendaListasPrecios||[]).filter(l=>l.localId===lid).map(l=>l.id);
-    legacy.forEach(id=>ids.add(id));
     return (data.agendaListasPrecios||[]).filter(l=>l.activo && ids.has(l.id));
   };
   const runImport = async () => {
@@ -3646,18 +3666,14 @@ function AgendaTurnos({ data, reloadData, user }) {
             const existing = (data.agendaClientes||[]).find(c=>normKey(c.nombre)===normKey(nombre)&&normKey(c.apellido)===normKey(apellido));
             if (existing) { await api.updateAgendaCliente(existing.id,payload); updated++; } else { await api.createAgendaCliente(payload); created++; }
           } else if (importModal === "listas") {
-            const localName = normTxt(rowVal(r,["Local"])); const local = localName ? findLocal(localName) : localActual;
             const lista = normTxt(rowVal(r,["Lista","Nombre","ListaPrecio"]));
-            if (!local || !localesPermitidos.some(l=>l.id===local.id)) { errors.push(`Fila ${rowNo}: local no permitido o inexistente`); continue; }
             if (!lista) { errors.push(`Fila ${rowNo}: falta Lista`); continue; }
-            const payload = { local_id:local.id, nombre:lista, descripcion:normTxt(rowVal(r,["Descripcion","Descripción"])), activo:toBool(rowVal(r,["Activa","Activo"])) };
-            const existing = findLista(local.id, lista);
+            const payload = { nombre:lista, descripcion:normTxt(rowVal(r,["Descripcion","Descripción"])), activo:toBool(rowVal(r,["Activa","Activo"])) };
+            const existing = findLista(lista);
             if (existing) { await api.updateAgendaListaPrecio(existing.id,payload); updated++; } else { await api.createAgendaListaPrecio(payload); created++; }
           } else if (importModal === "precios") {
-            const localName = normTxt(rowVal(r,["Local"])); const local = localName ? findLocal(localName) : localActual;
             const listaName = normTxt(rowVal(r,["Lista","ListaPrecio"])); const servicioName = normTxt(rowVal(r,["Servicio","NombreServicio"]));
-            if (!local || !localesPermitidos.some(l=>l.id===local.id)) { errors.push(`Fila ${rowNo}: local no permitido o inexistente`); continue; }
-            const lista = findLista(local.id, listaName); const servicio = findServicio(servicioName);
+            const lista = findLista(listaName); const servicio = findServicio(servicioName);
             if (!lista) { errors.push(`Fila ${rowNo}: lista no encontrada (${listaName})`); continue; }
             if (!servicio) { errors.push(`Fila ${rowNo}: servicio no encontrado (${servicioName})`); continue; }
             await api.upsertAgendaPrecioServicio({ lista_id:lista.id, servicio_id:servicio.id, precio_lista:toNum(rowVal(r,["PrecioLista","Precio Lista","Lista"])), precio_efectivo:toNum(rowVal(r,["PrecioEfectivo","Precio Efectivo","Efectivo"])) });
@@ -3686,6 +3702,7 @@ function AgendaTurnos({ data, reloadData, user }) {
 
   const localActual = data.locales.find(l=>l.id===parseInt(localId));
   const listasLocal = listasAsignadasA(localId);
+  const listaLocalActual = listasLocal[0] || null;
   const manicurasLocal = manicurasPermitidas.filter(m=>!localId || m.localId===parseInt(localId));
   const turnosDia = (data.agendaTurnos||[]).filter(t=>t.fecha===fecha && (!localId || t.localId===parseInt(localId)) && (manicuraId==="todas" || t.userId===parseInt(manicuraId)));
   const serviciosActivos = (data.agendaServicios||[]).filter(s=>s.activo);
@@ -4157,10 +4174,10 @@ function AgendaTurnos({ data, reloadData, user }) {
   </div>;
 
   const renderPrecios = () => <div style={{ display:"grid",gap:14 }}>
-    <div style={{ display:"flex",gap:8,alignItems:"center",flexWrap:"wrap" }}><Select value={localId} onChange={setLocalId} style={{ maxWidth:260 }}>{localesPermitidos.map(l=><option key={l.id} value={l.id}>{l.nombre}</option>)}</Select><Btn onClick={()=>setListaModal({ nombre:"Lista general", descripcion:"", activo:true, asignarLocal:true })} size="sm">+ Lista</Btn><Btn onClick={()=>setListaAsignacionModal({ localId:parseInt(localId), listaIds:listasLocal.map(l=>l.id) })} variant="secondary" size="sm">Asociar listas al local</Btn><Btn onClick={()=>openImport("listas")} variant="secondary" size="sm">Importar listas</Btn><Btn onClick={()=>openImport("precios")} variant="secondary" size="sm">Importar precios</Btn><Btn onClick={()=>setBulkModal({ listaId:listasLocal[0]?.id||"", pctLista:0, pctEfectivo:0, redondeo:100 })} variant="secondary" size="sm">Ajuste masivo %</Btn></div>
-    <div style={{ background:COLORS.infoLight,color:COLORS.info,borderRadius:10,padding:"9px 12px",fontSize:13 }}>Las listas de precios son globales. Primero se crean listas y luego se asocian a uno o más locales. Los precios pertenecen a la lista.</div>
-    {!listasLocal.length&&<Card><p style={{ margin:0,fontSize:14,color:"var(--color-text-secondary)" }}>Este local no tiene listas asociadas. Usá <strong>Asociar listas al local</strong> para seleccionar qué listas utiliza.</p></Card>}
-    {listasLocal.map(l=><Card key={l.id}><div style={{ display:"flex",justifyContent:"space-between",gap:8,alignItems:"center",marginBottom:10 }}><div><h3 style={{ margin:0,fontSize:15 }}>{l.nombre}</h3><p style={{ margin:"3px 0 0",fontSize:12,color:"var(--color-text-secondary)" }}>{l.descripcion||"Sin descripción"}</p></div><div style={{ display:"flex",gap:6,flexWrap:"wrap" }}><Btn onClick={()=>setListaModal({...l})} variant="ghost" size="sm">Editar lista</Btn><Btn onClick={async()=>{ await api.deleteAgendaLocalLista(localId,l.id); await reloadData(); }} variant="ghost" size="sm" style={{ color:COLORS.danger }}>Quitar del local</Btn></div></div><div style={{ overflowX:"auto" }}><table style={{ width:"100%",borderCollapse:"collapse",fontSize:13 }}><tbody>{serviciosActivos.map(s=>{ const key=`${l.id}-${s.id}`; const p=precioEdit[key]||precioByKey.get(key)||{precioLista:0,precioEfectivo:0}; return <tr key={s.id}><td style={{ padding:"7px 8px",borderTop:"1px solid #f1f1f1",minWidth:180 }}>{s.nombre}</td><td style={{ padding:"7px 8px",borderTop:"1px solid #f1f1f1" }}><input type="number" value={p.precioLista} onChange={e=>setPrecioEdit(v=>({...v,[key]:{...p,precioLista:e.target.value}}))} placeholder="Lista" style={{ width:110,border:"0.5px solid #ddd",borderRadius:6,padding:"6px 8px" }}/></td><td style={{ padding:"7px 8px",borderTop:"1px solid #f1f1f1" }}><input type="number" value={p.precioEfectivo} onChange={e=>setPrecioEdit(v=>({...v,[key]:{...p,precioEfectivo:e.target.value}}))} placeholder="Efectivo" style={{ width:110,border:"0.5px solid #ddd",borderRadius:6,padding:"6px 8px" }}/></td><td style={{ padding:"7px 8px",borderTop:"1px solid #f1f1f1" }}><Btn onClick={async()=>{ await api.upsertAgendaPrecioServicio({ lista_id:l.id, servicio_id:s.id, precio_lista:Number(p.precioLista||0), precio_efectivo:Number(p.precioEfectivo||0) }); await reloadData(); }} size="sm" variant="secondary">Guardar</Btn></td></tr>})}</tbody></table></div></Card>)}
+    <div style={{ display:"flex",gap:8,alignItems:"center",flexWrap:"wrap" }}><Select value={localId} onChange={setLocalId} style={{ maxWidth:260 }}>{localesPermitidos.map(l=><option key={l.id} value={l.id}>{l.nombre}</option>)}</Select><Btn onClick={()=>setListaModal({ nombre:"", descripcion:"", activo:true })} size="sm">+ Nueva lista global</Btn><Btn onClick={()=>setListaAsignacionModal({ localId:parseInt(localId), listaId:listaLocalActual?.id || "" })} variant="secondary" size="sm">Asignar lista al local</Btn><Btn onClick={()=>openImport("listas")} variant="secondary" size="sm">Importar listas</Btn><Btn onClick={()=>openImport("precios")} variant="secondary" size="sm">Importar precios</Btn><Btn onClick={()=>setBulkModal({ listaId:listaLocalActual?.id||"", pctLista:0, pctEfectivo:0, redondeo:100 })} variant="secondary" size="sm">Ajuste masivo %</Btn></div>
+    <div style={{ background:COLORS.infoLight,color:COLORS.info,borderRadius:10,padding:"9px 12px",fontSize:13 }}>Las listas de precios son globales. Primero se crean sin local. Después cada local tiene asignada una única lista activa para sus turnos.</div>
+    {!listaLocalActual&&<Card><p style={{ margin:0,fontSize:14,color:"var(--color-text-secondary)" }}>Este local no tiene lista asignada. Usá <strong>Asignar lista al local</strong> para elegir una lista global.</p></Card>}
+    {listaLocalActual&&<Card key={listaLocalActual.id}><div style={{ display:"flex",justifyContent:"space-between",gap:8,alignItems:"center",marginBottom:10,flexWrap:"wrap" }}><div><p style={{ margin:"0 0 4px",fontSize:11,color:"var(--color-text-secondary)",textTransform:"uppercase",letterSpacing:"0.04em" }}>Lista asignada al local</p><h3 style={{ margin:0,fontSize:15 }}>{listaLocalActual.nombre}</h3><p style={{ margin:"3px 0 0",fontSize:12,color:"var(--color-text-secondary)" }}>{listaLocalActual.descripcion||"Sin descripción"}</p></div><div style={{ display:"flex",gap:6,flexWrap:"wrap" }}><Btn onClick={()=>setListaModal({...listaLocalActual})} variant="ghost" size="sm">Editar lista</Btn><Btn onClick={()=>setListaAsignacionModal({ localId:parseInt(localId), listaId:listaLocalActual.id })} variant="ghost" size="sm">Cambiar lista</Btn><Btn onClick={async()=>{ await api.setAgendaLocalListas(localId,[]); await reloadData(); }} variant="ghost" size="sm" style={{ color:COLORS.danger }}>Quitar asignación</Btn></div></div><div style={{ overflowX:"auto" }}><table style={{ width:"100%",borderCollapse:"collapse",fontSize:13 }}><thead><tr><th style={{ textAlign:"left",padding:"7px 8px",color:"var(--color-text-secondary)",fontSize:11,textTransform:"uppercase" }}>Servicio</th><th style={{ textAlign:"left",padding:"7px 8px",color:"var(--color-text-secondary)",fontSize:11,textTransform:"uppercase" }}>Precio lista</th><th style={{ textAlign:"left",padding:"7px 8px",color:"var(--color-text-secondary)",fontSize:11,textTransform:"uppercase" }}>Precio efectivo</th><th></th></tr></thead><tbody>{serviciosActivos.map(s=>{ const l=listaLocalActual; const key=`${l.id}-${s.id}`; const p=precioEdit[key]||precioByKey.get(key)||{precioLista:0,precioEfectivo:0}; return <tr key={s.id}><td style={{ padding:"7px 8px",borderTop:"1px solid #f1f1f1",minWidth:180 }}>{s.nombre}</td><td style={{ padding:"7px 8px",borderTop:"1px solid #f1f1f1" }}><input type="number" value={p.precioLista} onChange={e=>setPrecioEdit(v=>({...v,[key]:{...p,precioLista:e.target.value}}))} placeholder="Lista" style={{ width:110,border:"0.5px solid #ddd",borderRadius:6,padding:"6px 8px" }}/></td><td style={{ padding:"7px 8px",borderTop:"1px solid #f1f1f1" }}><input type="number" value={p.precioEfectivo} onChange={e=>setPrecioEdit(v=>({...v,[key]:{...p,precioEfectivo:e.target.value}}))} placeholder="Efectivo" style={{ width:110,border:"0.5px solid #ddd",borderRadius:6,padding:"6px 8px" }}/></td><td style={{ padding:"7px 8px",borderTop:"1px solid #f1f1f1" }}><Btn onClick={async()=>{ await api.upsertAgendaPrecioServicio({ lista_id:l.id, servicio_id:s.id, precio_lista:Number(p.precioLista||0), precio_efectivo:Number(p.precioEfectivo||0) }); await reloadData(); }} size="sm" variant="secondary">Guardar</Btn></td></tr>})}</tbody></table></div></Card>}
   </div>;
 
   const renderClientes = () => {
@@ -4280,8 +4297,8 @@ function AgendaTurnos({ data, reloadData, user }) {
     </div></Modal>}
     {servicioModal&&<Modal title={servicioModal.id?"Editar servicio":"Nuevo servicio"} onClose={()=>setServicioModal(null)}><div style={{ display:"flex",flexDirection:"column",gap:12 }}><ModalInput label="Nombre" value={servicioModal.nombre} onChange={v=>setServicioModal(d=>({...d,nombre:v}))}/><ModalSelect label="Tipo" value={servicioModal.tipo} onChange={v=>setServicioModal(d=>({...d,tipo:v}))}>{SERVICIO_TIPOS.map(t=><option key={t} value={t}>{t}</option>)}</ModalSelect><ModalInput label="Duración en minutos" type="number" value={servicioModal.duracionMinutos} onChange={v=>setServicioModal(d=>({...d,duracionMinutos:v}))}/><ModalInput label="Descripción" value={servicioModal.descripcion} onChange={v=>setServicioModal(d=>({...d,descripcion:v}))}/><label style={{ display:"flex",gap:8,alignItems:"center",fontSize:14 }}><input type="checkbox" checked={servicioModal.activo} onChange={e=>setServicioModal(d=>({...d,activo:e.target.checked}))}/>Activo</label><div style={{ display:"flex",gap:8 }}><Btn onClick={async()=>{ const payload={nombre:servicioModal.nombre,descripcion:servicioModal.descripcion,tipo:servicioModal.tipo,duracion_minutos:parseInt(servicioModal.duracionMinutos)||60,activo:servicioModal.activo}; if(servicioModal.id) await api.updateAgendaServicio(servicioModal.id,payload); else await api.createAgendaServicio(payload); await reloadData(); setServicioModal(null); }}>Guardar</Btn><Btn onClick={()=>setServicioModal(null)} variant="secondary">Cancelar</Btn></div></div></Modal>}
     {clienteModal&&<Modal title={clienteModal.id?"Editar cliente":"Nuevo cliente"} onClose={()=>setClienteModal(null)}><div style={{ display:"flex",flexDirection:"column",gap:12 }}><ModalInput label="Nombre" value={clienteModal.nombre} onChange={v=>setClienteModal(d=>({...d,nombre:v}))}/><ModalInput label="Apellido" value={clienteModal.apellido} onChange={v=>setClienteModal(d=>({...d,apellido:v}))}/><ModalInput label="Email" type="email" value={clienteModal.email||""} onChange={v=>setClienteModal(d=>({...d,email:v}))}/><ModalInput label="Teléfono" value={clienteModal.telefono||""} onChange={v=>setClienteModal(d=>({...d,telefono:v}))}/><label style={{ display:"flex",gap:8,alignItems:"center",fontSize:14 }}><input type="checkbox" checked={clienteModal.activo} onChange={e=>setClienteModal(d=>({...d,activo:e.target.checked}))}/>Activo</label><div style={{ display:"flex",gap:8 }}><Btn onClick={async()=>{ const payload={nombre:clienteModal.nombre,apellido:clienteModal.apellido,email:clienteModal.email||"",telefono:clienteModal.telefono||"",activo:clienteModal.activo}; if(clienteModal.id) await api.updateAgendaCliente(clienteModal.id,payload); else await api.createAgendaCliente(payload); await reloadData(); setClienteModal(null); }}>Guardar</Btn><Btn onClick={()=>setClienteModal(null)} variant="secondary">Cancelar</Btn></div></div></Modal>}
-    {listaModal&&<Modal title={listaModal.id?"Editar lista":"Nueva lista"} onClose={()=>setListaModal(null)}><div style={{ display:"flex",flexDirection:"column",gap:12 }}><ModalInput label="Nombre" value={listaModal.nombre} onChange={v=>setListaModal(d=>({...d,nombre:v}))}/><ModalInput label="Descripción" value={listaModal.descripcion} onChange={v=>setListaModal(d=>({...d,descripcion:v}))}/><label style={{ display:"flex",gap:8,alignItems:"center",fontSize:14 }}><input type="checkbox" checked={listaModal.activo} onChange={e=>setListaModal(d=>({...d,activo:e.target.checked}))}/>Activa</label>{!listaModal.id&&<label style={{ display:"flex",gap:8,alignItems:"center",fontSize:14 }}><input type="checkbox" checked={listaModal.asignarLocal!==false} onChange={e=>setListaModal(d=>({...d,asignarLocal:e.target.checked}))}/>Asociar también al local seleccionado</label>}<div style={{ display:"flex",gap:8 }}><Btn onClick={async()=>{ const payload={nombre:listaModal.nombre,descripcion:listaModal.descripcion,activo:listaModal.activo}; if(listaModal.id) await api.updateAgendaListaPrecio(listaModal.id,payload); else { const res=await api.createAgendaListaPrecio(payload); const newId=Array.isArray(res)?res[0]?.id:res?.id; if(newId && listaModal.asignarLocal!==false) await api.createAgendaLocalLista({ local_id:parseInt(localId), lista_id:newId, predeterminada:listasLocal.length===0, activo:true }); } await reloadData(); setListaModal(null); }}>Guardar</Btn><Btn onClick={()=>setListaModal(null)} variant="secondary">Cancelar</Btn></div></div></Modal>}
-    {listaAsignacionModal&&<Modal title="Asociar listas al local" onClose={()=>setListaAsignacionModal(null)} width={520}><div style={{ display:"flex",flexDirection:"column",gap:10 }}><p style={{ margin:0,fontSize:13,color:"var(--color-text-secondary)" }}>Seleccioná qué listas de precios utiliza <strong>{data.locales.find(l=>l.id===parseInt(listaAsignacionModal.localId))?.nombre}</strong>. La primera seleccionada queda como lista predeterminada para nuevos turnos.</p>{(data.agendaListasPrecios||[]).filter(l=>l.activo).map(l=><label key={l.id} style={{ display:"flex",alignItems:"center",gap:8,border:"0.5px solid var(--color-border-tertiary)",borderRadius:8,padding:"8px 10px",fontSize:14 }}><input type="checkbox" checked={(listaAsignacionModal.listaIds||[]).map(Number).includes(Number(l.id))} onChange={e=>setListaAsignacionModal(d=>({ ...d, listaIds:e.target.checked?[...(d.listaIds||[]),l.id]:(d.listaIds||[]).filter(id=>Number(id)!==Number(l.id)) }))}/><span><strong>{l.nombre}</strong><br/><span style={{ color:"var(--color-text-secondary)",fontSize:12 }}>{l.descripcion||"Sin descripción"}</span></span></label>)}<div style={{ display:"flex",gap:8,justifyContent:"flex-end",marginTop:6 }}><Btn onClick={async()=>{ await api.setAgendaLocalListas(listaAsignacionModal.localId, listaAsignacionModal.listaIds||[]); await reloadData(); setListaAsignacionModal(null); }}>Guardar asociación</Btn><Btn onClick={()=>setListaAsignacionModal(null)} variant="secondary">Cancelar</Btn></div></div></Modal>}
+    {listaModal&&<Modal title={listaModal.id?"Editar lista global":"Nueva lista global"} onClose={()=>setListaModal(null)}><div style={{ display:"flex",flexDirection:"column",gap:12 }}><ModalInput label="Nombre" value={listaModal.nombre} onChange={v=>setListaModal(d=>({...d,nombre:v}))}/><ModalInput label="Descripción" value={listaModal.descripcion} onChange={v=>setListaModal(d=>({...d,descripcion:v}))}/><label style={{ display:"flex",gap:8,alignItems:"center",fontSize:14 }}><input type="checkbox" checked={listaModal.activo} onChange={e=>setListaModal(d=>({...d,activo:e.target.checked}))}/>Activa</label><div style={{ background:COLORS.infoLight,color:COLORS.info,borderRadius:8,padding:"8px 10px",fontSize:13 }}>Esta lista es global. Para usarla en turnos, asignala luego a cada local.</div><div style={{ display:"flex",gap:8 }}><Btn onClick={async()=>{ const payload={nombre:listaModal.nombre,descripcion:listaModal.descripcion,activo:listaModal.activo}; if(listaModal.id) await api.updateAgendaListaPrecio(listaModal.id,payload); else await api.createAgendaListaPrecio(payload); await reloadData(); setListaModal(null); }}>Guardar</Btn><Btn onClick={()=>setListaModal(null)} variant="secondary">Cancelar</Btn></div></div></Modal>}
+    {listaAsignacionModal&&<Modal title="Lista de precios del local" onClose={()=>setListaAsignacionModal(null)} width={520}><div style={{ display:"flex",flexDirection:"column",gap:10 }}><p style={{ margin:0,fontSize:13,color:"var(--color-text-secondary)" }}>Elegí la única lista de precios que utilizará <strong>{data.locales.find(l=>l.id===parseInt(listaAsignacionModal.localId))?.nombre}</strong> para cargar turnos.</p><ModalSelect label="Lista asignada" value={listaAsignacionModal.listaId||""} onChange={v=>setListaAsignacionModal(d=>({...d,listaId:v}))}><option value="">Sin lista asignada</option>{(data.agendaListasPrecios||[]).filter(l=>l.activo).map(l=><option key={l.id} value={l.id}>{l.nombre}</option>)}</ModalSelect>{listaAsignacionModal.listaId&&<div style={{ background:"var(--color-background-secondary)",borderRadius:8,padding:"8px 10px",fontSize:13,color:"var(--color-text-secondary)" }}>{data.agendaListasPrecios.find(l=>String(l.id)===String(listaAsignacionModal.listaId))?.descripcion||"Sin descripción"}</div>}<div style={{ display:"flex",gap:8,justifyContent:"flex-end",marginTop:6 }}><Btn onClick={async()=>{ await api.setAgendaLocalListas(listaAsignacionModal.localId, listaAsignacionModal.listaId?[listaAsignacionModal.listaId]:[]); await reloadData(); setListaAsignacionModal(null); }}>Guardar</Btn><Btn onClick={()=>setListaAsignacionModal(null)} variant="secondary">Cancelar</Btn></div></div></Modal>}
     {asigModal&&<Modal title="Servicios de manicura" onClose={()=>setAsigModal(null)} width={620}><div style={{ display:"flex",flexDirection:"column",gap:8 }}>{serviciosActivos.map(s=>{ const asignado=asigModal.servicios.find(x=>parseInt(x.servicioId)===parseInt(s.id)); return <div key={s.id} style={{ display:"grid",gridTemplateColumns:"1fr 110px",gap:10,alignItems:"center",fontSize:14,padding:"7px 0",borderBottom:"0.5px solid var(--color-border-tertiary)" }}><label style={{ display:"flex",alignItems:"center",gap:8 }}><input type="checkbox" checked={!!asignado} onChange={e=>setAsigModal(d=>({ ...d, servicios:e.target.checked?[...d.servicios,{servicioId:s.id,duracionMinutos:s.duracionMinutos||60}]:d.servicios.filter(x=>parseInt(x.servicioId)!==parseInt(s.id)) }))}/><span><strong>{s.nombre}</strong><br/><span style={{ color:"var(--color-text-secondary)",fontSize:12 }}>Duración base: {s.duracionMinutos} min</span></span></label><input type="number" disabled={!asignado} value={asignado?.duracionMinutos ?? s.duracionMinutos ?? 60} onChange={e=>setAsigModal(d=>({ ...d, servicios:d.servicios.map(x=>parseInt(x.servicioId)===parseInt(s.id)?{...x,duracionMinutos:e.target.value}:x) }))} style={{ border:"0.5px solid var(--color-border-secondary)",borderRadius:8,padding:"7px 8px",fontSize:13,width:"100%" }} placeholder="Minutos"/></div>})}<div style={{ background:COLORS.infoLight,color:COLORS.info,borderRadius:10,padding:"9px 12px",fontSize:13 }}>La duración asignada a la manicura se usa para sugerir el horario de finalización al cargar turnos.</div><div style={{ display:"flex",gap:8,marginTop:8 }}><Btn onClick={async()=>{ await api.setAgendaManicuraServicios(asigModal.userId,asigModal.servicios); await reloadData(); setAsigModal(null); }}>Guardar</Btn><Btn onClick={()=>setAsigModal(null)} variant="secondary">Cancelar</Btn></div></div></Modal>}
   </div>;
 }
@@ -4303,7 +4320,10 @@ function sectionAllowedForRole(section, role) {
 }
 export default function App() {
   const [data, setData] = useState(null);
-  const [user, setUser] = useState(null);
+  const [user, setUser] = useState(() => {
+    try { return JSON.parse(localStorage.getItem("niki_user") || "null"); }
+    catch { return null; }
+  });
   const [seccion, setSeccion] = useState(null);
   const [menuOpen, setMenuOpen] = useState(false);
   const [isDesktopMenu, setIsDesktopMenu] = useState(() => window.innerWidth >= 768);
@@ -4364,8 +4384,17 @@ export default function App() {
     return () => window.removeEventListener("hashchange", syncHash);
   }, [user]);
 
+  useEffect(() => {
+    if (!user) return;
+    localStorage.setItem("niki_user", JSON.stringify(user));
+    if (!seccion) {
+      const target = readSectionHash();
+      setSeccion(target && sectionAllowedForRole(target, user.rol) ? target : defaultSectionForRole(user.rol));
+    }
+  }, [user, seccion]);
+
   if (loading) return <div style={{ minHeight:"100vh",display:"flex",alignItems:"center",justifyContent:"center" }}><p style={{ color:"var(--color-text-secondary)",fontSize:14 }}>Conectando con Supabase...</p></div>;
-  if (!user) return <Login onLogin={u=>{ setUser(u); const target=readSectionHash(); setSeccion(target && sectionAllowedForRole(target,u.rol) ? target : defaultSectionForRole(u.rol)); }} reloadData={reloadData}/>;
+  if (!user) return <Login onLogin={u=>{ localStorage.setItem("niki_user", JSON.stringify(u)); setUser(u); const target=readSectionHash(); setSeccion(target && sectionAllowedForRole(target,u.rol) ? target : defaultSectionForRole(u.rol)); }} reloadData={reloadData}/>;
 
   const navAdmin = [
     {id:"asistencia",label:"Asistencia",icon:"📋"},
@@ -4425,7 +4454,7 @@ export default function App() {
         </div>
         <div style={{ display:"flex",alignItems:"center",gap:10 }}>
           <span style={{ fontSize:13,opacity:0.9 }}>{user.nombre}</span>
-          <button onClick={()=>{ setUser(null); setMenuOpen(false); }} style={{ background:"rgba(255,255,255,0.2)",border:"none",color:"#fff",borderRadius:6,padding:"4px 10px",fontSize:12,cursor:"pointer" }}>Salir</button>
+          <button onClick={()=>{ localStorage.removeItem("niki_user"); setUser(null); setMenuOpen(false); }} style={{ background:"rgba(255,255,255,0.2)",border:"none",color:"#fff",borderRadius:6,padding:"4px 10px",fontSize:12,cursor:"pointer" }}>Salir</button>
           {!isDesktopMenu && <button onClick={()=>setMenuOpen(m=>!m)} style={{ background:"rgba(255,255,255,0.2)",border:"none",color:"#fff",borderRadius:6,padding:"6px 10px",fontSize:16,cursor:"pointer" }}>☰</button>}
         </div>
       </header>
