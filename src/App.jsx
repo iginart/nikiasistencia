@@ -179,7 +179,16 @@ const api = {
   updateAgendaServicio: (id, d) => sb(`agenda_servicios?id=eq.${id}`, { method:"PATCH", body:JSON.stringify(d) }),
   deleteAgendaServicio: (id) => sb(`agenda_servicios?id=eq.${id}`, { method:"DELETE", prefer:"" }),
   getAgendaManicuraServicios: () => sb("agenda_manicura_servicios?select=*"),
-  setAgendaManicuraServicios: async (userId, servicioIds) => { await sb(`agenda_manicura_servicios?user_id=eq.${userId}`, { method:"DELETE", prefer:"" }); if (!servicioIds?.length) return []; return sb("agenda_manicura_servicios", { method:"POST", body:JSON.stringify(servicioIds.map(servicio_id=>({ user_id:parseInt(userId), servicio_id:parseInt(servicio_id), activo:true }))) }); },
+  setAgendaManicuraServicios: async (userId, servicios) => {
+    await sb(`agenda_manicura_servicios?user_id=eq.${userId}`, { method:"DELETE", prefer:"" });
+    if (!servicios?.length) return [];
+    const rows = servicios.map(x => {
+      const servicio_id = typeof x === "object" ? x.servicioId : x;
+      const duracion_minutos = typeof x === "object" ? (parseInt(x.duracionMinutos) || null) : null;
+      return { user_id:parseInt(userId), servicio_id:parseInt(servicio_id), duracion_minutos, activo:true };
+    });
+    return sb("agenda_manicura_servicios", { method:"POST", body:JSON.stringify(rows) });
+  },
   getAgendaListasPrecios: () => sb("agenda_listas_precios?select=*&order=local_id,nombre"),
   createAgendaListaPrecio: (d) => sb("agenda_listas_precios", { method:"POST", body:JSON.stringify(d) }),
   updateAgendaListaPrecio: (id, d) => sb(`agenda_listas_precios?id=eq.${id}`, { method:"PATCH", body:JSON.stringify(d) }),
@@ -217,7 +226,7 @@ function normalizeAdelanto(a) { return { id:a.id, fecha:a.fecha, fechaDescuento:
 function normalizeGarantia(g) { return { id:g.id, fechaServicioOriginal:g.fecha_servicio_original, comisionOriginalId:g.comision_original_id, localId:g.local_id, manicuraOriginalId:g.manicura_original_id, nombreManicuraOriginal:g.nombre_manicura_original || "", cliente:g.cliente || "", servicio:g.servicio || "", importeComision:Number(g.importe_comision || 0), fechaReparacion:g.fecha_reparacion, manicuraReparacionId:g.manicura_reparacion_id, nombreManicuraReparacion:g.nombre_manicura_reparacion || "", motivo:g.motivo || "", fotos:Array.isArray(g.fotos) ? g.fotos : [], creadoPor:g.creado_por_user_id, creadoEn:g.creado_en || "", actualizadoEn:g.actualizado_en || "" }; }
 function normalizeInformeDiario(i) { return { id:i.id, fecha:i.fecha, localId:i.local_id, importanteManana:i.importante_manana || "", urgentesGenerales:i.urgentes_generales || "", efectivoCaja:Number(i.efectivo_caja || 0), coincideCaja:i.coincide_caja === true, mercadoPagoTotalReservas:i.mercado_pago_total_reservas || "", pagosRealizados:i.pagos_realizados || "", saldoAnterior:Number(i.saldo_anterior || 0), traspasoCajaGeneral:Number(i.traspaso_caja_general || 0), traspasoCajaEfectivo:Number(i.traspaso_caja_efectivo || 0), reclamos:i.reclamos || "", novedadesSalonManicuras:i.novedades_salon_manicuras || "", observacionesExtras:i.observaciones_extras || "", estado:i.estado || "borrador", creadoPor:i.creado_por_user_id, enviadoEn:i.enviado_en || "", creadoEn:i.creado_en || "", actualizadoEn:i.actualizado_en || "" }; }
 function normalizeAgendaServicio(s) { return { id:s.id, nombre:s.nombre || "", descripcion:s.descripcion || "", tipo:s.tipo || "otros", duracionMinutos:s.duracion_minutos || 60, activo:s.activo !== false }; }
-function normalizeAgendaManicuraServicio(x) { return { userId:x.user_id, servicioId:x.servicio_id, activo:x.activo !== false }; }
+function normalizeAgendaManicuraServicio(x) { return { userId:x.user_id, servicioId:x.servicio_id, duracionMinutos:x.duracion_minutos || null, activo:x.activo !== false }; }
 function normalizeAgendaListaPrecio(l) { return { id:l.id, localId:l.local_id, nombre:l.nombre || "", descripcion:l.descripcion || "", activo:l.activo !== false }; }
 function normalizeAgendaPrecioServicio(p) { return { id:p.id, listaId:p.lista_id, servicioId:p.servicio_id, precioLista:Number(p.precio_lista || 0), precioEfectivo:Number(p.precio_efectivo || 0) }; }
 function normalizeAgendaCliente(c) { return { id:c.id, nombre:c.nombre || "", apellido:c.apellido || "", email:c.email || "", telefono:c.telefono || "", activo:c.activo !== false, creadoEn:c.creado_en || "" }; }
@@ -1676,6 +1685,14 @@ function AsistenciaDiaria({ data, reloadData, user }) {
 
   const setA = async (uid, datos) => {
     await api.upsertAsistencia({user_id:uid,fecha,estado:datos.estado,entrada_real:datos.entradaReal||null,salida_real:datos.salidaReal||null,motivo:datos.motivo||null,certificado:datos.certificado||false,tipo_doc:datos.tipoDoc||null});
+    if (datos.estado === "ausente") {
+      const manicura = data.users.find(u=>u.id===uid);
+      const h = data.horarios.find(x=>x.userId===uid&&x.fecha===fecha&&x.trabaja&&x.entrada&&x.salida);
+      const yaBloqueado = (data.agendaBloqueos||[]).some(b=>b.userId===uid&&b.fecha===fecha&&b.tipo==="agenda_bloqueada");
+      if (h && manicura && !yaBloqueado && window.confirm("¿Querés bloquear también la agenda de esta manicura para este día?")) {
+        await api.createAgendaBloqueo({ fecha, local_id:manicura.localId, user_id:uid, inicio:h.entrada, fin:h.salida, tipo:"agenda_bloqueada", motivo:"Agenda bloqueada por inasistencia", creado_por_user_id:null });
+      }
+    }
     await reloadData();
   };
   const limpiar = async (uid) => { await api.deleteAsistencia(uid,fecha); await reloadData(); };
@@ -3540,6 +3557,7 @@ function AgendaTurnos({ data, reloadData, user }) {
   const [pagoModal, setPagoModal] = useState(null);
   const [bloqueoModal, setBloqueoModal] = useState(null);
   const [manicuraAgendaModal, setManicuraAgendaModal] = useState(null);
+  const [bloqueoAusenciaModal, setBloqueoAusenciaModal] = useState(null);
   const agendaGridRef = useRef(null);
 
   const normTxt = (v) => String(v ?? "").trim();
@@ -3656,9 +3674,24 @@ function AgendaTurnos({ data, reloadData, user }) {
   const clientesActivos = (data.agendaClientes||[]).filter(c=>c.activo);
   const clienteOptions = useMemo(() => clientesActivos.map(c => ({ value:c.id, label:`${c.nombre} ${c.apellido}`.trim(), sub:[c.email, c.telefono].filter(Boolean).join(" · "), search:`${c.nombre} ${c.apellido} ${c.email || ""} ${c.telefono || ""}` })), [clientesActivos]);
   const precioByKey = useMemo(()=>{ const m=new Map(); (data.agendaPreciosServicios||[]).forEach(p=>m.set(`${p.listaId}-${p.servicioId}`,p)); return m; },[data.agendaPreciosServicios]);
-  const serviciosPorManicura = useMemo(()=>{ const m=new Map(); (data.agendaManicuraServicios||[]).filter(x=>x.activo).forEach(x=>{ if(!m.has(x.userId))m.set(x.userId,new Set()); m.get(x.userId).add(x.servicioId); }); return m; },[data.agendaManicuraServicios]);
-  const puedeManicuraServicio = (uid, sid) => serviciosPorManicura.get(parseInt(uid))?.has(parseInt(sid));
-  const serviciosParaManicura = (uid) => serviciosActivos.filter(s=>puedeManicuraServicio(uid,s.id));
+  const serviciosPorManicura = useMemo(()=>{
+    const m=new Map();
+    (data.agendaManicuraServicios||[]).filter(x=>x.activo).forEach(x=>{
+      const uid=parseInt(x.userId), sid=parseInt(x.servicioId);
+      if(!m.has(uid)) m.set(uid,new Map());
+      m.get(uid).set(sid, { servicioId:sid, duracionMinutos:x.duracionMinutos || null, activo:x.activo });
+    });
+    return m;
+  },[data.agendaManicuraServicios]);
+  const servicioAsignadoInfo = (uid, sid) => serviciosPorManicura.get(parseInt(uid))?.get(parseInt(sid)) || null;
+  const puedeManicuraServicio = (uid, sid) => !!servicioAsignadoInfo(uid, sid);
+  const getDuracionServicioManicura = (uid, sid) => {
+    const serv = getServicio(parseInt(sid));
+    const info = servicioAsignadoInfo(uid, sid);
+    return parseInt(info?.duracionMinutos || serv?.duracionMinutos || 60) || 60;
+  };
+  const serviciosAsignadosFor = (uid) => Array.from(serviciosPorManicura.get(parseInt(uid))?.values() || []);
+  const serviciosParaManicura = (uid) => serviciosActivos.filter(s=>puedeManicuraServicio(uid,s.id)).map(s=>({ ...s, duracionMinutos:getDuracionServicioManicura(uid,s.id) }));
   const getClienteLabel = (id) => { const c=data.agendaClientes?.find(x=>x.id===id); return c ? `${c.nombre} ${c.apellido}`.trim() : "Sin cliente"; };
   const getServicio = id => data.agendaServicios?.find(s=>s.id===id);
   const getManicura = id => data.users.find(u=>u.id===id);
@@ -3715,7 +3748,7 @@ function AgendaTurnos({ data, reloadData, user }) {
     if(!uid || !servicio) return [];
     const rango=getHorarioRangoDisponible(uid);
     if(!rango) return [];
-    const dur=servicio.duracionMinutos||60;
+    const dur=getDuracionServicioManicura(uid, servicioId);
     const ini=rango.ini, fin=rango.fin;
     const ocupados=(data.agendaTurnos||[]).filter(t=>t.fecha===fecha&&t.userId===parseInt(uid)&&t.id!==turnoId&&t.estado!=="no asiste");
     const bloqueos=getAgendaBloqueosDia(uid);
@@ -3793,6 +3826,7 @@ function AgendaTurnos({ data, reloadData, user }) {
       d = { ...d, clienteId:newId };
     }
     if(!d.fecha||!d.localId||!d.userId||!d.clienteId||!d.servicioId||!d.inicio||!d.fin) { alert("Completá fecha, local, manicura, cliente, servicio y horario."); return; }
+    if(!puedeManicuraServicio(d.userId, d.servicioId)) { alert("La manicura seleccionada no tiene habilitado ese servicio."); return; }
     if (agendaMin(d.fin) <= agendaMin(d.inicio)) { alert("El horario de fin debe ser posterior al inicio."); return; }
     if (isBlockedByAgenda(d.userId, agendaMin(d.inicio), agendaMin(d.fin))) { alert("Ese horario está bloqueado/no disponible para la manicura."); return; }
     if (!isWithinHorario(d.userId, agendaMin(d.inicio), agendaMin(d.fin)) && !force) {
@@ -3840,15 +3874,17 @@ function AgendaTurnos({ data, reloadData, user }) {
     if(!confirm("¿Eliminar este bloqueo de agenda?")) return;
     await api.deleteAgendaBloqueo(b.id); await reloadData(); setBloqueoModal(null); setManicuraAgendaModal(null);
   };
-  const toggleAgendaManicura = async (uid) => {
-    const existing = getBloqueoFullDay(uid);
-    if(existing) { await api.deleteAgendaBloqueo(existing.id); await reloadData(); setManicuraAgendaModal(null); return; }
+  const createFullDayAgendaBlock = async (uid, motivo="Agenda bloqueada") => {
     const rango = getHorarioRangoDisponible(uid);
     const h=(data.horarios||[]).find(x=>x.userId===parseInt(uid)&&x.fecha===fecha&&x.trabaja&&x.entrada&&x.salida);
     const ini = rango?.entrada || h?.entrada || "10:00";
     const fin = rango?.salida || h?.salida || "20:00";
-    await api.createAgendaBloqueo({ fecha, local_id:parseInt(localId), user_id:parseInt(uid), inicio:ini, fin, tipo:"agenda_bloqueada", motivo:"Agenda bloqueada / no asiste", creado_por_user_id:user.id });
-    await reloadData(); setManicuraAgendaModal(null);
+    return api.createAgendaBloqueo({ fecha, local_id:parseInt(localId), user_id:parseInt(uid), inicio:ini, fin, tipo:"agenda_bloqueada", motivo, creado_por_user_id:user.id });
+  };
+  const toggleAgendaManicura = async (uid) => {
+    const existing = getBloqueoFullDay(uid);
+    if(existing) { await api.deleteAgendaBloqueo(existing.id); await reloadData(); setManicuraAgendaModal(null); return; }
+    setBloqueoAusenciaModal({ userId:parseInt(uid), motivo:MOTIVOS_AUSENCIA[0], certificado:false, tipoDoc:"" });
   };
 
   const goTurnosDay = (delta) => {
@@ -3988,6 +4024,7 @@ function AgendaTurnos({ data, reloadData, user }) {
       }
 
       if(d.inicio===original.inicio && d.fin===original.fin && d.userId===original.userId) return;
+      if(!puedeManicuraServicio(d.userId, d.servicioId)) { alert("No se puede mover el turno: la manicura destino no tiene habilitado ese servicio."); return; }
       if(isBlockedByAgenda(d.userId, agendaMin(d.inicio), agendaMin(d.fin))) { alert("Ese horario está bloqueado/no disponible para la manicura."); return; }
       const warning = !isWithinHorario(d.userId, agendaMin(d.inicio), agendaMin(d.fin))
         ? "El turno queda fuera del horario disponible de la manicura. ¿Querés guardarlo igual?"
@@ -4098,7 +4135,7 @@ function AgendaTurnos({ data, reloadData, user }) {
     <Card><div style={{ display:"flex",justifyContent:"space-between",alignItems:"center",gap:8,marginBottom:12,flexWrap:"wrap" }}><h3 style={{ margin:0,fontSize:15 }}>Servicios</h3><div style={{ display:"flex",gap:8,flexWrap:"wrap" }}><Btn onClick={()=>openImport("servicios")} variant="secondary" size="sm">Importar Excel</Btn><Btn onClick={()=>setServicioModal({ nombre:"", descripcion:"", tipo:"manos", duracionMinutos:60, activo:true })} size="sm">+ Servicio</Btn></div></div>
       <div style={{ display:"flex",flexDirection:"column",gap:8 }}>{serviciosActivos.concat((data.agendaServicios||[]).filter(s=>!s.activo)).map(s=><div key={s.id} style={{ display:"flex",alignItems:"center",gap:10,border:"0.5px solid var(--color-border-tertiary)",borderRadius:10,padding:"9px 10px",flexWrap:"wrap" }}><div style={{ flex:1,minWidth:180 }}><p style={{ margin:0,fontWeight:600 }}>{s.nombre}</p><p style={{ margin:0,fontSize:12,color:"var(--color-text-secondary)" }}>{s.tipo} · {s.duracionMinutos} min · {s.descripcion||"Sin descripción"}</p></div><Badge color={s.activo?"success":"gray"}>{s.activo?"Activo":"Inactivo"}</Badge><Btn onClick={()=>setServicioModal({...s})} variant="ghost" size="sm">Editar</Btn></div>)}</div>
     </Card>
-    <Card><h3 style={{ margin:"0 0 12px",fontSize:15 }}>Servicios por manicura</h3><div style={{ display:"flex",flexDirection:"column",gap:8 }}>{manicurasLocal.map(m=>{ const qty=serviciosPorManicura.get(m.id)?.size||0; return <div key={m.id} style={{ display:"flex",alignItems:"center",gap:10,border:"0.5px solid var(--color-border-tertiary)",borderRadius:10,padding:"9px 10px" }}><Avatar nombre={m.nombre} size={32}/><div style={{ flex:1 }}><p style={{ margin:0,fontWeight:600 }}>{m.nombre}</p><p style={{ margin:0,fontSize:12,color:"var(--color-text-secondary)" }}>{qty} servicio{qty!==1?"s":""} asignado{qty!==1?"s":""}</p></div><Btn onClick={()=>setAsigModal({ userId:m.id, servicios:[...(serviciosPorManicura.get(m.id)||new Set())] })} size="sm" variant="secondary">Asignar</Btn></div>})}</div></Card>
+    <Card><h3 style={{ margin:"0 0 12px",fontSize:15 }}>Servicios por manicura</h3><div style={{ display:"flex",flexDirection:"column",gap:8 }}>{manicurasLocal.map(m=>{ const qty=serviciosPorManicura.get(m.id)?.size||0; return <div key={m.id} style={{ display:"flex",alignItems:"center",gap:10,border:"0.5px solid var(--color-border-tertiary)",borderRadius:10,padding:"9px 10px" }}><Avatar nombre={m.nombre} size={32}/><div style={{ flex:1 }}><p style={{ margin:0,fontWeight:600 }}>{m.nombre}</p><p style={{ margin:0,fontSize:12,color:"var(--color-text-secondary)" }}>{qty} servicio{qty!==1?"s":""} asignado{qty!==1?"s":""}</p></div><Btn onClick={()=>setAsigModal({ userId:m.id, servicios:serviciosAsignadosFor(m.id).map(x=>({ servicioId:x.servicioId, duracionMinutos:x.duracionMinutos || getServicio(x.servicioId)?.duracionMinutos || 60 })) })} size="sm" variant="secondary">Asignar</Btn></div>})}</div></Card>
   </div>;
 
   const renderPrecios = () => <div style={{ display:"grid",gap:14 }}>
@@ -4141,6 +4178,21 @@ function AgendaTurnos({ data, reloadData, user }) {
         </div>
       </Modal>;
     })()}
+    {bloqueoAusenciaModal&&<Modal title="Bloquear agenda" onClose={()=>setBloqueoAusenciaModal(null)} width={520}>
+      <div style={{ display:"flex",flexDirection:"column",gap:12 }}>
+        <div style={{ background:COLORS.amberLight,color:COLORS.amber,borderRadius:10,padding:"10px 12px",fontSize:13 }}>
+          Vas a bloquear la agenda de esta manicura para el día. También podés registrar la inasistencia para que quede impactada en Asistencia diaria.
+        </div>
+        <ModalSelect label="Motivo de inasistencia" value={bloqueoAusenciaModal.motivo||MOTIVOS_AUSENCIA[0]} onChange={v=>setBloqueoAusenciaModal(d=>({...d,motivo:v}))}>{MOTIVOS_AUSENCIA.map(m=><option key={m} value={m}>{m}</option>)}</ModalSelect>
+        <label style={{ display:"flex",alignItems:"center",gap:8,fontSize:14,cursor:"pointer" }}><input type="checkbox" checked={!!bloqueoAusenciaModal.certificado} onChange={e=>setBloqueoAusenciaModal(d=>({...d,certificado:e.target.checked}))}/>Presenta documentación</label>
+        {bloqueoAusenciaModal.certificado&&<ModalSelect label="Tipo de documentación" value={bloqueoAusenciaModal.tipoDoc||""} onChange={v=>setBloqueoAusenciaModal(d=>({...d,tipoDoc:v}))}><option value="">Seleccionar...</option><option value="Certificado médico">Certificado médico</option><option value="Certificado por examen">Certificado por examen</option><option value="Otro">Otro</option></ModalSelect>}
+        <div style={{ display:"flex",gap:8,justifyContent:"flex-end",flexWrap:"wrap" }}>
+          <Btn variant="secondary" onClick={async()=>{ await createFullDayAgendaBlock(bloqueoAusenciaModal.userId,"Agenda bloqueada"); await reloadData(); setBloqueoAusenciaModal(null); setManicuraAgendaModal(null); }}>Solo bloquear agenda</Btn>
+          <Btn onClick={async()=>{ const uid=bloqueoAusenciaModal.userId; await api.upsertAsistencia({ user_id:parseInt(uid), fecha, estado:"ausente", entrada_real:null, salida_real:null, motivo:bloqueoAusenciaModal.motivo||MOTIVOS_AUSENCIA[0], certificado:!!bloqueoAusenciaModal.certificado, tipo_doc:bloqueoAusenciaModal.tipoDoc||null }); await createFullDayAgendaBlock(uid,"Agenda bloqueada por inasistencia"); await reloadData(); setBloqueoAusenciaModal(null); setManicuraAgendaModal(null); }}>Bloquear y registrar inasistencia</Btn>
+          <Btn variant="ghost" onClick={()=>setBloqueoAusenciaModal(null)}>Cancelar</Btn>
+        </div>
+      </div>
+    </Modal>}
     {bloqueoModal&&<Modal title={bloqueoModal.id?"Editar bloqueo":"Nuevo bloqueo de agenda"} onClose={()=>setBloqueoModal(null)} width={520}>
       <div style={{ display:"flex",flexDirection:"column",gap:12 }}>
         <ModalInput label="Fecha" type="date" value={bloqueoModal.fecha||fecha} onChange={v=>setBloqueoModal(b=>({...b,fecha:v}))}/>
@@ -4175,7 +4227,7 @@ function AgendaTurnos({ data, reloadData, user }) {
     {modalTurno&&<Modal title={editingTurno?"Editar turno":"Nuevo turno"} onClose={()=>{setModalTurno(null);setEditingTurno(null);setClienteQuick(null);}} width={680}><div style={{ display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(220px,1fr))",gap:12 }}>
       <ModalInput label="Fecha" type="date" value={modalTurno.fecha} onChange={v=>setModalTurno(d=>({...d,fecha:v}))}/>
       <ModalSelect label="Local" value={modalTurno.localId||""} onChange={v=>{ const lista=getDefaultLista(v); setModalTurno(d=>({...d,localId:v,userId:"",servicioId:"",listaId:lista?.id||"",inicio:"",fin:"",precio:0,precioEfectivo:0})); }}>{localesPermitidos.map(l=><option key={l.id} value={l.id}>{l.nombre}</option>)}</ModalSelect>
-      <ModalSelect label="Manicura" value={modalTurno.userId||""} onChange={v=>setModalTurno(d=>({...d,userId:v,servicioId:"",fin:d.inicio?agendaTime(agendaMin(d.inicio)+60):"",precio:0,precioEfectivo:0}))}><option value="">Seleccionar...</option>{manicurasPermitidas.filter(m=>m.localId===parseInt(modalTurno.localId)).map(m=><option key={m.id} value={m.id}>{m.nombre}</option>)}</ModalSelect>
+      <ModalSelect label="Manicura" value={modalTurno.userId||""} onChange={v=>setModalTurno(d=>{ const servicioOk = d.servicioId && puedeManicuraServicio(v,d.servicioId); const dur = servicioOk ? getDuracionServicioManicura(v,d.servicioId) : 60; return {...d,userId:v,servicioId:servicioOk?d.servicioId:"",fin:d.inicio?agendaTime(agendaMin(d.inicio)+dur):"",precio:servicioOk?d.precio:0,precioEfectivo:servicioOk?d.precioEfectivo:0}; })}><option value="">Seleccionar...</option>{manicurasPermitidas.filter(m=>m.localId===parseInt(modalTurno.localId) && (!modalTurno.servicioId || puedeManicuraServicio(m.id,modalTurno.servicioId))).map(m=><option key={m.id} value={m.id}>{m.nombre}</option>)}</ModalSelect>
       <div>
         <SearchableSelect label="Cliente" value={modalTurno.clienteId||""} onChange={v=>{ setClienteQuick(null); setModalTurno(d=>({...d,clienteId:v})); }} options={clienteOptions} placeholder="Buscar cliente por nombre, mail o teléfono..."/>
         {!clienteQuick && <button onClick={()=>{setClienteQuick({nombre:"",apellido:"",email:"",telefono:""});setModalTurno(d=>({...d,clienteId:""}));}} style={{ marginTop:6,background:"transparent",border:"none",color:COLORS.pink,cursor:"pointer",fontSize:12,fontWeight:600 }}>+ Alta rápida de cliente</button>}
@@ -4185,8 +4237,8 @@ function AgendaTurnos({ data, reloadData, user }) {
         <ModalInput label="Apellido nuevo cliente" value={clienteQuick.apellido} onChange={v=>setClienteQuick(c=>({...c,apellido:v}))}/><ModalInput label="Email" type="email" value={clienteQuick.email||""} onChange={v=>setClienteQuick(c=>({...c,email:v}))}/><ModalInput label="Teléfono" value={clienteQuick.telefono||""} onChange={v=>setClienteQuick(c=>({...c,telefono:v}))}/>
         <div style={{ display:"flex",alignItems:"end",gap:8 }}><Btn onClick={()=>setClienteQuick(null)} variant="secondary" size="sm">Cancelar alta rápida</Btn></div>
       </div>}
-      <SearchableSelect label="Servicio" value={modalTurno.servicioId||""} onChange={v=>{ const serv=getServicio(parseInt(v)); const fin=modalTurno.inicio && serv ? agendaTime(agendaMin(modalTurno.inicio)+(serv.duracionMinutos||60)) : modalTurno.fin; const nd={...modalTurno,servicioId:v,fin}; setModalTurno(applyPrice(nd)); }} options={serviciosParaManicura(modalTurno.userId).map(s=>({ value:s.id, label:s.nombre, sub:`${s.tipo || "Servicio"} · ${s.duracionMinutos} min`, search:`${s.nombre} ${s.tipo || ""} ${s.descripcion || ""}` }))} placeholder={modalTurno.userId?"Buscar servicio...":"Primero seleccioná manicura"} disabled={!modalTurno.userId}/>
-      <ModalInput label="Inicio" type="time" value={modalTurno.inicio||""} onChange={v=>{ const serv=getServicio(parseInt(modalTurno.servicioId)); setModalTurno(d=>({...d,inicio:v,fin:serv?agendaTime(agendaMin(v)+(serv.duracionMinutos||60)):d.fin})); }}/>
+      <SearchableSelect label="Servicio" value={modalTurno.servicioId||""} onChange={v=>{ const dur=getDuracionServicioManicura(modalTurno.userId, parseInt(v)); const fin=modalTurno.inicio ? agendaTime(agendaMin(modalTurno.inicio)+dur) : modalTurno.fin; const nd={...modalTurno,servicioId:v,fin}; setModalTurno(applyPrice(nd)); }} options={serviciosParaManicura(modalTurno.userId).map(s=>({ value:s.id, label:s.nombre, sub:`${s.tipo || "Servicio"} · ${s.duracionMinutos} min`, search:`${s.nombre} ${s.tipo || ""} ${s.descripcion || ""}` }))} placeholder={modalTurno.userId?"Buscar servicio...":"Primero seleccioná manicura"} disabled={!modalTurno.userId}/>
+      <ModalInput label="Inicio" type="time" value={modalTurno.inicio||""} onChange={v=>{ const dur=modalTurno.servicioId ? getDuracionServicioManicura(modalTurno.userId, modalTurno.servicioId) : null; setModalTurno(d=>({...d,inicio:v,fin:dur?agendaTime(agendaMin(v)+dur):d.fin})); }}/>
       <ModalInput label="Fin sugerido / ajustable" type="time" value={modalTurno.fin||""} onChange={v=>setModalTurno(d=>({...d,fin:v}))}/>
       <div style={{ gridColumn:"1 / -1" }}>
         <label style={{ fontSize:13,fontWeight:500,color:"#555",display:"block",marginBottom:6 }}>Estado</label>
@@ -4209,7 +4261,7 @@ function AgendaTurnos({ data, reloadData, user }) {
     {servicioModal&&<Modal title={servicioModal.id?"Editar servicio":"Nuevo servicio"} onClose={()=>setServicioModal(null)}><div style={{ display:"flex",flexDirection:"column",gap:12 }}><ModalInput label="Nombre" value={servicioModal.nombre} onChange={v=>setServicioModal(d=>({...d,nombre:v}))}/><ModalSelect label="Tipo" value={servicioModal.tipo} onChange={v=>setServicioModal(d=>({...d,tipo:v}))}>{SERVICIO_TIPOS.map(t=><option key={t} value={t}>{t}</option>)}</ModalSelect><ModalInput label="Duración en minutos" type="number" value={servicioModal.duracionMinutos} onChange={v=>setServicioModal(d=>({...d,duracionMinutos:v}))}/><ModalInput label="Descripción" value={servicioModal.descripcion} onChange={v=>setServicioModal(d=>({...d,descripcion:v}))}/><label style={{ display:"flex",gap:8,alignItems:"center",fontSize:14 }}><input type="checkbox" checked={servicioModal.activo} onChange={e=>setServicioModal(d=>({...d,activo:e.target.checked}))}/>Activo</label><div style={{ display:"flex",gap:8 }}><Btn onClick={async()=>{ const payload={nombre:servicioModal.nombre,descripcion:servicioModal.descripcion,tipo:servicioModal.tipo,duracion_minutos:parseInt(servicioModal.duracionMinutos)||60,activo:servicioModal.activo}; if(servicioModal.id) await api.updateAgendaServicio(servicioModal.id,payload); else await api.createAgendaServicio(payload); await reloadData(); setServicioModal(null); }}>Guardar</Btn><Btn onClick={()=>setServicioModal(null)} variant="secondary">Cancelar</Btn></div></div></Modal>}
     {clienteModal&&<Modal title={clienteModal.id?"Editar cliente":"Nuevo cliente"} onClose={()=>setClienteModal(null)}><div style={{ display:"flex",flexDirection:"column",gap:12 }}><ModalInput label="Nombre" value={clienteModal.nombre} onChange={v=>setClienteModal(d=>({...d,nombre:v}))}/><ModalInput label="Apellido" value={clienteModal.apellido} onChange={v=>setClienteModal(d=>({...d,apellido:v}))}/><ModalInput label="Email" type="email" value={clienteModal.email||""} onChange={v=>setClienteModal(d=>({...d,email:v}))}/><ModalInput label="Teléfono" value={clienteModal.telefono||""} onChange={v=>setClienteModal(d=>({...d,telefono:v}))}/><label style={{ display:"flex",gap:8,alignItems:"center",fontSize:14 }}><input type="checkbox" checked={clienteModal.activo} onChange={e=>setClienteModal(d=>({...d,activo:e.target.checked}))}/>Activo</label><div style={{ display:"flex",gap:8 }}><Btn onClick={async()=>{ const payload={nombre:clienteModal.nombre,apellido:clienteModal.apellido,email:clienteModal.email||"",telefono:clienteModal.telefono||"",activo:clienteModal.activo}; if(clienteModal.id) await api.updateAgendaCliente(clienteModal.id,payload); else await api.createAgendaCliente(payload); await reloadData(); setClienteModal(null); }}>Guardar</Btn><Btn onClick={()=>setClienteModal(null)} variant="secondary">Cancelar</Btn></div></div></Modal>}
     {listaModal&&<Modal title={listaModal.id?"Editar lista":"Nueva lista"} onClose={()=>setListaModal(null)}><div style={{ display:"flex",flexDirection:"column",gap:12 }}><ModalInput label="Nombre" value={listaModal.nombre} onChange={v=>setListaModal(d=>({...d,nombre:v}))}/><ModalInput label="Descripción" value={listaModal.descripcion} onChange={v=>setListaModal(d=>({...d,descripcion:v}))}/><label style={{ display:"flex",gap:8,alignItems:"center",fontSize:14 }}><input type="checkbox" checked={listaModal.activo} onChange={e=>setListaModal(d=>({...d,activo:e.target.checked}))}/>Activa</label><div style={{ display:"flex",gap:8 }}><Btn onClick={async()=>{ const payload={local_id:parseInt(listaModal.localId||localId),nombre:listaModal.nombre,descripcion:listaModal.descripcion,activo:listaModal.activo}; if(listaModal.id) await api.updateAgendaListaPrecio(listaModal.id,payload); else await api.createAgendaListaPrecio(payload); await reloadData(); setListaModal(null); }}>Guardar</Btn><Btn onClick={()=>setListaModal(null)} variant="secondary">Cancelar</Btn></div></div></Modal>}
-    {asigModal&&<Modal title="Servicios de manicura" onClose={()=>setAsigModal(null)}><div style={{ display:"flex",flexDirection:"column",gap:8 }}>{serviciosActivos.map(s=><label key={s.id} style={{ display:"flex",alignItems:"center",gap:8,fontSize:14,padding:"6px 0" }}><input type="checkbox" checked={asigModal.servicios.includes(s.id)} onChange={e=>setAsigModal(d=>({ ...d, servicios:e.target.checked?[...d.servicios,s.id]:d.servicios.filter(x=>x!==s.id) }))}/>{s.nombre} <span style={{ color:"var(--color-text-secondary)",fontSize:12 }}>({s.duracionMinutos} min)</span></label>)}<div style={{ display:"flex",gap:8,marginTop:8 }}><Btn onClick={async()=>{ await api.setAgendaManicuraServicios(asigModal.userId,asigModal.servicios); await reloadData(); setAsigModal(null); }}>Guardar</Btn><Btn onClick={()=>setAsigModal(null)} variant="secondary">Cancelar</Btn></div></div></Modal>}
+    {asigModal&&<Modal title="Servicios de manicura" onClose={()=>setAsigModal(null)} width={620}><div style={{ display:"flex",flexDirection:"column",gap:8 }}>{serviciosActivos.map(s=>{ const asignado=asigModal.servicios.find(x=>parseInt(x.servicioId)===parseInt(s.id)); return <div key={s.id} style={{ display:"grid",gridTemplateColumns:"1fr 110px",gap:10,alignItems:"center",fontSize:14,padding:"7px 0",borderBottom:"0.5px solid var(--color-border-tertiary)" }}><label style={{ display:"flex",alignItems:"center",gap:8 }}><input type="checkbox" checked={!!asignado} onChange={e=>setAsigModal(d=>({ ...d, servicios:e.target.checked?[...d.servicios,{servicioId:s.id,duracionMinutos:s.duracionMinutos||60}]:d.servicios.filter(x=>parseInt(x.servicioId)!==parseInt(s.id)) }))}/><span><strong>{s.nombre}</strong><br/><span style={{ color:"var(--color-text-secondary)",fontSize:12 }}>Duración base: {s.duracionMinutos} min</span></span></label><input type="number" disabled={!asignado} value={asignado?.duracionMinutos ?? s.duracionMinutos ?? 60} onChange={e=>setAsigModal(d=>({ ...d, servicios:d.servicios.map(x=>parseInt(x.servicioId)===parseInt(s.id)?{...x,duracionMinutos:e.target.value}:x) }))} style={{ border:"0.5px solid var(--color-border-secondary)",borderRadius:8,padding:"7px 8px",fontSize:13,width:"100%" }} placeholder="Minutos"/></div>})}<div style={{ background:COLORS.infoLight,color:COLORS.info,borderRadius:10,padding:"9px 12px",fontSize:13 }}>La duración asignada a la manicura se usa para sugerir el horario de finalización al cargar turnos.</div><div style={{ display:"flex",gap:8,marginTop:8 }}><Btn onClick={async()=>{ await api.setAgendaManicuraServicios(asigModal.userId,asigModal.servicios); await reloadData(); setAsigModal(null); }}>Guardar</Btn><Btn onClick={()=>setAsigModal(null)} variant="secondary">Cancelar</Btn></div></div></Modal>}
   </div>;
 }
 
