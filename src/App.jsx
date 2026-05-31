@@ -2435,7 +2435,7 @@ function Reportes({ data, user, onOpenAgenda, reportRestore }) {
       </Card>}
       <Card style={{ padding:0,overflow:"hidden" }}>
         <div style={{ padding:"12px 14px",borderBottom:"1px solid rgba(120,120,120,0.16)",display:"flex",justifyContent:"space-between",gap:8,alignItems:"center",flexWrap:"wrap" }}><h3 style={{ margin:0,fontSize:15,fontWeight:500 }}>Detalle de comisiones <span style={{ marginLeft:8,fontSize:11,color:COLORS.pinkDark,background:COLORS.pinkLight,borderRadius:999,padding:"3px 8px" }}>{gruposComisiones.length ? `agrupado: ${gruposComisiones.map(g=>agrupables.find(a=>a.id===g)?.label||g).join(" → ")}` : "tabla avanzada"}</span></h3><span style={{ fontSize:12,color:"var(--color-text-secondary)" }}>{registros.length} registros</span></div>
-        <div style={{ padding:"8px 12px",borderBottom:"1px solid rgba(120,120,120,0.12)",background:"var(--color-background-secondary)" }}>
+        <div style={{ padding:"6px 10px",borderBottom:"1px solid rgba(120,120,120,0.12)",background:"var(--color-background-secondary)" }}>
           <p style={{ margin:0,fontSize:11,fontWeight:500,color:"var(--color-text-secondary)" }}>Arrastrá los títulos para cambiar el orden. Arrastrá el borde derecho para cambiar el ancho. Hacé clic en el título para ordenar asc/desc o sumar niveles de agrupación sobre esta misma grilla, por ejemplo Fecha → Cliente → Servicio.</p>
         </div>
         {registros.length===0?<p style={{ margin:0,padding:18,textAlign:"center",fontSize:13,color:"var(--color-text-secondary)" }}>Sin comisiones para los filtros seleccionados.</p>:<div style={{ overflowX:"auto" }}><div style={{ minWidth:Math.max(980, colsComisiones.reduce((a,c)=>a+c.width,0)+120) }}>
@@ -3547,6 +3547,7 @@ function InformeDiario({ data, reloadData, user }) {
 // ── GESTIÓN DE TURNOS / AGENDA ─────────────────────────────────────
 const SERVICIO_TIPOS = ["manos", "pies", "cejas y pestañas", "otros"];
 const TURNO_ESTADOS = ["pendiente", "confirmado", "asiste", "no asiste", "en espera"];
+const TURNO_ESTADOS_FILTRO = ["pendiente", "confirmado", "asiste", "no asiste", "en espera", "cancelado"];
 const FORMAS_PAGO = ["", "efectivo", "tarjeta débito", "tarjeta crédito", "transferencia", "canje", "otro"];
 function agendaMin(t) { if (!t) return 0; const [h,m]=String(t).slice(0,5).split(":").map(Number); return h*60+(m||0); }
 function agendaTime(m) { return `${String(Math.floor(m/60)).padStart(2,"0")}:${String(m%60).padStart(2,"0")}`; }
@@ -3583,6 +3584,8 @@ function AgendaTurnos({ data, reloadData, user }) {
   const [agendaScale, setAgendaScale] = useState("30");
   const [agendaViewportH, setAgendaViewportH] = useState(() => window.innerHeight || 720);
   const [showAllManicurasTurnos, setShowAllManicurasTurnos] = useState(false);
+  const [turnoEstadosVisibles, setTurnoEstadosVisibles] = useState(["pendiente", "confirmado", "asiste", "no asiste", "en espera"]);
+  const [cancelTurnoTarget, setCancelTurnoTarget] = useState(null);
   const [miniDate, setMiniDate] = useState(() => new Date(hoyKey + "T12:00:00"));
   const [dragTurno, setDragTurno] = useState(null);
   const dragTurnoRef = useRef(null);
@@ -3732,12 +3735,14 @@ function AgendaTurnos({ data, reloadData, user }) {
   const getManicura = id => data.users.find(u=>u.id===id);
   const getLista = id => data.agendaListasPrecios?.find(l=>l.id===id);
   const estadoTurnoMeta = {
-    pendiente:{label:"Pendiente",bg:COLORS.infoLight,fg:COLORS.info,border:COLORS.info},
-    confirmado:{label:"Confirmado",bg:COLORS.successLight,fg:COLORS.success,border:"#9ccf75",activeBg:"#dff1cf",activeFg:COLORS.success},
+    pendiente:{label:"Pendiente",bg:COLORS.infoLight,fg:COLORS.info,border:COLORS.info,activeBg:COLORS.info,activeFg:"#fff"},
+    confirmado:{label:"Confirmado",bg:COLORS.amberLight,fg:COLORS.amber,border:COLORS.amber,activeBg:COLORS.amber,activeFg:"#fff"},
     asiste:{label:"Asiste",bg:COLORS.pinkLight,fg:COLORS.pinkDark,border:COLORS.pink,activeBg:COLORS.pink,activeFg:"#fff"},
-    "no asiste":{label:"No asiste",bg:"#fff6d8",fg:"#8a5f00",border:"#e4bd37",activeBg:"#fff0bd",activeFg:"#7a5500"},
-    "en espera":{label:"En espera",bg:COLORS.successLight,fg:COLORS.success,border:COLORS.success},
+    "no asiste":{label:"No asiste",bg:"#f3eadc",fg:"#7a5732",border:"#b89363",activeBg:"#d2b48c",activeFg:"#fff"},
+    "en espera":{label:"En espera",bg:COLORS.successLight,fg:COLORS.success,border:COLORS.success,activeBg:COLORS.success,activeFg:"#fff"},
+    cancelado:{label:"Cancelado",bg:"#f2f2f2",fg:"#777",border:"#bdbdbd",activeBg:"#8a8a8a",activeFg:"#fff"},
   };
+  const toggleEstadoVisible = (estado) => setTurnoEstadosVisibles(prev => prev.includes(estado) ? prev.filter(x=>x!==estado) : [...prev, estado]);
   const calendarStart = 10 * 60;
   const calendarEnd = 20 * 60;
   const calendarStep = agendaScale === "fit" ? 30 : Number(agendaScale || 30);
@@ -3776,7 +3781,7 @@ function AgendaTurnos({ data, reloadData, user }) {
     if(isBlockedByAgenda(uid, start, end)) return false;
     return true;
   };
-  const hasOverlap = (draft, excludeId=null) => { const s=agendaMin(draft.inicio), e=agendaMin(draft.fin); return (data.agendaTurnos||[]).some(t=>t.fecha===draft.fecha&&t.userId===parseInt(draft.userId)&&t.id!==excludeId&&t.estado!=="no asiste"&&s<agendaMin(t.fin)&&e>agendaMin(t.inicio)); };
+  const hasOverlap = (draft, excludeId=null) => { const s=agendaMin(draft.inicio), e=agendaMin(draft.fin); return (data.agendaTurnos||[]).some(t=>t.fecha===draft.fecha&&t.userId===parseInt(draft.userId)&&t.id!==excludeId&&! ["no asiste","cancelado"].includes(t.estado)&&s<agendaMin(t.fin)&&e>agendaMin(t.inicio)); };
 
   const availableSlots = (uid, servicioId, turnoId=null, startOverride=null) => {
     const servicio=getServicio(parseInt(servicioId));
@@ -3785,7 +3790,7 @@ function AgendaTurnos({ data, reloadData, user }) {
     if(!rango) return [];
     const dur=getDuracionServicioManicura(uid, servicioId);
     const ini=rango.ini, fin=rango.fin;
-    const ocupados=(data.agendaTurnos||[]).filter(t=>t.fecha===fecha&&t.userId===parseInt(uid)&&t.id!==turnoId&&t.estado!=="no asiste");
+    const ocupados=(data.agendaTurnos||[]).filter(t=>t.fecha===fecha&&t.userId===parseInt(uid)&&t.id!==turnoId&&!["no asiste","cancelado"].includes(t.estado));
     const bloqueos=getAgendaBloqueosDia(uid);
     const slots=[];
     for(let m=ini; m+dur<=fin; m+=15){
@@ -3881,6 +3886,19 @@ function AgendaTurnos({ data, reloadData, user }) {
   };
 
   const delTurno = async (t) => { if(!confirm("¿Eliminar este turno?")) return; await api.deleteAgendaTurno(t.id); await reloadData(); };
+  const cancelTurno = async (t) => {
+    if(!t?.id) return;
+    setSaving(true);
+    try {
+      await api.updateAgendaTurno(t.id, { estado:"cancelado", actualizado_en:new Date().toISOString() });
+      await reloadData();
+      setCancelTurnoTarget(null);
+      setModalTurno(null);
+      setEditingTurno(null);
+      if (!turnoEstadosVisibles.includes("cancelado")) setTurnoEstadosVisibles(prev => prev.filter(x=>x!=="cancelado"));
+    } catch(e) { alert("Error al cancelar turno: "+e.message); }
+    setSaving(false);
+  };
 
   const openBloqueo = (uid=null, inicio=null, fin=null, existing=null) => {
     const rango = uid ? getHorarioRangoDisponible(uid) : null;
@@ -4074,7 +4092,7 @@ function AgendaTurnos({ data, reloadData, user }) {
   };
 
   const renderTurnos = () => {
-    const dayTurnosBase = (data.agendaTurnos||[]).filter(t=>t.fecha===fecha && (!localId || t.localId===parseInt(localId)) && (manicuraId==="todas" || t.userId===parseInt(manicuraId)));
+    const dayTurnosBase = (data.agendaTurnos||[]).filter(t=>t.fecha===fecha && (!localId || t.localId===parseInt(localId)) && (manicuraId==="todas" || t.userId===parseInt(manicuraId)) && turnoEstadosVisibles.includes(t.estado || "pendiente"));
     const dayTurnos = dayTurnosBase.map(t=>dragTurno?.id===t.id ? { ...t, ...dragTurno.draft } : t);
     const dayBloqueos = getAgendaBloqueosDia();
     const manicurasConActividad = new Set([
@@ -4115,14 +4133,18 @@ function AgendaTurnos({ data, reloadData, user }) {
           {!turnosPanelVisible && <><Select value={localId} onChange={v=>{setLocalId(v);setManicuraId("todas");}} style={{ maxWidth:220 }}>{localesPermitidos.map(l=><option key={l.id} value={l.id}>{l.nombre}</option>)}</Select><Select value={manicuraId} onChange={setManicuraId} style={{ maxWidth:240 }}><option value="todas">Todas las manicuras</option>{manicurasLocal.map(m=><option key={m.id} value={m.id}>{m.nombre}</option>)}</Select></>}
           <Select value={agendaScale} onChange={setAgendaScale} style={{ width:132 }}><option value="5">Escala 5 min</option><option value="10">Escala 10 min</option><option value="15">Escala 15 min</option><option value="30">Escala 30 min</option><option value="45">Escala 45 min</option><option value="60">Escala 60 min</option><option value="fit">Ajustar a pantalla</option></Select>
           <Btn onClick={()=>openBloqueo()} variant="secondary" size="sm">+ No disponible</Btn>
-          <Badge color="info">{dayTurnos.length} turno{dayTurnos.length!==1?"s":""}</Badge>{manicuraId==="todas"&&ocultasSinActividad>0&&<button onClick={()=>setShowAllManicurasTurnos(v=>!v)} style={{ border:"none",background:showAllManicurasTurnos?COLORS.amberLight:COLORS.pinkLight,color:showAllManicurasTurnos?COLORS.amber:COLORS.pinkDark,borderRadius:999,padding:"6px 10px",fontSize:12,fontWeight:700,cursor:"pointer" }}>{showAllManicurasTurnos?"Ocultar sin actividad":`Mostrar ${ocultasSinActividad} sin actividad`}</button>}
+          <Badge color="info">{dayTurnos.length} turno{dayTurnos.length!==1?"s":""}</Badge>{manicuraId==="todas"&&ocultasSinActividad>0&&<button onClick={()=>setShowAllManicurasTurnos(v=>!v)} style={{ border:"none",background:showAllManicurasTurnos?COLORS.amberLight:COLORS.pinkLight,color:showAllManicurasTurnos?COLORS.amber:COLORS.pinkDark,borderRadius:999,padding:"5px 9px",fontSize:11,fontWeight:700,cursor:"pointer" }}>{showAllManicurasTurnos?"Ocultar sin actividad":`Mostrar ${ocultasSinActividad} sin actividad`}</button>}
+          <div style={{ display:"flex",gap:4,alignItems:"center",flexWrap:"wrap",fontSize:10,color:"var(--color-text-secondary)",marginLeft:"auto" }}>
+            <span style={{ fontWeight:700,marginRight:2 }}>Ver</span>
+            {TURNO_ESTADOS_FILTRO.map(e=>{ const meta=estadoTurnoMeta[e]||estadoTurnoMeta.pendiente; return <label key={e} style={{ display:"inline-flex",alignItems:"center",gap:3,background:turnoEstadosVisibles.includes(e)?meta.bg:"#f7f7f7",color:turnoEstadosVisibles.includes(e)?meta.fg:"#999",border:`1px solid ${turnoEstadosVisibles.includes(e)?meta.border:"#e5e5e5"}`,borderRadius:999,padding:"3px 6px",cursor:"pointer",fontWeight:700 }}><input type="checkbox" checked={turnoEstadosVisibles.includes(e)} onChange={()=>toggleEstadoVisible(e)} style={{ margin:0 }}/>{meta.label}</label>; })}
+          </div>
         </div>
         <Card style={{ padding:0,overflow:"hidden" }}>
           <div style={{ padding:"8px 12px",borderBottom:"0.5px solid var(--color-border-tertiary)",display:"flex",justifyContent:"space-between",gap:8,alignItems:"center",flexWrap:"wrap" }}>
             <div style={{ display:"flex",alignItems:"baseline",gap:8,flexWrap:"wrap" }}><h3 style={{ margin:0,fontSize:14,fontWeight:700 }}>Agenda de turnos</h3><p style={{ margin:0,fontSize:12,color:"var(--color-text-secondary)" }}>{localActual?.nombre||""} · {dayLabel}</p></div>
             <span style={{ fontSize:11,color:"var(--color-text-secondary)" }}>Clic: editar · Arrastrar: mover · Bordes: ajustar</span>
           </div>
-          <div style={{ overflow:"auto",background:"#fff",maxHeight:"calc(100vh - 210px)",minHeight:460 }}>
+          <div style={{ overflow:"auto",background:"#fff",maxHeight:"calc(100vh - 160px)",minHeight:520 }}>
             <div style={{ minWidth:`max(100%, ${60+calManicuras.length*colMin}px)` }}>
               <div style={{ display:"grid",gridTemplateColumns:`60px repeat(${calManicuras.length}, minmax(${colMin}px, 1fr))`,position:"sticky",top:0,zIndex:3,background:"#fff",borderBottom:"1px solid #e9e9e9" }}>
                 <div style={{ padding:"8px 6px",fontSize:11,color:"var(--color-text-secondary)" }}>Hora</div>
@@ -4186,11 +4208,13 @@ function AgendaTurnos({ data, reloadData, user }) {
     return <Card><div style={{ display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:12,flexWrap:"wrap",gap:8 }}><h3 style={{ margin:0,fontSize:15 }}>Clientes</h3><div style={{ display:"flex",gap:8,flexWrap:"wrap" }}><Input value={clienteSearch} onChange={setClienteSearch} placeholder="Buscar por nombre, mail o teléfono" style={{ width:260 }}/><Btn onClick={()=>openImport("clientes")} variant="secondary" size="sm">Importar Excel</Btn><Btn onClick={()=>setClienteModal({ nombre:"", apellido:"", email:"", telefono:"", activo:true })} size="sm">+ Cliente</Btn></div></div><div style={{ display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(250px,1fr))",gap:8 }}>{clientesFiltrados.map(c=><div key={c.id} style={{ border:"0.5px solid var(--color-border-tertiary)",borderRadius:10,padding:"10px" }}><p style={{ margin:0,fontWeight:600 }}>{c.nombre} {c.apellido}</p><p style={{ margin:"3px 0 8px",fontSize:12,color:"var(--color-text-secondary)" }}>{[c.email,c.telefono].filter(Boolean).join(" · ") || "Sin contacto"}<br/>{c.activo?"Activo":"Inactivo"}</p><Btn onClick={()=>setClienteModal({...c})} variant="ghost" size="sm">Editar</Btn></div>)}</div>{!clientesFiltrados.length&&<p style={{ margin:"12px 0 0",fontSize:13,color:"var(--color-text-secondary)" }}>No hay clientes para la búsqueda.</p>}</Card>;
   };
 
-  const TabBtn = ({id,label}) => <button onClick={()=>setTab(id)} style={{ padding:"8px 12px",border:"none",borderRadius:8,cursor:"pointer",fontSize:13,fontWeight:600,background:tab===id?COLORS.pink:COLORS.pinkLight,color:tab===id?"#fff":COLORS.pinkDark }}>{label}</button>;
+  const TabBtn = ({id,label}) => <button onClick={()=>setTab(id)} style={{ padding:"5px 10px",border:"none",borderRadius:8,cursor:"pointer",fontSize:12,fontWeight:700,background:tab===id?COLORS.pink:COLORS.pinkLight,color:tab===id?"#fff":COLORS.pinkDark }}>{label}</button>;
 
   return <div>
-    <div style={{ display:"flex",justifyContent:"space-between",alignItems:"center",gap:8,flexWrap:"wrap",marginBottom:14 }}><div><h2 style={{ margin:0,fontSize:18,fontWeight:600 }}>Gestión de turnos</h2><p style={{ margin:"4px 0 0",fontSize:13,color:"var(--color-text-secondary)" }}>Servicios, clientes, precios y agenda de turnos.</p></div></div>
-    <div style={{ display:"flex",gap:6,flexWrap:"wrap",marginBottom:16 }}><TabBtn id="turnos" label="Turnos"/><TabBtn id="servicios" label="Servicios"/><TabBtn id="precios" label="Precios"/><TabBtn id="clientes" label="Clientes"/></div>
+    <div style={{ display:"flex",alignItems:"center",gap:8,flexWrap:"wrap",marginBottom:8 }}>
+      <h2 style={{ margin:0,fontSize:16,fontWeight:700 }}>Turnos</h2>
+      <div style={{ display:"flex",gap:5,flexWrap:"wrap" }}><TabBtn id="turnos" label="Turnos"/><TabBtn id="servicios" label="Servicios"/><TabBtn id="precios" label="Precios"/><TabBtn id="clientes" label="Clientes"/></div>
+    </div>
     {tab==="turnos"&&renderTurnos()}{tab==="servicios"&&renderServicios()}{tab==="precios"&&renderPrecios()}{tab==="clientes"&&renderClientes()}
     {manicuraAgendaModal&&(() => {
       const uid = manicuraAgendaModal.userId;
@@ -4285,8 +4309,21 @@ function AgendaTurnos({ data, reloadData, user }) {
       <div style={{ background:"#fafafa",border:"1px solid #eee",borderRadius:10,padding:"9px 12px" }}><p style={{ margin:"0 0 3px",fontSize:12,color:"var(--color-text-secondary)" }}>Precio lista / efectivo</p><p style={{ margin:0,fontSize:14,fontWeight:700 }}>${Number(modalTurno.precio||0).toLocaleString("es-AR")} · ${Number(modalTurno.precioEfectivo||0).toLocaleString("es-AR")}</p></div>
       <div style={{ background:COLORS.successLight,border:`1px solid ${COLORS.success}22`,borderRadius:10,padding:"9px 12px" }}><p style={{ margin:"0 0 3px",fontSize:12,color:COLORS.success }}>Cobranza</p><p style={{ margin:"0 0 8px",fontSize:14,fontWeight:700,color:COLORS.success }}>${Number(modalTurno.precioCobrado||0).toLocaleString("es-AR")} {modalTurno.formaPago?`· ${modalTurno.formaPago}`:"· pendiente"}</p>{editingTurno ? (modalTurno.estado==="asiste" ? <Btn onClick={()=>openPago(editingTurno)} size="sm" variant="success">Pagar</Btn> : <span style={{ fontSize:11,color:"var(--color-text-secondary)" }}>Para cobrar, primero marcá el turno como Asiste.</span>) : <span style={{ fontSize:11,color:"var(--color-text-secondary)" }}>Guardá el turno para registrar pagos combinados.</span>}</div>
       <div style={{ gridColumn:"1 / -1" }}><label style={{ fontSize:13,fontWeight:500,color:"#555",display:"block",marginBottom:6 }}>Observación</label><textarea value={modalTurno.observacion||""} onChange={e=>setModalTurno(d=>({...d,observacion:e.target.value}))} style={{ width:"100%",minHeight:70,border:"1.5px solid #e0e0e0",borderRadius:8,padding:"9px 12px",boxSizing:"border-box" }}/></div>
-      <div style={{ gridColumn:"1 / -1",display:"flex",gap:8,justifyContent:"flex-end" }}><Btn onClick={()=>saveTurno(false)} disabled={saving}>{saving?"Guardando...":"Guardar turno"}</Btn><Btn onClick={()=>setModalTurno(null)} variant="secondary">Cancelar</Btn></div>
+      <div style={{ gridColumn:"1 / -1",display:"flex",gap:8,justifyContent:"space-between",alignItems:"center",flexWrap:"wrap" }}>
+        <div>{editingTurno && editingTurno.estado!=="cancelado" && <Btn onClick={()=>setCancelTurnoTarget(editingTurno)} variant="danger">Cancelar turno</Btn>}</div>
+        <div style={{ display:"flex",gap:8 }}><Btn onClick={()=>saveTurno(false)} disabled={saving}>{saving?"Guardando...":"Guardar turno"}</Btn><Btn onClick={()=>setModalTurno(null)} variant="secondary">Cerrar</Btn></div>
+      </div>
     </div></Modal>}
+
+    {cancelTurnoTarget&&<Modal title="Cancelar turno" onClose={()=>setCancelTurnoTarget(null)} width={440}>
+      <div style={{ display:"flex",flexDirection:"column",gap:12 }}>
+        <div style={{ background:"#f2f2f2",borderRadius:10,padding:"10px 12px",fontSize:13,color:"#555" }}>
+          El turno se marcará como <strong>Cancelado</strong>. No se elimina, pero dejará de verse en la agenda salvo que actives el filtro de cancelados.
+        </div>
+        <p style={{ margin:0,fontSize:14,color:"#333" }}><strong>{getClienteLabel(cancelTurnoTarget.clienteId)}</strong> · {getServicio(cancelTurnoTarget.servicioId)?.nombre || "Servicio"}<br/><span style={{ color:"var(--color-text-secondary)",fontSize:12 }}>{cancelTurnoTarget.fecha} · {cancelTurnoTarget.inicio} - {cancelTurnoTarget.fin}</span></p>
+        <div style={{ display:"flex",gap:8,justifyContent:"flex-end" }}><Btn variant="danger" onClick={()=>cancelTurno(cancelTurnoTarget)} disabled={saving}>{saving?"Cancelando...":"Confirmar cancelación"}</Btn><Btn variant="secondary" onClick={()=>setCancelTurnoTarget(null)}>Volver</Btn></div>
+      </div>
+    </Modal>}
     {turnoWarning&&<Modal title="Advertencia de turno" onClose={()=>setTurnoWarning(null)} width={420}><div style={{ display:"flex",flexDirection:"column",gap:12 }}><p style={{ margin:0,fontSize:14,color:"#333" }}>{turnoWarning.message}</p><div style={{ display:"flex",gap:8,justifyContent:"flex-end" }}><Btn onClick={()=>turnoWarning.onConfirm ? turnoWarning.onConfirm() : saveTurno(true)} disabled={saving}>{saving?"Guardando...":"Guardar igual"}</Btn><Btn onClick={()=>setTurnoWarning(null)} variant="secondary">Volver a editar</Btn></div></div></Modal>}
 
     {pagoModal&&<Modal title="Registrar cobranza" onClose={()=>setPagoModal(null)} width={560}><div style={{ display:"flex",flexDirection:"column",gap:12 }}>
