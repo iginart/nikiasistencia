@@ -939,18 +939,21 @@ function CalendarioHorarios({ data, reloadData, user, agendaRequest, onBackToRep
   }, [vista, weekStart, diaVista, mes, anio, bloques, localH]);
 
   const weekDays = useMemo(()=>Array.from({length:6},(_,i)=>{ const d=new Date(weekStart); d.setDate(d.getDate()+i); return d; }),[weekStart]);
-  const repetirSemanaAnterior = useCallback(async () => {
+  const repetirSemanaAnteriorParaDias = useCallback(async (targetDaysRaw) => {
     const uid = parseInt(manicuraId);
     if (!uid) return;
     if (!puedeEditarManicura(uid)) return;
 
-    const prevDays = weekDays.map(d => {
+    const targetDays = (targetDaysRaw || []).filter(Boolean);
+    if (!targetDays.length) return;
+
+    const prevDays = targetDays.map(d => {
       const p = new Date(d);
       p.setDate(p.getDate() - 7);
       return p;
     });
 
-    const copia = weekDays.map((targetDay, idx) => {
+    const copia = targetDays.map((targetDay, idx) => {
       const targetFecha = dateKey(targetDay);
       const sourceFecha = dateKey(prevDays[idx]);
       const bloque = getBloqueFor(uid, sourceFecha);
@@ -963,7 +966,7 @@ function CalendarioHorarios({ data, reloadData, user, agendaRequest, onBackToRep
     if (!conHorario.length) {
       await pedirConfirmacion({
         title: "Sin horarios para copiar",
-        message: "La semana anterior no tiene horarios cargados para esta manicura.",
+        message: "La semana anterior no tiene horarios cargados para esta manicura en esos días.",
         confirmText: "Entendido",
         cancelText: "Cerrar",
         variant: "primary",
@@ -1020,7 +1023,11 @@ function CalendarioHorarios({ data, reloadData, user, agendaRequest, onBackToRep
       disponibles.forEach(item => { delete n[horarioKey(uid, item.targetFecha)]; });
       return n;
     });
-  }, [manicuraId, weekDays, puedeEditarManicura, getBloqueFor, getAsistenciaFor, bloqueadoPorFecha, hasHorarioPersistidoFor, pedirConfirmacion, reloadData, horarioKey]);
+  }, [manicuraId, puedeEditarManicura, getBloqueFor, getAsistenciaFor, bloqueadoPorFecha, hasHorarioPersistidoFor, pedirConfirmacion, reloadData, horarioKey]);
+
+  const repetirSemanaAnterior = useCallback(async () => {
+    await repetirSemanaAnteriorParaDias(weekDays);
+  }, [repetirSemanaAnteriorParaDias, weekDays]);
 
   const weekEnd = new Date(weekStart); weekEnd.setDate(weekEnd.getDate()+5);
   const diaVistaDate = new Date(diaVista + "T12:00:00");
@@ -1234,13 +1241,13 @@ function CalendarioHorarios({ data, reloadData, user, agendaRequest, onBackToRep
     const dias=getDiasDelMes(anio,mes), sems=getSemanasCalendario(dias);
     const rowH = Math.max(isMobile ? 58 : 74, Math.floor((520 - 34) / Math.max(sems.length, 1)));
     return <div style={{ flex:1,overflow:"hidden" }}>
-      <div style={{ display:"grid",gridTemplateColumns:"repeat(6,1fr) 70px",borderBottom:"0.5px solid rgba(120,120,120,0.24)",position:"sticky",top:0,background:"var(--color-background-primary)",zIndex:2 }}>
+      <div style={{ display:"grid",gridTemplateColumns:"repeat(6,1fr) 118px",borderBottom:"0.5px solid rgba(120,120,120,0.24)",position:"sticky",top:0,background:"var(--color-background-primary)",zIndex:2 }}>
         {DIAS_SEMANA.map(d=><div key={d} style={{ textAlign:"center",padding:"8px 4px",fontSize:11,fontWeight:500,color:"var(--color-text-secondary)",borderLeft:"0.5px solid rgba(120,120,120,0.24)" }}>{d}</div>)}
         <div style={{ textAlign:"center",padding:"8px 4px",fontSize:11,fontWeight:500,color:"var(--color-text-secondary)",borderLeft:"0.5px solid rgba(120,120,120,0.24)" }}>Sem.</div>
       </div>
       {sems.map((semana,si)=>{
         const totalSem=semana.reduce((a,d)=>d ? a+calHoras(getB(dateKey(d))) : a,0);
-        return <div key={si} style={{ display:"grid",gridTemplateColumns:"repeat(6,1fr) 70px",borderBottom:"0.5px solid rgba(120,120,120,0.24)",height:rowH }}>
+        return <div key={si} style={{ display:"grid",gridTemplateColumns:"repeat(6,1fr) 118px",borderBottom:"0.5px solid rgba(120,120,120,0.24)",height:rowH }}>
           {Array.from({length:6},(_,i)=>{
             const d=semana[i]; if(!d) return <div key={i} style={{ borderLeft:"0.5px solid rgba(120,120,120,0.24)" }}/>;
             const f=dateKey(d),b=getB(f),isToday=f===todayDk,fer=feriados.has(f),asis=getAsistencia(f),ai=asistenciaInfo(asis),lockedDia=bloqueadoPorFecha(f)||!!asis;
@@ -1274,8 +1281,14 @@ function CalendarioHorarios({ data, reloadData, user, agendaRequest, onBackToRep
               : !lockedDia && <p style={{ margin:0,fontSize:10,color:"var(--color-text-secondary)",opacity:0.5 }}>+ agregar</p>}
             </div>;
           })}
-          <div style={{ borderLeft:"0.5px solid rgba(120,120,120,0.24)",display:"flex",alignItems:"center",justifyContent:"center" }}>
-            <span style={{ fontSize:15,fontWeight:500,color:totalSem>0?COLORS.success:"var(--color-text-secondary)" }}>{totalSem.toFixed(1)}h</span>
+          <div style={{ borderLeft:"0.5px solid rgba(120,120,120,0.24)",display:"flex",alignItems:"center",justifyContent:"center",gap:6,padding:"0 6px" }}>
+            <span style={{ fontSize:15,fontWeight:500,color:totalSem>0?COLORS.success:"var(--color-text-secondary)",whiteSpace:"nowrap" }}>{totalSem.toFixed(1)}h</span>
+            <button
+              onClick={(e)=>{ e.stopPropagation(); repetirSemanaAnteriorParaDias(semana.filter(Boolean)); }}
+              disabled={bloqueado || !semana.some(Boolean)}
+              title="Copiar los horarios de la semana anterior para esta fila"
+              style={{ background:bloqueado?"var(--color-background-tertiary)":COLORS.pinkLight,border:"0.5px solid rgba(214,79,128,0.25)",borderRadius:6,padding:"4px 6px",cursor:bloqueado?"not-allowed":"pointer",fontSize:10,fontWeight:700,color:bloqueado?"var(--color-text-secondary)":COLORS.pinkDark,whiteSpace:"nowrap" }}
+            >↩</button>
           </div>
         </div>;
       })}
@@ -1363,7 +1376,7 @@ function CalendarioHorarios({ data, reloadData, user, agendaRequest, onBackToRep
               <button onClick={nextNav} style={{ background:"none",border:"0.5px solid rgba(120,120,120,0.24)",borderRadius:5,padding:"2px 8px",cursor:"pointer",fontSize:14 }}>›</button>
             </div>
             <button onClick={()=>{ setWeekStart(getMon(hoy)); setDiaVista(dateKey(hoy)); setMes(hoy.getMonth()); setAnio(hoy.getFullYear()); }} style={{ width:"100%",background:"none",border:"0.5px solid rgba(120,120,120,0.24)",borderRadius:6,padding:"4px",cursor:"pointer",fontSize:11,color:"var(--color-text-secondary)" }}>Hoy</button>
-            {["semana","mes"].includes(vista) && <button onClick={repetirSemanaAnterior} disabled={bloqueado} title="Copiar los horarios cargados en la semana anterior" style={{ width:"100%",marginTop:6,background:bloqueado?"var(--color-background-tertiary)":COLORS.pinkLight,border:"0.5px solid rgba(214,79,128,0.25)",borderRadius:6,padding:"6px 5px",cursor:bloqueado?"not-allowed":"pointer",fontSize:11,fontWeight:600,color:bloqueado?"var(--color-text-secondary)":COLORS.pinkDark }}>↩ Repetir semana anterior</button>}
+            {vista==="semana" && <button onClick={repetirSemanaAnterior} disabled={bloqueado} title="Copiar los horarios cargados en la semana anterior" style={{ width:"100%",marginTop:6,background:bloqueado?"var(--color-background-tertiary)":COLORS.pinkLight,border:"0.5px solid rgba(214,79,128,0.25)",borderRadius:6,padding:"6px 5px",cursor:bloqueado?"not-allowed":"pointer",fontSize:11,fontWeight:600,color:bloqueado?"var(--color-text-secondary)":COLORS.pinkDark }}>↩ Repetir semana anterior</button>}
           </div>
           <div style={{ padding:"8px 10px",borderTop:"0.5px solid rgba(120,120,120,0.18)" }}>
             <div style={{ background:"var(--color-background-primary)",border:"0.5px solid rgba(120,120,120,0.18)",borderRadius:10,padding:8 }}>
