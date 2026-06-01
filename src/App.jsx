@@ -3772,6 +3772,9 @@ function AgendaTurnos({ data, reloadData, user }) {
   const [manicuraId, setManicuraId] = useState("todas");
   const [modalTurno, setModalTurno] = useState(null);
   const [editingTurno, setEditingTurno] = useState(null);
+  const [buscadorTurno, setBuscadorTurno] = useState(null);
+  const [buscadorOpciones, setBuscadorOpciones] = useState([]);
+  const [buscadorMsg, setBuscadorMsg] = useState("");
   const [sendTurnoEmail, setSendTurnoEmail] = useState(true);
   const [emailTurnoMsg, setEmailTurnoMsg] = useState("");
   const [clienteQuick, setClienteQuick] = useState(null);
@@ -4048,6 +4051,116 @@ function AgendaTurnos({ data, reloadData, user }) {
     return buscarDesde(startMin) || buscarDesde(rango.ini);
   };
 
+
+
+  const ceilTo = (n, step=15) => Math.ceil(n / step) * step;
+  const getAgendaBloqueosDiaFor = (fechaX, lid, uid=null) => (data.agendaBloqueos||[]).filter(b => b.fecha===fechaX && (!lid || b.localId===parseInt(lid)) && (!uid || b.userId===parseInt(uid)));
+  const getAsistenciaDiaFor = (fechaX, uid) => (data.asistencias||[]).find(a => a.userId===parseInt(uid) && a.fecha===fechaX);
+  const getHorarioRangoDisponibleFor = (fechaX, uid) => {
+    const h=(data.horarios||[]).find(x=>x.userId===parseInt(uid)&&x.fecha===fechaX&&x.trabaja&&x.entrada&&x.salida);
+    if(!h) return null;
+    const a = getAsistenciaDiaFor(fechaX, uid);
+    if(a?.estado === "ausente") return null;
+    let ini = agendaMin(h.entrada);
+    let fin = agendaMin(h.salida);
+    if(a?.estado === "tarde" && a.entradaReal) ini = Math.max(ini, agendaMin(a.entradaReal));
+    if(a?.estado === "tarde" && a.salidaReal) fin = Math.min(fin, agendaMin(a.salidaReal));
+    if(fin <= ini) return null;
+    return { ...h, ini, fin, entrada:agendaTime(ini), salida:agendaTime(fin), asistencia:a||null };
+  };
+  const isSlotFreeFor = (fechaX, lid, uid, start, end, excludeId=null) => {
+    const rango = getHorarioRangoDisponibleFor(fechaX, uid);
+    if(!rango || start < rango.ini || end > rango.fin) return false;
+    const bloqueos = getAgendaBloqueosDiaFor(fechaX, lid, uid);
+    if(bloqueos.some(b => start < agendaMin(b.fin) && end > agendaMin(b.inicio))) return false;
+    const ocupados = (data.agendaTurnos||[]).filter(t => t.fecha===fechaX && t.userId===parseInt(uid) && t.id!==excludeId && !["no asiste","cancelado"].includes(t.estado));
+    if(ocupados.some(t => start < agendaMin(t.fin) && end > agendaMin(t.inicio))) return false;
+    return true;
+  };
+  const findFirstSlotForServiceOnDate = (uid, servicioId, fechaX, lid, desdeMin, excludeId=null) => {
+    const rango = getHorarioRangoDisponibleFor(fechaX, uid);
+    if(!rango) return null;
+    const durOriginal = getDuracionServicioManicura(uid, servicioId);
+    const durUsada = durOriginal > 60 ? Math.max(5, durOriginal - 15) : durOriginal;
+    const bloqueos = getAgendaBloqueosDiaFor(fechaX, lid, uid);
+    const ocupados = (data.agendaTurnos||[]).filter(t => t.fecha===fechaX && t.userId===parseInt(uid) && t.id!==excludeId && !["no asiste","cancelado"].includes(t.estado));
+    let m = Math.max(ceilTo(desdeMin, 15), rango.ini);
+    let guard = 0;
+    while (m + durUsada <= rango.fin && guard < 2000) {
+      guard++;
+      const e = m + durUsada;
+      const ocupadosSolapados = ocupados.filter(t => m < agendaMin(t.fin) && e > agendaMin(t.inicio));
+      const bloqueosSolapados = bloqueos.filter(b => m < agendaMin(b.fin) && e > agendaMin(b.inicio));
+      if (!ocupadosSolapados.length && !bloqueosSolapados.length) {
+        return { fecha:fechaX, userId:parseInt(uid), servicioId:parseInt(servicioId), inicio:agendaTime(m), fin:agendaTime(e), duracionOriginal:durOriginal, duracionUsada:durUsada, tolerancia:durOriginal!==durUsada };
+      }
+      const nextFromOcupados = ocupadosSolapados.length ? Math.max(...ocupadosSolapados.map(t=>agendaMin(t.fin))) : m + 15;
+      const nextFromBloqueos = bloqueosSolapados.length ? Math.max(...bloqueosSolapados.map(b=>agendaMin(b.fin))) : m + 15;
+      m = Math.max(m + 1, nextFromOcupados, nextFromBloqueos);
+    }
+    return null;
+  };
+  const generarOpcionesTurnoAutomatico = () => {
+    if(!buscadorTurno?.localId || !buscadorTurno?.clienteId || !buscadorTurno?.servicioId) { setBuscadorOpciones([]); setBuscadorMsg("Completá local, cliente y servicio para buscar disponibilidad."); return; }
+    const lid = parseInt(buscadorTurno.localId);
+    const sid = parseInt(buscadorTurno.servicioId);
+    const desdeFecha = buscadorTurno.desdeFecha || hoyKey;
+    const now = new Date();
+    const nowMin = now.getHours()*60 + now.getMinutes();
+    const opciones = [];
+    for(let d=0; d<21 && opciones.length<40; d++) {
+      const base = new Date(desdeFecha + "T12:00:00");
+      base.setDate(base.getDate()+d);
+      const f = dateKey(base);
+      const minDesde = f === hoyKey ? Math.max(calendarStart, ceilTo(nowMin, 15)) : calendarStart;
+      const manicurasCompatibles = manicurasPermitidas.filter(m => m.localId===lid && puedeManicuraServicio(m.id, sid));
+      for(const m of manicurasCompatibles) {
+        const slot = findFirstSlotForServiceOnDate(m.id, sid, f, lid, minDesde, null);
+        if(slot) opciones.push({ ...slot, localId:lid, clienteId:parseInt(buscadorTurno.clienteId), manicura:m, servicio:getServicio(sid) });
+      }
+      opciones.sort((a,b)=>`${a.fecha} ${a.inicio}`.localeCompare(`${b.fecha} ${b.inicio}`));
+    }
+    setBuscadorOpciones(opciones.slice(0,30));
+    setBuscadorMsg(opciones.length ? `${Math.min(opciones.length,30)} opción${opciones.length!==1?"es":""} disponible${opciones.length!==1?"s":""}.` : "No encontramos disponibilidad en los próximos días para ese servicio.");
+  };
+  const abrirBuscadorTurno = () => {
+    const lid = parseInt(localId) || localesPermitidos[0]?.id || "";
+    setBuscadorTurno({ localId:lid, clienteId:"", servicioId:"", desdeFecha:fecha || hoyKey, enviarEmail:true });
+    setBuscadorOpciones([]);
+    setBuscadorMsg("Elegí cliente y servicio para buscar opciones desde ahora.");
+  };
+  const crearTurnoDesdeOpcion = async (op) => {
+    if(!op) return;
+    const price = getPrecioFor(op.localId, op.servicioId);
+    const draft = buildTurnoDraft({
+      fecha:op.fecha,
+      localId:op.localId,
+      userId:op.userId,
+      clienteId:op.clienteId,
+      servicioId:op.servicioId,
+      listaId:price.lista?.id || "",
+      inicio:op.inicio,
+      fin:op.fin,
+      estado:"pendiente",
+      formaPago:"",
+      cantidad:1,
+      precio:price.precio || 0,
+      precioEfectivo:price.precioEfectivo || 0,
+      precioCobrado:0,
+      observacion:op.tolerancia ? "Turno sugerido automáticamente con tolerancia de 15 minutos" : "Turno sugerido automáticamente",
+      adicionales:[]
+    });
+    setSaving(true);
+    try {
+      const saved = await persistTurnoDraft(draft, null);
+      if (buscadorTurno?.enviarEmail && saved?.id) {
+        try { await api.enviarEmailTurno(saved.id, "alta"); } catch(e) { alert("El turno se creó, pero no se pudo enviar el email: " + (e.message || e)); }
+      }
+      await reloadData();
+      setFecha(op.fecha); setLocalId(op.localId); setManicuraId("todas"); setBuscadorTurno(null); setBuscadorOpciones([]); setBuscadorMsg("");
+    } catch(e) { alert("Error al crear turno: " + (e.message || e)); }
+    setSaving(false);
+  };
 
   const availableSlots = (uid, servicioId, turnoId=null, startOverride=null) => {
     const servicio=getServicio(parseInt(servicioId));
@@ -4486,6 +4599,7 @@ function AgendaTurnos({ data, reloadData, user }) {
           <button onClick={()=>goTurnosDay(1)} style={{ background:"#fff",border:"0.5px solid var(--color-border-secondary)",borderRadius:8,padding:"5px 10px",cursor:"pointer",fontSize:15 }}>›</button>
           {!turnosPanelVisible && <><Select value={localId} onChange={v=>{setLocalId(v);setManicuraId("todas");}} style={{ maxWidth:220 }}>{localesPermitidos.map(l=><option key={l.id} value={l.id}>{l.nombre}</option>)}</Select><Select value={manicuraId} onChange={setManicuraId} style={{ maxWidth:240 }}><option value="todas">Todas las manicuras</option>{manicurasLocal.map(m=><option key={m.id} value={m.id}>{m.nombre}</option>)}</Select></>}
           <Select value={agendaScale} onChange={setAgendaScale} style={{ width:132 }}><option value="5">Escala 5 min</option><option value="10">Escala 10 min</option><option value="15">Escala 15 min</option><option value="30">Escala 30 min</option><option value="45">Escala 45 min</option><option value="60">Escala 60 min</option><option value="fit">Ajustar a pantalla</option></Select>
+          <Btn onClick={abrirBuscadorTurno} size="sm">Buscar disponibilidad</Btn>
           <Btn onClick={()=>openBloqueo()} variant="secondary" size="sm">+ No disponible</Btn>
           <Badge color="info">{dayTurnos.length} turno{dayTurnos.length!==1?"s":""}</Badge>{manicuraId==="todas"&&ocultasSinActividad>0&&<button onClick={()=>setShowAllManicurasTurnos(v=>!v)} style={{ border:"none",background:showAllManicurasTurnos?COLORS.amberLight:COLORS.pinkLight,color:showAllManicurasTurnos?COLORS.amber:COLORS.pinkDark,borderRadius:999,padding:"5px 9px",fontSize:11,fontWeight:700,cursor:"pointer" }}>{showAllManicurasTurnos?"Ocultar sin actividad":`Mostrar ${ocultasSinActividad} sin actividad`}</button>}
           <div style={{ display:"flex",gap:4,alignItems:"center",flexWrap:"wrap",fontSize:10,color:"var(--color-text-secondary)",marginLeft:"auto" }}>
@@ -4570,6 +4684,37 @@ function AgendaTurnos({ data, reloadData, user }) {
       <div style={{ display:"flex",gap:5,flexWrap:"wrap" }}><TabBtn id="turnos" label="Turnos"/><TabBtn id="servicios" label="Servicios"/><TabBtn id="precios" label="Precios"/><TabBtn id="clientes" label="Clientes"/></div>
     </div>
     {tab==="turnos"&&renderTurnos()}{tab==="servicios"&&renderServicios()}{tab==="precios"&&renderPrecios()}{tab==="clientes"&&renderClientes()}
+
+    {buscadorTurno&&<Modal title="Buscar disponibilidad para turno" onClose={()=>setBuscadorTurno(null)} width={760}>
+      <div style={{ display:"flex",flexDirection:"column",gap:12 }}>
+        <div style={{ background:COLORS.infoLight,color:COLORS.info,borderRadius:10,padding:"9px 12px",fontSize:13 }}>
+          Elegí cliente y servicio. El sistema propone las manicuras que pueden hacerlo y el primer horario disponible desde ahora, ordenado por día y hora. En servicios de más de 1 hora se permite una tolerancia de 15 minutos.
+        </div>
+        <div style={{ display:"grid",gridTemplateColumns:"minmax(150px,0.8fr) minmax(220px,1.2fr) minmax(260px,1.4fr) minmax(145px,0.8fr)",gap:10,alignItems:"end" }}>
+          <ModalSelect label="Local" value={buscadorTurno.localId||""} onChange={v=>{ setBuscadorTurno(d=>({...d,localId:v})); setBuscadorOpciones([]); }}>
+            {localesPermitidos.map(l=><option key={l.id} value={l.id}>{l.nombre}</option>)}
+          </ModalSelect>
+          <SearchableSelect label="Cliente" value={buscadorTurno.clienteId||""} onChange={v=>{ setBuscadorTurno(d=>({...d,clienteId:v})); setBuscadorOpciones([]); }} options={clienteOptions} placeholder="Buscar cliente..."/>
+          <SearchableSelect label="Servicio" value={buscadorTurno.servicioId||""} onChange={v=>{ setBuscadorTurno(d=>({...d,servicioId:v})); setBuscadorOpciones([]); }} options={serviciosActivos.map(s=>({ value:s.id, label:s.nombre, sub:`${s.tipo || "Servicio"} · ${s.duracionMinutos} min${s.admiteCantidad?" · cantidad":""}`, search:`${s.nombre} ${s.tipo || ""} ${s.descripcion || ""}` }))} placeholder="Buscar servicio..."/>
+          <ModalInput label="Buscar desde" type="date" value={buscadorTurno.desdeFecha||fecha} onChange={v=>{ setBuscadorTurno(d=>({...d,desdeFecha:v})); setBuscadorOpciones([]); }}/>
+        </div>
+        {(() => { const cli=getCliente(buscadorTurno.clienteId); return <label style={{ display:"flex",alignItems:"center",gap:8,fontSize:13,color:cli?.email?"var(--color-text-primary)":"var(--color-text-secondary)" }}><input type="checkbox" checked={!!buscadorTurno.enviarEmail && !!cli?.email} disabled={!cli?.email} onChange={e=>setBuscadorTurno(d=>({...d,enviarEmail:e.target.checked}))}/>Enviar email al cliente al agendar{!cli?.email?" · el cliente no tiene email":""}</label>; })()}
+        <div style={{ display:"flex",gap:8,alignItems:"center",justifyContent:"space-between",flexWrap:"wrap" }}>
+          <p style={{ margin:0,fontSize:13,color:"var(--color-text-secondary)" }}>{buscadorMsg}</p>
+          <Btn onClick={generarOpcionesTurnoAutomatico} disabled={saving}>{saving?"Buscando...":"Buscar opciones"}</Btn>
+        </div>
+        {buscadorOpciones.length>0&&<div style={{ display:"flex",flexDirection:"column",gap:8,maxHeight:360,overflow:"auto",border:"1px solid #eee",borderRadius:12,padding:8 }}>
+          {buscadorOpciones.map((op,i)=>{ const d=new Date(op.fecha+"T12:00:00"); const dia=`${DIAS_SEMANA[d.getDay()===0?5:d.getDay()-1]||"Dom"} ${d.getDate()}/${String(d.getMonth()+1).padStart(2,"0")}`; return <div key={`${op.fecha}-${op.userId}-${op.inicio}-${i}`} style={{ display:"grid",gridTemplateColumns:"110px minmax(150px,1fr) 110px 1fr auto",gap:8,alignItems:"center",border:"0.5px solid var(--color-border-tertiary)",borderRadius:10,padding:"8px 10px",fontSize:13 }}>
+            <div><strong>{dia}</strong><br/><span style={{ color:"var(--color-text-secondary)",fontSize:12 }}>{op.fecha}</span></div>
+            <div><strong>{op.manicura?.nombre}</strong><br/><span style={{ color:"var(--color-text-secondary)",fontSize:12 }}>{data.locales.find(l=>l.id===op.localId)?.nombre}</span></div>
+            <div><strong>{op.inicio} - {op.fin}</strong><br/><span style={{ color:"var(--color-text-secondary)",fontSize:12 }}>{op.duracionUsada} min</span></div>
+            <div style={{ color:"var(--color-text-secondary)",fontSize:12 }}>{op.servicio?.nombre}{op.tolerancia&&<><br/><span style={{ color:COLORS.amber,fontWeight:700 }}>con tolerancia de 15 min</span></>}</div>
+            <Btn onClick={()=>crearTurnoDesdeOpcion(op)} disabled={saving} size="sm">Agendar</Btn>
+          </div>; })}
+        </div>}
+        <div style={{ display:"flex",justifyContent:"flex-end" }}><Btn onClick={()=>setBuscadorTurno(null)} variant="secondary">Cerrar</Btn></div>
+      </div>
+    </Modal>}
     {manicuraAgendaModal&&(() => {
       const uid = manicuraAgendaModal.userId;
       const man = getManicura(uid);
