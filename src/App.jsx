@@ -900,8 +900,46 @@ function CalendarioHorarios({ data, reloadData, user, agendaRequest, onBackToRep
 
   const onDeleteB = useCallback(async (f) => onDeleteBFor(parseInt(manicuraId), f), [manicuraId, onDeleteBFor]);
 
+  const toggleFeriado = useCallback(async (f) => {
+    if (!esAdmin) return;
+    if (feriados.has(f)) await api.deleteFeriado(f);
+    else await api.createFeriado({ fecha:f, descripcion:"" });
+    await reloadData();
+  }, [esAdmin, feriados, reloadData]);
+
+  const toggleBloqueo = useCallback(async () => {
+    const uid = parseInt(manicuraId);
+    if (!uid) return;
+    if (periodoBloqueadoParaManicura(periodoActivoKey, uid)) await api.deletePeriodo(periodoActivoKey, uid);
+    else await api.createPeriodo(periodoActivoKey, uid);
+    await reloadData();
+  }, [periodoActivoKey, manicuraId, periodoBloqueadoParaManicura, reloadData]);
+
+  const todasBloqueadas = useMemo(() => manicuras.length > 0 && manicuras.every(m => periodoBloqueadoParaManicura(periodoActivoKey, m.id)), [manicuras, periodoActivoKey, periodoBloqueadoParaManicura]);
+  const toggleBloqueoTodas = useCallback(async () => {
+    if (!puedeGestionar || manicuras.length === 0) return;
+    const accion = todasBloqueadas ? "habilitar" : "bloquear";
+    const ok = await pedirConfirmacion({ title: accion === "bloquear" ? "Bloquear todas" : "Habilitar todas", message: `¿Confirmás que querés ${accion} ${periodoActivoLabel} para todas las manicuras activas?`, confirmText: accion === "bloquear" ? "Bloquear" : "Habilitar", variant: accion === "bloquear" ? "danger" : "primary" });
+    if (!ok) return;
+    for (const m of manicuras) {
+      const yaBloqueada = periodoBloqueadoParaManicura(periodoActivoKey, m.id);
+      if (todasBloqueadas && yaBloqueada) await api.deletePeriodo(periodoActivoKey, m.id);
+      if (!todasBloqueadas && !yaBloqueada) await api.createPeriodo(periodoActivoKey, m.id);
+    }
+    await reloadData();
+  }, [puedeGestionar, manicuras, todasBloqueadas, periodoActivoKey, periodoActivoLabel, periodoBloqueadoParaManicura, reloadData, pedirConfirmacion]);
+
+  const { totalHoras, diasCargados } = useMemo(() => {
+    let fechas = [];
+    if (vista==="semana") fechas=Array.from({length:6},(_,i)=>{ const d=new Date(weekStart); d.setDate(d.getDate()+i); return dateKey(d); });
+    else if (vista==="dia") fechas=[diaVista];
+    else fechas=getDiasDelMes(anio,mes).map(d=>dateKey(d));
+    const cargados = fechas.filter(f=>getB(f));
+    return { totalHoras:cargados.reduce((a,f)=>a+calHoras(getB(f)),0), diasCargados:cargados.length };
+  }, [vista, weekStart, diaVista, mes, anio, bloques, localH]);
+
+  const weekDays = useMemo(()=>Array.from({length:6},(_,i)=>{ const d=new Date(weekStart); d.setDate(d.getDate()+i); return d; }),[weekStart]);
   const repetirSemanaAnterior = useCallback(async () => {
-    if (vista !== "semana") return;
     const uid = parseInt(manicuraId);
     if (!uid) return;
     if (!puedeEditarManicura(uid)) return;
@@ -982,47 +1020,8 @@ function CalendarioHorarios({ data, reloadData, user, agendaRequest, onBackToRep
       disponibles.forEach(item => { delete n[horarioKey(uid, item.targetFecha)]; });
       return n;
     });
-  }, [vista, manicuraId, weekDays, puedeEditarManicura, getBloqueFor, getAsistenciaFor, bloqueadoPorFecha, hasHorarioPersistidoFor, pedirConfirmacion, reloadData, horarioKey]);
+  }, [manicuraId, weekDays, puedeEditarManicura, getBloqueFor, getAsistenciaFor, bloqueadoPorFecha, hasHorarioPersistidoFor, pedirConfirmacion, reloadData, horarioKey]);
 
-  const toggleFeriado = useCallback(async (f) => {
-    if (!esAdmin) return;
-    if (feriados.has(f)) await api.deleteFeriado(f);
-    else await api.createFeriado({ fecha:f, descripcion:"" });
-    await reloadData();
-  }, [esAdmin, feriados, reloadData]);
-
-  const toggleBloqueo = useCallback(async () => {
-    const uid = parseInt(manicuraId);
-    if (!uid) return;
-    if (periodoBloqueadoParaManicura(periodoActivoKey, uid)) await api.deletePeriodo(periodoActivoKey, uid);
-    else await api.createPeriodo(periodoActivoKey, uid);
-    await reloadData();
-  }, [periodoActivoKey, manicuraId, periodoBloqueadoParaManicura, reloadData]);
-
-  const todasBloqueadas = useMemo(() => manicuras.length > 0 && manicuras.every(m => periodoBloqueadoParaManicura(periodoActivoKey, m.id)), [manicuras, periodoActivoKey, periodoBloqueadoParaManicura]);
-  const toggleBloqueoTodas = useCallback(async () => {
-    if (!puedeGestionar || manicuras.length === 0) return;
-    const accion = todasBloqueadas ? "habilitar" : "bloquear";
-    const ok = await pedirConfirmacion({ title: accion === "bloquear" ? "Bloquear todas" : "Habilitar todas", message: `¿Confirmás que querés ${accion} ${periodoActivoLabel} para todas las manicuras activas?`, confirmText: accion === "bloquear" ? "Bloquear" : "Habilitar", variant: accion === "bloquear" ? "danger" : "primary" });
-    if (!ok) return;
-    for (const m of manicuras) {
-      const yaBloqueada = periodoBloqueadoParaManicura(periodoActivoKey, m.id);
-      if (todasBloqueadas && yaBloqueada) await api.deletePeriodo(periodoActivoKey, m.id);
-      if (!todasBloqueadas && !yaBloqueada) await api.createPeriodo(periodoActivoKey, m.id);
-    }
-    await reloadData();
-  }, [puedeGestionar, manicuras, todasBloqueadas, periodoActivoKey, periodoActivoLabel, periodoBloqueadoParaManicura, reloadData, pedirConfirmacion]);
-
-  const { totalHoras, diasCargados } = useMemo(() => {
-    let fechas = [];
-    if (vista==="semana") fechas=Array.from({length:6},(_,i)=>{ const d=new Date(weekStart); d.setDate(d.getDate()+i); return dateKey(d); });
-    else if (vista==="dia") fechas=[diaVista];
-    else fechas=getDiasDelMes(anio,mes).map(d=>dateKey(d));
-    const cargados = fechas.filter(f=>getB(f));
-    return { totalHoras:cargados.reduce((a,f)=>a+calHoras(getB(f)),0), diasCargados:cargados.length };
-  }, [vista, weekStart, diaVista, mes, anio, bloques, localH]);
-
-  const weekDays = useMemo(()=>Array.from({length:6},(_,i)=>{ const d=new Date(weekStart); d.setDate(d.getDate()+i); return d; }),[weekStart]);
   const weekEnd = new Date(weekStart); weekEnd.setDate(weekEnd.getDate()+5);
   const diaVistaDate = new Date(diaVista + "T12:00:00");
   const navLabel = vista==="semana"
@@ -1364,7 +1363,7 @@ function CalendarioHorarios({ data, reloadData, user, agendaRequest, onBackToRep
               <button onClick={nextNav} style={{ background:"none",border:"0.5px solid rgba(120,120,120,0.24)",borderRadius:5,padding:"2px 8px",cursor:"pointer",fontSize:14 }}>›</button>
             </div>
             <button onClick={()=>{ setWeekStart(getMon(hoy)); setDiaVista(dateKey(hoy)); setMes(hoy.getMonth()); setAnio(hoy.getFullYear()); }} style={{ width:"100%",background:"none",border:"0.5px solid rgba(120,120,120,0.24)",borderRadius:6,padding:"4px",cursor:"pointer",fontSize:11,color:"var(--color-text-secondary)" }}>Hoy</button>
-            {vista==="semana" && <button onClick={repetirSemanaAnterior} disabled={bloqueado} title="Copiar los horarios cargados en la semana anterior" style={{ width:"100%",marginTop:6,background:bloqueado?"var(--color-background-tertiary)":COLORS.pinkLight,border:"0.5px solid rgba(214,79,128,0.25)",borderRadius:6,padding:"6px 5px",cursor:bloqueado?"not-allowed":"pointer",fontSize:11,fontWeight:600,color:bloqueado?"var(--color-text-secondary)":COLORS.pinkDark }}>↩ Repetir semana anterior</button>}
+            {["semana","mes"].includes(vista) && <button onClick={repetirSemanaAnterior} disabled={bloqueado} title="Copiar los horarios cargados en la semana anterior" style={{ width:"100%",marginTop:6,background:bloqueado?"var(--color-background-tertiary)":COLORS.pinkLight,border:"0.5px solid rgba(214,79,128,0.25)",borderRadius:6,padding:"6px 5px",cursor:bloqueado?"not-allowed":"pointer",fontSize:11,fontWeight:600,color:bloqueado?"var(--color-text-secondary)":COLORS.pinkDark }}>↩ Repetir semana anterior</button>}
           </div>
           <div style={{ padding:"8px 10px",borderTop:"0.5px solid rgba(120,120,120,0.18)" }}>
             <div style={{ background:"var(--color-background-primary)",border:"0.5px solid rgba(120,120,120,0.18)",borderRadius:10,padding:8 }}>
