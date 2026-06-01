@@ -2176,6 +2176,16 @@ function Reportes({ data, user, onOpenAgenda, reportRestore, reloadData }) {
       };
     };
     const comisionAl35 = (com40) => Number(com40 || 0) * 0.875;
+    const comisionAplicadaRegistro = (c) => {
+      const valor = Number(c?.comision || 0);
+      if (!c || c.tipoRegistro === "garantia") return valor;
+      const info = criterioInfo(c.userId);
+      return info.porcentaje === 35 ? comisionAl35(valor) : valor;
+    };
+    const porcentajeAplicadoRegistro = (c) => {
+      if (!c || c.tipoRegistro === "garantia") return null;
+      return criterioInfo(c.userId).porcentaje;
+    };
     const guardarCriterioComision = async (uid, localIdValue, porcentaje) => {
       if (!uid || semanaComisiones === "todas") return;
       try {
@@ -2200,7 +2210,7 @@ function Reportes({ data, user, onOpenAgenda, reportRestore, reloadData }) {
         manicurasPagoMap.set(key, { userId:c.userId || userMatch?.id || null, nombre:userMatch?.nombre || c.nombreManicura || "Sin manicura", local:c.nombreLocal || localNameById.get(userMatch?.localId) || "", comision:0, adelantos:0 });
       }
       const item = manicurasPagoMap.get(key);
-      item.comision += c.comision;
+      item.comision += comisionAplicadaRegistro(c);
     });
     adelantos.forEach(a => {
       const key = a.userId || `adelanto-${a.id}`;
@@ -2272,7 +2282,7 @@ function Reportes({ data, user, onOpenAgenda, reportRestore, reloadData }) {
       if (campo === "servicio") return c.servicio || "Sin servicio";
       if (campo === "cliente") return c.cliente || "Sin cliente";
       if (campo === "precio") return fmtMoney(c.precio);
-      if (campo === "comision") return fmtMoney(c.comision);
+      if (campo === "comision") return fmtMoney(comisionAplicadaRegistro(c));
       return "Detalle";
     };
     const groupIdPart = (campo, valor) => `${campo}:${String(valor).replace(/\|/g,"/")}`;
@@ -2314,7 +2324,7 @@ function Reportes({ data, user, onOpenAgenda, reportRestore, reloadData }) {
         servicio: c.servicio,
         cliente: c.cliente,
         precio: fmtMoney(c.precio),
-        comision: fmtMoney(c.comision),
+        comision: fmtMoney(comisionAplicadaRegistro(c)),
       };
       return map[key] ?? "";
     };
@@ -2506,8 +2516,8 @@ function Reportes({ data, user, onOpenAgenda, reportRestore, reloadData }) {
           {semanaComisiones==="todas"?<Badge color="info">Seleccioná una semana para definir 35% / 40%</Badge>:<Badge color="success">Semana {semanaComisiones}</Badge>}
         </div>
         <div style={{ overflowX:"auto" }}>
-          <div style={{ minWidth:puedeGestionar?1120:980 }}>
-            <div style={{ display:"grid",gridTemplateColumns:puedeGestionar?"1fr 90px 95px 95px 115px 110px 105px 105px 110px":"1fr 90px 95px 95px 105px 105px 110px",gap:8,alignItems:"center",padding:"0 8px 6px",borderBottom:"1px solid rgba(120,120,120,0.12)",marginBottom:6 }}>
+          <div style={{ minWidth:puedeGestionar?1120:1040 }}>
+            <div style={{ display:"grid",gridTemplateColumns:puedeGestionar?"1fr 90px 95px 95px 115px 110px 105px 105px 110px":"1fr 90px 95px 95px 105px 105px 105px 110px",gap:8,alignItems:"center",padding:"0 8px 6px",borderBottom:"1px solid rgba(120,120,120,0.12)",marginBottom:6 }}>
               <span style={{ fontSize:10,fontWeight:700,color:"var(--color-text-secondary)",textTransform:"uppercase",letterSpacing:"0.04em" }}>Manicura</span>
               <span style={{ fontSize:10,fontWeight:700,color:"var(--color-text-secondary)",textTransform:"uppercase",letterSpacing:"0.04em",textAlign:"right" }}>Venta</span>
               <span style={{ fontSize:10,fontWeight:700,color:"var(--color-text-secondary)",textTransform:"uppercase",letterSpacing:"0.04em",textAlign:"right" }}>40%</span>
@@ -2518,7 +2528,7 @@ function Reportes({ data, user, onOpenAgenda, reportRestore, reloadData }) {
               <span style={{ fontSize:10,fontWeight:700,color:"var(--color-text-secondary)",textTransform:"uppercase",letterSpacing:"0.04em",textAlign:"right" }}>Adelantos</span>
               <span style={{ fontSize:10,fontWeight:700,color:"var(--color-text-secondary)",textTransform:"uppercase",letterSpacing:"0.04em",textAlign:"right" }}>Neto</span>
             </div>
-            <div style={{ display:"flex",flexDirection:"column",gap:6 }}>{resumenPorManicura.slice(0,12).map((r,i)=><div key={i} style={{ display:"grid",gridTemplateColumns:puedeGestionar?"1fr 90px 95px 95px 115px 110px 105px 105px 110px":"1fr 90px 95px 95px 105px 105px 110px",gap:8,alignItems:"center",padding:"7px 8px",borderRadius:8,background:"var(--color-background-secondary)" }}>
+            <div style={{ display:"flex",flexDirection:"column",gap:6 }}>{resumenPorManicura.slice(0,12).map((r,i)=><div key={i} style={{ display:"grid",gridTemplateColumns:puedeGestionar?"1fr 90px 95px 95px 115px 110px 105px 105px 110px":"1fr 90px 95px 95px 105px 105px 105px 110px",gap:8,alignItems:"center",padding:"7px 8px",borderRadius:8,background:"var(--color-background-secondary)" }}>
               <div><p style={{ margin:0,fontSize:13,fontWeight:500 }}>{r.nombre}</p><p style={{ margin:0,fontSize:11,color:"var(--color-text-secondary)" }}>{r.local} · {r.servicios} servicios{semanaComisiones!=="todas"?` · ${Number(r.horasTeoricas||0).toFixed(1)}h teóricas · ${r.faltas||0} falta${(r.faltas||0)!==1?"s":""}`:""}{r.garantiasQty?` · ${r.garantiasQty} garantía${r.garantiasQty!==1?"s":""}`:""}</p></div>
               <span style={{ fontSize:13,textAlign:"right",color:"var(--color-text-secondary)" }}>{fmtMoney(r.precio)}</span>
               <strong style={{ fontSize:14,textAlign:"right",color:COLORS.pink }}>{fmtMoney(r.comisionBase)}</strong>
