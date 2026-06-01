@@ -2678,56 +2678,58 @@ function Reportes({ data, user, onOpenAgenda, reportRestore, reloadData }) {
         <Card><p style={{ margin:"0 0 4px",fontSize:11,color:"var(--color-text-secondary)",textTransform:"uppercase",letterSpacing:"0.04em" }}>Servicios</p><p style={{ margin:0,fontSize:22,fontWeight:600 }}>{servicios}</p></Card>
         <Card><p style={{ margin:"0 0 4px",fontSize:11,color:"var(--color-text-secondary)",textTransform:"uppercase",letterSpacing:"0.04em" }}>Clientes</p><p style={{ margin:0,fontSize:22,fontWeight:600 }}>{clientes}</p></Card>
       </div>
-      {semanaComisiones !== "todas" && <Card style={{ marginBottom:14 }}>
-        <div style={{ display:"flex",justifyContent:"space-between",alignItems:"flex-start",gap:12,flexWrap:"wrap",marginBottom:12 }}>
-          <div>
-            <h3 style={{ margin:"0 0 3px",fontSize:15,fontWeight:600 }}>Comparativo vs semana anterior</h3>
-            <p style={{ margin:0,fontSize:12,color:"var(--color-text-secondary)" }}>Compara la semana seleccionada al mismo día de corte: {Array.from(compareCurrentKeys).length ? `${shortDateCom(Array.from(compareCurrentKeys)[0])} a ${shortDateCom(Array.from(compareCurrentKeys).slice(-1)[0])}` : "sin días"} contra los mismos días de la semana anterior.</p>
-          </div>
-          <Badge color="info">Semana {semanaComisiones}</Badge>
+      <div style={{ display:"grid",gridTemplateColumns:"minmax(360px,1fr) minmax(380px,0.95fr)",gap:14,alignItems:"start",marginBottom:14 }}>
+        <div><Card style={{ marginBottom:0,border:semanaComisiones==="todas"?`1px solid ${COLORS.info}33`:semanaFinalizada?`1px solid ${COLORS.success}33`:`1px solid ${COLORS.amber}33`,background:semanaComisiones==="todas"?COLORS.infoLight:semanaFinalizada?COLORS.successLight:COLORS.amberLight }}>
+  <div style={{ display:"flex",justifyContent:"space-between",alignItems:"flex-start",gap:12,flexWrap:"wrap" }}>
+    <div style={{ flex:1,minWidth:260 }}>
+      <h3 style={{ margin:"0 0 4px",fontSize:15,fontWeight:600,color:semanaComisiones==="todas"?COLORS.info:semanaFinalizada?COLORS.success:COLORS.amber }}>Fecha de pago de comisiones</h3>
+      {semanaComisiones==="todas" ? <p style={{ margin:0,fontSize:13,color:COLORS.info }}>Seleccioná una semana para calcular la fecha de pago.</p>
+      : !semanaFinalizada ? <p style={{ margin:0,fontSize:13,color:COLORS.amber }}>La semana seleccionada todavía no está cerrada. Se muestra una fecha estimada en base a la agenda teórica del sábado {sabadoPagoBase?fmtFecha(sabadoPagoBase):""}. La fecha definitiva se confirmará cuando pase ese sábado.</p>
+      : <p style={{ margin:0,fontSize:13,color:COLORS.success }}>Semana cerrada el sábado {fmtFecha(sabadoPagoBase)}. Si la manicura trabajó ese sábado, cobra el lunes siguiente; si no trabajó, el martes siguiente.</p>}
+    </div>
+    {semanaComisiones!=="todas"&&sabadoPagoBase&&<div style={{ textAlign:"right" }}><p style={{ margin:0,fontSize:11,color:"var(--color-text-secondary)",textTransform:"uppercase",letterSpacing:"0.04em" }}>Sábado de control</p><p style={{ margin:0,fontSize:18,fontWeight:600 }}>{fmtFecha(sabadoPagoBase)}</p></div>}
+  </div>
+  {semanaComisiones!=="todas"&&fechasPagoComisiones.length>0&&<div style={{ marginTop:12,display:"flex",flexDirection:"column",gap:6 }}>
+    {fechasPagoComisiones.map((pago,i)=><div key={`${pago.userId||pago.nombre}-${i}`} style={{ display:"grid",gridTemplateColumns:"1fr 120px 120px 115px",gap:8,alignItems:"center",background:"rgba(255,255,255,0.68)",borderRadius:8,padding:"7px 9px" }}>
+      <div><p style={{ margin:0,fontSize:13,fontWeight:600 }}>{pago.nombre}</p><p style={{ margin:0,fontSize:11,color:"var(--color-text-secondary)" }}>{pago.local||"Sin local"} · {pago.trabajaSabado?"Trabaja sábado":"No trabaja sábado"}{pagoEstimado?" · estimado por agenda":""}</p></div>
+      <Badge color={pagoEstimado?"amber":pago.trabajaSabado?"success":"amber"}>{pagoEstimado?`Estimado ${pago.trabajaSabado?"lunes":"martes"}`:pago.trabajaSabado?"Lunes":"Martes"}</Badge>
+      <strong style={{ fontSize:14,textAlign:"right" }}>{pago.fechaPago ? pago.fechaPago.split("-").reverse().join("/") : "—"}</strong>
+      <strong style={{ fontSize:14,textAlign:"right",color:(pago.neto||0)>=0?COLORS.success:COLORS.danger }}>{fmtMoney(pago.neto)}</strong>
+    </div>)}
+  </div>}
+</Card></div>
+        <div style={{ display:"flex",flexDirection:"column",gap:14 }}>
+          {semanaComisiones !== "todas" && <Card style={{ marginBottom:0 }}>
+  <div style={{ display:"flex",justifyContent:"space-between",alignItems:"flex-start",gap:12,flexWrap:"wrap",marginBottom:12 }}>
+    <div>
+      <h3 style={{ margin:"0 0 3px",fontSize:15,fontWeight:600 }}>Comparativo vs semana anterior</h3>
+      <p style={{ margin:0,fontSize:12,color:"var(--color-text-secondary)" }}>Compara solo comisión y servicios al mismo día de corte: {Array.from(compareCurrentKeys).length ? `${shortDateCom(Array.from(compareCurrentKeys)[0])} a ${shortDateCom(Array.from(compareCurrentKeys).slice(-1)[0])}` : "sin días"} contra los mismos días de la semana anterior.</p>
+    </div>
+    <Badge color="info">Semana {semanaComisiones}</Badge>
+  </div>
+  <div style={{ display:"grid",gridTemplateColumns:"repeat(2,minmax(0,1fr))",gap:10 }}>
+    <div style={{ background:"var(--color-background-secondary)",borderRadius:12,padding:12 }}><p style={{ margin:"0 0 5px",fontSize:11,color:"var(--color-text-secondary)",fontWeight:700,textTransform:"uppercase" }}>Comisión aplicada</p><p style={{ margin:"0 0 6px",fontSize:20,fontWeight:700,color:COLORS.pink }}>{fmtMoney(compareCurrent.comision)}</p><DeltaBadge actual={compareCurrent.comision} anterior={comparePrevious.comision}/><p style={{ margin:"6px 0 0",fontSize:11,color:"var(--color-text-secondary)" }}>Anterior: {fmtMoney(comparePrevious.comision)}</p></div>
+    <div style={{ background:"var(--color-background-secondary)",borderRadius:12,padding:12 }}><p style={{ margin:"0 0 5px",fontSize:11,color:"var(--color-text-secondary)",fontWeight:700,textTransform:"uppercase" }}>Servicios</p><p style={{ margin:"0 0 6px",fontSize:20,fontWeight:700 }}>{compareCurrent.servicios}</p><span style={{ fontSize:11,fontWeight:700,color:(compareCurrent.servicios-comparePrevious.servicios)>=0?COLORS.success:COLORS.danger }}>{(compareCurrent.servicios-comparePrevious.servicios)>=0?"+":""}{compareCurrent.servicios-comparePrevious.servicios}</span><p style={{ margin:"6px 0 0",fontSize:11,color:"var(--color-text-secondary)" }}>Anterior: {comparePrevious.servicios}</p></div>
+  </div>
+</Card>}
+          <Card style={{ marginBottom:0 }}>
+  <div style={{ display:"flex",justifyContent:"space-between",alignItems:"flex-start",gap:12,flexWrap:"wrap",marginBottom:10 }}>
+    <div>
+      <h3 style={{ margin:"0 0 3px",fontSize:15,fontWeight:600 }}>Tendencia semanal</h3>
+      <p style={{ margin:0,fontSize:12,color:"var(--color-text-secondary)" }}>No depende del filtro de semana. Se recalcula con el local y la manicura seleccionados.</p>
+    </div>
+    <span style={{ fontSize:12,color:"var(--color-text-secondary)",fontWeight:600 }}>{tendenciaSemanal.length} semanas</span>
+  </div>
+  {tendenciaSemanal.length < 2 ? <p style={{ margin:0,fontSize:13,color:"var(--color-text-secondary)",textAlign:"center",padding:18 }}>Todavía no hay suficientes semanas para mostrar tendencia.</p> : <div style={{ overflowX:"auto" }}>
+    <svg width={trendWidth} height={trendHeight + 34} viewBox={`0 0 ${trendWidth} ${trendHeight + 34}`} style={{ minWidth:560,width:"100%",height:"auto",display:"block" }}>
+      {[0,0.25,0.5,0.75,1].map((t,i)=>{ const y=trendHeight-trendPadY-t*(trendHeight-trendPadY*2); return <g key={i}><line x1={trendPadX} x2={trendWidth-trendPadX} y1={y} y2={y} stroke="rgba(120,120,120,0.15)"/><text x={6} y={y+4} fontSize="10" fill="var(--color-text-secondary)">{fmtMoney(maxTrendValue*t)}</text></g>;})}
+      <path d={trendPath} fill="none" stroke={COLORS.pink} strokeWidth="3" strokeLinecap="round" strokeLinejoin="round"/>
+      {trendPoints.map((p,i)=><g key={p.semanaInicio}><circle cx={p.x} cy={p.y} r="4.5" fill={COLORS.pink}/><title>{`${shortDateCom(p.semanaInicio)} · ${fmtMoney(p.comision)} · Venta ${fmtMoney(p.venta)}`}</title>{i%2===0&&<text x={p.x} y={trendHeight+16} textAnchor="middle" fontSize="10" fill="var(--color-text-secondary)">{shortDateCom(p.semanaInicio)}</text>}</g>)}
+    </svg>
+  </div>}
+</Card>
         </div>
-        <div style={{ display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(170px,1fr))",gap:10 }}>
-          <div style={{ background:"var(--color-background-secondary)",borderRadius:12,padding:12 }}><p style={{ margin:"0 0 5px",fontSize:11,color:"var(--color-text-secondary)",fontWeight:700,textTransform:"uppercase" }}>Venta</p><p style={{ margin:"0 0 6px",fontSize:20,fontWeight:700 }}>{fmtMoney(compareCurrent.venta)}</p><DeltaBadge actual={compareCurrent.venta} anterior={comparePrevious.venta}/><p style={{ margin:"6px 0 0",fontSize:11,color:"var(--color-text-secondary)" }}>Anterior: {fmtMoney(comparePrevious.venta)}</p></div>
-          <div style={{ background:"var(--color-background-secondary)",borderRadius:12,padding:12 }}><p style={{ margin:"0 0 5px",fontSize:11,color:"var(--color-text-secondary)",fontWeight:700,textTransform:"uppercase" }}>Comisión aplicada</p><p style={{ margin:"0 0 6px",fontSize:20,fontWeight:700,color:COLORS.pink }}>{fmtMoney(compareCurrent.comision)}</p><DeltaBadge actual={compareCurrent.comision} anterior={comparePrevious.comision}/><p style={{ margin:"6px 0 0",fontSize:11,color:"var(--color-text-secondary)" }}>Anterior: {fmtMoney(comparePrevious.comision)}</p></div>
-          <div style={{ background:"var(--color-background-secondary)",borderRadius:12,padding:12 }}><p style={{ margin:"0 0 5px",fontSize:11,color:"var(--color-text-secondary)",fontWeight:700,textTransform:"uppercase" }}>Servicios</p><p style={{ margin:"0 0 6px",fontSize:20,fontWeight:700 }}>{compareCurrent.servicios}</p><span style={{ fontSize:11,fontWeight:700,color:(compareCurrent.servicios-comparePrevious.servicios)>=0?COLORS.success:COLORS.danger }}>{(compareCurrent.servicios-comparePrevious.servicios)>=0?"+":""}{compareCurrent.servicios-comparePrevious.servicios}</span><p style={{ margin:"6px 0 0",fontSize:11,color:"var(--color-text-secondary)" }}>Anterior: {comparePrevious.servicios}</p></div>
-          <div style={{ background:"var(--color-background-secondary)",borderRadius:12,padding:12 }}><p style={{ margin:"0 0 5px",fontSize:11,color:"var(--color-text-secondary)",fontWeight:700,textTransform:"uppercase" }}>Clientes</p><p style={{ margin:"0 0 6px",fontSize:20,fontWeight:700 }}>{compareCurrent.clientes.size}</p><span style={{ fontSize:11,fontWeight:700,color:(compareCurrent.clientes.size-comparePrevious.clientes.size)>=0?COLORS.success:COLORS.danger }}>{(compareCurrent.clientes.size-comparePrevious.clientes.size)>=0?"+":""}{compareCurrent.clientes.size-comparePrevious.clientes.size}</span><p style={{ margin:"6px 0 0",fontSize:11,color:"var(--color-text-secondary)" }}>Anterior: {comparePrevious.clientes.size}</p></div>
-        </div>
-      </Card>}
-      <Card style={{ marginBottom:14 }}>
-        <div style={{ display:"flex",justifyContent:"space-between",alignItems:"flex-start",gap:12,flexWrap:"wrap",marginBottom:10 }}>
-          <div>
-            <h3 style={{ margin:"0 0 3px",fontSize:15,fontWeight:600 }}>Tendencia semanal</h3>
-            <p style={{ margin:0,fontSize:12,color:"var(--color-text-secondary)" }}>No depende del filtro de semana. Se recalcula con el local y la manicura seleccionados.</p>
-          </div>
-          <span style={{ fontSize:12,color:"var(--color-text-secondary)",fontWeight:600 }}>{tendenciaSemanal.length} semanas</span>
-        </div>
-        {tendenciaSemanal.length < 2 ? <p style={{ margin:0,fontSize:13,color:"var(--color-text-secondary)",textAlign:"center",padding:18 }}>Todavía no hay suficientes semanas para mostrar tendencia.</p> : <div style={{ overflowX:"auto" }}>
-          <svg width={trendWidth} height={trendHeight + 34} viewBox={`0 0 ${trendWidth} ${trendHeight + 34}`} style={{ minWidth:560,width:"100%",height:"auto",display:"block" }}>
-            {[0,0.25,0.5,0.75,1].map((t,i)=>{ const y=trendHeight-trendPadY-t*(trendHeight-trendPadY*2); return <g key={i}><line x1={trendPadX} x2={trendWidth-trendPadX} y1={y} y2={y} stroke="rgba(120,120,120,0.15)"/><text x={6} y={y+4} fontSize="10" fill="var(--color-text-secondary)">{fmtMoney(maxTrendValue*t)}</text></g>;})}
-            <path d={trendPath} fill="none" stroke={COLORS.pink} strokeWidth="3" strokeLinecap="round" strokeLinejoin="round"/>
-            {trendPoints.map((p,i)=><g key={p.semanaInicio}><circle cx={p.x} cy={p.y} r="4.5" fill={COLORS.pink}/><title>{`${shortDateCom(p.semanaInicio)} · ${fmtMoney(p.comision)} · Venta ${fmtMoney(p.venta)}`}</title>{i%2===0&&<text x={p.x} y={trendHeight+16} textAnchor="middle" fontSize="10" fill="var(--color-text-secondary)">{shortDateCom(p.semanaInicio)}</text>}</g>)}
-          </svg>
-        </div>}
-      </Card>
-      <Card style={{ marginBottom:14,border:semanaComisiones==="todas"?`1px solid ${COLORS.info}33`:semanaFinalizada?`1px solid ${COLORS.success}33`:`1px solid ${COLORS.amber}33`,background:semanaComisiones==="todas"?COLORS.infoLight:semanaFinalizada?COLORS.successLight:COLORS.amberLight }}>
-        <div style={{ display:"flex",justifyContent:"space-between",alignItems:"flex-start",gap:12,flexWrap:"wrap" }}>
-          <div style={{ flex:1,minWidth:260 }}>
-            <h3 style={{ margin:"0 0 4px",fontSize:15,fontWeight:600,color:semanaComisiones==="todas"?COLORS.info:semanaFinalizada?COLORS.success:COLORS.amber }}>Fecha de pago de comisiones</h3>
-            {semanaComisiones==="todas" ? <p style={{ margin:0,fontSize:13,color:COLORS.info }}>Seleccioná una semana para calcular la fecha de pago.</p>
-            : !semanaFinalizada ? <p style={{ margin:0,fontSize:13,color:COLORS.amber }}>La semana seleccionada todavía no está cerrada. Se muestra una fecha estimada en base a la agenda teórica del sábado {sabadoPagoBase?fmtFecha(sabadoPagoBase):""}. La fecha definitiva se confirmará cuando pase ese sábado.</p>
-            : <p style={{ margin:0,fontSize:13,color:COLORS.success }}>Semana cerrada el sábado {fmtFecha(sabadoPagoBase)}. Si la manicura trabajó ese sábado, cobra el lunes siguiente; si no trabajó, el martes siguiente.</p>}
-          </div>
-          {semanaComisiones!=="todas"&&sabadoPagoBase&&<div style={{ textAlign:"right" }}><p style={{ margin:0,fontSize:11,color:"var(--color-text-secondary)",textTransform:"uppercase",letterSpacing:"0.04em" }}>Sábado de control</p><p style={{ margin:0,fontSize:18,fontWeight:600 }}>{fmtFecha(sabadoPagoBase)}</p></div>}
-        </div>
-        {semanaComisiones!=="todas"&&fechasPagoComisiones.length>0&&<div style={{ marginTop:12,display:"flex",flexDirection:"column",gap:6 }}>
-          {fechasPagoComisiones.map((pago,i)=><div key={`${pago.userId||pago.nombre}-${i}`} style={{ display:"grid",gridTemplateColumns:"1fr 120px 120px 115px",gap:8,alignItems:"center",background:"rgba(255,255,255,0.68)",borderRadius:8,padding:"7px 9px" }}>
-            <div><p style={{ margin:0,fontSize:13,fontWeight:600 }}>{pago.nombre}</p><p style={{ margin:0,fontSize:11,color:"var(--color-text-secondary)" }}>{pago.local||"Sin local"} · {pago.trabajaSabado?"Trabaja sábado":"No trabaja sábado"}{pagoEstimado?" · estimado por agenda":""}</p></div>
-            <Badge color={pagoEstimado?"amber":pago.trabajaSabado?"success":"amber"}>{pagoEstimado?`Estimado ${pago.trabajaSabado?"lunes":"martes"}`:pago.trabajaSabado?"Lunes":"Martes"}</Badge>
-            <strong style={{ fontSize:14,textAlign:"right" }}>{pago.fechaPago ? pago.fechaPago.split("-").reverse().join("/") : "—"}</strong>
-            <strong style={{ fontSize:14,textAlign:"right",color:(pago.neto||0)>=0?COLORS.success:COLORS.danger }}>{fmtMoney(pago.neto)}</strong>
-          </div>)}
-        </div>}
-      </Card>
+      </div>
       {resumenPorManicura.length>0&&<Card style={{ marginBottom:14,overflow:"hidden" }}>
         <div style={{ display:"flex",alignItems:"center",justifyContent:"space-between",gap:8,marginBottom:10,flexWrap:"wrap" }}>
           <div>
