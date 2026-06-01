@@ -2283,6 +2283,32 @@ function Reportes({ data, user, onOpenAgenda, reportRestore, reloadData }) {
       if (!c || c.tipoRegistro === "garantia") return null;
       return criterioInfo(c.userId).porcentaje;
     };
+    const semanaKeysPorPeriodo = (periodo, semana) => {
+      const [yy, mm] = String(periodo || "").split("-").map(Number);
+      if (!yy || !mm || !semana) return [];
+      const semanas = getSemanas(getDiasDelMes(yy, mm - 1));
+      return (semanas[parseInt(semana) - 1] || []).filter(Boolean).map(d => dateKey(d));
+    };
+    const horasTeoricasSemanaFor = (uid, periodo, semana) => semanaKeysPorPeriodo(periodo, semana).reduce((acc, f) => {
+      const h = (data.horarios || []).find(x => x.userId === uid && x.fecha === f && x.trabaja && x.entrada && x.salida);
+      if (!h) return acc;
+      return acc + Math.max(0, minutesFromTimeComision(h.salida) - minutesFromTimeComision(h.entrada)) / 60;
+    }, 0);
+    const faltasSemanaFor = (uid, periodo, semana) => semanaKeysPorPeriodo(periodo, semana).filter(f => (data.asistencias || []).some(a => a.userId === uid && a.fecha === f && a.estado === "ausente")).length;
+    const criterioInfoFor = (uid, periodo, semana) => {
+      if (!uid || !periodo || !semana) return { porcentaje: 40, guardado: false, automatico: 40, horas: 0, faltas: 0 };
+      const guardado = (data.comisionesCriterios || []).find(c => c.periodo === periodo && String(c.semana) === String(semana) && c.userId === uid);
+      const horas = horasTeoricasSemanaFor(uid, periodo, semana);
+      const faltas = faltasSemanaFor(uid, periodo, semana);
+      const automatico = (faltas > 0 || horas < 36) ? 35 : 40;
+      return { porcentaje: guardado?.porcentaje || automatico, guardado: !!guardado, automatico, horas, faltas };
+    };
+    const comisionAplicadaRegistroHistorica = (c) => {
+      const valor = Number(c?.comision || 0);
+      if (!c || c.tipoRegistro === "garantia") return valor;
+      const info = criterioInfoFor(c.userId, c.periodo || String(c.fechaPago || "").slice(0,7), weekOfMonthValue(c.fechaPago));
+      return info.porcentaje === 35 ? comisionAl35(valor) : valor;
+    };
     const guardarCriterioComision = async (uid, localIdValue, porcentaje) => {
       if (!uid || semanaComisiones === "todas") return;
       try {
@@ -2556,6 +2582,73 @@ function Reportes({ data, user, onOpenAgenda, reportRestore, reloadData }) {
       return [header, ...g.items.map(item=>renderDataRow(item,{key:`${g.id}::${item.id}`,indent:(g.level+1)*18,muted:true}))];
     });
 
+    const shortDateCom = f => (f || "").split("-").reverse().slice(0,2).join("/");
+    const allComisionesMetricas = (data.comisiones || [])
+      .filter(c => puedeVerComision(c))
+      .filter(c => localComisiones === "todos" || c.localId === parseInt(localComisiones) || normalize(c.nombreLocal) === normalize(localNameById.get(parseInt(localComisiones))))
+      .filter(c => manicuraComisiones === "todas" || c.userId === parseInt(manicuraComisiones) || normalize(c.nombreManicura) === normalize(userNameById.get(parseInt(manicuraComisiones))));
+    const sumaMetricasComisiones = (items) => items.reduce((acc, c) => {
+      acc.venta += Number(c.precio || 0);
+      acc.comision += comisionAplicadaRegistroHistorica(c);
+      acc.servicios += 1;
+      if (normalize(c.cliente)) acc.clientes.add(normalize(c.cliente));
+      return acc;
+    }, { venta: 0, comision: 0, servicios: 0, clientes: new Set() });
+    const buildDelta = (actual, anterior) => {
+      const diff = Number(actual || 0) - Number(anterior || 0);
+      const pct = anterior ? (diff / Math.abs(anterior)) * 100 : null;
+      return { diff, pct };
+    };
+    const compareCutoffIndex = (() => {
+      if (!semanaSeleccionadaDias || !semanaSeleccionadaDias.length) return -1;
+      const keys = semanaSeleccionadaDias.filter(Boolean).map(d => dateKey(d));
+      const todayKey = dateKey(new Date());
+      const idx = keys.indexOf(todayKey);
+      return idx >= 0 ? idx : keys.length - 1;
+    })();
+    const compareCurrentKeys = semanaComisiones !== "todas" && semanaKeysComision.length
+      ? new Set(semanaKeysComision.filter((_, idx) => idx <= compareCutoffIndex))
+      : new Set();
+    const comparePreviousKeys = new Set(Array.from(compareCurrentKeys).map(f => dateKey(addDaysLocal(f, -7))));
+    const compareCurrentItems = semanaComisiones !== "todas" ? allComisionesMetricas.filter(c => compareCurrentKeys.has(c.fechaPago)) : [];
+    const comparePreviousItems = semanaComisiones !== "todas" ? allComisionesMetricas.filter(c => comparePreviousKeys.has(c.fechaPago)) : [];
+    const compareCurrent = sumaMetricasComisiones(compareCurrentItems);
+    const comparePrevious = sumaMetricasComisiones(comparePreviousItems);
+    const trendWeekStart = (f) => {
+      const d = parseDateLocal(f);
+      if (!d) return "";
+      const day = d.getDay();
+      const diff = day === 0 ? -6 : 1 - day;
+      d.setDate(d.getDate() + diff);
+      return dateKey(d);
+    };
+    const tendenciaMap = allComisionesMetricas.reduce((map, c) => {
+      const wk = trendWeekStart(c.fechaPago);
+      if (!wk) return map;
+      const prev = map.get(wk) || { semanaInicio: wk, venta: 0, comision: 0, servicios: 0 };
+      prev.venta += Number(c.precio || 0);
+      prev.comision += comisionAplicadaRegistroHistorica(c);
+      prev.servicios += 1;
+      map.set(wk, prev);
+      return map;
+    }, new Map());
+    const tendenciaSemanal = Array.from(tendenciaMap.values()).sort((a,b)=>a.semanaInicio.localeCompare(b.semanaInicio)).slice(-12);
+    const maxTrendValue = Math.max(1, ...tendenciaSemanal.map(x => x.comision));
+    const trendWidth = 680, trendHeight = 170, trendPadX = 38, trendPadY = 18;
+    const trendPoints = tendenciaSemanal.map((x, idx) => {
+      const xPos = tendenciaSemanal.length === 1 ? trendPadX : trendPadX + idx * ((trendWidth - trendPadX * 2) / (tendenciaSemanal.length - 1));
+      const yPos = trendHeight - trendPadY - (x.comision / maxTrendValue) * (trendHeight - trendPadY * 2);
+      return { ...x, x: xPos, y: yPos };
+    });
+    const trendPath = trendPoints.map((p, idx) => `${idx === 0 ? "M" : "L"}${p.x},${p.y}`).join(" ");
+    const DeltaBadge = ({ actual, anterior }) => {
+      const d = buildDelta(actual, anterior);
+      const positive = d.diff >= 0;
+      return <span style={{ fontSize:11,fontWeight:700,color:positive?COLORS.success:COLORS.danger,background:positive?COLORS.successLight:COLORS.dangerLight,borderRadius:999,padding:"2px 7px",whiteSpace:"nowrap" }}>
+        {positive?"+":""}{fmtMoney(d.diff)}{d.pct===null?"":` · ${positive?"+":""}${d.pct.toFixed(1)}%`}
+      </span>;
+    };
+
     return <>
       <div style={{ display:"flex",gap:8,marginBottom:16,flexWrap:"wrap",alignItems:"center" }}>
         <Select value={periodoComisiones} onChange={v=>{setPeriodoComisiones(v);setSemanaComisiones("todas");}} style={{ width:130 }}>{mesesDisponibles.map(p=><option key={p} value={p}>{p}</option>)}</Select>
@@ -2585,6 +2678,37 @@ function Reportes({ data, user, onOpenAgenda, reportRestore, reloadData }) {
         <Card><p style={{ margin:"0 0 4px",fontSize:11,color:"var(--color-text-secondary)",textTransform:"uppercase",letterSpacing:"0.04em" }}>Servicios</p><p style={{ margin:0,fontSize:22,fontWeight:600 }}>{servicios}</p></Card>
         <Card><p style={{ margin:"0 0 4px",fontSize:11,color:"var(--color-text-secondary)",textTransform:"uppercase",letterSpacing:"0.04em" }}>Clientes</p><p style={{ margin:0,fontSize:22,fontWeight:600 }}>{clientes}</p></Card>
       </div>
+      {semanaComisiones !== "todas" && <Card style={{ marginBottom:14 }}>
+        <div style={{ display:"flex",justifyContent:"space-between",alignItems:"flex-start",gap:12,flexWrap:"wrap",marginBottom:12 }}>
+          <div>
+            <h3 style={{ margin:"0 0 3px",fontSize:15,fontWeight:600 }}>Comparativo vs semana anterior</h3>
+            <p style={{ margin:0,fontSize:12,color:"var(--color-text-secondary)" }}>Compara la semana seleccionada al mismo día de corte: {Array.from(compareCurrentKeys).length ? `${shortDateCom(Array.from(compareCurrentKeys)[0])} a ${shortDateCom(Array.from(compareCurrentKeys).slice(-1)[0])}` : "sin días"} contra los mismos días de la semana anterior.</p>
+          </div>
+          <Badge color="info">Semana {semanaComisiones}</Badge>
+        </div>
+        <div style={{ display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(170px,1fr))",gap:10 }}>
+          <div style={{ background:"var(--color-background-secondary)",borderRadius:12,padding:12 }}><p style={{ margin:"0 0 5px",fontSize:11,color:"var(--color-text-secondary)",fontWeight:700,textTransform:"uppercase" }}>Venta</p><p style={{ margin:"0 0 6px",fontSize:20,fontWeight:700 }}>{fmtMoney(compareCurrent.venta)}</p><DeltaBadge actual={compareCurrent.venta} anterior={comparePrevious.venta}/><p style={{ margin:"6px 0 0",fontSize:11,color:"var(--color-text-secondary)" }}>Anterior: {fmtMoney(comparePrevious.venta)}</p></div>
+          <div style={{ background:"var(--color-background-secondary)",borderRadius:12,padding:12 }}><p style={{ margin:"0 0 5px",fontSize:11,color:"var(--color-text-secondary)",fontWeight:700,textTransform:"uppercase" }}>Comisión aplicada</p><p style={{ margin:"0 0 6px",fontSize:20,fontWeight:700,color:COLORS.pink }}>{fmtMoney(compareCurrent.comision)}</p><DeltaBadge actual={compareCurrent.comision} anterior={comparePrevious.comision}/><p style={{ margin:"6px 0 0",fontSize:11,color:"var(--color-text-secondary)" }}>Anterior: {fmtMoney(comparePrevious.comision)}</p></div>
+          <div style={{ background:"var(--color-background-secondary)",borderRadius:12,padding:12 }}><p style={{ margin:"0 0 5px",fontSize:11,color:"var(--color-text-secondary)",fontWeight:700,textTransform:"uppercase" }}>Servicios</p><p style={{ margin:"0 0 6px",fontSize:20,fontWeight:700 }}>{compareCurrent.servicios}</p><span style={{ fontSize:11,fontWeight:700,color:(compareCurrent.servicios-comparePrevious.servicios)>=0?COLORS.success:COLORS.danger }}>{(compareCurrent.servicios-comparePrevious.servicios)>=0?"+":""}{compareCurrent.servicios-comparePrevious.servicios}</span><p style={{ margin:"6px 0 0",fontSize:11,color:"var(--color-text-secondary)" }}>Anterior: {comparePrevious.servicios}</p></div>
+          <div style={{ background:"var(--color-background-secondary)",borderRadius:12,padding:12 }}><p style={{ margin:"0 0 5px",fontSize:11,color:"var(--color-text-secondary)",fontWeight:700,textTransform:"uppercase" }}>Clientes</p><p style={{ margin:"0 0 6px",fontSize:20,fontWeight:700 }}>{compareCurrent.clientes.size}</p><span style={{ fontSize:11,fontWeight:700,color:(compareCurrent.clientes.size-comparePrevious.clientes.size)>=0?COLORS.success:COLORS.danger }}>{(compareCurrent.clientes.size-comparePrevious.clientes.size)>=0?"+":""}{compareCurrent.clientes.size-comparePrevious.clientes.size}</span><p style={{ margin:"6px 0 0",fontSize:11,color:"var(--color-text-secondary)" }}>Anterior: {comparePrevious.clientes.size}</p></div>
+        </div>
+      </Card>}
+      <Card style={{ marginBottom:14 }}>
+        <div style={{ display:"flex",justifyContent:"space-between",alignItems:"flex-start",gap:12,flexWrap:"wrap",marginBottom:10 }}>
+          <div>
+            <h3 style={{ margin:"0 0 3px",fontSize:15,fontWeight:600 }}>Tendencia semanal</h3>
+            <p style={{ margin:0,fontSize:12,color:"var(--color-text-secondary)" }}>No depende del filtro de semana. Se recalcula con el local y la manicura seleccionados.</p>
+          </div>
+          <span style={{ fontSize:12,color:"var(--color-text-secondary)",fontWeight:600 }}>{tendenciaSemanal.length} semanas</span>
+        </div>
+        {tendenciaSemanal.length < 2 ? <p style={{ margin:0,fontSize:13,color:"var(--color-text-secondary)",textAlign:"center",padding:18 }}>Todavía no hay suficientes semanas para mostrar tendencia.</p> : <div style={{ overflowX:"auto" }}>
+          <svg width={trendWidth} height={trendHeight + 34} viewBox={`0 0 ${trendWidth} ${trendHeight + 34}`} style={{ minWidth:560,width:"100%",height:"auto",display:"block" }}>
+            {[0,0.25,0.5,0.75,1].map((t,i)=>{ const y=trendHeight-trendPadY-t*(trendHeight-trendPadY*2); return <g key={i}><line x1={trendPadX} x2={trendWidth-trendPadX} y1={y} y2={y} stroke="rgba(120,120,120,0.15)"/><text x={6} y={y+4} fontSize="10" fill="var(--color-text-secondary)">{fmtMoney(maxTrendValue*t)}</text></g>;})}
+            <path d={trendPath} fill="none" stroke={COLORS.pink} strokeWidth="3" strokeLinecap="round" strokeLinejoin="round"/>
+            {trendPoints.map((p,i)=><g key={p.semanaInicio}><circle cx={p.x} cy={p.y} r="4.5" fill={COLORS.pink}/><title>{`${shortDateCom(p.semanaInicio)} · ${fmtMoney(p.comision)} · Venta ${fmtMoney(p.venta)}`}</title>{i%2===0&&<text x={p.x} y={trendHeight+16} textAnchor="middle" fontSize="10" fill="var(--color-text-secondary)">{shortDateCom(p.semanaInicio)}</text>}</g>)}
+          </svg>
+        </div>}
+      </Card>
       <Card style={{ marginBottom:14,border:semanaComisiones==="todas"?`1px solid ${COLORS.info}33`:semanaFinalizada?`1px solid ${COLORS.success}33`:`1px solid ${COLORS.amber}33`,background:semanaComisiones==="todas"?COLORS.infoLight:semanaFinalizada?COLORS.successLight:COLORS.amberLight }}>
         <div style={{ display:"flex",justifyContent:"space-between",alignItems:"flex-start",gap:12,flexWrap:"wrap" }}>
           <div style={{ flex:1,minWidth:260 }}>
