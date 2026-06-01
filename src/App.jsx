@@ -3834,16 +3834,28 @@ function AgendaTurnos({ data, reloadData, user }) {
     if(!rango) return null;
     const bloqueos=getAgendaBloqueosDia(uid);
     const ocupados=(data.agendaTurnos||[]).filter(t=>t.fecha===fecha&&t.userId===parseInt(uid)&&t.id!==excludeId&&! ["no asiste","cancelado"].includes(t.estado));
-    for(let pass=0; pass<2; pass++){
-      const startBase = pass===0 ? Math.max(startMin, rango.ini) : rango.ini;
-      for(let m=startBase; m+dur<=rango.fin; m+=15){
-        const e=m+dur;
-        const overlap=ocupados.some(t=>m<agendaMin(t.fin)&&e>agendaMin(t.inicio));
-        const blocked=bloqueos.some(b=>m<agendaMin(b.fin)&&e>agendaMin(b.inicio));
-        if(!overlap && !blocked) return { inicio:agendaTime(m), fin:agendaTime(e), ajustado:m!==startMin };
+
+    const buscarDesde = (desde) => {
+      let m = Math.max(desde, rango.ini);
+      // Buscamos al minuto exacto cuando hay un hueco disponible. Si un turno termina 16:00,
+      // la sugerencia puede arrancar 16:00 y no 16:05/16:15 por efecto del incremento fijo.
+      let guard = 0;
+      while (m + dur <= rango.fin && guard < 2000) {
+        guard++;
+        const e = m + dur;
+        const ocupadosSolapados = ocupados.filter(t => m < agendaMin(t.fin) && e > agendaMin(t.inicio));
+        const bloqueosSolapados = bloqueos.filter(b => m < agendaMin(b.fin) && e > agendaMin(b.inicio));
+        if (!ocupadosSolapados.length && !bloqueosSolapados.length) {
+          return { inicio:agendaTime(m), fin:agendaTime(e), ajustado:m!==startMin };
+        }
+        const nextFromOcupados = ocupadosSolapados.length ? Math.max(...ocupadosSolapados.map(t=>agendaMin(t.fin))) : m + 1;
+        const nextFromBloqueos = bloqueosSolapados.length ? Math.max(...bloqueosSolapados.map(b=>agendaMin(b.fin))) : m + 1;
+        m = Math.max(m + 1, nextFromOcupados, nextFromBloqueos);
       }
-    }
-    return null;
+      return null;
+    };
+
+    return buscarDesde(startMin) || buscarDesde(rango.ini);
   };
 
 
@@ -4464,6 +4476,7 @@ function AgendaTurnos({ data, reloadData, user }) {
           <Btn size="sm" variant="secondary" onClick={()=>setModalTurno(d=>({...d, adicionales:[...(d.adicionales||[]), buildAdicionalDraft({ userId:d.userId, posicion:"despues", sumaTiempo:true, orden:(d.adicionales||[]).length+1 })]}))}>+ Servicio</Btn>
         </div>
         {!(modalTurno.adicionales||[]).length && <p style={{ margin:0,fontSize:12,color:"var(--color-text-secondary)" }}>No hay servicios adicionales cargados.</p>}
+        {(modalTurno.adicionales||[]).length > 0 && <p style={{ margin:"0 0 4px",fontSize:10,color:"var(--color-text-secondary)" }}>Podés quitar un adicional desde esta cita principal. Al guardar, también se elimina el turno asociado de la otra manicura si correspondía.</p>}
         {(modalTurno.adicionales||[]).map((ad,idx)=>{
           const manicurasCompatibles = manicurasPermitidas.filter(m=>m.localId===parseInt(modalTurno.localId) && (!ad.servicioId || puedeManicuraServicio(m.id, ad.servicioId)));
           const serviciosAd = ad.userId ? serviciosParaManicura(ad.userId) : serviciosActivos;
@@ -4490,7 +4503,7 @@ function AgendaTurnos({ data, reloadData, user }) {
             <ModalSelect label="Tiempo" value={ad.sumaTiempo?"suma":"incluido"} onChange={v=>updateAd({sumaTiempo:v==="suma"})}><option value="suma">Suma tiempo</option><option value="incluido">Incluido</option></ModalSelect>
             <ModalInput label="Cantidad" type="number" value={ad.cantidad||1} disabled={!admiteCantidadServicio(ad.servicioId)} onChange={v=>updateAd({cantidad:v})}/>
             <div style={{ background:"#fafafa",border:"1px solid #eee",borderRadius:8,padding:"8px 10px",fontSize:12 }}><b>${Number(ad.precioTotal||0).toLocaleString("es-AR")}</b><br/><span style={{ color:"var(--color-text-secondary)" }}>{ad.sumaTiempo?`${Number(ad.duracionMinutos||0)*Number(ad.cantidad||1)} min`:"sin tiempo extra"}</span></div>
-            <button onClick={()=>setModalTurno(d=>{ const arr=(d.adicionales||[]).filter((_,j)=>j!==idx); const mainDur=d.servicioId ? getDuracionServicioManicura(d.userId,d.servicioId) : 0; const extraDur=arr.filter(x=>x.sumaTiempo).reduce((a,x)=>a+Number(x.duracionMinutos||0)*Number(x.cantidad||1),0); return applyPrice({...d,adicionales:arr,fin:d.inicio&&mainDur?agendaTime(agendaMin(d.inicio)+mainDur+extraDur):d.fin}); })} style={{ height:34,border:"none",borderRadius:8,background:COLORS.dangerLight,color:COLORS.danger,cursor:"pointer",fontWeight:800 }}>×</button>
+            <button title="Quitar servicio adicional de esta cita" onClick={()=>setModalTurno(d=>{ const arr=(d.adicionales||[]).filter((_,j)=>j!==idx).map((x,k)=>({...x,orden:k+1})); const mainDur=d.servicioId ? getDuracionServicioManicura(d.userId,d.servicioId) : 0; const extraDur=arr.filter(x=>x.sumaTiempo).reduce((a,x)=>a+Number(x.duracionMinutos||0)*Number(x.cantidad||1),0); return applyPrice({...d,adicionales:arr,fin:d.inicio&&mainDur?agendaTime(agendaMin(d.inicio)+mainDur+extraDur):d.fin}); })} style={{ height:34,border:"none",borderRadius:8,background:COLORS.dangerLight,color:COLORS.danger,cursor:"pointer",fontWeight:800,padding:"0 10px" }}>Quitar</button>
           </div>;
         })}
       </div>
