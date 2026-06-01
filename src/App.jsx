@@ -1844,7 +1844,7 @@ function AsistenciaDiaria({ data, reloadData, user }) {
 
 // ── REPORTES ───────────────────────────────────────────────────────
 
-function Reportes({ data, user, onOpenAgenda, reportRestore }) {
+function Reportes({ data, user, onOpenAgenda, reportRestore, reloadData }) {
   const hoy = new Date();
   const esAdmin = user.rol === "admin";
   const esEncargada = user.rol === "encargada";
@@ -4780,7 +4780,7 @@ export default function App() {
     if (seccion==="asistencia") return <AsistenciaDiaria data={data} reloadData={reloadData} user={user}/>;
     if (seccion==="turnos") return user.rol!=="manicura" ? <AgendaTurnos data={data} reloadData={reloadData} user={user}/> : null;
     if (seccion==="horarios") return <CalendarioHorarios data={data} reloadData={reloadData} user={user} agendaRequest={agendaRequest} onBackToReport={()=>{ setSeccion("reportes"); setMenuOpen(false); }}/>;
-    if (seccion==="reportes") return <Reportes data={data} user={user} reportRestore={reportRestore} onOpenAgenda={(req)=>{ const restore={ tab:"cobertura", fecha:req.fecha, localId:req.localId || "" }; setReportRestore(restore); setAgendaRequest({...req, fromReport:true}); setSeccion("horarios"); setMenuOpen(false); }}/>;
+    if (seccion==="reportes") return <Reportes data={data} reloadData={reloadData} user={user} reportRestore={reportRestore} onOpenAgenda={(req)=>{ const restore={ tab:"cobertura", fecha:req.fecha, localId:req.localId || "" }; setReportRestore(restore); setAgendaRequest({...req, fromReport:true}); setSeccion("horarios"); setMenuOpen(false); }}/>;
     if (seccion==="adelantos") return user.rol!=="manicura" ? <AdelantosManicuras data={data} reloadData={reloadData} user={user}/> : null;
     if (seccion==="garantias") return user.rol!=="manicura" ? <GarantiasServicios data={data} reloadData={reloadData} user={user}/> : null;
     if (seccion==="informes") return user.rol!=="manicura" ? <InformeDiario data={data} reloadData={reloadData} user={user}/> : null;
