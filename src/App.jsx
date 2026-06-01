@@ -158,7 +158,7 @@ const api = {
   getGarantias: () => sb("garantias_servicios?select=*&order=fecha_reparacion.desc,id.desc"),
   getInformesDiarios: () => sb("informes_diarios?select=*&order=fecha.desc,id.desc"),
   createInformeDiario: (d) => sb("informes_diarios", { method: "POST", body: JSON.stringify(d) }),
-  upsertInformeDiario: (d) => patchOrPost("informes_diarios", `fecha=eq.${d.fecha}&local_id=eq.${d.local_id}`, d),
+  upsertInformeDiario: (d) => patchOrPost("informes_diarios", `fecha=eq.${d.fecha}&local_id=eq.${d.local_id}&turno=eq.${encodeURIComponent(d.turno || "dia")}`, d),
   updateInformeDiario: (id, d) => sb(`informes_diarios?id=eq.${id}`, { method: "PATCH", body: JSON.stringify(d) }),
   deleteInformeDiario: (id) => sb(`informes_diarios?id=eq.${id}`, { method: "DELETE", prefer: "" }),
   createGarantia: (d) => sb("garantias_servicios", { method: "POST", body: JSON.stringify(d) }),
@@ -251,7 +251,7 @@ function normalizeComisionImportacion(i) { return { id:i.id, periodo:i.periodo, 
 function normalizeComisionCriterio(c) { return { id:c.id, periodo:c.periodo, semana:Number(c.semana || 0), userId:c.user_id, localId:c.local_id, porcentaje:Number(c.porcentaje || 0), motivo:c.motivo || "", actualizadoPor:c.actualizado_por_user_id, actualizadoEn:c.actualizado_en || "" }; }
 function normalizeAdelanto(a) { return { id:a.id, fecha:a.fecha, fechaDescuento:a.fecha_descuento || a.fecha, periodo:a.periodo || (a.fecha_descuento ? String(a.fecha_descuento).slice(0,7) : a.fecha ? String(a.fecha).slice(0,7) : ""), userId:a.user_id, localId:a.local_id, importe:Number(a.importe || 0), importeTotal:Number(a.importe_total || a.importe || 0), concepto:a.concepto || "", observacion:a.observacion || "", creadoPor:a.creado_por, creadoEn:a.creado_en || "", grupoId:a.grupo_id || "", cuotaNum:a.cuota_num || 1, cuotasTotal:a.cuotas_total || 1, tipoDescuento:a.tipo_descuento || "semana" }; }
 function normalizeGarantia(g) { return { id:g.id, fechaServicioOriginal:g.fecha_servicio_original, comisionOriginalId:g.comision_original_id, localId:g.local_id, manicuraOriginalId:g.manicura_original_id, nombreManicuraOriginal:g.nombre_manicura_original || "", cliente:g.cliente || "", servicio:g.servicio || "", importeComision:Number(g.importe_comision || 0), fechaReparacion:g.fecha_reparacion, manicuraReparacionId:g.manicura_reparacion_id, nombreManicuraReparacion:g.nombre_manicura_reparacion || "", motivo:g.motivo || "", fotos:Array.isArray(g.fotos) ? g.fotos : [], creadoPor:g.creado_por_user_id, creadoEn:g.creado_en || "", actualizadoEn:g.actualizado_en || "" }; }
-function normalizeInformeDiario(i) { return { id:i.id, fecha:i.fecha, localId:i.local_id, importanteManana:i.importante_manana || "", urgentesGenerales:i.urgentes_generales || "", efectivoCaja:Number(i.efectivo_caja || 0), coincideCaja:i.coincide_caja === true, mercadoPagoTotalReservas:i.mercado_pago_total_reservas || "", pagosRealizados:i.pagos_realizados || "", saldoAnterior:Number(i.saldo_anterior || 0), traspasoCajaGeneral:Number(i.traspaso_caja_general || 0), traspasoCajaEfectivo:Number(i.traspaso_caja_efectivo || 0), reclamos:i.reclamos || "", novedadesSalonManicuras:i.novedades_salon_manicuras || "", observacionesExtras:i.observaciones_extras || "", estado:i.estado || "borrador", creadoPor:i.creado_por_user_id, enviadoEn:i.enviado_en || "", creadoEn:i.creado_en || "", actualizadoEn:i.actualizado_en || "" }; }
+function normalizeInformeDiario(i) { return { id:i.id, fecha:i.fecha, localId:i.local_id, turno:i.turno || "dia", importanteManana:i.importante_manana || "", urgentesGenerales:i.urgentes_generales || "", saldoEfectivoAnterior:Number(i.saldo_efectivo_anterior || 0), efectivoCaja:Number(i.efectivo_caja || 0), coincideCaja:i.coincide_caja === true, mercadoPagoTotalReservas:i.mercado_pago_total_reservas || "", pagosRealizados:i.pagos_realizados || "", saldoAnterior:Number(i.saldo_anterior || 0), traspasoCajaGeneral:Number(i.traspaso_caja_general || 0), traspasoCajaEfectivo:Number(i.traspaso_caja_efectivo || 0), reclamos:i.reclamos || "", novedadesSalonManicuras:i.novedades_salon_manicuras || "", observacionesExtras:i.observaciones_extras || "", estado:i.estado || "borrador", creadoPor:i.creado_por_user_id, cerradoPor:i.cerrado_por_user_id, enviadoEn:i.enviado_en || "", cerradoEn:i.cerrado_en || "", creadoEn:i.creado_en || "", actualizadoEn:i.actualizado_en || "" }; }
 function normalizeAgendaServicio(s) { return { id:s.id, nombre:s.nombre || "", descripcion:s.descripcion || "", tipo:s.tipo || "otros", duracionMinutos:s.duracion_minutos || 60, admiteCantidad:s.admite_cantidad === true, activo:s.activo !== false }; }
 function normalizeAgendaManicuraServicio(x) { return { userId:x.user_id, servicioId:x.servicio_id, duracionMinutos:x.duracion_minutos || null, activo:x.activo !== false }; }
 function normalizeAgendaListaPrecio(l) { return { id:l.id, localId:l.local_id ?? null, nombre:l.nombre || "", descripcion:l.descripcion || "", activo:l.activo !== false }; }
@@ -2632,9 +2632,9 @@ function Reportes({ data, user, onOpenAgenda, reportRestore, reloadData }) {
       map.set(wk, prev);
       return map;
     }, new Map());
-    const tendenciaSemanal = Array.from(tendenciaMap.values()).sort((a,b)=>a.semanaInicio.localeCompare(b.semanaInicio)).slice(-12);
+    const tendenciaSemanal = Array.from(tendenciaMap.values()).sort((a,b)=>a.semanaInicio.localeCompare(b.semanaInicio)).slice(-8);
     const maxTrendValue = Math.max(1, ...tendenciaSemanal.map(x => x.comision));
-    const trendWidth = 680, trendHeight = 170, trendPadX = 38, trendPadY = 18;
+    const trendWidth = 720, trendHeight = 180, trendPadX = 82, trendPadY = 20;
     const trendPoints = tendenciaSemanal.map((x, idx) => {
       const xPos = tendenciaSemanal.length === 1 ? trendPadX : trendPadX + idx * ((trendWidth - trendPadX * 2) / (tendenciaSemanal.length - 1));
       const yPos = trendHeight - trendPadY - (x.comision / maxTrendValue) * (trendHeight - trendPadY * 2);
@@ -2718,13 +2718,13 @@ function Reportes({ data, user, onOpenAgenda, reportRestore, reloadData }) {
       <h3 style={{ margin:"0 0 3px",fontSize:15,fontWeight:600 }}>Tendencia semanal</h3>
       <p style={{ margin:0,fontSize:12,color:"var(--color-text-secondary)" }}>No depende del filtro de semana. Se recalcula con el local y la manicura seleccionados.</p>
     </div>
-    <span style={{ fontSize:12,color:"var(--color-text-secondary)",fontWeight:600 }}>{tendenciaSemanal.length} semanas</span>
+    <span style={{ fontSize:12,color:"var(--color-text-secondary)",fontWeight:600 }}>Últimas {tendenciaSemanal.length} semanas</span>
   </div>
   {tendenciaSemanal.length < 2 ? <p style={{ margin:0,fontSize:13,color:"var(--color-text-secondary)",textAlign:"center",padding:18 }}>Todavía no hay suficientes semanas para mostrar tendencia.</p> : <div style={{ overflowX:"auto" }}>
     <svg width={trendWidth} height={trendHeight + 34} viewBox={`0 0 ${trendWidth} ${trendHeight + 34}`} style={{ minWidth:560,width:"100%",height:"auto",display:"block" }}>
-      {[0,0.25,0.5,0.75,1].map((t,i)=>{ const y=trendHeight-trendPadY-t*(trendHeight-trendPadY*2); return <g key={i}><line x1={trendPadX} x2={trendWidth-trendPadX} y1={y} y2={y} stroke="rgba(120,120,120,0.15)"/><text x={6} y={y+4} fontSize="10" fill="var(--color-text-secondary)">{fmtMoney(maxTrendValue*t)}</text></g>;})}
+      {[0,0.25,0.5,0.75,1].map((t,i)=>{ const y=trendHeight-trendPadY-t*(trendHeight-trendPadY*2); return <g key={i}><line x1={trendPadX} x2={trendWidth-trendPadX} y1={y} y2={y} stroke="rgba(120,120,120,0.15)"/><text x={8} y={y+4} fontSize="10" fill="var(--color-text-secondary)">{fmtMoney(maxTrendValue*t)}</text></g>;})}
       <path d={trendPath} fill="none" stroke={COLORS.pink} strokeWidth="3" strokeLinecap="round" strokeLinejoin="round"/>
-      {trendPoints.map((p,i)=><g key={p.semanaInicio}><circle cx={p.x} cy={p.y} r="4.5" fill={COLORS.pink}/><title>{`${shortDateCom(p.semanaInicio)} · ${fmtMoney(p.comision)} · Venta ${fmtMoney(p.venta)}`}</title>{i%2===0&&<text x={p.x} y={trendHeight+16} textAnchor="middle" fontSize="10" fill="var(--color-text-secondary)">{shortDateCom(p.semanaInicio)}</text>}</g>)}
+      {trendPoints.map((p,i)=><g key={p.semanaInicio}><circle cx={p.x} cy={p.y} r="4.5" fill={COLORS.pink}/><title>{`${shortDateCom(p.semanaInicio)} · ${fmtMoney(p.comision)} · Venta ${fmtMoney(p.venta)}`}</title><text x={p.x} y={trendHeight+16} textAnchor="middle" fontSize="10" fill="var(--color-text-secondary)">{shortDateCom(p.semanaInicio)}</text></g>)}
     </svg>
   </div>}
 </Card>
@@ -3539,43 +3539,57 @@ function InformeDiario({ data, reloadData, user }) {
   }, [locales, localId, localFiltro]);
 
   const calcTotalCaja = useCallback((inf) => Number(inf?.saldoAnterior || 0) + Number(inf?.traspasoCajaGeneral || 0) - Number(inf?.traspasoCajaEfectivo || 0), []);
-  const getPreviousInforme = useCallback((f, lid, excludeId = null) => {
+  const calcTotalEfectivo = useCallback((inf) => Number(inf?.efectivoCaja || 0), []);
+  const turnoOrden = useCallback((t) => t === "manana" ? 1 : t === "tarde" ? 2 : 3, []);
+  const getPreviousInforme = useCallback((f, lid, turno = "manana", excludeId = null) => {
     const localNum = parseInt(lid);
+    const ordenActual = turnoOrden(turno);
     return (data.informesDiarios || [])
-      .filter(i => i.localId === localNum && i.fecha < f && (!excludeId || i.id !== excludeId))
-      .sort((a,b) => (b.fecha || "").localeCompare(a.fecha || ""))[0] || null;
-  }, [data.informesDiarios]);
-  const getSaldoAnterior = useCallback((f, lid, excludeId = null) => {
-    const prev = getPreviousInforme(f, lid, excludeId);
+      .filter(i => i.localId === localNum && (!excludeId || i.id !== excludeId))
+      .filter(i => (i.fecha < f) || (i.fecha === f && turnoOrden(i.turno) < ordenActual))
+      .sort((a,b) => {
+        const df = (b.fecha || "").localeCompare(a.fecha || "");
+        if (df) return df;
+        return turnoOrden(b.turno) - turnoOrden(a.turno);
+      })[0] || null;
+  }, [data.informesDiarios, turnoOrden]);
+  const getSaldoAnterior = useCallback((f, lid, turno = "manana", excludeId = null) => {
+    const prev = getPreviousInforme(f, lid, turno, excludeId);
     return prev ? calcTotalCaja(prev) : 0;
   }, [getPreviousInforme, calcTotalCaja]);
-  const emptyForm = useCallback((f = fecha, lid = localId) => ({
+  const getSaldoEfectivoAnterior = useCallback((f, lid, turno = "manana", excludeId = null) => {
+    const prev = getPreviousInforme(f, lid, turno, excludeId);
+    return prev ? calcTotalEfectivo(prev) : 0;
+  }, [getPreviousInforme, calcTotalEfectivo]);
+  const emptyForm = useCallback((f = fecha, lid = localId, turno = "manana") => ({
     fecha: f,
     localId: parseInt(lid) || null,
+    turno,
     importanteManana: "",
     urgentesGenerales: "",
+    saldoEfectivoAnterior: getSaldoEfectivoAnterior(f, lid, turno),
     efectivoCaja: "",
     coincideCaja: true,
     mercadoPagoTotalReservas: "",
     pagosRealizados: "",
-    saldoAnterior: getSaldoAnterior(f, lid),
+    saldoAnterior: getSaldoAnterior(f, lid, turno),
     traspasoCajaGeneral: "",
     traspasoCajaEfectivo: "",
     reclamos: "",
     novedadesSalonManicuras: "",
     observacionesExtras: "",
     estado: "borrador",
-  }), [fecha, localId, getSaldoAnterior]);
+  }), [fecha, localId, getSaldoAnterior, getSaldoEfectivoAnterior]);
 
-  const findInforme = useCallback((f, lid) => (data.informesDiarios || []).find(i => i.fecha === f && i.localId === parseInt(lid)), [data.informesDiarios]);
+  const findInforme = useCallback((f, lid, turno = "manana") => (data.informesDiarios || []).find(i => i.fecha === f && i.localId === parseInt(lid) && (i.turno || "dia") === turno), [data.informesDiarios]);
 
-  const loadForDateLocal = useCallback((f = fecha, lid = localId) => {
-    const existing = findInforme(f, lid);
-    if (existing) setForm({ ...existing, saldoAnterior: getSaldoAnterior(f, lid, existing.id) });
-    else setForm(emptyForm(f, lid));
-  }, [fecha, localId, findInforme, emptyForm, getSaldoAnterior]);
+  const loadForDateLocal = useCallback((f = fecha, lid = localId, turno = form?.turno || "manana") => {
+    const existing = findInforme(f, lid, turno);
+    if (existing) setForm({ ...existing, saldoAnterior: getSaldoAnterior(f, lid, turno, existing.id), saldoEfectivoAnterior: getSaldoEfectivoAnterior(f, lid, turno, existing.id) });
+    else setForm(emptyForm(f, lid, turno));
+  }, [fecha, localId, form?.turno, findInforme, emptyForm, getSaldoAnterior, getSaldoEfectivoAnterior]);
 
-  useEffect(() => { if (localId) loadForDateLocal(fecha, localId); }, [fecha, localId]);
+  useEffect(() => { if (localId) loadForDateLocal(fecha, localId, form?.turno || "manana"); }, [fecha, localId]);
 
   const informesFiltrados = useMemo(() => {
     return (data.informesDiarios || [])
@@ -3623,6 +3637,8 @@ function InformeDiario({ data, reloadData, user }) {
     return [
       `INFORME DIARIO ${local?.nombre || ""}`,
       `Fecha: ${parseDateLabel(inf.fecha)}`,
+      `Turno: ${inf.turno === "manana" ? "Mañana" : inf.turno === "tarde" ? "Tarde" : "Día"}`,
+      `Responsable cierre: ${userLabel(inf.cerradoPor || inf.creadoPor)}`,
       ``,
       `IMPORTANTE PARA MAÑANA:`,
       inf.importanteManana || "-",
@@ -3631,7 +3647,8 @@ function InformeDiario({ data, reloadData, user }) {
       inf.urgentesGenerales || "-",
       ``,
       `CAJA EN EFECTIVO:`,
-      `Efectivo en caja: ${fmtMoney(inf.efectivoCaja)}`,
+      `Saldo inicial efectivo: ${fmtMoney(inf.saldoEfectivoAnterior)}`,
+      `Saldo final efectivo: ${fmtMoney(inf.efectivoCaja)}`,
       `Coincide la caja: ${inf.coincideCaja ? "Sí" : "No"}`,
       ``,
       `MERCADO PAGO / TOTAL / RESERVAS:`,
@@ -3667,8 +3684,10 @@ function InformeDiario({ data, reloadData, user }) {
       const payload = {
         fecha: form.fecha,
         local_id: parseInt(form.localId),
+        turno: form.turno || "manana",
         importante_manana: form.importanteManana || "",
         urgentes_generales: form.urgentesGenerales || "",
+        saldo_efectivo_anterior: Number(form.saldoEfectivoAnterior || 0),
         efectivo_caja: Number(form.efectivoCaja || 0),
         coincide_caja: !!form.coincideCaja,
         mercado_pago_total_reservas: form.mercadoPagoTotalReservas || "",
@@ -3681,7 +3700,9 @@ function InformeDiario({ data, reloadData, user }) {
         observaciones_extras: form.observacionesExtras || "",
         estado: markSent ? "enviado" : (form.estado || "borrador"),
         enviado_en: markSent ? new Date().toISOString() : (form.enviadoEn || null),
+        cerrado_en: markSent ? new Date().toISOString() : (form.cerradoEn || null),
         creado_por_user_id: form.creadoPor || user.id,
+        cerrado_por_user_id: markSent ? user.id : (form.cerradoPor || null),
         actualizado_en: new Date().toISOString(),
       };
       const savedRows = form.id
@@ -3747,17 +3768,18 @@ function InformeDiario({ data, reloadData, user }) {
       <div style={{ display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(180px,1fr))",gap:12,marginBottom:14 }}>
         <Field label="Local"><Select value={localId} onChange={v=>{setLocalId(v); setLocalFiltro(v);}}>{locales.map(l=><option key={l.id} value={l.id}>{l.nombre}</option>)}</Select></Field>
         <Field label="Fecha"><input type="date" value={fecha} onChange={e=>{setFecha(e.target.value); setMesFiltro(String(e.target.value).slice(0,7));}} style={{ width:"100%",border:`1.5px solid ${COLORS.pink}`,borderRadius:10,padding:"10px 12px",fontSize:17,fontWeight:700,background:COLORS.pinkLight,color:COLORS.pinkDark,boxSizing:"border-box",fontFamily:"inherit" }}/></Field>
+        <Field label="Turno"><Select value={form?.turno || "manana"} onChange={v=>loadForDateLocal(fecha, localId, v)}><option value="manana">Mañana</option><option value="tarde">Tarde</option></Select></Field>
         <Field label="Estado"><div style={{ padding:"8px 12px",borderRadius:8,background:form?.estado==="enviado"?COLORS.successLight:COLORS.grayLight,color:form?.estado==="enviado"?COLORS.success:"#555",fontWeight:600 }}>{form?.estado==="enviado"?"Enviado":"Borrador"}</div></Field>
       </div>
       {form && <div style={{ display:"flex",flexDirection:"column",gap:16 }}>
         <div style={{ background:COLORS.pinkLight,border:`1px solid ${COLORS.pink}`,borderRadius:14,padding:"12px 14px",display:"flex",alignItems:"center",justifyContent:"space-between",gap:12,flexWrap:"wrap" }}>
           <div>
             <p style={{ margin:0,fontSize:12,fontWeight:700,color:COLORS.pinkDark,textTransform:"uppercase",letterSpacing:"0.04em" }}>Fecha del informe</p>
-            <p style={{ margin:"3px 0 0",fontSize:24,fontWeight:800,color:COLORS.pinkDark }}>{parseDateLabel(form.fecha)}</p>
+            <p style={{ margin:"3px 0 0",fontSize:24,fontWeight:800,color:COLORS.pinkDark }}>{parseDateLabel(form.fecha)}</p><p style={{ margin:"2px 0 0",fontSize:12,color:COLORS.pinkDark,fontWeight:700 }}>{form.turno === "manana" ? "Turno mañana" : form.turno === "tarde" ? "Turno tarde" : "Turno día"}</p>
           </div>
           <div style={{ textAlign:"right" }}>
             <p style={{ margin:0,fontSize:12,color:COLORS.pinkDark }}>Local</p>
-            <p style={{ margin:"2px 0 0",fontSize:16,fontWeight:700,color:"var(--color-text-primary)" }}>{selectedLocal?.nombre || "-"}</p>
+            <p style={{ margin:"2px 0 0",fontSize:16,fontWeight:700,color:"var(--color-text-primary)" }}>{selectedLocal?.nombre || "-"}</p><p style={{ margin:"3px 0 0",fontSize:12,color:"var(--color-text-secondary)" }}>Responsable cierre: {userLabel(form.cerradoPor || form.creadoPor || user.id)}</p>
           </div>
         </div>
 
@@ -3773,7 +3795,8 @@ function InformeDiario({ data, reloadData, user }) {
               <p style={{ margin:"2px 0 0",fontSize:12,color:COLORS.info }}>Control del efectivo físico del local.</p>
             </div>
             <div style={{ padding:12,display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(180px,1fr))",gap:12 }}>
-              <Field label="Efectivo en caja"><MoneyInput value={form.efectivoCaja} onChange={v=>setForm(f=>({...f,efectivoCaja:v}))}/></Field>
+              <Field label="Saldo inicial efectivo"><MoneyInput readOnly value={form.saldoEfectivoAnterior} onChange={()=>{}}/></Field>
+              <Field label="Saldo final efectivo"><MoneyInput value={form.efectivoCaja} onChange={v=>setForm(f=>({...f,efectivoCaja:v}))}/></Field>
               <Field label="¿Coincide la caja?"><Select value={form.coincideCaja?"si":"no"} onChange={v=>setForm(f=>({...f,coincideCaja:v==="si"}))}><option value="si">Sí</option><option value="no">No</option></Select></Field>
             </div>
           </div>
@@ -3787,7 +3810,7 @@ function InformeDiario({ data, reloadData, user }) {
               <Badge color="pink">Saldo final {fmtMoney(calcTotalCaja(form))}</Badge>
             </div>
             <div style={{ padding:12,display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(180px,1fr))",gap:12 }}>
-              <Field label="Saldo anterior"><MoneyInput readOnly value={form.saldoAnterior} onChange={()=>{}}/></Field>
+              <Field label="Saldo inicial Caja General"><MoneyInput readOnly value={form.saldoAnterior} onChange={()=>{}}/></Field>
               <Field label="+ Traspaso a Caja General"><MoneyInput value={form.traspasoCajaGeneral} onChange={v=>setForm(f=>({...f,traspasoCajaGeneral:v}))}/></Field>
               <Field label="- Traspaso a Caja Efectivo"><MoneyInput value={form.traspasoCajaEfectivo} onChange={v=>setForm(f=>({...f,traspasoCajaEfectivo:v}))}/></Field>
               <Field label="Saldo final"><div style={{ padding:"8px 12px",borderRadius:8,background:COLORS.pinkLight,color:COLORS.pinkDark,fontWeight:800,fontSize:16 }}>{fmtMoney(calcTotalCaja(form))}</div></Field>
@@ -3850,7 +3873,7 @@ function InformeDiario({ data, reloadData, user }) {
       </div>
       {informesFiltrados.length===0 ? <p style={{ margin:0,color:"var(--color-text-secondary)",fontSize:14 }}>No hay informes para los filtros seleccionados.</p> : <div style={{ display:"flex",flexDirection:"column",gap:8 }}>
         {informesFiltrados.map(inf=>{ const loc=data.locales.find(l=>l.id===inf.localId); return <div key={inf.id} style={{ border:"0.5px solid var(--color-border-tertiary)",borderRadius:10,padding:12,display:"flex",gap:10,alignItems:"center",flexWrap:"wrap" }}>
-          <div style={{ flex:1,minWidth:220 }}><p style={{ margin:0,fontWeight:700 }}>{parseDateLabel(inf.fecha)} · {loc?.nombre}</p><p style={{ margin:"2px 0 0",fontSize:12,color:"var(--color-text-secondary)" }}>{inf.importanteManana || inf.novedadesSalonManicuras || "Sin observaciones principales"}</p></div>
+          <div style={{ flex:1,minWidth:220 }}><p style={{ margin:0,fontWeight:700 }}>{parseDateLabel(inf.fecha)} · {loc?.nombre} · {inf.turno === "manana" ? "Mañana" : inf.turno === "tarde" ? "Tarde" : "Día"}</p><p style={{ margin:"2px 0 0",fontSize:12,color:"var(--color-text-secondary)" }}>Cierre: {userLabel(inf.cerradoPor || inf.creadoPor)} · {inf.importanteManana || inf.novedadesSalonManicuras || "Sin observaciones principales"}</p></div>
           <Badge color={inf.estado==="enviado"?"success":"gray"}>{inf.estado==="enviado"?"Enviado":"Borrador"}</Badge>
           <Btn size="sm" variant="ghost" onClick={()=>{setFecha(inf.fecha);setLocalId(String(inf.localId));setForm({...inf});}}>Editar</Btn>
           <Btn size="sm" variant="secondary" onClick={()=>setPreview(inf)}>Ver</Btn>
@@ -3862,7 +3885,7 @@ function InformeDiario({ data, reloadData, user }) {
 
     {preview && <Modal title="Informe diario" onClose={()=>setPreview(null)} width={720}>
       <div style={{ display:"flex",justifyContent:"space-between",alignItems:"center",gap:8,flexWrap:"wrap",marginBottom:12 }}>
-        <div><p style={{ margin:0,fontSize:17,fontWeight:700 }}>Informe diario {data.locales.find(l=>l.id===preview.localId)?.nombre}</p><p style={{ margin:"2px 0 0",fontSize:13,color:"#777" }}>{parseDateLabel(preview.fecha)}</p></div>
+        <div><p style={{ margin:0,fontSize:17,fontWeight:700 }}>Informe diario {data.locales.find(l=>l.id===preview.localId)?.nombre}</p><p style={{ margin:"2px 0 0",fontSize:13,color:"#777" }}>{parseDateLabel(preview.fecha)} · {preview.turno === "manana" ? "Mañana" : preview.turno === "tarde" ? "Tarde" : "Día"} · Cierre: {userLabel(preview.cerradoPor || preview.creadoPor)}</p></div>
         <div style={{ display:"flex",gap:8 }}><Btn size="sm" onClick={()=>copyReport(preview)} variant="secondary">Copiar texto</Btn><Btn size="sm" onClick={()=>printInforme(preview)}>Imprimir</Btn></div>
       </div>
       <pre style={{ whiteSpace:"pre-wrap",fontFamily:"inherit",fontSize:14,lineHeight:1.5,background:"#fafafa",border:"1px solid #eee",borderRadius:10,padding:14,maxHeight:500,overflowY:"auto",color:"#222" }}>{buildTextReport(preview)}</pre>
