@@ -485,7 +485,7 @@ function Btn({ children, onClick, variant="primary", size="md", disabled, style 
 }
 function Input({ value, onChange, type="text", placeholder, style }) { return <input type={type} value={value} onChange={e=>onChange(e.target.value)} placeholder={placeholder} style={{ border:"0.5px solid rgba(120,120,120,0.24)",borderRadius:8,padding:"8px 12px",fontSize:14,width:"100%",background:"var(--color-background-primary)",color:"var(--color-text-primary)",boxSizing:"border-box",...style }}/>; }
 function Select({ value, onChange, children, style }) { return <select value={value} onChange={e=>onChange(e.target.value)} style={{ border:"0.5px solid rgba(120,120,120,0.24)",borderRadius:8,padding:"8px 12px",fontSize:14,width:"100%",background:"var(--color-background-primary)",color:"var(--color-text-primary)",...style }}>{children}</select>; }
-function SearchableSelect({ label, value, onChange, options = [], placeholder = "Buscar...", disabled = false, style }) {
+function SearchableSelect({ label, value, onChange, options = [], placeholder = "Buscar...", disabled = false, style, compact = false }) {
   const [open, setOpen] = useState(false);
   const selected = options.find(o => String(o.value) === String(value));
   const [query, setQuery] = useState(selected?.label || "");
@@ -496,19 +496,19 @@ function SearchableSelect({ label, value, onChange, options = [], placeholder = 
   const q = query.trim().toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
   const filtered = !q ? options.slice(0, 60) : options.filter(o => String(o.search || o.label || "").toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").includes(q)).slice(0, 80);
   return <div style={{ position:"relative",...style }}>
-    {label && <label style={{ fontSize:13,fontWeight:500,color:"#555",display:"block",marginBottom:6 }}>{label}</label>}
+    {label && <label style={{ fontSize:compact?11:13,fontWeight:500,color:"#555",display:"block",marginBottom:compact?4:6 }}>{label}</label>}
     <input
       value={query}
       disabled={disabled}
       onFocus={() => !disabled && setOpen(true)}
       onChange={e => { setQuery(e.target.value); setOpen(true); if (!e.target.value) onChange(""); }}
       placeholder={placeholder}
-      style={{ width:"100%",border:"1.5px solid #e0e0e0",borderRadius:8,padding:"9px 12px",fontSize:14,background:disabled?"#f3f3f3":"#fafafa",color:"#1a1a1a",outline:"none",boxSizing:"border-box" }}
+      style={{ width:"100%",border:"1.5px solid #e0e0e0",borderRadius:8,padding:compact?"6px 9px":"9px 12px",fontSize:compact?12:14,background:disabled?"#f3f3f3":"#fafafa",color:"#1a1a1a",outline:"none",boxSizing:"border-box" }}
     />
-    {open && !disabled && <div style={{ position:"absolute",zIndex:10020,top:label?62:40,left:0,right:0,maxHeight:230,overflowY:"auto",background:"#fff",border:"1px solid #ddd",borderRadius:10,boxShadow:"0 8px 24px rgba(0,0,0,0.15)" }}>
-      {filtered.length === 0 ? <div style={{ padding:"10px 12px",fontSize:13,color:"#888" }}>Sin resultados</div> : filtered.map(o => <button key={o.value} type="button" onMouseDown={e=>e.preventDefault()} onClick={() => { onChange(o.value); setQuery(o.label); setOpen(false); }} style={{ width:"100%",textAlign:"left",border:"none",background:String(o.value)===String(value)?COLORS.pinkLight:"#fff",padding:"9px 12px",cursor:"pointer",fontSize:13,color:"#333",borderBottom:"1px solid #f2f2f2" }}>
+    {open && !disabled && <div style={{ position:"absolute",zIndex:10020,top:label?(compact?52:62):(compact?34:40),left:0,right:0,maxHeight:230,overflowY:"auto",background:"#fff",border:"1px solid #ddd",borderRadius:10,boxShadow:"0 8px 24px rgba(0,0,0,0.15)" }}>
+      {filtered.length === 0 ? <div style={{ padding:compact?"7px 9px":"10px 12px",fontSize:compact?12:13,color:"#888" }}>Sin resultados</div> : filtered.map(o => <button key={o.value} type="button" onMouseDown={e=>e.preventDefault()} onClick={() => { onChange(o.value); setQuery(o.label); setOpen(false); }} style={{ width:"100%",textAlign:"left",border:"none",background:String(o.value)===String(value)?COLORS.pinkLight:"#fff",padding:compact?"7px 9px":"9px 12px",cursor:"pointer",fontSize:compact?12:13,color:"#333",borderBottom:"1px solid #f2f2f2" }}>
         <span style={{ display:"block",fontWeight:600 }}>{o.label}</span>
-        {o.sub && <span style={{ display:"block",fontSize:11,color:"#777",marginTop:2 }}>{o.sub}</span>}
+        {o.sub && <span style={{ display:"block",fontSize:compact?10:11,color:"#777",marginTop:2 }}>{o.sub}</span>}
       </button>)}
     </div>}
     {open && <div onMouseDown={() => setOpen(false)} style={{ position:"fixed",inset:0,zIndex:10010,background:"transparent" }}/>} 
@@ -541,8 +541,8 @@ function ConfirmDialog({ config, onCancel, onConfirm }) {
   );
 }
 
-function ModalInput({ label, value, onChange, type="text", disabled=false }) { return <div><label style={{ fontSize:13,fontWeight:500,color:disabled?"#999":"#555",display:"block",marginBottom:6 }}>{label}</label><input type={type} disabled={disabled} value={value} onChange={e=>onChange(e.target.value)} style={{ width:"100%",border:"1.5px solid #e0e0e0",borderRadius:8,padding:"9px 12px",fontSize:14,background:disabled?"#f0f0f0":"#fafafa",color:disabled?"#999":"#1a1a1a",outline:"none",boxSizing:"border-box" }} onFocus={e=>e.target.style.borderColor=COLORS.pink} onBlur={e=>e.target.style.borderColor="#e0e0e0"}/></div>; }
-function ModalSelect({ label, value, onChange, children }) { return <div><label style={{ fontSize:13,fontWeight:500,color:"#555",display:"block",marginBottom:6 }}>{label}</label><select value={value} onChange={e=>onChange(e.target.value)} style={{ width:"100%",border:"1.5px solid #e0e0e0",borderRadius:8,padding:"9px 12px",fontSize:14,background:"#fafafa",color:"#1a1a1a",outline:"none",boxSizing:"border-box" }}>{children}</select></div>; }
+function ModalInput({ label, value, onChange, type="text", disabled=false, compact=false }) { return <div><label style={{ fontSize:compact?11:13,fontWeight:500,color:disabled?"#999":"#555",display:"block",marginBottom:compact?4:6 }}>{label}</label><input type={type} disabled={disabled} value={value} onChange={e=>onChange(e.target.value)} style={{ width:"100%",border:"1.5px solid #e0e0e0",borderRadius:8,padding:compact?"6px 9px":"9px 12px",fontSize:compact?12:14,background:disabled?"#f0f0f0":"#fafafa",color:disabled?"#999":"#1a1a1a",outline:"none",boxSizing:"border-box" }} onFocus={e=>e.target.style.borderColor=COLORS.pink} onBlur={e=>e.target.style.borderColor="#e0e0e0"}/></div>; }
+function ModalSelect({ label, value, onChange, children, compact=false }) { return <div><label style={{ fontSize:compact?11:13,fontWeight:500,color:"#555",display:"block",marginBottom:compact?4:6 }}>{label}</label><select value={value} onChange={e=>onChange(e.target.value)} style={{ width:"100%",border:"1.5px solid #e0e0e0",borderRadius:8,padding:compact?"6px 9px":"9px 12px",fontSize:compact?12:14,background:"#fafafa",color:"#1a1a1a",outline:"none",boxSizing:"border-box" }}>{children}</select></div>; }
 function HelpTip({ text }) {
   const [open, setOpen] = useState(false);
   return <span style={{ position:"relative",display:"inline-flex",alignItems:"center",marginLeft:6 }}>
@@ -2466,7 +2466,7 @@ function Reportes({ data, user, onOpenAgenda, reportRestore }) {
     <div>
       <h2 style={{ margin:"0 0 16px",fontSize:18,fontWeight:500 }}>Reportes</h2>
       <div style={{ display:"flex",gap:4,background:"var(--color-background-secondary)",padding:4,borderRadius:10,marginBottom:20,width:"fit-content",flexWrap:"wrap" }}><TabBtn id="horas" label="Horas teóricas"/><TabBtn id="asistencia" label="Asistencia"/>{puedeVerCobertura && <TabBtn id="cobertura" label="Cobertura"/>}<TabBtn id="comisiones" label="Comisiones"/></div>
-      {tab!=="cobertura"&&tab!=="comisiones"&&puedeGestionar && <div style={{ display:"flex",gap:8,marginBottom:8,flexWrap:"wrap" }}>
+      {tab!=="cobertura"&&tab!=="comisiones"&&puedeGestionar && <div style={{ display:"flex",gap:6,marginBottom:6,flexWrap:"wrap" }}>
         <Select value={filtroTipo} onChange={v=>{setFiltroTipo(v);setExpandidos({});}} style={{ width:130 }}><option value="manicura">Manicura</option><option value="local">Local</option><option value="todas">Todas</option></Select>
         {filtroTipo==="manicura"&&<Select value={filtroId} onChange={v=>{setFiltroId(v);setExpandidos({});}} style={{ flex:1,minWidth:160 }}>{manicuras.map(m=><option key={m.id} value={m.id}>{m.nombre}</option>)}</Select>}
         {filtroTipo==="local"&&<Select value={filtroId} onChange={v=>{setFiltroId(v);setExpandidos({});}} style={{ flex:1,minWidth:160 }}>{localesVisibles.map(l=><option key={l.id} value={l.id}>{l.nombre}</option>)}</Select>}
@@ -4470,13 +4470,13 @@ function AgendaTurnos({ data, reloadData, user }) {
         <ModalInput label="Inicio" type="time" value={modalTurno.inicio||""} onChange={v=>{ const dur=modalTurno.servicioId ? getDuracionServicioManicura(modalTurno.userId, modalTurno.servicioId) : null; const extra=(modalTurno.adicionales||[]).filter(x=>x.sumaTiempo).reduce((a,x)=>a+Number(x.duracionMinutos||0)*Number(x.cantidad||1),0); setModalTurno(d=>({...d,inicio:v,fin:dur?agendaTime(agendaMin(v)+dur+extra):d.fin})); }}/>
         <ModalInput label="Fin sugerido / ajustable" type="time" value={modalTurno.fin||""} onChange={v=>setModalTurno(d=>({...d,fin:v}))}/>
       </div>
-      <div style={{ gridColumn:"1 / -1",border:`1px solid ${COLORS.pink}22`,borderRadius:14,padding:12,background:COLORS.pinkLight }}>
-        <div style={{ display:"flex",justifyContent:"space-between",alignItems:"center",gap:8,marginBottom:8 }}>
-          <div><p style={{ margin:0,fontSize:12,fontWeight:800,color:COLORS.pinkDark }}>Servicios adicionales de la cita</p><p style={{ margin:"2px 0 0",fontSize:10,color:"var(--color-text-secondary)" }}>Retiro, nail art, reconstrucciones u otros extras. Suman al precio total.</p></div>
+      <div style={{ gridColumn:"1 / -1",border:`1px solid ${COLORS.pink}22`,borderRadius:12,padding:9,background:COLORS.pinkLight }}>
+        <div style={{ display:"flex",justifyContent:"space-between",alignItems:"center",gap:6,marginBottom:6 }}>
+          <div><p style={{ margin:0,fontSize:11,fontWeight:800,color:COLORS.pinkDark }}>Servicios adicionales de la cita</p><p style={{ margin:"2px 0 0",fontSize:9,color:"var(--color-text-secondary)" }}>Retiro, nail art, reconstrucciones u otros extras. Suman al precio total.</p></div>
           <Btn size="sm" variant="secondary" onClick={()=>setModalTurno(d=>({...d, adicionales:[...(d.adicionales||[]), buildAdicionalDraft({ userId:d.userId, posicion:"despues", sumaTiempo:true, orden:(d.adicionales||[]).length+1 })]}))}>+ Servicio</Btn>
         </div>
-        {!(modalTurno.adicionales||[]).length && <p style={{ margin:0,fontSize:12,color:"var(--color-text-secondary)" }}>No hay servicios adicionales cargados.</p>}
-        {(modalTurno.adicionales||[]).length > 0 && <p style={{ margin:"0 0 4px",fontSize:10,color:"var(--color-text-secondary)" }}>Podés quitar un adicional desde esta cita principal. Al guardar, también se elimina el turno asociado de la otra manicura si correspondía.</p>}
+        {!(modalTurno.adicionales||[]).length && <p style={{ margin:0,fontSize:11,color:"var(--color-text-secondary)" }}>No hay servicios adicionales cargados.</p>}
+        {(modalTurno.adicionales||[]).length > 0 && <p style={{ margin:"0 0 4px",fontSize:9,color:"var(--color-text-secondary)" }}>Podés quitar un adicional desde esta cita principal. Al guardar, también se elimina el turno asociado de la otra manicura si correspondía.</p>}
         {(modalTurno.adicionales||[]).map((ad,idx)=>{
           const manicurasCompatibles = manicurasPermitidas.filter(m=>m.localId===parseInt(modalTurno.localId) && (!ad.servicioId || puedeManicuraServicio(m.id, ad.servicioId)));
           const serviciosAd = ad.userId ? serviciosParaManicura(ad.userId) : serviciosActivos;
@@ -4496,14 +4496,14 @@ function AgendaTurnos({ data, reloadData, user }) {
             const nd={...d,adicionales:arr,fin:d.inicio&&mainDur?agendaTime(agendaMin(d.inicio)+mainDur+extraDur):d.fin};
             return applyPrice(nd);
           });
-          return <div key={idx} style={{ display:"grid",gridTemplateColumns:"minmax(115px,1fr) minmax(250px,2fr) minmax(105px,1fr) minmax(100px,1fr)",gap:8,alignItems:"end",borderTop:idx?"1px solid #ead6dd":"none",paddingTop:idx?10:0,marginTop:idx?10:0,fontSize:12,minWidth:0 }}>
-            <ModalSelect label="Manicura" value={ad.userId||""} onChange={v=>updateAd({ userId:v, servicioId: ad.servicioId && puedeManicuraServicio(v,ad.servicioId) ? ad.servicioId : "" })}><option value="">Seleccionar...</option>{manicurasPermitidas.filter(m=>m.localId===parseInt(modalTurno.localId)).map(m=><option key={m.id} value={m.id}>{m.nombre}</option>)}</ModalSelect>
-            <SearchableSelect label="Servicio" value={ad.servicioId||""} onChange={v=>updateAd({ servicioId:v })} options={serviciosAd.map(s=>({ value:s.id,label:s.nombre,sub:`${s.tipo || "Servicio"} · ${s.duracionMinutos} min`,search:`${s.nombre} ${s.tipo||""} ${s.descripcion||""}` }))} placeholder="Buscar servicio..." disabled={!ad.userId}/>
-            <ModalSelect label="Orden" value={ad.posicion||"despues"} onChange={v=>updateAd({posicion:v})}><option value="antes">Antes del principal</option><option value="despues">Después del principal</option></ModalSelect>
-            <ModalSelect label="Tiempo" value={ad.sumaTiempo?"suma":"incluido"} onChange={v=>updateAd({sumaTiempo:v==="suma"})}><option value="suma">Suma tiempo</option><option value="incluido">Incluido</option></ModalSelect>
-            <ModalInput label="Cantidad" type="number" value={ad.cantidad||1} disabled={!admiteCantidadServicio(ad.servicioId)} onChange={v=>updateAd({cantidad:v})}/>
-            <div style={{ background:"#fafafa",border:"1px solid #eee",borderRadius:8,padding:"8px 10px",fontSize:12,minWidth:0 }}><b>${Number(ad.precioTotal||0).toLocaleString("es-AR")}</b><br/><span style={{ color:"var(--color-text-secondary)" }}>{ad.sumaTiempo?`${Number(ad.duracionMinutos||0)*Number(ad.cantidad||1)} min`:"sin tiempo extra"}</span></div>
-            <button title="Quitar servicio adicional de esta cita" onClick={()=>setModalTurno(d=>{ const arr=(d.adicionales||[]).filter((_,j)=>j!==idx).map((x,k)=>({...x,orden:k+1})); const mainDur=d.servicioId ? getDuracionServicioManicura(d.userId,d.servicioId) : 0; const extraDur=arr.filter(x=>x.sumaTiempo).reduce((a,x)=>a+Number(x.duracionMinutos||0)*Number(x.cantidad||1),0); return applyPrice({...d,adicionales:arr,fin:d.inicio&&mainDur?agendaTime(agendaMin(d.inicio)+mainDur+extraDur):d.fin}); })} style={{ height:34,border:"none",borderRadius:8,background:COLORS.dangerLight,color:COLORS.danger,cursor:"pointer",fontWeight:800,padding:"0 10px",width:"100%" }}>Quitar</button>
+          return <div key={idx} style={{ display:"grid",gridTemplateColumns:"minmax(115px,1fr) minmax(250px,2fr) minmax(105px,1fr) minmax(100px,1fr)",gap:6,alignItems:"end",borderTop:idx?"1px solid #ead6dd":"none",paddingTop:idx?8:0,marginTop:idx?8:0,fontSize:11,minWidth:0 }}>
+            <ModalSelect compact label="Manicura" value={ad.userId||""} onChange={v=>updateAd({ userId:v, servicioId: ad.servicioId && puedeManicuraServicio(v,ad.servicioId) ? ad.servicioId : "" })}><option value="">Seleccionar...</option>{manicurasPermitidas.filter(m=>m.localId===parseInt(modalTurno.localId)).map(m=><option key={m.id} value={m.id}>{m.nombre}</option>)}</ModalSelect>
+            <SearchableSelect compact label="Servicio" value={ad.servicioId||""} onChange={v=>updateAd({ servicioId:v })} options={serviciosAd.map(s=>({ value:s.id,label:s.nombre,sub:`${s.tipo || "Servicio"} · ${s.duracionMinutos} min`,search:`${s.nombre} ${s.tipo||""} ${s.descripcion||""}` }))} placeholder="Buscar servicio..." disabled={!ad.userId}/>
+            <ModalSelect compact label="Orden" value={ad.posicion||"despues"} onChange={v=>updateAd({posicion:v})}><option value="antes">Antes del principal</option><option value="despues">Después del principal</option></ModalSelect>
+            <ModalSelect compact label="Tiempo" value={ad.sumaTiempo?"suma":"incluido"} onChange={v=>updateAd({sumaTiempo:v==="suma"})}><option value="suma">Suma tiempo</option><option value="incluido">Incluido</option></ModalSelect>
+            <ModalInput compact label="Cantidad" type="number" value={ad.cantidad||1} disabled={!admiteCantidadServicio(ad.servicioId)} onChange={v=>updateAd({cantidad:v})}/>
+            <div style={{ background:"#fafafa",border:"1px solid #eee",borderRadius:8,padding:"6px 8px",fontSize:11,minWidth:0 }}><b>${Number(ad.precioTotal||0).toLocaleString("es-AR")}</b><br/><span style={{ color:"var(--color-text-secondary)" }}>{ad.sumaTiempo?`${Number(ad.duracionMinutos||0)*Number(ad.cantidad||1)} min`:"sin tiempo extra"}</span></div>
+            <button title="Quitar servicio adicional de esta cita" onClick={()=>setModalTurno(d=>{ const arr=(d.adicionales||[]).filter((_,j)=>j!==idx).map((x,k)=>({...x,orden:k+1})); const mainDur=d.servicioId ? getDuracionServicioManicura(d.userId,d.servicioId) : 0; const extraDur=arr.filter(x=>x.sumaTiempo).reduce((a,x)=>a+Number(x.duracionMinutos||0)*Number(x.cantidad||1),0); return applyPrice({...d,adicionales:arr,fin:d.inicio&&mainDur?agendaTime(agendaMin(d.inicio)+mainDur+extraDur):d.fin}); })} style={{ height:30,border:"none",borderRadius:8,background:COLORS.dangerLight,color:COLORS.danger,cursor:"pointer",fontWeight:800,padding:"0 8px",width:"100%",fontSize:11 }}>Quitar</button>
           </div>;
         })}
       </div>
