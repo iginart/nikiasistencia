@@ -900,6 +900,90 @@ function CalendarioHorarios({ data, reloadData, user, agendaRequest, onBackToRep
 
   const onDeleteB = useCallback(async (f) => onDeleteBFor(parseInt(manicuraId), f), [manicuraId, onDeleteBFor]);
 
+  const repetirSemanaAnterior = useCallback(async () => {
+    if (vista !== "semana") return;
+    const uid = parseInt(manicuraId);
+    if (!uid) return;
+    if (!puedeEditarManicura(uid)) return;
+
+    const prevDays = weekDays.map(d => {
+      const p = new Date(d);
+      p.setDate(p.getDate() - 7);
+      return p;
+    });
+
+    const copia = weekDays.map((targetDay, idx) => {
+      const targetFecha = dateKey(targetDay);
+      const sourceFecha = dateKey(prevDays[idx]);
+      const bloque = getBloqueFor(uid, sourceFecha);
+      const asistencia = getAsistenciaFor(uid, targetFecha);
+      const bloqueadoDia = bloqueadoPorFecha(targetFecha, uid);
+      return { targetFecha, sourceFecha, bloque, asistencia, bloqueadoDia };
+    });
+
+    const conHorario = copia.filter(x => x.bloque);
+    if (!conHorario.length) {
+      await pedirConfirmacion({
+        title: "Sin horarios para copiar",
+        message: "La semana anterior no tiene horarios cargados para esta manicura.",
+        confirmText: "Entendido",
+        cancelText: "Cerrar",
+        variant: "primary",
+        hideCancel: true,
+      });
+      return;
+    }
+
+    const disponibles = conHorario.filter(x => !x.asistencia && !x.bloqueadoDia);
+    const omitidos = conHorario.length - disponibles.length;
+
+    if (!disponibles.length) {
+      await pedirConfirmacion({
+        title: "No se puede copiar",
+        message: "Todos los días destino tienen asistencia registrada, están bloqueados o no se pueden editar.",
+        confirmText: "Entendido",
+        cancelText: "Cerrar",
+        variant: "primary",
+        hideCancel: true,
+      });
+      return;
+    }
+
+    const existentes = disponibles.filter(x => hasHorarioPersistidoFor(uid, x.targetFecha)).length;
+    const ok = await pedirConfirmacion({
+      title: "Repetir semana anterior",
+      message: `Se copiarán ${disponibles.length} horario${disponibles.length === 1 ? "" : "s"} de la semana anterior. ${existentes ? `Se sobrescribirán ${existentes} horario${existentes === 1 ? "" : "s"} existente${existentes === 1 ? "" : "s"}. ` : ""}${omitidos ? `Se omitirán ${omitidos} día${omitidos === 1 ? "" : "s"} por estar bloqueado${omitidos === 1 ? "" : "s"} o con asistencia. ` : ""}¿Confirmás la copia?`,
+      confirmText: "Copiar horarios",
+      cancelText: "Cancelar",
+      variant: "primary",
+    });
+    if (!ok) return;
+
+    for (const item of disponibles) {
+      const s = calFromSlot(item.bloque.startSlot);
+      const e = calFromSlot(item.bloque.endSlot);
+      await api.upsertHorario({
+        user_id: uid,
+        fecha: item.targetFecha,
+        entrada: calFmt(s.h, s.m),
+        salida: calFmt(e.h, e.m),
+        trabaja: true,
+      });
+    }
+
+    await reloadData();
+    setLocalH(p => {
+      const n = { ...p };
+      disponibles.forEach(item => { delete n[item.targetFecha]; });
+      return n;
+    });
+    setLocalHAll(p => {
+      const n = { ...p };
+      disponibles.forEach(item => { delete n[horarioKey(uid, item.targetFecha)]; });
+      return n;
+    });
+  }, [vista, manicuraId, weekDays, puedeEditarManicura, getBloqueFor, getAsistenciaFor, bloqueadoPorFecha, hasHorarioPersistidoFor, pedirConfirmacion, reloadData, horarioKey]);
+
   const toggleFeriado = useCallback(async (f) => {
     if (!esAdmin) return;
     if (feriados.has(f)) await api.deleteFeriado(f);
@@ -1280,6 +1364,7 @@ function CalendarioHorarios({ data, reloadData, user, agendaRequest, onBackToRep
               <button onClick={nextNav} style={{ background:"none",border:"0.5px solid rgba(120,120,120,0.24)",borderRadius:5,padding:"2px 8px",cursor:"pointer",fontSize:14 }}>›</button>
             </div>
             <button onClick={()=>{ setWeekStart(getMon(hoy)); setDiaVista(dateKey(hoy)); setMes(hoy.getMonth()); setAnio(hoy.getFullYear()); }} style={{ width:"100%",background:"none",border:"0.5px solid rgba(120,120,120,0.24)",borderRadius:6,padding:"4px",cursor:"pointer",fontSize:11,color:"var(--color-text-secondary)" }}>Hoy</button>
+            {vista==="semana" && <button onClick={repetirSemanaAnterior} disabled={bloqueado} title="Copiar los horarios cargados en la semana anterior" style={{ width:"100%",marginTop:6,background:bloqueado?"var(--color-background-tertiary)":COLORS.pinkLight,border:"0.5px solid rgba(214,79,128,0.25)",borderRadius:6,padding:"6px 5px",cursor:bloqueado?"not-allowed":"pointer",fontSize:11,fontWeight:600,color:bloqueado?"var(--color-text-secondary)":COLORS.pinkDark }}>↩ Repetir semana anterior</button>}
           </div>
           <div style={{ padding:"8px 10px",borderTop:"0.5px solid rgba(120,120,120,0.18)" }}>
             <div style={{ background:"var(--color-background-primary)",border:"0.5px solid rgba(120,120,120,0.18)",borderRadius:10,padding:8 }}>
