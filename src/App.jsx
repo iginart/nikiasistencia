@@ -250,7 +250,7 @@ function normalizeComision(c) { return { id:c.id, periodo:c.periodo, fechaPago:c
 function normalizeComisionImportacion(i) { return { id:i.id, periodo:i.periodo, registros:i.registros || 0, totalPrecio:Number(i.total_precio || 0), totalComision:Number(i.total_comision || 0), estado:i.estado || "", mensaje:i.mensaje || "", creadoEn:i.creado_en || "" }; }
 function normalizeComisionCriterio(c) { return { id:c.id, periodo:c.periodo, semana:Number(c.semana || 0), userId:c.user_id, localId:c.local_id, porcentaje:Number(c.porcentaje || 0), motivo:c.motivo || "", actualizadoPor:c.actualizado_por_user_id, actualizadoEn:c.actualizado_en || "" }; }
 function normalizeAdelanto(a) { return { id:a.id, fecha:a.fecha, fechaDescuento:a.fecha_descuento || a.fecha, periodo:a.periodo || (a.fecha_descuento ? String(a.fecha_descuento).slice(0,7) : a.fecha ? String(a.fecha).slice(0,7) : ""), userId:a.user_id, localId:a.local_id, importe:Number(a.importe || 0), importeTotal:Number(a.importe_total || a.importe || 0), concepto:a.concepto || "", observacion:a.observacion || "", creadoPor:a.creado_por, creadoEn:a.creado_en || "", grupoId:a.grupo_id || "", cuotaNum:a.cuota_num || 1, cuotasTotal:a.cuotas_total || 1, tipoDescuento:a.tipo_descuento || "semana" }; }
-function normalizeGarantia(g) { return { id:g.id, fechaServicioOriginal:g.fecha_servicio_original, comisionOriginalId:g.comision_original_id, localId:g.local_id, manicuraOriginalId:g.manicura_original_id, nombreManicuraOriginal:g.nombre_manicura_original || "", cliente:g.cliente || "", servicio:g.servicio || "", importeComision:Number(g.importe_comision || 0), fechaReparacion:g.fecha_reparacion, manicuraReparacionId:g.manicura_reparacion_id, nombreManicuraReparacion:g.nombre_manicura_reparacion || "", motivo:g.motivo || "", fotos:Array.isArray(g.fotos) ? g.fotos : [], creadoPor:g.creado_por_user_id, creadoEn:g.creado_en || "", actualizadoEn:g.actualizado_en || "" }; }
+function normalizeGarantia(g) { return { id:g.id, fechaServicioOriginal:g.fecha_servicio_original, comisionOriginalId:g.comision_original_id, localId:g.local_id, manicuraOriginalId:g.manicura_original_id, nombreManicuraOriginal:g.nombre_manicura_original || "", cliente:g.cliente || "", servicio:g.servicio || "", importeComision:Number(g.importe_comision || 0), fechaReparacion:g.fecha_reparacion, manicuraReparacionId:g.manicura_reparacion_id, nombreManicuraReparacion:g.nombre_manicura_reparacion || "", servicioReparacionMismo:g.servicio_reparacion_mismo !== false, serviciosReparacion:Array.isArray(g.servicios_reparacion) ? g.servicios_reparacion : [], motivo:g.motivo || "", fotos:Array.isArray(g.fotos) ? g.fotos : [], creadoPor:g.creado_por_user_id, creadoEn:g.creado_en || "", actualizadoEn:g.actualizado_en || "" }; }
 function normalizeInformeDiario(i) { return { id:i.id, fecha:i.fecha, localId:i.local_id, turno:i.turno || "dia", importanteManana:i.importante_manana || "", urgentesGenerales:i.urgentes_generales || "", saldoEfectivoAnterior:Number(i.saldo_efectivo_anterior || 0), efectivoCaja:Number(i.efectivo_caja || 0), coincideCaja:i.coincide_caja === true, mercadoPagoTotalReservas:i.mercado_pago_total_reservas || "", pagosRealizados:i.pagos_realizados || "", saldoAnterior:Number(i.saldo_anterior || 0), traspasoCajaGeneral:Number(i.traspaso_caja_general || 0), traspasoCajaEfectivo:Number(i.traspaso_caja_efectivo || 0), reclamos:i.reclamos || "", novedadesSalonManicuras:i.novedades_salon_manicuras || "", observacionesExtras:i.observaciones_extras || "", estado:i.estado || "borrador", creadoPor:i.creado_por_user_id, cerradoPor:i.cerrado_por_user_id, enviadoEn:i.enviado_en || "", cerradoEn:i.cerrado_en || "", creadoEn:i.creado_en || "", actualizadoEn:i.actualizado_en || "" }; }
 function normalizeAgendaServicio(s) { return { id:s.id, nombre:s.nombre || "", descripcion:s.descripcion || "", tipo:s.tipo || "otros", duracionMinutos:s.duracion_minutos || 60, admiteCantidad:s.admite_cantidad === true, activo:s.activo !== false }; }
 function normalizeAgendaManicuraServicio(x) { return { userId:x.user_id, servicioId:x.servicio_id, duracionMinutos:x.duracion_minutos || null, activo:x.activo !== false }; }
@@ -2895,6 +2895,8 @@ function GarantiasServicios({ data, reloadData, user }) {
     importeComision: "",
     fechaReparacion: dateKey(hoy),
     manicuraReparacionId: "",
+    servicioReparacionMismo: true,
+    serviciosReparacion: [],
     motivo: "",
     fotos: [],
   });
@@ -2913,6 +2915,8 @@ function GarantiasServicios({ data, reloadData, user }) {
       importeComision:String(g.importeComision || 0),
       fechaReparacion:g.fechaReparacion || dateKey(hoy),
       manicuraReparacionId:g.manicuraReparacionId || "",
+      servicioReparacionMismo:g.servicioReparacionMismo !== false,
+      serviciosReparacion:Array.isArray(g.serviciosReparacion) ? g.serviciosReparacion : [],
       motivo:g.motivo || "",
       fotos:g.fotos || [],
     });
@@ -2924,6 +2928,27 @@ function GarantiasServicios({ data, reloadData, user }) {
     (!form.localId || c.localId === parseInt(form.localId)) &&
     (!form.manicuraOriginalId || c.userId === parseInt(form.manicuraOriginalId))
   );
+  const serviciosActivosGarantia = (data.agendaServicios || []).filter(s=>s.activo !== false);
+  const getListaLocalGarantia = () => {
+    const rel = (data.agendaLocalListas || []).find(x=>x.localId===parseInt(form.localId) && x.predeterminada && x.activo !== false) || (data.agendaLocalListas || []).find(x=>x.localId===parseInt(form.localId) && x.activo !== false);
+    return rel?.listaId || null;
+  };
+  const getPrecioGarantia = (servicioId) => {
+    const listaId = getListaLocalGarantia();
+    const precio = (data.agendaPreciosServicios || []).find(p=>p.listaId===listaId && p.servicioId===parseInt(servicioId));
+    return Number(precio?.precioEfectivo || precio?.precioLista || 0);
+  };
+  const calcServicioGarantia = (row) => {
+    const servicio = serviciosActivosGarantia.find(s=>s.id===parseInt(row.servicioId));
+    const admiteCantidad = servicio?.admiteCantidad === true;
+    const cantidad = admiteCantidad ? Math.max(1, Number(row.cantidad || 1)) : 1;
+    const precioEfectivo = getPrecioGarantia(row.servicioId);
+    const comision = precioEfectivo * cantidad * 0.40;
+    return { servicio, admiteCantidad, cantidad, precioEfectivo, comision };
+  };
+  const totalServiciosReparacion = (form.serviciosReparacion || []).reduce((acc,row)=>acc + calcServicioGarantia(row).comision, 0);
+  const addServicioReparacion = () => setForm(f=>({ ...f, servicioReparacionMismo:false, serviciosReparacion:[...(f.serviciosReparacion || []), { servicioId:"", cantidad:1 }] }));
+
   const selectComision = id => {
     const c = (data.comisiones||[]).find(x=>String(x.id)===String(id));
     if (!c) { setForm(f=>({...f,comisionOriginalId:"",cliente:"",servicio:"",importeComision:""})); return; }
@@ -2940,8 +2965,11 @@ function GarantiasServicios({ data, reloadData, user }) {
   const save = async () => {
     setErr("");
     if (!form.fechaServicioOriginal || !form.localId || !form.manicuraOriginalId || !form.cliente || !form.servicio || !form.fechaReparacion || !form.manicuraReparacionId) { setErr("Completá los datos obligatorios y seleccioná el servicio original."); return; }
-    const importe = Number(String(form.importeComision||"0").replace(",","."));
-    if (!(importe > 0)) { setErr("Ingresá un importe de comisión válido."); return; }
+    const serviciosReparacionValidos = form.servicioReparacionMismo ? [] : (form.serviciosReparacion || []).filter(x=>x.servicioId);
+    if (!form.servicioReparacionMismo && !serviciosReparacionValidos.length) { setErr("Indicá al menos un servicio de reparación o marcá que se realiza el mismo servicio."); return; }
+    const importeManual = Number(String(form.importeComision||"0").replace(/\./g,"").replace(",","."));
+    const importe = form.servicioReparacionMismo ? importeManual : totalServiciosReparacion;
+    if (!(importe > 0)) { setErr("Ingresá un importe de comisión válido o seleccioná servicios de reparación con precio."); return; }
     if (((form.fotos || []).length + files.length) > MAX_GARANTIA_FOTOS) { setErr(`Máximo ${MAX_GARANTIA_FOTOS} fotos por garantía.`); return; }
     const original = data.users.find(u=>u.id===parseInt(form.manicuraOriginalId));
     const reparacion = data.users.find(u=>u.id===parseInt(form.manicuraReparacionId));
@@ -2960,6 +2988,8 @@ function GarantiasServicios({ data, reloadData, user }) {
         fecha_reparacion: form.fechaReparacion,
         manicura_reparacion_id: parseInt(form.manicuraReparacionId),
         nombre_manicura_reparacion: reparacion?.nombre || "",
+        servicio_reparacion_mismo: form.servicioReparacionMismo !== false,
+        servicios_reparacion: serviciosReparacionValidos.map((row, idx) => { const calc = calcServicioGarantia(row); return { servicioId:parseInt(row.servicioId), servicio:calc.servicio?.nombre || "", cantidad:calc.cantidad, precioEfectivo:calc.precioEfectivo, comision:calc.comision, orden:idx+1 }; }),
         motivo: form.motivo || null,
         fotos: form.fotos || [],
         creado_por_user_id: user.id,
@@ -3020,8 +3050,23 @@ function GarantiasServicios({ data, reloadData, user }) {
         </div>
         <div style={{ display:"grid",gridTemplateColumns:"1fr 1fr 150px",gap:12 }}>
           <ModalInput label="Cliente" value={form.cliente} onChange={()=>{}}/>
-          <ModalInput label="Servicio" value={form.servicio} onChange={()=>{}}/>
-          <ModalInput label="Importe comisión" type="number" value={form.importeComision} onChange={v=>setForm(f=>({...f,importeComision:v}))}/>
+          <ModalInput label="Servicio original" value={form.servicio} onChange={()=>{}}/>
+          <ModalInput label="Importe comisión" type="text" value={form.servicioReparacionMismo ? form.importeComision : fmtMoney(totalServiciosReparacion)} onChange={v=>setForm(f=>({...f,importeComision:v}))}/>
+        </div>
+        <div style={{ border:"1px solid var(--color-border-tertiary)",background:"rgba(236,98,148,0.06)",borderRadius:10,padding:"8px 10px" }}>
+          <div style={{ display:"flex",alignItems:"center",justifyContent:"space-between",gap:8,flexWrap:"wrap",marginBottom:6 }}>
+            <label style={{ display:"inline-flex",alignItems:"center",gap:6,fontSize:12,fontWeight:700,color:COLORS.pinkDark }}><input type="checkbox" checked={form.servicioReparacionMismo !== false} onChange={e=>setForm(f=>({...f,servicioReparacionMismo:e.target.checked,serviciosReparacion:e.target.checked?[]:f.serviciosReparacion}))}/> La reparación realiza el mismo servicio</label>
+            {form.servicioReparacionMismo === false && <Btn size="sm" variant="ghost" onClick={addServicioReparacion}>+ Servicio reparación</Btn>}
+          </div>
+          {form.servicioReparacionMismo !== false ? <p style={{ margin:0,fontSize:11,color:"var(--color-text-secondary)" }}>Si se realiza el mismo servicio, se mantiene el importe de comisión indicado arriba.</p> : <div style={{ display:"flex",flexDirection:"column",gap:6 }}>
+            {(form.serviciosReparacion || []).length === 0 && <p style={{ margin:0,fontSize:11,color:"var(--color-text-secondary)" }}>Agregá uno o más servicios que se realizarán como reparación. La comisión se calcula como precio efectivo × 40% × cantidad.</p>}
+            {(form.serviciosReparacion || []).map((row, idx) => { const calc = calcServicioGarantia(row); return <div key={idx} style={{ display:"grid",gridTemplateColumns:"minmax(220px,1fr) 72px 96px 70px",gap:6,alignItems:"end" }}>
+              <div><label style={{ fontSize:10,fontWeight:700,color:"var(--color-text-secondary)",display:"block",marginBottom:3 }}>Servicio reparación</label><select value={row.servicioId||""} onChange={e=>setForm(f=>({ ...f, serviciosReparacion:(f.serviciosReparacion||[]).map((x,i)=>i===idx?{...x,servicioId:e.target.value,cantidad:1}:x) }))} style={{ width:"100%",border:"1px solid var(--color-border-secondary)",borderRadius:7,padding:"6px 8px",fontSize:12,background:"var(--color-background-primary)",fontFamily:"inherit" }}><option value="">Seleccionar...</option>{serviciosActivosGarantia.map(s=><option key={s.id} value={s.id}>{s.nombre}</option>)}</select></div>
+              <div><label style={{ fontSize:10,fontWeight:700,color:"var(--color-text-secondary)",display:"block",marginBottom:3 }}>Cant.</label><input type="number" min="1" disabled={!calc.admiteCantidad} value={calc.admiteCantidad ? (row.cantidad||1) : 1} onChange={e=>setForm(f=>({ ...f, serviciosReparacion:(f.serviciosReparacion||[]).map((x,i)=>i===idx?{...x,cantidad:e.target.value}:x) }))} style={{ width:"100%",boxSizing:"border-box",border:"1px solid var(--color-border-secondary)",borderRadius:7,padding:"6px 8px",fontSize:12,background:calc.admiteCantidad?"var(--color-background-primary)":"var(--color-background-secondary)",fontFamily:"inherit" }}/></div>
+              <div style={{ fontSize:11,color:"var(--color-text-secondary)" }}><strong style={{ color:COLORS.pinkDark }}>{fmtMoney(calc.comision)}</strong><br/><span>{fmtMoney(calc.precioEfectivo)} × 40%</span></div>
+              <button type="button" onClick={()=>setForm(f=>({ ...f, serviciosReparacion:(f.serviciosReparacion||[]).filter((_,i)=>i!==idx) }))} style={{ border:"none",background:"transparent",color:COLORS.danger,fontSize:11,fontWeight:700,cursor:"pointer",padding:"6px 4px" }}>Quitar</button>
+            </div>;})}
+          </div>}
         </div>
         <div style={{ display:"grid",gridTemplateColumns:"1fr 1fr",gap:12 }}>
           <ModalInput label="Fecha de reparación" type="date" value={form.fechaReparacion} onChange={v=>setForm(f=>({...f,fechaReparacion:v}))}/>
@@ -3538,8 +3583,19 @@ function InformeDiario({ data, reloadData, user }) {
     if (!localFiltro && locales[0]?.id) setLocalFiltro(locales[0].id);
   }, [locales, localId, localFiltro]);
 
-  const calcTotalCaja = useCallback((inf) => Number(inf?.saldoAnterior || 0) + Number(inf?.traspasoCajaGeneral || 0) - Number(inf?.traspasoCajaEfectivo || 0), []);
-  const calcTotalEfectivo = useCallback((inf) => Number(inf?.efectivoCaja || 0), []);
+  const parseMoneyInforme = useCallback((v) => {
+    if (typeof v === "number") return Number.isFinite(v) ? v : 0;
+    const cleaned = String(v ?? "").replace(/\./g, "").replace(",", ".");
+    const n = Number(cleaned);
+    return Number.isFinite(n) ? n : 0;
+  }, []);
+  const formatMoneyInput = useCallback((v) => {
+    const n = parseMoneyInforme(v);
+    if (!n) return "";
+    return Math.round(n).toLocaleString("es-AR");
+  }, [parseMoneyInforme]);
+  const calcTotalCaja = useCallback((inf) => parseMoneyInforme(inf?.saldoAnterior) + parseMoneyInforme(inf?.traspasoCajaGeneral) - parseMoneyInforme(inf?.traspasoCajaEfectivo), [parseMoneyInforme]);
+  const calcTotalEfectivo = useCallback((inf) => parseMoneyInforme(inf?.efectivoCaja), [parseMoneyInforme]);
   const turnoOrden = useCallback((t) => t === "manana" ? 1 : t === "tarde" ? 2 : 3, []);
   const getPreviousInforme = useCallback((f, lid, turno = "manana", excludeId = null) => {
     const localNum = parseInt(lid);
@@ -3687,14 +3743,14 @@ function InformeDiario({ data, reloadData, user }) {
         turno: form.turno || "manana",
         importante_manana: form.importanteManana || "",
         urgentes_generales: form.urgentesGenerales || "",
-        saldo_efectivo_anterior: Number(form.saldoEfectivoAnterior || 0),
-        efectivo_caja: Number(form.efectivoCaja || 0),
+        saldo_efectivo_anterior: parseMoneyInforme(form.saldoEfectivoAnterior),
+        efectivo_caja: parseMoneyInforme(form.efectivoCaja),
         coincide_caja: !!form.coincideCaja,
         mercado_pago_total_reservas: form.mercadoPagoTotalReservas || "",
         pagos_realizados: form.pagosRealizados || "",
-        saldo_anterior: Number(form.saldoAnterior || 0),
-        traspaso_caja_general: Number(form.traspasoCajaGeneral || 0),
-        traspaso_caja_efectivo: Number(form.traspasoCajaEfectivo || 0),
+        saldo_anterior: parseMoneyInforme(form.saldoAnterior),
+        traspaso_caja_general: parseMoneyInforme(form.traspasoCajaGeneral),
+        traspaso_caja_efectivo: parseMoneyInforme(form.traspasoCajaEfectivo),
         reclamos: form.reclamos || "",
         novedades_salon_manicuras: form.novedadesSalonManicuras || "",
         observaciones_extras: form.observacionesExtras || "",
@@ -3751,7 +3807,7 @@ function InformeDiario({ data, reloadData, user }) {
 
   const Field = useCallback(({ label, children, style }) => <div style={style}><label style={{ fontSize:12,fontWeight:600,color:"var(--color-text-secondary)",display:"block",marginBottom:5 }}>{label}</label>{children}</div>, []);
   const TextArea = useCallback(({ value, onChange, rows=3, placeholder }) => <textarea value={value||""} onChange={e=>onChange(e.target.value)} rows={rows} placeholder={placeholder} style={{ width:"100%",boxSizing:"border-box",border:"0.5px solid var(--color-border-secondary)",borderRadius:8,padding:"8px 12px",fontSize:14,background:"var(--color-background-primary)",color:"var(--color-text-primary)",resize:"vertical",fontFamily:"inherit" }}/>, []);
-  const MoneyInput = useCallback(({ value, onChange, readOnly=false }) => <input type="text" inputMode="decimal" value={value ?? ""} readOnly={readOnly} onChange={e=>onChange(e.target.value)} style={{ border:"0.5px solid var(--color-border-secondary)",borderRadius:8,padding:"8px 12px",fontSize:14,width:"100%",background:readOnly?"var(--color-background-secondary)":"var(--color-background-primary)",color:"var(--color-text-primary)",boxSizing:"border-box",fontFamily:"inherit" }}/>, []);
+  const MoneyInput = useCallback(({ value, onChange, readOnly=false }) => <input type="text" inputMode="decimal" value={value ?? ""} readOnly={readOnly} onChange={e=>onChange(e.target.value)} onBlur={()=>{ if (!readOnly) onChange(formatMoneyInput(value)); }} style={{ border:"0.5px solid var(--color-border-secondary)",borderRadius:8,padding:"8px 12px",fontSize:14,width:"100%",background:readOnly?"var(--color-background-secondary)":"var(--color-background-primary)",color:"var(--color-text-primary)",boxSizing:"border-box",fontFamily:"inherit",textAlign:"right" }}/>, [formatMoneyInput]);
 
   if (!locales.length) return <Card><p style={{ margin:0,color:COLORS.danger }}>No tenés locales asignados para cargar informes diarios.</p></Card>;
 
@@ -3794,10 +3850,10 @@ function InformeDiario({ data, reloadData, user }) {
               <h3 style={{ margin:0,fontSize:15,fontWeight:700,color:COLORS.info }}>Caja en efectivo</h3>
               <p style={{ margin:"2px 0 0",fontSize:12,color:COLORS.info }}>Control del efectivo físico del local.</p>
             </div>
-            <div style={{ padding:12,display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(180px,1fr))",gap:12 }}>
-              <Field label="Saldo inicial efectivo"><MoneyInput readOnly value={form.saldoEfectivoAnterior} onChange={()=>{}}/></Field>
-              <Field label="Saldo final efectivo"><MoneyInput value={form.efectivoCaja} onChange={v=>setForm(f=>({...f,efectivoCaja:v}))}/></Field>
+            <div style={{ padding:12,display:"grid",gridTemplateColumns:"1fr",gap:10 }}>
               <Field label="¿Coincide la caja?"><Select value={form.coincideCaja?"si":"no"} onChange={v=>setForm(f=>({...f,coincideCaja:v==="si"}))}><option value="si">Sí</option><option value="no">No</option></Select></Field>
+              <Field label="Saldo inicial efectivo"><MoneyInput readOnly value={formatMoneyInput(form.saldoEfectivoAnterior)} onChange={()=>{}}/></Field>
+              <Field label="Saldo final efectivo"><MoneyInput value={form.efectivoCaja} onChange={v=>setForm(f=>({...f,efectivoCaja:v}))}/></Field>
             </div>
           </div>
 
@@ -3809,11 +3865,11 @@ function InformeDiario({ data, reloadData, user }) {
               </div>
               <Badge color="pink">Saldo final {fmtMoney(calcTotalCaja(form))}</Badge>
             </div>
-            <div style={{ padding:12,display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(180px,1fr))",gap:12 }}>
-              <Field label="Saldo inicial Caja General"><MoneyInput readOnly value={form.saldoAnterior} onChange={()=>{}}/></Field>
+            <div style={{ padding:12,display:"grid",gridTemplateColumns:"1fr",gap:10 }}>
+              <Field label="Saldo inicial Caja General"><MoneyInput readOnly value={formatMoneyInput(form.saldoAnterior)} onChange={()=>{}}/></Field>
               <Field label="+ Traspaso a Caja General"><MoneyInput value={form.traspasoCajaGeneral} onChange={v=>setForm(f=>({...f,traspasoCajaGeneral:v}))}/></Field>
               <Field label="- Traspaso a Caja Efectivo"><MoneyInput value={form.traspasoCajaEfectivo} onChange={v=>setForm(f=>({...f,traspasoCajaEfectivo:v}))}/></Field>
-              <Field label="Saldo final"><div style={{ padding:"8px 12px",borderRadius:8,background:COLORS.pinkLight,color:COLORS.pinkDark,fontWeight:800,fontSize:16 }}>{fmtMoney(calcTotalCaja(form))}</div></Field>
+              <Field label="Saldo final"><div style={{ padding:"8px 12px",borderRadius:8,background:COLORS.pinkLight,color:COLORS.pinkDark,fontWeight:800,fontSize:16,textAlign:"right" }}>{fmtMoney(calcTotalCaja(form))}</div></Field>
             </div>
           </div>
         </div>
