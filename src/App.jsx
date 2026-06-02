@@ -251,7 +251,7 @@ function normalizeComisionImportacion(i) { return { id:i.id, periodo:i.periodo, 
 function normalizeComisionCriterio(c) { return { id:c.id, periodo:c.periodo, semana:Number(c.semana || 0), userId:c.user_id, localId:c.local_id, porcentaje:Number(c.porcentaje || 0), motivo:c.motivo || "", actualizadoPor:c.actualizado_por_user_id, actualizadoEn:c.actualizado_en || "" }; }
 function normalizeAdelanto(a) { return { id:a.id, fecha:a.fecha, fechaDescuento:a.fecha_descuento || a.fecha, periodo:a.periodo || (a.fecha_descuento ? String(a.fecha_descuento).slice(0,7) : a.fecha ? String(a.fecha).slice(0,7) : ""), userId:a.user_id, localId:a.local_id, importe:Number(a.importe || 0), importeTotal:Number(a.importe_total || a.importe || 0), concepto:a.concepto || "", observacion:a.observacion || "", creadoPor:a.creado_por, creadoEn:a.creado_en || "", grupoId:a.grupo_id || "", cuotaNum:a.cuota_num || 1, cuotasTotal:a.cuotas_total || 1, tipoDescuento:a.tipo_descuento || "semana" }; }
 function normalizeGarantia(g) { return { id:g.id, fechaServicioOriginal:g.fecha_servicio_original, comisionOriginalId:g.comision_original_id, localId:g.local_id, manicuraOriginalId:g.manicura_original_id, nombreManicuraOriginal:g.nombre_manicura_original || "", cliente:g.cliente || "", servicio:g.servicio || "", importeComision:Number(g.importe_comision || 0), fechaReparacion:g.fecha_reparacion, manicuraReparacionId:g.manicura_reparacion_id, nombreManicuraReparacion:g.nombre_manicura_reparacion || "", servicioReparacionMismo:g.servicio_reparacion_mismo !== false, serviciosReparacion:Array.isArray(g.servicios_reparacion) ? g.servicios_reparacion : [], motivo:g.motivo || "", fotos:Array.isArray(g.fotos) ? g.fotos : [], creadoPor:g.creado_por_user_id, creadoEn:g.creado_en || "", actualizadoEn:g.actualizado_en || "" }; }
-function normalizeInformeDiario(i) { return { id:i.id, fecha:i.fecha, localId:i.local_id, turno:i.turno || "dia", importanteManana:i.importante_manana || "", urgentesGenerales:i.urgentes_generales || "", saldoEfectivoAnterior:Number(i.saldo_efectivo_anterior || 0), efectivoCaja:Number(i.efectivo_caja || 0), coincideCaja:i.coincide_caja === true, mercadoPagoTotalReservas:i.mercado_pago_total_reservas || "", pagosRealizados:i.pagos_realizados || "", saldoAnterior:Number(i.saldo_anterior || 0), traspasoCajaGeneral:Number(i.traspaso_caja_general || 0), traspasoCajaEfectivo:Number(i.traspaso_caja_efectivo || 0), reclamos:i.reclamos || "", novedadesSalonManicuras:i.novedades_salon_manicuras || "", observacionesExtras:i.observaciones_extras || "", estado:i.estado || "borrador", creadoPor:i.creado_por_user_id, cerradoPor:i.cerrado_por_user_id, enviadoEn:i.enviado_en || "", cerradoEn:i.cerrado_en || "", creadoEn:i.creado_en || "", actualizadoEn:i.actualizado_en || "" }; }
+function normalizeInformeDiario(i) { return { id:i.id, fecha:i.fecha, localId:i.local_id, turno:i.turno || "dia", importanteManana:i.importante_manana || "", urgentesGenerales:i.urgentes_generales || "", saldoEfectivoAnterior:Number(i.saldo_efectivo_anterior || 0), coincideEfectivoInicial:i.coincide_efectivo_inicial === true, efectivoCaja:Number(i.efectivo_caja || 0), coincideCaja:i.coincide_caja === true, mercadoPagoTotalReservas:i.mercado_pago_total_reservas || "", pagosRealizados:i.pagos_realizados || "", saldoAnterior:Number(i.saldo_anterior || 0), traspasoCajaGeneral:Number(i.traspaso_caja_general || 0), traspasoCajaEfectivo:Number(i.traspaso_caja_efectivo || 0), reclamos:i.reclamos || "", novedadesSalonManicuras:i.novedades_salon_manicuras || "", observacionesExtras:i.observaciones_extras || "", estado:i.estado || "borrador", creadoPor:i.creado_por_user_id, cerradoPor:i.cerrado_por_user_id, enviadoEn:i.enviado_en || "", cerradoEn:i.cerrado_en || "", creadoEn:i.creado_en || "", actualizadoEn:i.actualizado_en || "" }; }
 function normalizeAgendaServicio(s) { return { id:s.id, nombre:s.nombre || "", descripcion:s.descripcion || "", tipo:s.tipo || "otros", duracionMinutos:s.duracion_minutos || 60, admiteCantidad:s.admite_cantidad === true, activo:s.activo !== false }; }
 function normalizeAgendaManicuraServicio(x) { return { userId:x.user_id, servicioId:x.servicio_id, duracionMinutos:x.duracion_minutos || null, activo:x.activo !== false }; }
 function normalizeAgendaListaPrecio(l) { return { id:l.id, localId:l.local_id ?? null, nombre:l.nombre || "", descripcion:l.descripcion || "", activo:l.activo !== false }; }
@@ -3634,6 +3634,7 @@ function InformeDiario({ data, reloadData, user }) {
     importanteManana: "",
     urgentesGenerales: "",
     saldoEfectivoAnterior: getSaldoEfectivoAnterior(f, lid, turno),
+    coincideEfectivoInicial: true,
     efectivoCaja: "",
     coincideCaja: true,
     mercadoPagoTotalReservas: "",
@@ -3713,9 +3714,8 @@ function InformeDiario({ data, reloadData, user }) {
       inf.urgentesGenerales || "-",
       ``,
       `CAJA EN EFECTIVO:`,
-      `Saldo inicial efectivo: ${fmtMoney(inf.saldoEfectivoAnterior)}`,
-      `Saldo final efectivo: ${fmtMoney(inf.efectivoCaja)}`,
-      `Coincide la caja: ${inf.coincideCaja ? "Sí" : "No"}`,
+      `Saldo inicial efectivo: ${fmtMoney(inf.saldoEfectivoAnterior)} · Coincide: ${inf.coincideEfectivoInicial ? "Sí" : "No"}`,
+      `Saldo final efectivo: ${fmtMoney(inf.efectivoCaja)} · Coincide: ${inf.coincideCaja ? "Sí" : "No"}`,
       ``,
       `MERCADO PAGO / TOTAL / RESERVAS:`,
       inf.mercadoPagoTotalReservas || "-",
@@ -3754,6 +3754,7 @@ function InformeDiario({ data, reloadData, user }) {
         importante_manana: form.importanteManana || "",
         urgentes_generales: form.urgentesGenerales || "",
         saldo_efectivo_anterior: parseMoneyInforme(form.saldoEfectivoAnterior),
+        coincide_efectivo_inicial: !!form.coincideEfectivoInicial,
         efectivo_caja: parseMoneyInforme(form.efectivoCaja),
         coincide_caja: !!form.coincideCaja,
         mercado_pago_total_reservas: form.mercadoPagoTotalReservas || "",
@@ -3797,7 +3798,7 @@ function InformeDiario({ data, reloadData, user }) {
       ["FECHA", parseDateLabel(inf.fecha)],
       ["IMPORTANTE PARA MAÑANA", inf.importanteManana],
       ["URGENTES GENERALES", inf.urgentesGenerales, "danger"],
-      ["CAJA EN EFECTIVO", `Efectivo en caja: ${fmtMoney(inf.efectivoCaja)}\nCoincide la caja: ${inf.coincideCaja ? "Sí" : "No"}`],
+      ["CAJA EN EFECTIVO", `Saldo inicial: ${fmtMoney(inf.saldoEfectivoAnterior)} · Coincide: ${inf.coincideEfectivoInicial ? "Sí" : "No"}\nSaldo final: ${fmtMoney(inf.efectivoCaja)} · Coincide: ${inf.coincideCaja ? "Sí" : "No"}`],
       ["MERCADO PAGO / TOTAL / RESERVAS", inf.mercadoPagoTotalReservas],
       ["PAGOS REALIZADOS", inf.pagosRealizados],
       ["CAJA GENERAL", `Saldo anterior: ${fmtMoney(inf.saldoAnterior)}\n+ Traspaso a Caja General: ${fmtMoney(inf.traspasoCajaGeneral)}\n- Traspaso a Caja Efectivo: ${fmtMoney(inf.traspasoCajaEfectivo)}\nSALDO FINAL: ${fmtMoney(calcTotalCaja(inf))}`],
@@ -3856,34 +3857,29 @@ function InformeDiario({ data, reloadData, user }) {
 
         <div style={{ display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(360px,1fr))",gap:14 }}>
           <div style={{ border:"1px solid var(--color-border-tertiary)",borderRadius:14,overflow:"hidden",background:"var(--color-background-primary)" }}>
-            <div style={{ background:COLORS.infoLight,padding:"10px 12px",borderBottom:"1px solid var(--color-border-tertiary)",display:"grid",gridTemplateColumns:"minmax(160px,1fr) minmax(260px,1.35fr)",gap:12,alignItems:"center" }}>
-              <div>
-                <h3 style={{ margin:0,fontSize:15,fontWeight:700,color:COLORS.info }}>Caja en efectivo</h3>
-                <p style={{ margin:"2px 0 0",fontSize:12,color:COLORS.info }}>Control del efectivo físico del local.</p>
-              </div>
-              <div style={{ display:"grid",gridTemplateColumns:"115px minmax(140px,1fr)",gap:8,alignItems:"end" }}>
-                <Field label="¿Coincide?"><Select value={form.coincideCaja?"si":"no"} onChange={v=>setForm(f=>({...f,coincideCaja:v==="si"}))}><option value="si">Sí</option><option value="no">No</option></Select></Field>
-                <Field label="Saldo final efectivo"><MoneyInput value={form.efectivoCaja} onChange={v=>setForm(f=>({...f,efectivoCaja:v}))}/></Field>
-              </div>
+            <div style={{ background:COLORS.infoLight,padding:"10px 12px",borderBottom:"1px solid var(--color-border-tertiary)" }}>
+              <h3 style={{ margin:0,fontSize:15,fontWeight:700,color:COLORS.info }}>Caja efectivo</h3>
             </div>
             <div style={{ padding:12,display:"grid",gridTemplateColumns:"1fr",gap:10 }}>
-              <Field label="Saldo inicial efectivo"><MoneyInput readOnly value={formatMoneyInput(form.saldoEfectivoAnterior)} onChange={()=>{}}/></Field>
+              <div style={{ display:"grid",gridTemplateColumns:"minmax(160px,1fr) 120px",gap:10,alignItems:"end" }}>
+                <Field label="Saldo inicial"><MoneyInput readOnly value={formatMoneyInput(form.saldoEfectivoAnterior)} onChange={()=>{}}/></Field>
+                <Field label="¿Coincide?"><Select value={form.coincideEfectivoInicial?"si":"no"} onChange={v=>setForm(f=>({...f,coincideEfectivoInicial:v==="si"}))}><option value="si">Sí</option><option value="no">No</option></Select></Field>
+              </div>
+              <div style={{ display:"grid",gridTemplateColumns:"minmax(160px,1fr) 120px",gap:10,alignItems:"end" }}>
+                <Field label="Saldo final"><MoneyInput value={form.efectivoCaja} onChange={v=>setForm(f=>({...f,efectivoCaja:v}))}/></Field>
+                <Field label="¿Coincide?"><Select value={form.coincideCaja?"si":"no"} onChange={v=>setForm(f=>({...f,coincideCaja:v==="si"}))}><option value="si">Sí</option><option value="no">No</option></Select></Field>
+              </div>
             </div>
           </div>
 
           <div style={{ border:"1px solid var(--color-border-tertiary)",borderRadius:14,overflow:"hidden",background:"var(--color-background-primary)" }}>
-            <div style={{ background:COLORS.pinkLight,padding:"10px 12px",borderBottom:"1px solid var(--color-border-tertiary)",display:"grid",gridTemplateColumns:"minmax(170px,1fr) minmax(280px,1.4fr)",gap:12,alignItems:"center" }}>
-              <div>
-                <h3 style={{ margin:0,fontSize:15,fontWeight:700,color:COLORS.pinkDark }}>Caja general</h3>
-                <p style={{ margin:"2px 0 0",fontSize:12,color:COLORS.pinkDark }}>El saldo anterior se toma del saldo final del informe anterior.</p>
-              </div>
-              <div style={{ display:"grid",gridTemplateColumns:"1fr 1fr",gap:8,alignItems:"end" }}>
-                <Field label="+ A Caja General"><MoneyInput value={form.traspasoCajaGeneral} onChange={v=>setForm(f=>({...f,traspasoCajaGeneral:v}))}/></Field>
-                <Field label="- A Caja Efectivo"><MoneyInput value={form.traspasoCajaEfectivo} onChange={v=>setForm(f=>({...f,traspasoCajaEfectivo:v}))}/></Field>
-              </div>
+            <div style={{ background:COLORS.pinkLight,padding:"10px 12px",borderBottom:"1px solid var(--color-border-tertiary)" }}>
+              <h3 style={{ margin:0,fontSize:15,fontWeight:700,color:COLORS.pinkDark }}>Caja general</h3>
             </div>
-            <div style={{ padding:12,display:"grid",gridTemplateColumns:"1fr 1fr",gap:10,alignItems:"end" }}>
-              <Field label="Saldo inicial Caja General"><MoneyInput readOnly value={formatMoneyInput(form.saldoAnterior)} onChange={()=>{}}/></Field>
+            <div style={{ padding:12,display:"grid",gridTemplateColumns:"1fr",gap:10 }}>
+              <Field label="Saldo inicial"><MoneyInput readOnly value={formatMoneyInput(form.saldoAnterior)} onChange={()=>{}}/></Field>
+              <Field label="+ Traspaso a caja general"><MoneyInput value={form.traspasoCajaGeneral} onChange={v=>setForm(f=>({...f,traspasoCajaGeneral:v}))}/></Field>
+              <Field label="- Traspaso a caja efectivo"><MoneyInput value={form.traspasoCajaEfectivo} onChange={v=>setForm(f=>({...f,traspasoCajaEfectivo:v}))}/></Field>
               <Field label="Saldo final"><div style={{ padding:"8px 12px",borderRadius:8,background:COLORS.pinkLight,color:COLORS.pinkDark,fontWeight:800,fontSize:16,textAlign:"right" }}>{fmtMoney(calcTotalCaja(form))}</div></Field>
             </div>
           </div>
