@@ -3860,14 +3860,18 @@ function InformeDiario({ data, reloadData, user }) {
             <div style={{ background:COLORS.infoLight,padding:"10px 12px",borderBottom:"1px solid var(--color-border-tertiary)" }}>
               <h3 style={{ margin:0,fontSize:15,fontWeight:700,color:COLORS.info }}>Caja efectivo</h3>
             </div>
-            <div style={{ padding:12,display:"grid",gridTemplateColumns:"1fr",gap:10 }}>
-              <div style={{ display:"grid",gridTemplateColumns:"minmax(160px,1fr) 120px",gap:10,alignItems:"end" }}>
-                <Field label="Saldo inicial"><MoneyInput readOnly value={formatMoneyInput(form.saldoEfectivoAnterior)} onChange={()=>{}}/></Field>
-                <Field label="¿Coincide?"><Select value={form.coincideEfectivoInicial?"si":"no"} onChange={v=>setForm(f=>({...f,coincideEfectivoInicial:v==="si"}))}><option value="si">Sí</option><option value="no">No</option></Select></Field>
+            <div style={{ padding:12,display:"flex",flexDirection:"column",gap:10 }}>
+              <div style={{ display:"grid",gridTemplateColumns:"minmax(120px,1fr) minmax(130px,170px) minmax(92px,110px) minmax(90px,150px)",gap:10,alignItems:"center" }}>
+                <label style={{ fontSize:13,fontWeight:700,color:"var(--color-text-primary)" }}>Saldo inicial</label>
+                <MoneyInput readOnly value={formatMoneyInput(form.saldoEfectivoAnterior)} onChange={()=>{}}/>
+                <label style={{ fontSize:13,fontWeight:700,color:"var(--color-text-primary)",textAlign:"right" }}>¿Coincide?</label>
+                <Select value={form.coincideEfectivoInicial?"si":"no"} onChange={v=>setForm(f=>({...f,coincideEfectivoInicial:v==="si"}))}><option value="si">Sí</option><option value="no">No</option></Select>
               </div>
-              <div style={{ display:"grid",gridTemplateColumns:"minmax(160px,1fr) 120px",gap:10,alignItems:"end" }}>
-                <Field label="Saldo final"><MoneyInput value={form.efectivoCaja} onChange={v=>setForm(f=>({...f,efectivoCaja:v}))}/></Field>
-                <Field label="¿Coincide?"><Select value={form.coincideCaja?"si":"no"} onChange={v=>setForm(f=>({...f,coincideCaja:v==="si"}))}><option value="si">Sí</option><option value="no">No</option></Select></Field>
+              <div style={{ display:"grid",gridTemplateColumns:"minmax(120px,1fr) minmax(130px,170px) minmax(92px,110px) minmax(90px,150px)",gap:10,alignItems:"center" }}>
+                <label style={{ fontSize:13,fontWeight:700,color:"var(--color-text-primary)" }}>Saldo final</label>
+                <MoneyInput value={form.efectivoCaja} onChange={v=>setForm(f=>({...f,efectivoCaja:v}))}/>
+                <label style={{ fontSize:13,fontWeight:700,color:"var(--color-text-primary)",textAlign:"right" }}>¿Coincide?</label>
+                <Select value={form.coincideCaja?"si":"no"} onChange={v=>setForm(f=>({...f,coincideCaja:v==="si"}))}><option value="si">Sí</option><option value="no">No</option></Select>
               </div>
             </div>
           </div>
@@ -3876,11 +3880,23 @@ function InformeDiario({ data, reloadData, user }) {
             <div style={{ background:COLORS.pinkLight,padding:"10px 12px",borderBottom:"1px solid var(--color-border-tertiary)" }}>
               <h3 style={{ margin:0,fontSize:15,fontWeight:700,color:COLORS.pinkDark }}>Caja general</h3>
             </div>
-            <div style={{ padding:12,display:"grid",gridTemplateColumns:"1fr",gap:10 }}>
-              <Field label="Saldo inicial"><MoneyInput readOnly value={formatMoneyInput(form.saldoAnterior)} onChange={()=>{}}/></Field>
-              <Field label="+ Traspaso a caja general"><MoneyInput value={form.traspasoCajaGeneral} onChange={v=>setForm(f=>({...f,traspasoCajaGeneral:v}))}/></Field>
-              <Field label="- Traspaso a caja efectivo"><MoneyInput value={form.traspasoCajaEfectivo} onChange={v=>setForm(f=>({...f,traspasoCajaEfectivo:v}))}/></Field>
-              <Field label="Saldo final"><div style={{ padding:"8px 12px",borderRadius:8,background:COLORS.pinkLight,color:COLORS.pinkDark,fontWeight:800,fontSize:16,textAlign:"right" }}>{fmtMoney(calcTotalCaja(form))}</div></Field>
+            <div style={{ padding:12,display:"flex",flexDirection:"column",gap:10 }}>
+              <div style={{ display:"grid",gridTemplateColumns:"minmax(180px,1fr) minmax(140px,180px)",gap:10,alignItems:"center" }}>
+                <label style={{ fontSize:13,fontWeight:700,color:"var(--color-text-primary)" }}>Saldo inicial</label>
+                <MoneyInput readOnly value={formatMoneyInput(form.saldoAnterior)} onChange={()=>{}}/>
+              </div>
+              <div style={{ display:"grid",gridTemplateColumns:"minmax(180px,1fr) minmax(140px,180px)",gap:10,alignItems:"center" }}>
+                <label style={{ fontSize:13,fontWeight:700,color:"var(--color-text-primary)" }}>+ Traspaso a caja general</label>
+                <MoneyInput value={form.traspasoCajaGeneral} onChange={v=>setForm(f=>({...f,traspasoCajaGeneral:v}))}/>
+              </div>
+              <div style={{ display:"grid",gridTemplateColumns:"minmax(180px,1fr) minmax(140px,180px)",gap:10,alignItems:"center" }}>
+                <label style={{ fontSize:13,fontWeight:700,color:"var(--color-text-primary)" }}>- Traspaso a caja efectivo</label>
+                <MoneyInput value={form.traspasoCajaEfectivo} onChange={v=>setForm(f=>({...f,traspasoCajaEfectivo:v}))}/>
+              </div>
+              <div style={{ display:"grid",gridTemplateColumns:"minmax(180px,1fr) minmax(140px,180px)",gap:10,alignItems:"center" }}>
+                <label style={{ fontSize:13,fontWeight:800,color:"var(--color-text-primary)" }}>Saldo final</label>
+                <div style={{ padding:"8px 12px",borderRadius:8,background:COLORS.pinkLight,color:COLORS.pinkDark,fontWeight:800,fontSize:16,textAlign:"right" }}>{fmtMoney(calcTotalCaja(form))}</div>
+              </div>
             </div>
           </div>
         </div>
