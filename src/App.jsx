@@ -2923,6 +2923,16 @@ function GarantiasServicios({ data, reloadData, user }) {
     setFiles([]); setErr(""); setModal(true);
   };
   const manicurasLocal = manicuras.filter(m=>!form.localId || m.localId===parseInt(form.localId));
+  const manicuraIdsConServicioOriginal = new Set((data.comisiones||[])
+    .filter(c => c.fechaPago === form.fechaServicioOriginal && (!form.localId || c.localId === parseInt(form.localId)))
+    .map(c => c.userId)
+    .filter(Boolean));
+  const manicurasOriginalDisponibles = manicurasLocal.filter(m => manicuraIdsConServicioOriginal.has(m.id) || String(m.id) === String(form.manicuraOriginalId || ""));
+  const manicurasReparacionDisponibles = manicuras.filter(m => {
+    if (!form.localId || m.localId !== parseInt(form.localId)) return false;
+    const tieneAgenda = (data.horarios || []).some(h => h.userId === m.id && h.fecha === form.fechaReparacion && h.trabaja && h.entrada && h.salida);
+    return tieneAgenda || String(m.id) === String(form.manicuraReparacionId || "");
+  });
   const comisionesOriginales = (data.comisiones||[]).filter(c =>
     c.fechaPago === form.fechaServicioOriginal &&
     (!form.localId || c.localId === parseInt(form.localId)) &&
@@ -3045,7 +3055,7 @@ function GarantiasServicios({ data, reloadData, user }) {
           <div><label style={{ fontSize:13,fontWeight:500,color:"#555",display:"block",marginBottom:6 }}>Local</label><select value={form.localId||""} onChange={e=>setForm(f=>({...f,localId:e.target.value,manicuraOriginalId:"",comisionOriginalId:"",cliente:"",servicio:"",importeComision:""}))} style={{ width:"100%",border:"1.5px solid #e0e0e0",borderRadius:8,padding:"9px 12px",fontSize:14,background:"#fafafa" }}><option value="">Seleccionar...</option>{locales.map(l=><option key={l.id} value={l.id}>{l.nombre}</option>)}</select></div>
         </div>
         <div style={{ display:"grid",gridTemplateColumns:"1fr 1fr",gap:12 }}>
-          <div><label style={{ fontSize:13,fontWeight:500,color:"#555",display:"block",marginBottom:6 }}>Manicura servicio original</label><select value={form.manicuraOriginalId||""} onChange={e=>setForm(f=>({...f,manicuraOriginalId:e.target.value,comisionOriginalId:"",cliente:"",servicio:"",importeComision:""}))} style={{ width:"100%",border:"1.5px solid #e0e0e0",borderRadius:8,padding:"9px 12px",fontSize:14,background:"#fafafa" }}><option value="">Seleccionar...</option>{manicurasLocal.map(m=><option key={m.id} value={m.id}>{m.nombre}</option>)}</select></div>
+          <div><label style={{ fontSize:13,fontWeight:500,color:"#555",display:"block",marginBottom:6 }}>Manicura servicio original</label><select value={form.manicuraOriginalId||""} onChange={e=>setForm(f=>({...f,manicuraOriginalId:e.target.value,comisionOriginalId:"",cliente:"",servicio:"",importeComision:""}))} style={{ width:"100%",border:"1.5px solid #e0e0e0",borderRadius:8,padding:"9px 12px",fontSize:14,background:"#fafafa" }}><option value="">Seleccionar...</option>{manicurasOriginalDisponibles.map(m=><option key={m.id} value={m.id}>{m.nombre}</option>)}</select>{form.fechaServicioOriginal && form.localId && manicurasOriginalDisponibles.length===0 && <p style={{ margin:"4px 0 0",fontSize:11,color:"var(--color-text-secondary)" }}>No hay manicuras con servicios registrados ese día.</p>}</div>
           <div><label style={{ fontSize:13,fontWeight:500,color:"#555",display:"block",marginBottom:6 }}>Servicio realizado</label><select value={form.comisionOriginalId||""} onChange={e=>selectComision(e.target.value)} style={{ width:"100%",border:"1.5px solid #e0e0e0",borderRadius:8,padding:"9px 12px",fontSize:14,background:"#fafafa" }}><option value="">Seleccionar servicio...</option>{comisionesOriginales.map(c=><option key={c.id} value={c.id}>{c.servicio} · {c.cliente} · {fmtMoney(c.comision)}</option>)}</select></div>
         </div>
         <div style={{ display:"grid",gridTemplateColumns:"1fr 1fr 150px",gap:12 }}>
@@ -3070,7 +3080,7 @@ function GarantiasServicios({ data, reloadData, user }) {
         </div>
         <div style={{ display:"grid",gridTemplateColumns:"1fr 1fr",gap:12 }}>
           <ModalInput label="Fecha de reparación" type="date" value={form.fechaReparacion} onChange={v=>setForm(f=>({...f,fechaReparacion:v}))}/>
-          <div><label style={{ fontSize:13,fontWeight:500,color:"#555",display:"block",marginBottom:6 }}>Manicura que realiza reparación</label><select value={form.manicuraReparacionId||""} onChange={e=>setForm(f=>({...f,manicuraReparacionId:e.target.value}))} style={{ width:"100%",border:"1.5px solid #e0e0e0",borderRadius:8,padding:"9px 12px",fontSize:14,background:"#fafafa" }}><option value="">Seleccionar...</option>{manicuras.map(m=><option key={m.id} value={m.id}>{m.nombre} · {data.locales.find(l=>l.id===m.localId)?.nombre||""}</option>)}</select></div>
+          <div><label style={{ fontSize:13,fontWeight:500,color:"#555",display:"block",marginBottom:6 }}>Manicura que realiza reparación</label><select value={form.manicuraReparacionId||""} onChange={e=>setForm(f=>({...f,manicuraReparacionId:e.target.value}))} style={{ width:"100%",border:"1.5px solid #e0e0e0",borderRadius:8,padding:"9px 12px",fontSize:14,background:"#fafafa" }}><option value="">Seleccionar...</option>{manicurasReparacionDisponibles.map(m=><option key={m.id} value={m.id}>{m.nombre}</option>)}</select>{form.fechaReparacion && form.localId && manicurasReparacionDisponibles.length===0 && <p style={{ margin:"4px 0 0",fontSize:11,color:"var(--color-text-secondary)" }}>No hay manicuras con agenda abierta ese día en el local.</p>}</div>
         </div>
         <div><label style={{ fontSize:13,fontWeight:500,color:"#555",display:"block",marginBottom:6 }}>Motivo / explicación</label><textarea value={form.motivo} onChange={e=>setForm(f=>({...f,motivo:e.target.value}))} rows={3} style={{ width:"100%",boxSizing:"border-box",border:"1.5px solid #e0e0e0",borderRadius:8,padding:"9px 12px",fontSize:14,background:"#fafafa" }}/></div>
         <div style={{ background:COLORS.infoLight,borderRadius:8,padding:"9px 11px" }}><p style={{ margin:0,fontSize:12,color:COLORS.info }}><strong>Fotos:</strong> máximo {MAX_GARANTIA_FOTOS} por garantía. Se comprimen automáticamente antes de subirse para que no superen aproximadamente 200 KB cada una.</p></div>
@@ -3844,31 +3854,36 @@ function InformeDiario({ data, reloadData, user }) {
           <Field label="Urgentes generales"><TextArea value={form.urgentesGenerales} onChange={v=>setForm(f=>({...f,urgentesGenerales:v}))}/></Field>
         </div>
 
-        <div style={{ display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(280px,1fr))",gap:14 }}>
+        <div style={{ display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(360px,1fr))",gap:14 }}>
           <div style={{ border:"1px solid var(--color-border-tertiary)",borderRadius:14,overflow:"hidden",background:"var(--color-background-primary)" }}>
-            <div style={{ background:COLORS.infoLight,padding:"10px 12px",borderBottom:"1px solid var(--color-border-tertiary)" }}>
-              <h3 style={{ margin:0,fontSize:15,fontWeight:700,color:COLORS.info }}>Caja en efectivo</h3>
-              <p style={{ margin:"2px 0 0",fontSize:12,color:COLORS.info }}>Control del efectivo físico del local.</p>
+            <div style={{ background:COLORS.infoLight,padding:"10px 12px",borderBottom:"1px solid var(--color-border-tertiary)",display:"grid",gridTemplateColumns:"minmax(160px,1fr) minmax(260px,1.35fr)",gap:12,alignItems:"center" }}>
+              <div>
+                <h3 style={{ margin:0,fontSize:15,fontWeight:700,color:COLORS.info }}>Caja en efectivo</h3>
+                <p style={{ margin:"2px 0 0",fontSize:12,color:COLORS.info }}>Control del efectivo físico del local.</p>
+              </div>
+              <div style={{ display:"grid",gridTemplateColumns:"115px minmax(140px,1fr)",gap:8,alignItems:"end" }}>
+                <Field label="¿Coincide?"><Select value={form.coincideCaja?"si":"no"} onChange={v=>setForm(f=>({...f,coincideCaja:v==="si"}))}><option value="si">Sí</option><option value="no">No</option></Select></Field>
+                <Field label="Saldo final efectivo"><MoneyInput value={form.efectivoCaja} onChange={v=>setForm(f=>({...f,efectivoCaja:v}))}/></Field>
+              </div>
             </div>
             <div style={{ padding:12,display:"grid",gridTemplateColumns:"1fr",gap:10 }}>
-              <Field label="¿Coincide la caja?"><Select value={form.coincideCaja?"si":"no"} onChange={v=>setForm(f=>({...f,coincideCaja:v==="si"}))}><option value="si">Sí</option><option value="no">No</option></Select></Field>
               <Field label="Saldo inicial efectivo"><MoneyInput readOnly value={formatMoneyInput(form.saldoEfectivoAnterior)} onChange={()=>{}}/></Field>
-              <Field label="Saldo final efectivo"><MoneyInput value={form.efectivoCaja} onChange={v=>setForm(f=>({...f,efectivoCaja:v}))}/></Field>
             </div>
           </div>
 
           <div style={{ border:"1px solid var(--color-border-tertiary)",borderRadius:14,overflow:"hidden",background:"var(--color-background-primary)" }}>
-            <div style={{ background:COLORS.pinkLight,padding:"10px 12px",borderBottom:"1px solid var(--color-border-tertiary)",display:"flex",justifyContent:"space-between",alignItems:"center",gap:8,flexWrap:"wrap" }}>
+            <div style={{ background:COLORS.pinkLight,padding:"10px 12px",borderBottom:"1px solid var(--color-border-tertiary)",display:"grid",gridTemplateColumns:"minmax(170px,1fr) minmax(280px,1.4fr)",gap:12,alignItems:"center" }}>
               <div>
                 <h3 style={{ margin:0,fontSize:15,fontWeight:700,color:COLORS.pinkDark }}>Caja general</h3>
                 <p style={{ margin:"2px 0 0",fontSize:12,color:COLORS.pinkDark }}>El saldo anterior se toma del saldo final del informe anterior.</p>
               </div>
-              <Badge color="pink">Saldo final {fmtMoney(calcTotalCaja(form))}</Badge>
+              <div style={{ display:"grid",gridTemplateColumns:"1fr 1fr",gap:8,alignItems:"end" }}>
+                <Field label="+ A Caja General"><MoneyInput value={form.traspasoCajaGeneral} onChange={v=>setForm(f=>({...f,traspasoCajaGeneral:v}))}/></Field>
+                <Field label="- A Caja Efectivo"><MoneyInput value={form.traspasoCajaEfectivo} onChange={v=>setForm(f=>({...f,traspasoCajaEfectivo:v}))}/></Field>
+              </div>
             </div>
-            <div style={{ padding:12,display:"grid",gridTemplateColumns:"1fr",gap:10 }}>
+            <div style={{ padding:12,display:"grid",gridTemplateColumns:"1fr 1fr",gap:10,alignItems:"end" }}>
               <Field label="Saldo inicial Caja General"><MoneyInput readOnly value={formatMoneyInput(form.saldoAnterior)} onChange={()=>{}}/></Field>
-              <Field label="+ Traspaso a Caja General"><MoneyInput value={form.traspasoCajaGeneral} onChange={v=>setForm(f=>({...f,traspasoCajaGeneral:v}))}/></Field>
-              <Field label="- Traspaso a Caja Efectivo"><MoneyInput value={form.traspasoCajaEfectivo} onChange={v=>setForm(f=>({...f,traspasoCajaEfectivo:v}))}/></Field>
               <Field label="Saldo final"><div style={{ padding:"8px 12px",borderRadius:8,background:COLORS.pinkLight,color:COLORS.pinkDark,fontWeight:800,fontSize:16,textAlign:"right" }}>{fmtMoney(calcTotalCaja(form))}</div></Field>
             </div>
           </div>
