@@ -2878,7 +2878,7 @@ function ConfiguracionCobertura({ data, reloadData, user }) {
   return <div>
     <div style={{ display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:16,flexWrap:"wrap",gap:8 }}><h2 style={{ margin:0,fontSize:18,fontWeight:500 }}>Configuración de cobertura por local</h2><Btn onClick={save} disabled={saving||!localId}>{saving?"Guardando...":"Guardar configuración"}</Btn></div>
     {ok&&<div style={{ background:COLORS.successLight,color:COLORS.success,borderRadius:8,padding:"8px 12px",fontSize:13,marginBottom:12 }}>Configuración guardada correctamente.</div>}
-    <Card style={{ marginBottom:14 }}><h3 style={{ margin:"0 0 12px",fontSize:15,fontWeight:500 }}>Local</h3><Select value={localId} onChange={setLocalId} style={{ maxWidth:320 }}>{localesVisibles.map(l=><option key={l.id} value={l.id}>{l.nombre}</option>)}</Select></Card>
+    <Card style={{ marginBottom:14, background:turnoVisual.background, border:turnoVisual.border, overflow:"hidden" }}><h3 style={{ margin:"0 0 12px",fontSize:15,fontWeight:500 }}>Local</h3><Select value={localId} onChange={setLocalId} style={{ maxWidth:320 }}>{localesVisibles.map(l=><option key={l.id} value={l.id}>{l.nombre}</option>)}</Select></Card>
     <Card style={{ marginBottom:14 }}><h3 style={{ margin:"0 0 12px",fontSize:15,fontWeight:500 }}>Parámetros generales</h3><div style={{ display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(160px,1fr))",gap:12 }}><div><label style={{ fontSize:12,color:"var(--color-text-secondary)",display:"block",marginBottom:4 }}>Hora de apertura</label><Input type="time" value={config.horaApertura} onChange={v=>setConfig(c=>({...c,horaApertura:v}))}/></div><div><label style={{ fontSize:12,color:"var(--color-text-secondary)",display:"block",marginBottom:4 }}>Hora de cierre</label><Input type="time" value={config.horaCierre} onChange={v=>setConfig(c=>({...c,horaCierre:v}))}/></div><div><label style={{ fontSize:12,color:"var(--color-text-secondary)",display:"block",marginBottom:4 }}>Minutos de apertura</label><Input type="number" value={config.minutosApertura} onChange={v=>setConfig(c=>({...c,minutosApertura:v}))}/></div><div><label style={{ fontSize:12,color:"var(--color-text-secondary)",display:"block",marginBottom:4 }}>Minutos de cierre</label><Input type="number" value={config.minutosCierre} onChange={v=>setConfig(c=>({...c,minutosCierre:v}))}/></div></div></Card>
     <Card style={{ padding:0,overflow:"hidden" }}><div style={{ padding:"12px 14px",borderBottom:"1px solid rgba(120,120,120,0.18)" }}><h3 style={{ margin:0,fontSize:15,fontWeight:500 }}>Reglas por día</h3><p style={{ margin:"3px 0 0",fontSize:12,color:"var(--color-text-secondary)" }}>Estos valores alimentan el reporte de cobertura del local seleccionado.</p></div><div style={{ overflowX:"auto" }}><div style={{ minWidth:760 }}><div style={{ display:"grid",gridTemplateColumns:"110px 130px repeat(4,1fr)",gap:8,padding:"8px 12px",fontSize:11,fontWeight:500,color:"var(--color-text-secondary)",borderBottom:"1px solid rgba(120,120,120,0.14)" }}>{["Día","Afluencia","Mín. día","Máx. día","Mín. apertura","Mín. cierre"].map(h=><span key={h}>{h}</span>)}</div>{reglas.map(r=><div key={r.diaSemana} style={{ display:"grid",gridTemplateColumns:"110px 130px repeat(4,1fr)",gap:8,padding:"8px 12px",alignItems:"center",borderBottom:"1px solid rgba(120,120,120,0.10)" }}><strong style={{ fontSize:13 }}>{DIAS_SEMANA[r.diaSemana-1]}</strong><Select value={r.afluencia} onChange={v=>setRegla(r.diaSemana,"afluencia",v)}><option value="baja">Baja</option><option value="media">Media</option><option value="alta">Alta</option></Select>{[["minimoDiario"],["maximoDiario"],["minimoApertura"],["minimoCierre"]].map(([campo])=><Input key={campo} type="number" value={r[campo]} onChange={v=>setRegla(r.diaSemana,campo,v)}/>)}</div>)}</div></div></Card>
   </div>;
@@ -3714,6 +3714,59 @@ function InformeDiario({ data, reloadData, user }) {
     ].filter(Boolean).join(" | ")).join("\n");
   }, [getGarantiasDelDia, userLabel]);
 
+  const getAsistenciaInforme = useCallback((inf) => {
+    if (!inf?.fecha || !inf?.localId) return { total:0, ok:true, tarde:[], ausente:[], sinRegistro:[] };
+    const localNum = parseInt(inf.localId);
+    const manicurasLocal = (data.users || []).filter(u => u.rol === "manicura" && u.activo !== false && u.localId === localNum);
+    const horariosDia = (data.horarios || []).filter(h => h.fecha === inf.fecha && h.trabaja && h.entrada && h.salida);
+    const idsConHorario = new Set(horariosDia.map(h => parseInt(h.userId)));
+    const manicurasConHorario = manicurasLocal.filter(m => idsConHorario.has(parseInt(m.id))).sort((a,b)=>(a.codigoExterno || a.nombre || "").localeCompare(b.codigoExterno || b.nombre || ""));
+    const asistenciasDia = (data.asistencias || []).filter(a => a.fecha === inf.fecha);
+    const byUser = new Map(asistenciasDia.map(a => [parseInt(a.userId), a]));
+    const tarde = [];
+    const ausente = [];
+    const sinRegistro = [];
+    manicurasConHorario.forEach(m => {
+      const a = byUser.get(parseInt(m.id));
+      const item = { manicura:m, asistencia:a };
+      if (!a) sinRegistro.push(item);
+      else if (a.estado === "tarde") tarde.push(item);
+      else if (a.estado === "ausente") ausente.push(item);
+    });
+    return { total:manicurasConHorario.length, ok:tarde.length === 0 && ausente.length === 0, tarde, ausente, sinRegistro };
+  }, [data.users, data.horarios, data.asistencias]);
+
+  const buildAsistenciaText = useCallback((inf) => {
+    const info = getAsistenciaInforme(inf);
+    if (!info.total) return "No hay manicuras con horario cargado para este local y fecha.";
+    if (info.ok) return `Todas las manicuras con horario llegaron a tiempo (${info.total}).`;
+    const lines = [];
+    if (info.tarde.length) {
+      lines.push("Llegaron tarde:");
+      info.tarde.forEach(({ manicura, asistencia }) => {
+        const detalle = [
+          userLabel(manicura.id, manicura.nombre),
+          asistencia?.entradaReal ? `entrada real ${asistencia.entradaReal}` : null,
+          asistencia?.motivo ? `motivo: ${asistencia.motivo}` : null,
+        ].filter(Boolean).join(" · ");
+        lines.push(`- ${detalle}`);
+      });
+    }
+    if (info.ausente.length) {
+      lines.push("Faltaron:");
+      info.ausente.forEach(({ manicura, asistencia }) => {
+        const detalle = [
+          userLabel(manicura.id, manicura.nombre),
+          asistencia?.motivo ? `motivo: ${asistencia.motivo}` : null,
+          asistencia?.tipoDoc ? `doc: ${asistencia.tipoDoc}` : null,
+          asistencia?.certificado ? "con certificado" : null,
+        ].filter(Boolean).join(" · ");
+        lines.push(`- ${detalle}`);
+      });
+    }
+    return lines.join("\n");
+  }, [getAsistenciaInforme, userLabel]);
+
   const garantiasDelDia = useMemo(() => getGarantiasDelDia(form), [getGarantiasDelDia, form]);
 
   const buildTextReport = (inf) => {
@@ -3745,6 +3798,9 @@ function InformeDiario({ data, reloadData, user }) {
       `+ Traspaso a Caja General: ${fmtMoney(inf.traspasoCajaGeneral)}`,
       `- Traspaso a Caja Efectivo: ${fmtMoney(inf.traspasoCajaEfectivo)}`,
       `Saldo final: ${fmtMoney(calcTotalCaja(inf))}`,
+      ``,
+      `ASISTENCIA DE MANICURAS:`,
+      buildAsistenciaText(inf),
       ``,
       `GARANTÍAS DEL DÍA:`,
       buildGarantiasText(inf),
@@ -3819,6 +3875,8 @@ function InformeDiario({ data, reloadData, user }) {
       ["MERCADO PAGO / TOTAL / RESERVAS", inf.mercadoPagoTotalReservas],
       ["PAGOS REALIZADOS", inf.pagosRealizados],
       ["CAJA GENERAL", `Saldo anterior: ${fmtMoney(inf.saldoAnterior)}\n+ Traspaso a Caja General: ${fmtMoney(inf.traspasoCajaGeneral)}\n- Traspaso a Caja Efectivo: ${fmtMoney(inf.traspasoCajaEfectivo)}\nSALDO FINAL: ${fmtMoney(calcTotalCaja(inf))}`],
+      ["ASISTENCIA DE MANICURAS", buildAsistenciaText(inf)],
+      ["GARANTÍAS DEL DÍA", buildGarantiasText(inf)],
       ["RECLAMOS", inf.reclamos],
       ["NOVEDADES SALÓN / MANICURAS", inf.novedadesSalonManicuras],
       ["OBSERVACIONES / EXTRAS", inf.observacionesExtras],
@@ -3832,6 +3890,27 @@ function InformeDiario({ data, reloadData, user }) {
     await navigator.clipboard.writeText(buildTextReport(inf));
     alert("Informe copiado al portapapeles.");
   };
+
+  const turnoVisual = useMemo(() => {
+    const tarde = (form?.turno || "manana") === "tarde";
+    return tarde ? {
+      icon:"🌙",
+      label:"Turno tarde",
+      background:"linear-gradient(135deg, rgba(62,37,98,0.16) 0%, rgba(212,83,126,0.14) 45%, rgba(252,184,119,0.20) 100%)",
+      heroBackground:"linear-gradient(135deg, #3e2562 0%, #d4537e 55%, #f6a65b 100%)",
+      heroColor:"#fff",
+      border:"1px solid rgba(114,36,62,0.16)",
+    } : {
+      icon:"☀️",
+      label:"Turno mañana",
+      background:"linear-gradient(135deg, rgba(255,244,199,0.55) 0%, rgba(251,234,240,0.55) 52%, rgba(255,255,255,0.88) 100%)",
+      heroBackground:"linear-gradient(135deg, #ffe08a 0%, #f9b4cd 56%, #ffffff 100%)",
+      heroColor:COLORS.pinkDark,
+      border:"1px solid rgba(212,83,126,0.16)",
+    };
+  }, [form?.turno]);
+
+  const asistenciaInforme = useMemo(() => getAsistenciaInforme(form), [getAsistenciaInforme, form]);
 
   const Field = useCallback(({ label, children, style }) => <div style={style}><label style={{ fontSize:12,fontWeight:600,color:"var(--color-text-secondary)",display:"block",marginBottom:5 }}>{label}</label>{children}</div>, []);
   const TextArea = useCallback(({ value, onChange, rows=3, placeholder }) => <textarea value={value||""} onChange={e=>onChange(e.target.value)} rows={rows} placeholder={placeholder} style={{ width:"100%",boxSizing:"border-box",border:"0.5px solid var(--color-border-secondary)",borderRadius:8,padding:"8px 12px",fontSize:14,background:"var(--color-background-primary)",color:"var(--color-text-primary)",resize:"vertical",fontFamily:"inherit" }}/>, []);
@@ -3856,13 +3935,16 @@ function InformeDiario({ data, reloadData, user }) {
         <Field label="Estado"><div style={{ padding:"8px 12px",borderRadius:8,background:form?.estado==="enviado"?COLORS.successLight:COLORS.grayLight,color:form?.estado==="enviado"?COLORS.success:"#555",fontWeight:600 }}>{form?.estado==="enviado"?"Enviado":"Borrador"}</div></Field>
       </div>
       {form && <div style={{ display:"flex",flexDirection:"column",gap:16 }}>
-        <div style={{ background:COLORS.pinkLight,border:`1px solid ${COLORS.pink}`,borderRadius:14,padding:"12px 14px",display:"flex",alignItems:"center",justifyContent:"space-between",gap:12,flexWrap:"wrap" }}>
-          <div>
-            <p style={{ margin:0,fontSize:12,fontWeight:700,color:COLORS.pinkDark,textTransform:"uppercase",letterSpacing:"0.04em" }}>Fecha del informe</p>
-            <p style={{ margin:"3px 0 0",fontSize:24,fontWeight:800,color:COLORS.pinkDark }}>{parseDateLabel(form.fecha)}</p><p style={{ margin:"2px 0 0",fontSize:12,color:COLORS.pinkDark,fontWeight:700 }}>{form.turno === "manana" ? "Turno mañana" : form.turno === "tarde" ? "Turno tarde" : "Turno día"}</p>
+        <div style={{ background:turnoVisual.heroBackground,border:"1px solid rgba(255,255,255,0.45)",borderRadius:16,padding:"14px 16px",display:"flex",alignItems:"center",justifyContent:"space-between",gap:12,flexWrap:"wrap",boxShadow:"0 10px 26px rgba(114,36,62,0.10)" }}>
+          <div style={{ display:"flex",alignItems:"center",gap:12 }}>
+            <div style={{ width:46,height:46,borderRadius:"50%",background:"rgba(255,255,255,0.72)",display:"flex",alignItems:"center",justifyContent:"center",fontSize:25,boxShadow:"0 4px 16px rgba(0,0,0,0.10)" }}>{turnoVisual.icon}</div>
+            <div>
+              <p style={{ margin:0,fontSize:12,fontWeight:800,color:turnoVisual.heroColor,textTransform:"uppercase",letterSpacing:"0.04em" }}>Fecha del informe</p>
+              <p style={{ margin:"3px 0 0",fontSize:24,fontWeight:800,color:turnoVisual.heroColor }}>{parseDateLabel(form.fecha)}</p><p style={{ margin:"2px 0 0",fontSize:12,color:turnoVisual.heroColor,fontWeight:800 }}>{turnoVisual.label}</p>
+            </div>
           </div>
           <div style={{ textAlign:"right" }}>
-            <p style={{ margin:0,fontSize:12,color:COLORS.pinkDark }}>Local</p>
+            <p style={{ margin:0,fontSize:12,color:turnoVisual.heroColor,fontWeight:700 }}>Local</p>
             <p style={{ margin:"2px 0 0",fontSize:16,fontWeight:700,color:"var(--color-text-primary)" }}>{selectedLocal?.nombre || "-"}</p><p style={{ margin:"3px 0 0",fontSize:12,color:"var(--color-text-secondary)" }}>Responsable cierre: {userLabel(form.cerradoPor || form.creadoPor || user.id)}</p>
           </div>
         </div>
@@ -3870,6 +3952,28 @@ function InformeDiario({ data, reloadData, user }) {
         <div style={{ display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(260px,1fr))",gap:14 }}>
           <Field label="Importante para mañana"><TextArea value={form.importanteManana} onChange={v=>setForm(f=>({...f,importanteManana:v}))} placeholder="Ej: Ver si llegan tapas"/></Field>
           <Field label="Urgentes generales"><TextArea value={form.urgentesGenerales} onChange={v=>setForm(f=>({...f,urgentesGenerales:v}))}/></Field>
+        </div>
+
+        <div style={{ border:"1px solid var(--color-border-tertiary)",borderRadius:14,overflow:"hidden",background:"var(--color-background-primary)" }}>
+          <div style={{ background:asistenciaInforme.ok ? COLORS.successLight : COLORS.amberLight,padding:"10px 12px",borderBottom:"1px solid var(--color-border-tertiary)",display:"flex",justifyContent:"space-between",alignItems:"center",gap:8,flexWrap:"wrap" }}>
+            <div>
+              <h3 style={{ margin:0,fontSize:15,fontWeight:700,color:asistenciaInforme.ok ? COLORS.success : COLORS.amber }}>Asistencia de manicuras</h3>
+              <p style={{ margin:"2px 0 0",fontSize:12,color:asistenciaInforme.ok ? COLORS.success : COLORS.amber }}>Resumen automático según horarios y asistencia registrada para este local y fecha.</p>
+            </div>
+            <Badge color={asistenciaInforme.ok ? "success" : "amber"}>{asistenciaInforme.total} con horario</Badge>
+          </div>
+          <div style={{ padding:12 }}>
+            {asistenciaInforme.total === 0 ? <p style={{ margin:0,fontSize:13,color:"var(--color-text-secondary)" }}>No hay manicuras con horario cargado para este día.</p> : asistenciaInforme.ok ? <div style={{ display:"flex",gap:8,alignItems:"center",flexWrap:"wrap" }}><Badge color="success">✓ Todas llegaron a tiempo</Badge><span style={{ fontSize:13,color:"var(--color-text-secondary)" }}>No hay faltas ni llegadas tarde registradas.</span></div> : <div style={{ display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(240px,1fr))",gap:10 }}>
+              {asistenciaInforme.tarde.length > 0 && <div style={{ border:"1px solid rgba(186,117,23,0.25)",borderRadius:10,padding:"8px 10px",background:COLORS.amberLight }}>
+                <p style={{ margin:"0 0 6px",fontSize:13,fontWeight:700,color:COLORS.amber }}>Llegaron tarde</p>
+                {asistenciaInforme.tarde.map(({ manicura, asistencia }) => <p key={manicura.id} style={{ margin:"4px 0",fontSize:12,color:"var(--color-text-primary)" }}><strong>{userLabel(manicura.id, manicura.nombre)}</strong>{asistencia?.entradaReal ? ` · entrada ${asistencia.entradaReal}` : ""}{asistencia?.motivo ? ` · ${asistencia.motivo}` : ""}</p>)}
+              </div>}
+              {asistenciaInforme.ausente.length > 0 && <div style={{ border:"1px solid rgba(226,75,74,0.25)",borderRadius:10,padding:"8px 10px",background:COLORS.dangerLight }}>
+                <p style={{ margin:"0 0 6px",fontSize:13,fontWeight:700,color:COLORS.danger }}>Faltaron</p>
+                {asistenciaInforme.ausente.map(({ manicura, asistencia }) => <p key={manicura.id} style={{ margin:"4px 0",fontSize:12,color:"var(--color-text-primary)" }}><strong>{userLabel(manicura.id, manicura.nombre)}</strong>{asistencia?.motivo ? ` · ${asistencia.motivo}` : ""}{asistencia?.certificado ? " · con certificado" : ""}</p>)}
+              </div>}
+            </div>}
+          </div>
         </div>
 
         <div style={{ display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(360px,1fr))",gap:14 }}>
