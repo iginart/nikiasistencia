@@ -118,7 +118,24 @@ const patchOrPost = async (table, matchQuery, data) => {
 };
 
 const api = {
-  getUsers: () => sb("users?select=*&order=id"),
+  login: async (usuario, password) => {
+    const res = await fetch(`${SUPABASE_URL}/functions/v1/login-niki`, {
+      method: "POST",
+      headers: {
+        apikey: SUPABASE_KEY,
+        Authorization: `Bearer ${SUPABASE_KEY}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ usuario, password }),
+    });
+    const txt = await res.text();
+    const data = txt ? JSON.parse(txt) : null;
+    if (!res.ok || data?.ok === false) {
+      throw new Error(data?.error || txt || "Usuario o contraseña incorrectos.");
+    }
+    return data;
+  },
+  getUsers: () => sb("users?select=id,nombre,usuario,email,rol,local_id,activo,codigo_externo,telefono&order=id"),
   createUser: (d) => sb("users", { method: "POST", body: JSON.stringify(d) }),
   updateUser: (id, d) => sb(`users?id=eq.${id}`, { method: "PATCH", body: JSON.stringify(d) }),
   getLocales: () => sb("locales?select=*&order=id"),
@@ -239,7 +256,7 @@ const api = {
   setEncargadoLocales: async (userId, localIds) => { await sb(`encargado_locales?user_id=eq.${userId}`, { method:"DELETE", prefer:"" }); if (!localIds?.length) return []; return sb("encargado_locales", { method:"POST", body:JSON.stringify(localIds.map(local_id=>({ user_id:userId, local_id:parseInt(local_id) }))) }); },
 };
 
-function normalizeUser(u) { return { id: u.id, nombre: u.nombre, usuario: u.usuario, password: u.password, email: u.email || "", rol: u.rol, localId: u.local_id, activo: u.activo, codigoExterno: u.codigo_externo || "" }; }
+function normalizeUser(u) { return { id: u.id, nombre: u.nombre, usuario: u.usuario, email: u.email || "", rol: u.rol, localId: u.local_id ?? u.localId ?? null, activo: u.activo, codigoExterno: u.codigo_externo || u.codigoExterno || "", telefono: u.telefono || "" }; }
 function normalizeHorario(h) { return { id: h.id, userId: h.user_id, fecha: h.fecha, entrada: h.entrada || "", salida: h.salida || "", trabaja: h.trabaja }; }
 function normalizeAsistencia(a) { return { id: a.id, userId: a.user_id, fecha: a.fecha, estado: a.estado, entradaReal: a.entrada_real || "", salidaReal: a.salida_real || "", motivo: a.motivo || "", certificado: a.certificado, tipoDoc: a.tipo_doc || "" }; }
 function normalizePeriodo(p) { return { id: p.id, periodo: p.periodo, userId: p.user_id ?? p.userId ?? null }; }
@@ -1481,11 +1498,17 @@ function Login({ onLogin, reloadData }) {
   const handleLogin = async () => {
     setLoading(true); setErr("");
     try {
-      const users = await api.getUsers();
-      const found = users.map(normalizeUser).find(x => x.usuario === u.trim() && x.password === p && x.activo);
-      if (found) { await reloadData(); onLogin(found); }
-      else setErr("Usuario o contraseña incorrectos.");
-    } catch { setErr("Error de conexión. Intentá de nuevo."); }
+      const result = await api.login(u.trim(), p);
+      const found = normalizeUser(result?.user || result);
+      if (found && found.activo !== false) {
+        await reloadData();
+        onLogin(found);
+      } else {
+        setErr("Usuario o contraseña incorrectos.");
+      }
+    } catch (e) {
+      setErr(e?.message || "Error de conexión. Intentá de nuevo.");
+    }
     setLoading(false);
   };
 
