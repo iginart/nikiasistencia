@@ -118,24 +118,29 @@ const patchOrPost = async (table, matchQuery, data) => {
 };
 
 const api = {
+  getUsers: () => sb("users?select=id,nombre,usuario,email,rol,local_id,activo,codigo_externo,telefono&order=id"),
   login: async (usuario, password) => {
     const res = await fetch(`${SUPABASE_URL}/functions/v1/login-niki`, {
       method: "POST",
-      headers: {
-        apikey: SUPABASE_KEY,
-        Authorization: `Bearer ${SUPABASE_KEY}`,
-        "Content-Type": "application/json",
-      },
+      headers: { apikey: SUPABASE_KEY, Authorization: `Bearer ${SUPABASE_KEY}`, "Content-Type": "application/json" },
       body: JSON.stringify({ usuario, password }),
     });
     const txt = await res.text();
     const data = txt ? JSON.parse(txt) : null;
-    if (!res.ok || data?.ok === false) {
-      throw new Error(data?.error || txt || "Usuario o contraseña incorrectos.");
-    }
+    if (!res.ok || data?.ok === false) throw new Error(data?.error || txt || "Error de login");
     return data;
   },
-  getUsers: () => sb("users?select=id,nombre,usuario,email,rol,local_id,activo,codigo_externo,telefono&order=id"),
+  changePassword: async (payload) => {
+    const res = await fetch(`${SUPABASE_URL}/functions/v1/cambiar-password-niki`, {
+      method: "POST",
+      headers: { apikey: SUPABASE_KEY, Authorization: `Bearer ${SUPABASE_KEY}`, "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+    const txt = await res.text();
+    const data = txt ? JSON.parse(txt) : null;
+    if (!res.ok || data?.ok === false) throw new Error(data?.error || txt || "No se pudo cambiar la contraseña");
+    return data;
+  },
   createUser: (d) => sb("users", { method: "POST", body: JSON.stringify(d) }),
   updateUser: (id, d) => sb(`users?id=eq.${id}`, { method: "PATCH", body: JSON.stringify(d) }),
   getLocales: () => sb("locales?select=*&order=id"),
@@ -256,7 +261,7 @@ const api = {
   setEncargadoLocales: async (userId, localIds) => { await sb(`encargado_locales?user_id=eq.${userId}`, { method:"DELETE", prefer:"" }); if (!localIds?.length) return []; return sb("encargado_locales", { method:"POST", body:JSON.stringify(localIds.map(local_id=>({ user_id:userId, local_id:parseInt(local_id) }))) }); },
 };
 
-function normalizeUser(u) { return { id: u.id, nombre: u.nombre, usuario: u.usuario, email: u.email || "", rol: u.rol, localId: u.local_id ?? u.localId ?? null, activo: u.activo, codigoExterno: u.codigo_externo || u.codigoExterno || "", telefono: u.telefono || "" }; }
+function normalizeUser(u) { return { id: u.id, nombre: u.nombre, usuario: u.usuario, email: u.email || "", rol: u.rol, localId: u.local_id, activo: u.activo, codigoExterno: u.codigo_externo || "", telefono: u.telefono || "", sessionToken: u.session_token || u.sessionToken || "" }; }
 function normalizeHorario(h) { return { id: h.id, userId: h.user_id, fecha: h.fecha, entrada: h.entrada || "", salida: h.salida || "", trabaja: h.trabaja }; }
 function normalizeAsistencia(a) { return { id: a.id, userId: a.user_id, fecha: a.fecha, estado: a.estado, entradaReal: a.entrada_real || "", salidaReal: a.salida_real || "", motivo: a.motivo || "", certificado: a.certificado, tipoDoc: a.tipo_doc || "" }; }
 function normalizePeriodo(p) { return { id: p.id, periodo: p.periodo, userId: p.user_id ?? p.userId ?? null }; }
@@ -1498,17 +1503,11 @@ function Login({ onLogin, reloadData }) {
   const handleLogin = async () => {
     setLoading(true); setErr("");
     try {
-      const result = await api.login(u.trim(), p);
-      const found = normalizeUser(result?.user || result);
-      if (found && found.activo !== false) {
-        await reloadData();
-        onLogin(found);
-      } else {
-        setErr("Usuario o contraseña incorrectos.");
-      }
-    } catch (e) {
-      setErr(e?.message || "Error de conexión. Intentá de nuevo.");
-    }
+      const data = await api.login(u.trim(), p);
+      const found = normalizeUser({ ...data.user, session_token: data.session_token });
+      if (found?.activo) { await reloadData(); onLogin(found); }
+      else setErr("Usuario o contraseña incorrectos.");
+    } catch { setErr("Usuario o contraseña incorrectos."); }
     setLoading(false);
   };
 
@@ -1528,22 +1527,17 @@ function Login({ onLogin, reloadData }) {
   };
 
   const handleVerificarToken = async () => {
-    setLoading(true); setMsg("");
-    try {
-      const tokens = await api.getTokens();
-      const tk = tokens.find(t => t.token === token.trim() && t.expiry > Date.now());
-      if (tk) { setTokenValido(tk); setVista("nueva"); }
-      else setMsg("Token inválido o vencido.");
-    } catch { setMsg("Error al verificar."); }
-    setLoading(false);
+    setMsg("");
+    if (!token.trim()) { setMsg("Ingresá el token."); return; }
+    setTokenValido({ token: token.trim() });
+    setVista("nueva");
   };
 
   const handleNuevaPassword = async () => {
     if (!nueva || nueva !== nueva2) { setMsg("Las contraseñas no coinciden."); return; }
     setLoading(true);
     try {
-      await api.updateUser(tokenValido.user_id, { password: nueva });
-      await api.deleteToken(tokenValido.token);
+      await api.changePassword({ mode:"reset", token: tokenValido.token, new_password: nueva });
       setVista("login"); setMsg(""); setNueva(""); setNueva2(""); setToken(""); setErr("");
       alert("Contraseña actualizada. Ya podés ingresar.");
     } catch { setMsg("Error al guardar."); }
@@ -1621,8 +1615,8 @@ function ABMManicuras({ data, reloadData, user }) {
         await api.createUser({ nombre:form.nombre.trim(),usuario:form.usuario.trim(),email:form.email.trim(),codigo_externo:(form.codigoExterno||"").trim()||null,password:form.password,rol:"manicura",local_id:parseInt(form.localId)||null,activo:true });
       } else {
         const upd = { nombre:form.nombre.trim(),usuario:form.usuario.trim(),email:form.email?.trim()||"",codigo_externo:(form.codigoExterno||"").trim()||null,local_id:parseInt(form.localId)||null };
-        if (form.password) upd.password = form.password;
         await api.updateUser(form.id, upd);
+        if (form.password) await api.changePassword({ mode:"admin_set", actor_id:user.id, session_token:user.sessionToken, target_user_id:form.id, new_password:form.password });
       }
       await reloadData(); setModal(null);
     } catch(e) { setFormErr("Error al guardar: "+e.message); }
@@ -1768,8 +1762,8 @@ function MiPerfil({ data, reloadData, user, setUser }) {
     setSaving(true);
     try {
       const upd = {nombre:form.nombre.trim(),usuario:form.usuario.trim(),email:form.email.trim()};
-      if (form.password) upd.password = form.password;
       await api.updateUser(user.id,upd);
+      if (form.password) await api.changePassword({ mode:"self", actor_id:user.id, session_token:user.sessionToken, target_user_id:user.id, new_password:form.password });
       await reloadData(); setUser({...user,...upd}); setOk(true);
     } catch(e) { setErr("Error al guardar: "+e.message); }
     setSaving(false);
@@ -3564,8 +3558,8 @@ function ABMEncargadas({ data, reloadData }) {
         userId = created?.[0]?.id;
       } else {
         const upd = { nombre:form.nombre.trim(), usuario:form.usuario.trim(), email:form.email?.trim()||"" };
-        if (form.password) upd.password = form.password;
         await api.updateUser(form.id, upd);
+        if (form.password) await api.changePassword({ mode:"admin_set", actor_id:user.id, session_token:user.sessionToken, target_user_id:form.id, new_password:form.password });
       }
       await api.setEncargadoLocales(userId, form.localIds);
       await reloadData(); setModal(null);
