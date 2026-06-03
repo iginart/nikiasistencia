@@ -1,6 +1,6 @@
 import { useState, useEffect, useMemo, useCallback, useRef } from "react";
 
-// Fuente Montserrat en toda la app, incluyendo controles nativos
+// Fuente Montserrat en toda la app, incluyendo controles nativos y botones
 if (!document.getElementById("niki-font")) {
   const link = document.createElement("link");
   link.id = "niki-font";
