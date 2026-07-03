@@ -1,4 +1,5 @@
 import { useState, useEffect, useMemo, useCallback, useRef } from "react";
+import { createClient } from "@supabase/supabase-js";
 
 // Fuente Montserrat en toda la app, incluyendo controles nativos y botones
 if (!document.getElementById("niki-font")) {
@@ -18,6 +19,10 @@ if (!document.getElementById("niki-font-global-style")) {
     }
     button, input, select, textarea {
       letter-spacing: inherit;
+    }
+    @keyframes nikiToastIn {
+      from { opacity: 0; transform: translateY(-8px) scale(0.98); }
+      to { opacity: 1; transform: translateY(0) scale(1); }
     }
   `;
   document.head.appendChild(style);
@@ -95,6 +100,8 @@ document.title = "Niki Beauty Bar";
 export const SUPABASE_URL = "https://fomdnmnrxntoqdsxndxx.supabase.co";
 export const SUPABASE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImZvbWRubW5yeG50b3Fkc3huZHh4Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3Nzk4MDczMjksImV4cCI6MjA5NTM4MzMyOX0.pxqz72fqHYph-WZm9R3QT5tPpG9kOQBNaZKreEftFVA";
 
+const supabaseRealtime = createClient(SUPABASE_URL, SUPABASE_KEY);
+
 const sb = async (path, opts = {}) => {
   const prefer = opts.prefer ?? "return=representation";
   const headers = { apikey: SUPABASE_KEY, Authorization: `Bearer ${SUPABASE_KEY}`, "Content-Type": "application/json" };
@@ -154,8 +161,12 @@ const api = {
   upsertAsistencia: (d) => patchOrPost("asistencias", `user_id=eq.${d.user_id}&fecha=eq.${d.fecha}`, d),
   deleteAsistencia: (userId, fecha) => sb(`asistencias?user_id=eq.${userId}&fecha=eq.${fecha}`, { method: "DELETE", prefer: "" }),
   getPeriodos: () => sb("periodos_bloqueados?select=*"),
-  createPeriodo: (periodo, userId) => sb("periodos_bloqueados", { method: "POST", body: JSON.stringify({ periodo, user_id: userId }) }),
-  deletePeriodo: (periodo, userId) => sb(`periodos_bloqueados?periodo=eq.${encodeURIComponent(periodo)}&user_id=eq.${userId}`, { method: "DELETE", prefer: "" }),
+  createPeriodo: (periodo, userId, localId, creadoPorUserId = null) => sb("periodos_bloqueados", { method: "POST", body: JSON.stringify({ periodo, user_id: parseInt(userId), local_id: localId ? parseInt(localId) : null, creado_por_user_id: creadoPorUserId ? parseInt(creadoPorUserId) : null }) }),
+  deletePeriodo: (periodo, userId, localId = null) => {
+    const localFilter = localId ? `&local_id=eq.${parseInt(localId)}` : "";
+    return sb(`periodos_bloqueados?periodo=eq.${encodeURIComponent(periodo)}&user_id=eq.${parseInt(userId)}${localFilter}`, { method: "DELETE", prefer: "" });
+  },
+  createAuditoriaEvento: (d) => sb("auditoria_eventos", { method: "POST", body: JSON.stringify(d) }),
   getTokens: () => sb("reset_tokens?select=*"),
   createToken: (d) => sb("reset_tokens", { method: "POST", body: JSON.stringify(d) }),
   deleteToken: (token) => sb(`reset_tokens?token=eq.${encodeURIComponent(token)}`, { method: "DELETE", prefer: "" }),
@@ -264,7 +275,7 @@ const api = {
 function normalizeUser(u) { return { id: u.id, nombre: u.nombre, usuario: u.usuario, email: u.email || "", rol: u.rol, localId: u.local_id, activo: u.activo, codigoExterno: u.codigo_externo || "", telefono: u.telefono || "", sessionToken: u.session_token || u.sessionToken || "" }; }
 function normalizeHorario(h) { return { id: h.id, userId: h.user_id, fecha: h.fecha, entrada: h.entrada || "", salida: h.salida || "", trabaja: h.trabaja }; }
 function normalizeAsistencia(a) { return { id: a.id, userId: a.user_id, fecha: a.fecha, estado: a.estado, entradaReal: a.entrada_real || "", salidaReal: a.salida_real || "", motivo: a.motivo || "", certificado: a.certificado, tipoDoc: a.tipo_doc || "" }; }
-function normalizePeriodo(p) { return { id: p.id, periodo: p.periodo, userId: p.user_id ?? p.userId ?? null }; }
+function normalizePeriodo(p) { return { id: p.id, periodo: p.periodo, userId: p.user_id ?? p.userId ?? null, localId: p.local_id ?? p.localId ?? null, creadoPorUserId: p.creado_por_user_id ?? null, creadoEn: p.creado_en || "" }; }
 function normalizeReglaCobertura(r) { return { id:r.id, localId:r.local_id, diaSemana:r.dia_semana, afluencia:r.afluencia, minimoDiario:r.minimo_diario, maximoDiario:r.maximo_diario, minimoApertura:r.minimo_apertura, minimoCierre:r.minimo_cierre, activo:r.activo }; }
 function normalizeConfigCobertura(c) { return { id:c.id, localId:c.local_id, horaApertura:(c.hora_apertura||"10:00").slice(0,5), horaCierre:(c.hora_cierre||"20:00").slice(0,5), minutosApertura:c.minutos_apertura ?? 60, minutosCierre:c.minutos_cierre ?? 60 }; }
 function normalizeEncargadoLocal(x) { return { userId:x.user_id, localId:x.local_id }; }
@@ -344,6 +355,25 @@ export function LogoMark({ size = 32, variant = "light" }) {
 const DIAS_SEMANA = ["Lun","Mar","Mié","Jue","Vie","Sáb"];
 const MESES = ["Enero","Febrero","Marzo","Abril","Mayo","Junio","Julio","Agosto","Septiembre","Octubre","Noviembre","Diciembre"];
 const MOTIVOS_AUSENCIA = ["Enfermedad","Personal","Trámite","Licencia","Otro"];
+
+function periodoLabel(periodo) {
+  const [y, m] = String(periodo || "").split("-").map(Number);
+  if (!y || !m) return periodo || "";
+  return `${MESES[m - 1]} ${y}`;
+}
+
+function addMonthsPeriodo(baseDate, offset) {
+  const d = new Date(baseDate.getFullYear(), baseDate.getMonth() + offset, 1);
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
+}
+
+async function registrarAuditoriaSeguro(payload) {
+  try {
+    await api.createAuditoriaEvento(payload);
+  } catch (err) {
+    console.warn("No se pudo registrar auditoría", err);
+  }
+}
 
 function getDiasDelMes(y, m) { const dias = [], d = new Date(y, m, 1); while (d.getMonth() === m) { if (d.getDay() !== 0) dias.push(new Date(d)); d.setDate(d.getDate() + 1); } return dias; }
 function getSemanas(dias) { const s = []; let sem = []; dias.forEach((d, i) => { sem.push(d); if (d.getDay() === 6 || i === dias.length - 1) { s.push([...sem]); sem = []; } }); if (sem.length) s.push(sem); return s; }
@@ -543,6 +573,64 @@ function Modal({ title, children, onClose, width=480 }) {
   useEffect(()=>{ const p=document.body.style.overflow; document.body.style.overflow="hidden"; return()=>{ document.body.style.overflow=p; }; },[]);
   return <div style={{ position:"fixed",inset:0,background:"rgba(0,0,0,0.55)",display:"flex",alignItems:"center",justifyContent:"center",zIndex:9999,padding:16 }} onClick={e=>{ if(e.target===e.currentTarget)onClose(); }}><div style={{ background:"#fff",borderRadius:14,padding:"1.5rem",width:"100%",maxWidth:width,maxHeight:"90vh",overflowY:"auto",boxShadow:"0 8px 32px rgba(0,0,0,0.18)" }}><div style={{ display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:20 }}><h3 style={{ margin:0,fontSize:16,fontWeight:500,color:"#1a1a1a" }}>{title}</h3><button onClick={onClose} style={{ background:"#f5f5f5",border:"none",cursor:"pointer",fontSize:18,color:"#666",width:30,height:30,borderRadius:"50%",display:"flex",alignItems:"center",justifyContent:"center" }}>×</button></div>{children}</div></div>;
 }
+
+const NIKI_TOAST_EVENT = "niki-toast";
+
+function notifyToast(message, type = "info", options = {}) {
+  const detail = typeof message === "object"
+    ? { type, ...message }
+    : { type, message, ...options };
+  window.dispatchEvent(new CustomEvent(NIKI_TOAST_EVENT, { detail }));
+}
+
+function ToastStack({ toasts, onDismiss, onAction }) {
+  const meta = {
+    success: { icon:"✓", title:"Listo", bg:COLORS.successLight, fg:COLORS.success, border:COLORS.success },
+    error: { icon:"!", title:"Error", bg:COLORS.dangerLight, fg:COLORS.danger, border:COLORS.danger },
+    warning: { icon:"!", title:"Atención", bg:COLORS.amberLight, fg:COLORS.amber, border:COLORS.amber },
+    info: { icon:"i", title:"Aviso", bg:COLORS.infoLight, fg:COLORS.info, border:COLORS.info },
+  };
+  if (!toasts.length) return null;
+  return (
+    <div aria-live="polite" aria-atomic="true" style={{ position:"fixed",right:16,top:82,zIndex:20000,display:"flex",flexDirection:"column",gap:10,width:"min(360px, calc(100vw - 32px))",pointerEvents:"none" }}>
+      {toasts.map(t => {
+        const m = meta[t.type] || meta.info;
+        return <div key={t.id} onClick={() => t.action && onAction?.(t.action, t.id)} title={t.action ? "Ver detalle" : undefined} style={{ background:"#fff",border:`1px solid ${m.border}33`,borderLeft:`5px solid ${m.border}`,borderRadius:13,boxShadow:"0 12px 34px rgba(0,0,0,0.18)",padding:"11px 12px",display:"flex",gap:10,alignItems:"flex-start",pointerEvents:"auto",animation:"nikiToastIn 0.18s ease-out",cursor:t.action?"pointer":"default" }}>
+          <div style={{ width:26,height:26,borderRadius:"50%",background:m.bg,color:m.fg,display:"flex",alignItems:"center",justifyContent:"center",fontWeight:800,flexShrink:0,fontSize:13 }}>{m.icon}</div>
+          <div style={{ flex:1,minWidth:0 }}>
+            <p style={{ margin:"0 0 2px",fontSize:13,fontWeight:700,color:"#1a1a1a" }}>{t.title || m.title}</p>
+            <p style={{ margin:0,fontSize:12,lineHeight:1.4,color:"#555",whiteSpace:"pre-wrap" }}>{t.message}</p>
+          </div>
+          <button type="button" onClick={(e) => { e.stopPropagation(); onDismiss(t.id); }} aria-label="Cerrar notificación" style={{ border:"none",background:"transparent",color:"#999",fontSize:18,lineHeight:1,cursor:"pointer",padding:0,marginLeft:2 }}>×</button>
+        </div>;
+      })}
+    </div>
+  );
+}
+
+function NotificationBell({ history, open, setOpen, onClear, onAction }) {
+  const unread = history.filter(n => !n.read).length;
+  return <div style={{ position:"relative" }}>
+    <button type="button" onClick={() => setOpen(!open)} title="Notificaciones" style={{ position:"relative",background:"rgba(255,255,255,0.2)",border:"none",color:"#fff",borderRadius:8,padding:"6px 9px",fontSize:15,cursor:"pointer",display:"flex",alignItems:"center",gap:6 }}>
+      🔔
+      {unread > 0 && <span style={{ position:"absolute",top:-5,right:-5,minWidth:17,height:17,borderRadius:999,background:COLORS.danger,color:"#fff",fontSize:10,fontWeight:800,display:"flex",alignItems:"center",justifyContent:"center",border:"2px solid #fff" }}>{Math.min(unread, 9)}</span>}
+    </button>
+    {open && <div style={{ position:"absolute",right:0,top:"calc(100% + 10px)",width:"min(340px, calc(100vw - 24px))",background:"#fff",color:"#1a1a1a",borderRadius:14,boxShadow:"0 14px 38px rgba(0,0,0,0.22)",border:"1px solid rgba(120,120,120,0.16)",overflow:"hidden",zIndex:21000 }}>
+      <div style={{ display:"flex",alignItems:"center",justifyContent:"space-between",gap:8,padding:"10px 12px",borderBottom:"1px solid #f0f0f0" }}>
+        <strong style={{ fontSize:13 }}>Notificaciones</strong>
+        {history.length > 0 && <button type="button" onClick={onClear} style={{ border:"none",background:"transparent",color:COLORS.pink,fontSize:12,fontWeight:700,cursor:"pointer" }}>Limpiar</button>}
+      </div>
+      <div style={{ maxHeight:320,overflowY:"auto" }}>
+        {history.length === 0 ? <p style={{ margin:0,padding:14,fontSize:13,color:"#777" }}>No hay notificaciones recientes.</p> : history.slice(0, 12).map(n => <div key={n.id} onClick={() => n.action && onAction?.(n.action, n.id)} title={n.action ? "Ver detalle" : undefined} style={{ padding:"10px 12px",borderBottom:"1px solid #f6f6f6",background:n.read?"#fff":COLORS.pinkLight,cursor:n.action?"pointer":"default" }}>
+          <p style={{ margin:"0 0 2px",fontSize:13,fontWeight:700 }}>{n.title || "Aviso"}</p>
+          <p style={{ margin:0,fontSize:12,lineHeight:1.35,color:"#555" }}>{n.message}</p>
+          <p style={{ margin:"4px 0 0",fontSize:10,color:"#999" }}>{n.time}</p>
+        </div>)}
+      </div>
+    </div>}
+  </div>;
+}
+
 function ConfirmDialog({ config, onCancel, onConfirm }) {
   if (!config) return null;
   const variant = config.variant || "primary";
@@ -766,12 +854,17 @@ function CalendarioHorarios({ data, reloadData, user, agendaRequest, onBackToRep
       ? new Date(diaVista + "T12:00:00")
       : new Date(anio, mes, 1);
   const periodoActivoLabel = `${MESES[periodoActivoDate.getMonth()]} ${periodoActivoDate.getFullYear()}`;
-  const periodoBloqueadoParaManicura = useCallback((periodo, uid) =>
-    (data.periodosBloqueados || []).some(p => {
+  const getLocalIdForManicura = useCallback((uid) => data.users.find(u => parseInt(u.id) === parseInt(uid))?.localId ?? null, [data.users]);
+  const periodoBloqueadoParaManicura = useCallback((periodo, uid) => {
+    const localIdManicura = getLocalIdForManicura(uid);
+    return (data.periodosBloqueados || []).some(p => {
       if (typeof p === "string") return p === periodo;
-      return p.periodo === periodo && parseInt(p.userId) === parseInt(uid);
-    }), [data.periodosBloqueados]
-  );
+      const samePeriodo = p.periodo === periodo;
+      const sameUser = parseInt(p.userId) === parseInt(uid);
+      const sameLocal = p.localId == null || localIdManicura == null || parseInt(p.localId) === parseInt(localIdManicura);
+      return samePeriodo && sameUser && sameLocal;
+    });
+  }, [data.periodosBloqueados, getLocalIdForManicura]);
   const puedeEditarManicura = useCallback((uid) => {
     const uidNum = parseInt(uid);
     if (esAdmin) return true;
@@ -834,6 +927,25 @@ function CalendarioHorarios({ data, reloadData, user, agendaRequest, onBackToRep
   const getB = f => localH[f] ?? bloques[f];
   const getBFor = (uid, f) => localHAll[horarioKey(uid, f)] ?? getBloqueFor(uid, f);
 
+  const auditarHorario = useCallback(async ({ accion, uid, fecha, anterior = null, nuevo = null }) => {
+    const manicura = data.users.find(u => parseInt(u.id) === parseInt(uid));
+    await registrarAuditoriaSeguro({
+      usuario_id: user.id,
+      usuario_nombre: user.nombre || user.usuario || "",
+      usuario_rol: user.rol || "",
+      accion,
+      entidad: "horarios",
+      entidad_id: anterior?.id ? String(anterior.id) : null,
+      local_id: manicura?.localId ?? null,
+      user_id: uid ? parseInt(uid) : null,
+      periodo: fecha ? String(fecha).slice(0, 7) : null,
+      datos_anteriores: anterior,
+      datos_nuevos: nuevo,
+      detalle: `${accion} · ${manicura?.nombre || "Manicura"} · ${fechaLarga(fecha)}`,
+      origen: "app",
+    });
+  }, [data.users, user]);
+
   const showTooltip = useCallback((ev, f, b, manicuraNombre, asistenciaOverride) => {
     if (!b) return;
     const a = asistenciaOverride ?? getAsistencia(f);
@@ -883,12 +995,15 @@ function CalendarioHorarios({ data, reloadData, user, agendaRequest, onBackToRep
       return false;
     }
     const s = calFromSlot(bl.startSlot), e = calFromSlot(bl.endSlot);
-    await api.upsertHorario({ user_id:parseInt(uid), fecha:f, entrada:calFmt(s.h,s.m), salida:calFmt(e.h,e.m), trabaja:true });
+    const anterior = (data.horarios || []).find(h => parseInt(h.userId) === parseInt(uid) && h.fecha === f) || null;
+    const nuevo = { user_id:parseInt(uid), fecha:f, entrada:calFmt(s.h,s.m), salida:calFmt(e.h,e.m), trabaja:true };
+    await api.upsertHorario(nuevo);
+    await auditarHorario({ accion: anterior ? "HORARIO_MODIFICADO" : "HORARIO_CREADO", uid:parseInt(uid), fecha:f, anterior, nuevo });
     await reloadData();
     if (parseInt(uid) === parseInt(manicuraId)) setLocalH(p => { const n={...p}; delete n[f]; return n; });
     setLocalHAll(p => { const n={...p}; delete n[key]; return n; });
     return true;
-  }, [manicuraId, localH, localHAll, bloques, getBloqueFor, getAsistenciaFor, reloadData, confirmarCambioHorario, horarioKey, bloqueadoPorFecha]);
+  }, [manicuraId, localH, localHAll, bloques, getBloqueFor, getAsistenciaFor, reloadData, confirmarCambioHorario, horarioKey, bloqueadoPorFecha, data.horarios, auditarHorario]);
 
   const saveBloque = useCallback(async (f, b) => saveBloqueFor(parseInt(manicuraId), f, b), [manicuraId, saveBloqueFor]);
 
@@ -901,13 +1016,16 @@ function CalendarioHorarios({ data, reloadData, user, agendaRequest, onBackToRep
     if (parseInt(uid) === parseInt(manicuraId)) setLocalH(p => ({...p,[f]:b}));
     setLocalHAll(p => ({...p,[key]:b}));
     const s = calFromSlot(b.startSlot), e = calFromSlot(b.endSlot);
-    await api.upsertHorario({ user_id:parseInt(uid), fecha:f, entrada:calFmt(s.h,s.m), salida:calFmt(e.h,e.m), trabaja:true });
+    const anterior = (data.horarios || []).find(h => parseInt(h.userId) === parseInt(uid) && h.fecha === f) || null;
+    const nuevo = { user_id:parseInt(uid), fecha:f, entrada:calFmt(s.h,s.m), salida:calFmt(e.h,e.m), trabaja:true };
+    await api.upsertHorario(nuevo);
+    await auditarHorario({ accion: anterior ? "HORARIO_MODIFICADO" : "HORARIO_CREADO", uid:parseInt(uid), fecha:f, anterior, nuevo });
     if (!alreadyPersisted) silentEditOnce.current.add(key);
     await reloadData();
     if (parseInt(uid) === parseInt(manicuraId)) setLocalH(p => { const n={...p}; delete n[f]; return n; });
     setLocalHAll(p => { const n={...p}; delete n[key]; return n; });
     return true;
-  }, [manicuraId, reloadData, getAsistenciaFor, confirmarCambioHorario, hasHorarioPersistidoFor, horarioKey, bloqueadoPorFecha]);
+  }, [manicuraId, reloadData, getAsistenciaFor, confirmarCambioHorario, hasHorarioPersistidoFor, horarioKey, bloqueadoPorFecha, data.horarios, auditarHorario]);
 
   const onAddB = useCallback(async (f, b) => onAddBFor(parseInt(manicuraId), f, b), [manicuraId, onAddBFor]);
 
@@ -915,10 +1033,12 @@ function CalendarioHorarios({ data, reloadData, user, agendaRequest, onBackToRep
     if (getAsistenciaFor(uid, f)) return false;
     if (bloqueadoPorFecha(f, uid)) return false;
     if (!(await confirmarCambioHorario(uid, f, "eliminarlo"))) return false;
+    const anterior = (data.horarios || []).find(h => parseInt(h.userId) === parseInt(uid) && h.fecha === f) || null;
     await api.deleteHorario(parseInt(uid), f);
+    await auditarHorario({ accion:"HORARIO_ELIMINADO", uid:parseInt(uid), fecha:f, anterior, nuevo:null });
     await reloadData();
     return true;
-  }, [reloadData, getAsistenciaFor, confirmarCambioHorario, bloqueadoPorFecha]);
+  }, [reloadData, getAsistenciaFor, confirmarCambioHorario, bloqueadoPorFecha, data.horarios, auditarHorario]);
 
   const onDeleteB = useCallback(async (f) => onDeleteBFor(parseInt(manicuraId), f), [manicuraId, onDeleteBFor]);
 
@@ -1025,13 +1145,16 @@ function CalendarioHorarios({ data, reloadData, user, agendaRequest, onBackToRep
     for (const item of disponibles) {
       const s = calFromSlot(item.bloque.startSlot);
       const e = calFromSlot(item.bloque.endSlot);
-      await api.upsertHorario({
+      const anterior = (data.horarios || []).find(h => parseInt(h.userId) === parseInt(uid) && h.fecha === item.targetFecha) || null;
+      const nuevo = {
         user_id: uid,
         fecha: item.targetFecha,
         entrada: calFmt(s.h, s.m),
         salida: calFmt(e.h, e.m),
         trabaja: true,
-      });
+      };
+      await api.upsertHorario(nuevo);
+      await auditarHorario({ accion: anterior ? "HORARIO_MODIFICADO" : "HORARIO_CREADO", uid:parseInt(uid), fecha:item.targetFecha, anterior, nuevo });
     }
 
     await reloadData();
@@ -1045,7 +1168,7 @@ function CalendarioHorarios({ data, reloadData, user, agendaRequest, onBackToRep
       disponibles.forEach(item => { delete n[horarioKey(uid, item.targetFecha)]; });
       return n;
     });
-  }, [manicuraId, puedeEditarManicura, getBloqueFor, getAsistenciaFor, bloqueadoPorFecha, hasHorarioPersistidoFor, pedirConfirmacion, reloadData, horarioKey]);
+  }, [manicuraId, puedeEditarManicura, getBloqueFor, getAsistenciaFor, bloqueadoPorFecha, hasHorarioPersistidoFor, pedirConfirmacion, reloadData, horarioKey, data.horarios, auditarHorario]);
 
   const repetirSemanaAnterior = useCallback(async () => {
     await repetirSemanaAnteriorParaDias(weekDays);
@@ -1371,8 +1494,7 @@ function CalendarioHorarios({ data, reloadData, user, agendaRequest, onBackToRep
           {agendaRequest?.fromReport && onBackToReport && <Btn onClick={onBackToReport} variant="secondary" size="sm">← Volver al reporte</Btn>}
         </div>
         {puedeGestionar && <div style={{ display:"flex",gap:8,flexWrap:"wrap" }}>
-          <Btn onClick={toggleBloqueo} variant={periodoBloqueadoParaManicura(periodoActivoKey, manicuraId)?"success":"danger"} size="sm">{periodoBloqueadoParaManicura(periodoActivoKey, manicuraId)?"🔓 Habilitar manicura":"🔒 Bloquear manicura"}</Btn>
-          <Btn onClick={toggleBloqueoTodas} variant={todasBloqueadas?"success":"danger"} size="sm">{todasBloqueadas?"🔓 Habilitar todas":"🔒 Bloquear todas"}</Btn>
+          <Btn onClick={() => { window.location.hash = "bloqueo_horarios"; }} variant="secondary" size="sm">🔐 Gestionar bloqueo de horarios</Btn>
         </div>}
       </div>
       <div style={{ display:"flex",height:vista==="mes"?560:640,border:"0.5px solid rgba(120,120,120,0.18)",borderRadius:12,overflow:"hidden",background:"var(--color-background-primary)" }}>
@@ -1539,7 +1661,7 @@ function Login({ onLogin, reloadData }) {
     try {
       await api.changePassword({ mode:"reset", token: tokenValido.token, new_password: nueva });
       setVista("login"); setMsg(""); setNueva(""); setNueva2(""); setToken(""); setErr("");
-      alert("Contraseña actualizada. Ya podés ingresar.");
+      notifyToast("Contraseña actualizada. Ya podés ingresar.", "success", { title:"Contraseña actualizada" });
     } catch { setMsg("Error al guardar."); }
     setLoading(false);
   };
@@ -1690,11 +1812,11 @@ function ABMLocales({ data, reloadData }) {
       if (modal==="new") await api.createLocal({nombre:form.nombre,direccion:form.direccion,codigo_externo:(form.codigoExterno||"").trim()||null});
       else await api.updateLocal(form.id,{nombre:form.nombre,direccion:form.direccion,codigo_externo:(form.codigoExterno||"").trim()||null});
       await reloadData(); setModal(null);
-    } catch(e) { alert("Error: "+e.message); }
+    } catch(e) { notifyToast("Error: " + e.message, "error"); }
     setSaving(false);
   };
   const del = async (id) => {
-    if (data.users.some(u=>u.localId===id)) return alert("Hay manicuras asignadas a este local.");
+    if (data.users.some(u=>u.localId===id)) { notifyToast("Hay manicuras asignadas a este local.", "warning"); return; }
     await api.deleteLocal(id); await reloadData();
   };
   return (
@@ -2340,7 +2462,7 @@ function Reportes({ data, user, onOpenAgenda, reportRestore, reloadData }) {
           actualizado_en: new Date().toISOString()
         });
         await reloadData();
-      } catch(e) { alert("No se pudo guardar el porcentaje de comisión: " + (e.message || e)); }
+      } catch(e) { notifyToast("No se pudo guardar el porcentaje de comisión: " + (e.message || e), "error"); }
     };
     const manicurasPagoMap = new Map();
     registros.forEach(c => {
@@ -3817,7 +3939,7 @@ function InformeDiario({ data, reloadData, user }) {
   };
 
   const save = async (markSent = false) => {
-    if (!form?.fecha || !form?.localId) return alert("Seleccioná fecha y local.");
+    if (!form?.fecha || !form?.localId) return notifyToast("Seleccioná fecha y local.", "warning");
     setSaving(true);
     try {
       const payload = {
@@ -3853,7 +3975,7 @@ function InformeDiario({ data, reloadData, user }) {
       setForm(savedNormalized);
       await reloadData();
       if (markSent) setPreview(savedNormalized);
-    } catch(e) { alert("Error al guardar informe: " + e.message); }
+    } catch(e) { notifyToast("Error al guardar informe: " + e.message, "error"); }
     setSaving(false);
   };
 
@@ -3882,13 +4004,13 @@ function InformeDiario({ data, reloadData, user }) {
       ["OBSERVACIONES / EXTRAS", inf.observacionesExtras],
     ].map(([l,v,c]) => `<div class="row"><div class="label ${c||""}">${l}</div><div class="value">${String(v || "-").replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;")}</div></div>`).join("")}</body></html>`;
     const w = window.open("", "_blank");
-    if (!w) return alert("El navegador bloqueó la ventana de impresión.");
+    if (!w) return notifyToast("El navegador bloqueó la ventana de impresión.", "warning");
     w.document.write(html); w.document.close(); w.focus(); setTimeout(()=>w.print(), 250);
   };
 
   const copyReport = async (inf) => {
     await navigator.clipboard.writeText(buildTextReport(inf));
-    alert("Informe copiado al portapapeles.");
+    notifyToast("Informe copiado al portapapeles.", "success", { title:"Informe copiado" });
   };
 
   const turnoVisual = useMemo(() => {
@@ -4111,7 +4233,7 @@ const FORMAS_PAGO = ["", "efectivo", "tarjeta débito", "tarjeta crédito", "tra
 function agendaMin(t) { if (!t) return 0; const [h,m]=String(t).slice(0,5).split(":").map(Number); return h*60+(m||0); }
 function agendaTime(m) { return `${String(Math.floor(m/60)).padStart(2,"0")}:${String(m%60).padStart(2,"0")}`; }
 function agendaWeekLabel(f) { const d=new Date(f+"T12:00:00"); const w=getMon(d); const e=new Date(w); e.setDate(e.getDate()+5); return `${fmtFecha(w)} - ${fmtFecha(e)}`; }
-function AgendaTurnos({ data, reloadData, user }) {
+function AgendaTurnos({ data, reloadData, user, agendaOpenRequest, onAgendaOpenRequestDone }) {
   const esAdmin = user.rol === "admin";
   const esEncargada = user.rol === "encargada";
   const hoyKey = dateKey(new Date());
@@ -4507,11 +4629,11 @@ function AgendaTurnos({ data, reloadData, user }) {
     try {
       const saved = await persistTurnoDraft(draft, null);
       if (buscadorTurno?.enviarEmail && saved?.id) {
-        try { await api.enviarEmailTurno(saved.id, "alta"); } catch(e) { alert("El turno se creó, pero no se pudo enviar el email: " + (e.message || e)); }
+        try { await api.enviarEmailTurno(saved.id, "alta"); } catch(e) { notifyToast("El turno se creó, pero no se pudo enviar el email: " + (e.message || e), "warning", { title:"Turno creado" }); }
       }
       await reloadData();
       setFecha(op.fecha); setLocalId(op.localId); setManicuraId("todas"); setBuscadorTurno(null); setBuscadorOpciones([]); setBuscadorMsg("");
-    } catch(e) { alert("Error al crear turno: " + (e.message || e)); }
+    } catch(e) { notifyToast("Error al crear turno: " + (e.message || e), "error"); }
     setSaving(false);
   };
 
@@ -4568,6 +4690,18 @@ function AgendaTurnos({ data, reloadData, user }) {
     setSendTurnoEmail(!!cli?.email);
     setClienteQuick(null);
   };
+
+  useEffect(() => {
+    if (!agendaOpenRequest?.turnoId) return;
+    const t = (data.agendaTurnos || []).find(x => String(x.id) === String(agendaOpenRequest.turnoId));
+    if (!t) return;
+    setTab("turnos");
+    setFecha(t.fecha);
+    setLocalId(t.localId);
+    setManicuraId("todas");
+    openTurno(t);
+    onAgendaOpenRequestDone?.();
+  }, [agendaOpenRequest?.nonce, agendaOpenRequest?.turnoId, data.agendaTurnos]);
 
   const openTurnoAt = (uid, startMin) => {
     if (!isWithinHorario(uid,startMin,startMin+15)) return;
@@ -4658,24 +4792,24 @@ function AgendaTurnos({ data, reloadData, user }) {
       const newId = await createQuickCliente();
       d = { ...d, clienteId:newId };
     }
-    if(!d.fecha||!d.localId||!d.userId||!d.clienteId||!d.servicioId||!d.inicio||!d.fin) { alert("Completá fecha, local, manicura, cliente, servicio y horario."); return; }
-    if(!puedeManicuraServicio(d.userId, d.servicioId)) { alert("La manicura seleccionada no tiene habilitado ese servicio."); return; }
+    if(!d.fecha||!d.localId||!d.userId||!d.clienteId||!d.servicioId||!d.inicio||!d.fin) { notifyToast("Completá fecha, local, manicura, cliente, servicio y horario.", "warning"); return; }
+    if(!puedeManicuraServicio(d.userId, d.servicioId)) { notifyToast("La manicura seleccionada no tiene habilitado ese servicio.", "warning"); return; }
     for (const ad of (d.adicionales||[])) {
-      if(!ad.servicioId || !ad.userId) { alert("Completá manicura y servicio en todos los servicios adicionales."); return; }
-      if(!puedeManicuraServicio(ad.userId, ad.servicioId)) { alert("Una manicura adicional no tiene habilitado el servicio seleccionado."); return; }
+      if(!ad.servicioId || !ad.userId) { notifyToast("Completá manicura y servicio en todos los servicios adicionales.", "warning"); return; }
+      if(!puedeManicuraServicio(ad.userId, ad.servicioId)) { notifyToast("Una manicura adicional no tiene habilitado el servicio seleccionado.", "warning"); return; }
       if(parseInt(ad.userId)!==parseInt(d.userId)) {
         const baseMin = ad.posicion === "antes" ? agendaMin(d.inicio) - Number(ad.duracionMinutos||0) * Math.max(1,parseInt(ad.cantidad||1)||1) : agendaMin(d.fin);
         const durExtra = Math.max(5, Number(ad.duracionMinutos||0) * Math.max(1,parseInt(ad.cantidad||1)||1));
         const slot = findNearestSlotForServicio(ad.userId, ad.servicioId, Math.max(calendarStart, baseMin), durExtra, null);
-        if(!slot) { alert(`No hay disponibilidad para ${getManicura(parseInt(ad.userId))?.nombre || "la manicura"} en el servicio adicional.`); return; }
+        if(!slot) { notifyToast(`No hay disponibilidad para ${getManicura(parseInt(ad.userId))?.nombre || "la manicura"} en el servicio adicional.`, "warning"); return; }
         if(slot.ajustado && !force) {
           setTurnoWarning({ draft:d, message:`El servicio adicional de ${getManicura(parseInt(ad.userId))?.nombre || "otra manicura"} no entra exactamente en el horario solicitado. Se sugiere ${slot.inicio} a ${slot.fin}. ¿Querés guardar con ese horario sugerido?`, confirmText:"Guardar con sugerencia" });
           return;
         }
       }
     }
-    if (agendaMin(d.fin) <= agendaMin(d.inicio)) { alert("El horario de fin debe ser posterior al inicio."); return; }
-    if (isBlockedByAgenda(d.userId, agendaMin(d.inicio), agendaMin(d.fin))) { alert("Ese horario está bloqueado/no disponible para la manicura."); return; }
+    if (agendaMin(d.fin) <= agendaMin(d.inicio)) { notifyToast("El horario de fin debe ser posterior al inicio.", "warning"); return; }
+    if (isBlockedByAgenda(d.userId, agendaMin(d.inicio), agendaMin(d.fin))) { notifyToast("Ese horario está bloqueado/no disponible para la manicura.", "warning"); return; }
     if (!isWithinHorario(d.userId, agendaMin(d.inicio), agendaMin(d.fin)) && !force) {
       setTurnoWarning({ type:"fuera_horario", draft:d, message:"El turno queda fuera del horario disponible de la manicura. ¿Querés guardarlo igual?" });
       return;
@@ -4692,15 +4826,15 @@ function AgendaTurnos({ data, reloadData, user }) {
           await api.enviarEmailTurno(savedTurno.id, editingTurno ? "modificacion" : "alta");
           setEmailTurnoMsg("Email enviado al cliente.");
         } catch(emailErr) {
-          alert("El turno se guardó, pero no se pudo enviar el email: " + (emailErr.message || emailErr));
+          notifyToast("El turno se guardó, pero no se pudo enviar el email: " + (emailErr.message || emailErr), "warning", { title:"Turno guardado" });
         }
       }
       await reloadData(); setModalTurno(null); setEditingTurno(null); setTurnoWarning(null);
-    } catch(e){ alert("Error al guardar turno: "+e.message); }
+    } catch(e){ notifyToast("Error al guardar turno: " + e.message, "error"); }
     setSaving(false);
   };
 
-  const delTurno = async (t) => { if(!t?.id) return; setSaving(true); try { await api.deleteAgendaTurno(t.id); await reloadData(); setDeleteTurnoTarget(null); setModalTurno(null); setEditingTurno(null); } catch(e) { alert("Error al eliminar turno: "+(e.message||e)); } setSaving(false); };
+  const delTurno = async (t) => { if(!t?.id) return; setSaving(true); try { await api.deleteAgendaTurno(t.id); await reloadData(); setDeleteTurnoTarget(null); setModalTurno(null); setEditingTurno(null); } catch(e) { notifyToast("Error al eliminar turno: " + (e.message || e), "error"); } setSaving(false); };
   const cancelTurno = async (t) => {
     if(!t?.id) return;
     setSaving(true);
@@ -4709,14 +4843,14 @@ function AgendaTurnos({ data, reloadData, user }) {
       const cli = getCliente(t.clienteId);
       if (cli?.email) {
         try { await api.enviarEmailTurno(t.id, "cancelacion"); }
-        catch(emailErr) { alert("El turno se canceló, pero no se pudo enviar el email: " + (emailErr.message || emailErr)); }
+        catch(emailErr) { notifyToast("El turno se canceló, pero no se pudo enviar el email: " + (emailErr.message || emailErr), "warning", { title:"Turno cancelado" }); }
       }
       await reloadData();
       setCancelTurnoTarget(null);
       setModalTurno(null);
       setEditingTurno(null);
       if (!turnoEstadosVisibles.includes("cancelado")) setTurnoEstadosVisibles(prev => prev.filter(x=>x!=="cancelado"));
-    } catch(e) { alert("Error al cancelar turno: "+e.message); }
+    } catch(e) { notifyToast("Error al cancelar turno: " + e.message, "error"); }
     setSaving(false);
   };
 
@@ -4734,12 +4868,12 @@ function AgendaTurnos({ data, reloadData, user }) {
   };
   const saveBloqueo = async () => {
     const b = bloqueoModal;
-    if(!b?.fecha || !b.localId || !b.userId || !b.inicio || !b.fin) { alert("Completá manicura, fecha, inicio y fin."); return; }
-    if(agendaMin(b.fin) <= agendaMin(b.inicio)) { alert("El fin debe ser posterior al inicio."); return; }
+    if(!b?.fecha || !b.localId || !b.userId || !b.inicio || !b.fin) { notifyToast("Completá manicura, fecha, inicio y fin.", "warning"); return; }
+    if(agendaMin(b.fin) <= agendaMin(b.inicio)) { notifyToast("El fin debe ser posterior al inicio.", "warning"); return; }
     const payload = { fecha:b.fecha, local_id:parseInt(b.localId), user_id:parseInt(b.userId), inicio:b.inicio, fin:b.fin, tipo:b.tipo || "no_disponible", motivo:b.motivo || null, creado_por_user_id:user.id };
     setSaving(true);
     try { if(b.id) await api.updateAgendaBloqueo(b.id, payload); else await api.createAgendaBloqueo(payload); await reloadData(); setBloqueoModal(null); }
-    catch(e) { alert("Error al guardar bloqueo: " + (e.message||e)); }
+    catch(e) { notifyToast("Error al guardar bloqueo: " + (e.message || e), "error"); }
     setSaving(false);
   };
   const deleteBloqueo = async (b) => {
@@ -4785,7 +4919,7 @@ function AgendaTurnos({ data, reloadData, user }) {
   }, [data.agendaTurnosPagos]);
   const getPagosTurno = (turnoId) => agendaPagosByTurno.get(turnoId) || [];
   const openPago = (turno) => {
-    if (turno.estado !== "asiste") { alert("Solo se pueden registrar pagos cuando el cliente asiste."); return; }
+    if (turno.estado !== "asiste") { notifyToast("Solo se pueden registrar pagos cuando el cliente asiste.", "warning"); return; }
     const pagos = getPagosTurno(turno.id);
     setPagoModal({
       turno,
@@ -4795,7 +4929,7 @@ function AgendaTurnos({ data, reloadData, user }) {
   const savePagos = async () => {
     if(!pagoModal?.turno) return;
     const pagos = (pagoModal.pagos||[]).filter(p=>p.formaPago && Number(p.importe)>0);
-    if(!pagos.length) { alert("Cargá al menos un pago con importe mayor a cero."); return; }
+    if(!pagos.length) { notifyToast("Cargá al menos un pago con importe mayor a cero.", "warning"); return; }
     const total = pagos.reduce((a,p)=>a+Number(p.importe||0),0);
     setSaving(true);
     try {
@@ -4809,7 +4943,7 @@ function AgendaTurnos({ data, reloadData, user }) {
       setModalTurno(d => d ? { ...d, precioCobrado: total, formaPago: nextFormaPago, estado: nextEstado } : d);
       setEditingTurno(t => t && t.id===pagoModal.turno.id ? { ...t, precioCobrado: total, formaPago: nextFormaPago, estado: nextEstado } : t);
       await reloadData(); setPagoModal(null);
-    } catch(e) { alert("Error al registrar cobranza: " + (e.message||e)); }
+    } catch(e) { notifyToast("Error al registrar cobranza: " + (e.message || e), "error"); }
     setSaving(false);
   };
   const buildOverlapLayout = (turnos) => {
@@ -4897,8 +5031,8 @@ function AgendaTurnos({ data, reloadData, user }) {
       }
 
       if(d.inicio===original.inicio && d.fin===original.fin && d.userId===original.userId) return;
-      if(!puedeManicuraServicio(d.userId, d.servicioId)) { alert("No se puede mover el turno: la manicura destino no tiene habilitado ese servicio."); return; }
-      if(isBlockedByAgenda(d.userId, agendaMin(d.inicio), agendaMin(d.fin))) { alert("Ese horario está bloqueado/no disponible para la manicura."); return; }
+      if(!puedeManicuraServicio(d.userId, d.servicioId)) { notifyToast("No se puede mover el turno: la manicura destino no tiene habilitado ese servicio.", "warning"); return; }
+      if(isBlockedByAgenda(d.userId, agendaMin(d.inicio), agendaMin(d.fin))) { notifyToast("Ese horario está bloqueado/no disponible para la manicura.", "warning"); return; }
       const baseWarning = !isWithinHorario(d.userId, agendaMin(d.inicio), agendaMin(d.fin))
         ? "El turno queda fuera del horario disponible de la manicura."
         : hasOverlap(d, turno.id)
@@ -5253,6 +5387,215 @@ function AgendaTurnos({ data, reloadData, user }) {
   </div>;
 }
 
+
+function canUserReceiveTurnoRealtimeNotifications(currentUser) {
+  return currentUser?.rol === "admin" || currentUser?.rol === "encargada";
+}
+
+function canUserSeeAgendaTurno(appData, currentUser, turno) {
+  if (!canUserReceiveTurnoRealtimeNotifications(currentUser) || !turno) return false;
+  if (currentUser.rol === "admin") return true;
+  if (currentUser.rol === "encargada") {
+    const allowed = new Set((appData.encargadoLocales || []).filter(x => x.userId === currentUser.id).map(x => x.localId));
+    return allowed.has(parseInt(turno.localId));
+  }
+  return false;
+}
+
+function buildTurnoToastPayload(appData, rawTurno, eventType, currentUser) {
+  const turno = rawTurno?.id ? normalizeAgendaTurno(rawTurno) : rawTurno;
+  if (!turno?.id || !canUserSeeAgendaTurno(appData, currentUser, turno)) return null;
+
+  const cliente = (appData.agendaClientes || []).find(c => c.id === parseInt(turno.clienteId));
+  const servicio = (appData.agendaServicios || []).find(s => s.id === parseInt(turno.servicioId));
+  const manicura = (appData.users || []).find(u => u.id === parseInt(turno.userId));
+  const local = (appData.locales || []).find(l => l.id === parseInt(turno.localId));
+  const clienteNombre = cliente ? `${cliente.nombre || ""} ${cliente.apellido || ""}`.trim() : "Cliente sin identificar";
+  const servicioNombre = servicio?.nombre || "Servicio";
+  const manicuraNombre = manicura?.nombre || "Manicura sin asignar";
+  const localNombre = local?.nombre || "Local";
+  const fechaTxt = turno.fecha ? turno.fecha.split("-").reverse().join("/") : "Sin fecha";
+  const horaTxt = turno.inicio && turno.fin ? `${turno.inicio} a ${turno.fin}` : "Sin horario";
+
+  if (eventType === "INSERT") {
+    return {
+      type:"success",
+      title:"Nuevo turno agendado",
+      message:`${clienteNombre} · ${servicioNombre}\n${fechaTxt} de ${horaTxt} · ${manicuraNombre} · ${localNombre}`,
+      duration:6500,
+      action:{ kind:"openTurno", turnoId:turno.id, fecha:turno.fecha, localId:turno.localId },
+    };
+  }
+
+  if (eventType === "UPDATE") {
+    return {
+      type:"info",
+      title:"Turno actualizado",
+      message:`${clienteNombre} · ${servicioNombre}\n${fechaTxt} de ${horaTxt} · ${manicuraNombre}`,
+      duration:4500,
+      action:{ kind:"openTurno", turnoId:turno.id, fecha:turno.fecha, localId:turno.localId },
+    };
+  }
+
+  if (eventType === "DELETE") {
+    return {
+      type:"warning",
+      title:"Turno eliminado",
+      message:`Se eliminó el turno de ${clienteNombre} · ${servicioNombre}\n${fechaTxt} de ${horaTxt} · ${manicuraNombre} · ${localNombre}`,
+      duration:6500,
+      action:null,
+    };
+  }
+
+  return null;
+}
+
+
+function BloqueoHorarios({ data, reloadData, user }) {
+  const esAdmin = user.rol === "admin";
+  const puedeGestionar = esAdmin || user.rol === "encargada";
+  const allowedLocalIds = getAssignedLocalIds(data, user);
+  const localesVisibles = (data.locales || []).filter(l => esAdmin || allowedLocalIds.includes(l.id));
+  const hoy = new Date();
+  const [localId, setLocalId] = useState(() => String(localesVisibles[0]?.id || ""));
+  const [periodo, setPeriodo] = useState(() => addMonthsPeriodo(hoy, 1));
+  const [estado, setEstado] = useState("todos");
+  const [busqueda, setBusqueda] = useState("");
+
+  useEffect(() => {
+    if (!localId && localesVisibles[0]?.id) setLocalId(String(localesVisibles[0].id));
+  }, [localId, localesVisibles]);
+
+  const localActual = localesVisibles.find(l => String(l.id) === String(localId));
+  const opcionesPeriodo = useMemo(() => Array.from({ length: 13 }, (_, i) => addMonthsPeriodo(hoy, i)), []);
+  const manicurasLocal = useMemo(() => {
+    const q = busqueda.trim().toLowerCase();
+    return (data.users || [])
+      .filter(u => u.rol === "manicura" && u.activo && (!localId || parseInt(u.localId) === parseInt(localId)))
+      .filter(u => !q || String(u.nombre || "").toLowerCase().includes(q) || String(u.usuario || "").toLowerCase().includes(q))
+      .sort((a, b) => String(a.nombre || "").localeCompare(String(b.nombre || "")));
+  }, [data.users, localId, busqueda]);
+
+  const getBloqueo = useCallback((uid) => {
+    const localNum = parseInt(localId);
+    return (data.periodosBloqueados || []).find(p => {
+      const samePeriodo = p.periodo === periodo;
+      const sameUser = parseInt(p.userId) === parseInt(uid);
+      const sameLocal = p.localId == null || parseInt(p.localId) === localNum;
+      return samePeriodo && sameUser && sameLocal;
+    });
+  }, [data.periodosBloqueados, periodo, localId]);
+
+  const filas = useMemo(() => manicurasLocal
+    .map(m => ({ manicura:m, bloqueo:getBloqueo(m.id) }))
+    .filter(x => estado === "todos" || (estado === "bloqueados" ? !!x.bloqueo : !x.bloqueo)), [manicurasLocal, getBloqueo, estado]);
+
+  const auditar = useCallback(async ({ accion, manicura, bloqueo = null, datosAnteriores = null, datosNuevos = null }) => {
+    await registrarAuditoriaSeguro({
+      usuario_id: user.id,
+      usuario_nombre: user.nombre || user.usuario || "",
+      usuario_rol: user.rol || "",
+      accion,
+      entidad: "periodos_bloqueados",
+      entidad_id: bloqueo?.id ? String(bloqueo.id) : null,
+      local_id: localId ? parseInt(localId) : null,
+      user_id: manicura?.id ? parseInt(manicura.id) : null,
+      periodo,
+      datos_anteriores: datosAnteriores,
+      datos_nuevos: datosNuevos,
+      detalle: `${accion === "BLOQUEO_HORARIOS_CREADO" ? "Bloqueó" : "Habilitó"} edición de horarios de ${manicura?.nombre || "manicura"} para ${periodoLabel(periodo)} en ${localActual?.nombre || "local"}`,
+      origen: "app",
+    });
+  }, [user, localId, periodo, localActual]);
+
+  const bloquear = useCallback(async (manicura) => {
+    if (!puedeGestionar || !localId || !manicura?.id) return;
+    const existente = getBloqueo(manicura.id);
+    if (existente) return;
+    const nuevo = { periodo, user_id: parseInt(manicura.id), local_id: parseInt(localId), creado_por_user_id: parseInt(user.id) };
+    await api.createPeriodo(periodo, manicura.id, localId, user.id);
+    await auditar({ accion:"BLOQUEO_HORARIOS_CREADO", manicura, datosNuevos:nuevo });
+    await reloadData();
+    notifyToast(`Se bloqueó la edición de horarios de ${manicura.nombre} para ${periodoLabel(periodo)}.`, "success");
+  }, [puedeGestionar, localId, periodo, user.id, getBloqueo, auditar, reloadData]);
+
+  const habilitar = useCallback(async (manicura) => {
+    if (!puedeGestionar || !localId || !manicura?.id) return;
+    const existente = getBloqueo(manicura.id);
+    if (!existente) return;
+    await api.deletePeriodo(periodo, manicura.id, localId);
+    await auditar({ accion:"BLOQUEO_HORARIOS_ELIMINADO", manicura, bloqueo:existente, datosAnteriores:existente });
+    await reloadData();
+    notifyToast(`Se habilitó la edición de horarios de ${manicura.nombre} para ${periodoLabel(periodo)}.`, "success");
+  }, [puedeGestionar, localId, periodo, getBloqueo, auditar, reloadData]);
+
+  const bloquearTodos = useCallback(async () => {
+    const pendientes = manicurasLocal.filter(m => !getBloqueo(m.id));
+    if (!pendientes.length) return notifyToast("Todas las manicuras visibles ya están bloqueadas para ese mes.", "info");
+    if (!window.confirm(`Vas a bloquear la edición de horarios de ${pendientes.length} manicura${pendientes.length === 1 ? "" : "s"} para ${periodoLabel(periodo)} en ${localActual?.nombre || "este local"}. ¿Confirmás?`)) return;
+    for (const m of pendientes) await bloquear(m);
+  }, [manicurasLocal, getBloqueo, periodo, localActual, bloquear]);
+
+  const habilitarTodos = useCallback(async () => {
+    const pendientes = manicurasLocal.filter(m => getBloqueo(m.id));
+    if (!pendientes.length) return notifyToast("No hay manicuras bloqueadas para habilitar en ese mes.", "info");
+    if (!window.confirm(`Vas a habilitar la edición de horarios de ${pendientes.length} manicura${pendientes.length === 1 ? "" : "s"} para ${periodoLabel(periodo)} en ${localActual?.nombre || "este local"}. ¿Confirmás?`)) return;
+    for (const m of pendientes) await habilitar(m);
+  }, [manicurasLocal, getBloqueo, periodo, localActual, habilitar]);
+
+  const totalBloqueadas = manicurasLocal.filter(m => getBloqueo(m.id)).length;
+
+  if (!puedeGestionar) {
+    return <Card><p style={{ margin:0,color:"var(--color-text-secondary)" }}>No tenés permisos para gestionar bloqueo de horarios.</p></Card>;
+  }
+
+  return <div style={{ display:"flex", flexDirection:"column", gap:16 }}>
+    <div style={{ display:"flex", alignItems:"flex-start", justifyContent:"space-between", gap:12, flexWrap:"wrap" }}>
+      <div>
+        <h2 style={{ margin:"0 0 4px", fontSize:20, fontWeight:600 }}>Bloqueo de horarios</h2>
+        <p style={{ margin:0, fontSize:13, color:"var(--color-text-secondary)" }}>Controla si las manicuras pueden cargar o modificar sus horarios por local y mes. No bloquea turnos ni disponibilidad para clientas.</p>
+      </div>
+      <div style={{ display:"flex", gap:8, flexWrap:"wrap" }}>
+        <Btn onClick={bloquearTodos} variant="danger" size="sm">🔒 Bloquear visibles</Btn>
+        <Btn onClick={habilitarTodos} variant="success" size="sm">🔓 Habilitar visibles</Btn>
+      </div>
+    </div>
+
+    <Card>
+      <div style={{ display:"grid", gridTemplateColumns:"repeat(auto-fit,minmax(180px,1fr))", gap:12, alignItems:"end" }}>
+        <div><label style={{ display:"block", fontSize:12, fontWeight:600, color:"var(--color-text-secondary)", marginBottom:5 }}>Local</label><select value={localId} onChange={e=>setLocalId(e.target.value)} style={{ width:"100%", border:"1px solid #ddd", borderRadius:8, padding:"9px 10px", background:"#fff" }}>{localesVisibles.map(l=><option key={l.id} value={l.id}>{l.nombre}</option>)}</select></div>
+        <div><label style={{ display:"block", fontSize:12, fontWeight:600, color:"var(--color-text-secondary)", marginBottom:5 }}>Mes</label><select value={periodo} onChange={e=>setPeriodo(e.target.value)} style={{ width:"100%", border:"1px solid #ddd", borderRadius:8, padding:"9px 10px", background:"#fff" }}>{opcionesPeriodo.map(p=><option key={p} value={p}>{periodoLabel(p)}</option>)}</select></div>
+        <div><label style={{ display:"block", fontSize:12, fontWeight:600, color:"var(--color-text-secondary)", marginBottom:5 }}>Estado</label><select value={estado} onChange={e=>setEstado(e.target.value)} style={{ width:"100%", border:"1px solid #ddd", borderRadius:8, padding:"9px 10px", background:"#fff" }}><option value="todos">Todos</option><option value="bloqueados">Bloqueados</option><option value="habilitados">Habilitados</option></select></div>
+        <div><label style={{ display:"block", fontSize:12, fontWeight:600, color:"var(--color-text-secondary)", marginBottom:5 }}>Buscar manicura</label><input value={busqueda} onChange={e=>setBusqueda(e.target.value)} placeholder="Nombre o usuario" style={{ width:"100%", border:"1px solid #ddd", borderRadius:8, padding:"9px 10px", boxSizing:"border-box" }}/></div>
+      </div>
+    </Card>
+
+    <div style={{ display:"grid", gridTemplateColumns:"repeat(auto-fit,minmax(180px,1fr))", gap:10 }}>
+      <Card style={{ padding:"12px 14px" }}><p style={{ margin:0, fontSize:12, color:"var(--color-text-secondary)" }}>Local</p><p style={{ margin:"4px 0 0", fontSize:18, fontWeight:700 }}>{localActual?.nombre || "—"}</p></Card>
+      <Card style={{ padding:"12px 14px" }}><p style={{ margin:0, fontSize:12, color:"var(--color-text-secondary)" }}>Mes</p><p style={{ margin:"4px 0 0", fontSize:18, fontWeight:700 }}>{periodoLabel(periodo)}</p></Card>
+      <Card style={{ padding:"12px 14px" }}><p style={{ margin:0, fontSize:12, color:"var(--color-text-secondary)" }}>Bloqueadas</p><p style={{ margin:"4px 0 0", fontSize:18, fontWeight:700, color:totalBloqueadas ? COLORS.amber : COLORS.success }}>{totalBloqueadas} / {manicurasLocal.length}</p></Card>
+    </div>
+
+    <Card style={{ padding:0, overflow:"hidden" }}>
+      <div style={{ overflowX:"auto" }}>
+        <table style={{ width:"100%", borderCollapse:"collapse", fontSize:13 }}>
+          <thead><tr style={{ background:"var(--color-background-secondary)" }}><th style={{ textAlign:"left", padding:"10px 12px" }}>Manicura</th><th style={{ textAlign:"left", padding:"10px 12px" }}>Local</th><th style={{ textAlign:"left", padding:"10px 12px" }}>Mes</th><th style={{ textAlign:"left", padding:"10px 12px" }}>Estado</th><th style={{ textAlign:"right", padding:"10px 12px" }}>Acción</th></tr></thead>
+          <tbody>
+            {filas.map(({ manicura, bloqueo }) => <tr key={manicura.id} style={{ borderTop:"1px solid #eee" }}>
+              <td style={{ padding:"10px 12px" }}><div style={{ fontWeight:600 }}>{manicura.nombre}</div><div style={{ fontSize:12, color:"var(--color-text-secondary)" }}>{manicura.usuario}</div></td>
+              <td style={{ padding:"10px 12px" }}>{localActual?.nombre || "—"}</td>
+              <td style={{ padding:"10px 12px" }}>{periodoLabel(periodo)}</td>
+              <td style={{ padding:"10px 12px" }}>{bloqueo ? <Badge color="amber">🔒 Bloqueado</Badge> : <Badge color="success">🔓 Habilitado</Badge>}</td>
+              <td style={{ padding:"10px 12px", textAlign:"right" }}>{bloqueo ? <Btn onClick={()=>habilitar(manicura)} variant="success" size="sm">Habilitar</Btn> : <Btn onClick={()=>bloquear(manicura)} variant="danger" size="sm">Bloquear</Btn>}</td>
+            </tr>)}
+            {!filas.length && <tr><td colSpan={5} style={{ padding:18, textAlign:"center", color:"var(--color-text-secondary)" }}>No hay manicuras para los filtros seleccionados.</td></tr>}
+          </tbody>
+        </table>
+      </div>
+    </Card>
+  </div>;
+}
+
 // ── APP PRINCIPAL ──────────────────────────────────────────────────
 function readSectionHash() {
   const h = (window.location.hash || "").replace(/^#/, "").trim();
@@ -5262,8 +5605,8 @@ function defaultSectionForRole(role) {
   return role === "manicura" ? "horarios" : "asistencia";
 }
 function sectionAllowedForRole(section, role) {
-  const admin = ["asistencia","horarios","turnos","reportes","adelantos","garantias","informes","manicuras","encargadas","locales","cobertura_config","perfil"];
-  const encargada = ["asistencia","horarios","turnos","reportes","adelantos","garantias","informes","manicuras","cobertura_config","perfil"];
+  const admin = ["asistencia","horarios","bloqueo_horarios","turnos","reportes","adelantos","garantias","informes","manicuras","encargadas","locales","cobertura_config","perfil"];
+  const encargada = ["asistencia","horarios","bloqueo_horarios","turnos","reportes","adelantos","garantias","informes","manicuras","cobertura_config","perfil"];
   const manicura = ["horarios","reportes","perfil"];
   const allowed = role === "admin" ? admin : role === "encargada" ? encargada : manicura;
   return allowed.includes(section);
@@ -5279,13 +5622,62 @@ export default function App() {
   const [isDesktopMenu, setIsDesktopMenu] = useState(() => window.innerWidth >= 768);
   const [loading, setLoading] = useState(true);
   const [agendaRequest, setAgendaRequest] = useState(null);
+  const [agendaOpenRequest, setAgendaOpenRequest] = useState(null);
   const [reportRestore, setReportRestore] = useState(null);
+  const [toasts, setToasts] = useState([]);
+  const [notificationHistory, setNotificationHistory] = useState([]);
+  const [notificationOpen, setNotificationOpen] = useState(false);
+
+  const dismissToast = useCallback((id) => {
+    setToasts(prev => prev.filter(t => t.id !== id));
+  }, []);
+
+  const pushNotification = useCallback((payload) => {
+    const id = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+    const item = {
+      id,
+      type: payload.type || "info",
+      title: payload.title || "Aviso",
+      message: String(payload.message || ""),
+      time: new Intl.DateTimeFormat("es-AR", { hour:"2-digit", minute:"2-digit" }).format(new Date()),
+      read: false,
+      action: payload.action || null,
+    };
+    setToasts(prev => [item, ...prev].slice(0, 4));
+    setNotificationHistory(prev => [item, ...prev].slice(0, 30));
+    window.setTimeout(() => dismissToast(id), payload.duration ?? 3800);
+  }, [dismissToast]);
+
+  useEffect(() => {
+    const onToast = (ev) => pushNotification(ev.detail || {});
+    window.addEventListener(NIKI_TOAST_EVENT, onToast);
+    return () => window.removeEventListener(NIKI_TOAST_EVENT, onToast);
+  }, [pushNotification]);
+
+  useEffect(() => {
+    if (notificationOpen) {
+      setNotificationHistory(prev => prev.map(n => ({ ...n, read:true })));
+    }
+  }, [notificationOpen]);
+
+  const handleNotificationAction = useCallback((action, notificationId = null) => {
+    if (!action) return;
+    if (notificationId) dismissToast(notificationId);
+    setNotificationOpen(false);
+    if (action.kind === "openTurno" && sectionAllowedForRole("turnos", user?.rol)) {
+      window.history.replaceState(null, "", "#turnos");
+      setAgendaOpenRequest({ ...action, nonce:Date.now() });
+      setSeccion("turnos");
+      setMenuOpen(false);
+      return;
+    }
+  }, [dismissToast, user?.rol]);
 
   const reloadData = useCallback(async () => {
     const [users, locales, horarios, asistencias, periodos, feriados, reglasCobertura, configCobertura, encargadoLocales, comisiones, comisionesImportaciones, comisionesCriterios, adelantos, garantias, informesDiarios, agendaServicios, agendaManicuraServicios, agendaListasPrecios, agendaLocalListas, agendaPreciosServicios, agendaClientes, agendaTurnos, agendaTurnosPagos, agendaTurnoServicios, agendaBloqueos] = await Promise.all([
       api.getUsers(), api.getLocales(), api.getHorarios(), api.getAsistencias(), api.getPeriodos(), api.getFeriados(), api.getReglasCobertura(), api.getConfigCobertura(), api.getEncargadoLocales(), api.getComisiones(), api.getComisionesImportaciones(), api.getComisionesCriterios(), api.getAdelantos(), api.getGarantias(), api.getInformesDiarios(), api.getAgendaServicios(), api.getAgendaManicuraServicios(), api.getAgendaListasPrecios(), api.getAgendaLocalListas(), api.getAgendaPreciosServicios(), api.getAgendaClientes(), api.getAgendaTurnos(), api.getAgendaTurnosPagos(), api.getAgendaTurnoServicios(), api.getAgendaBloqueos()
     ]);
-    setData({
+    const nextData = {
       users: users.map(normalizeUser),
       locales,
       horarios: horarios.map(normalizeHorario),
@@ -5311,8 +5703,52 @@ export default function App() {
       agendaTurnosPagos: (agendaTurnosPagos||[]).map(normalizeAgendaTurnoPago),
       agendaTurnoServicios: (agendaTurnoServicios||[]).map(normalizeAgendaTurnoServicio),
       agendaBloqueos: (agendaBloqueos||[]).map(normalizeAgendaBloqueo),
-    });
+    };
+    setData(nextData);
+    return nextData;
   }, []);
+
+  useEffect(() => {
+    if (!user) return undefined;
+
+    let refreshTimer = null;
+
+    const channel = supabaseRealtime
+      .channel("agenda-turnos-realtime")
+      .on(
+        "postgres_changes",
+        {
+          event: "*",
+          schema: "public",
+          table: "agenda_turnos",
+        },
+        (payload) => {
+          clearTimeout(refreshTimer);
+          refreshTimer = setTimeout(() => {
+            reloadData()
+              .then((nextData) => {
+                if (!canUserReceiveTurnoRealtimeNotifications(user)) return;
+
+                const rawTurno = payload.eventType === "DELETE" ? payload.old : payload.new;
+                const toastPayload = buildTurnoToastPayload(nextData, rawTurno, payload.eventType, user);
+                if (toastPayload) notifyToast(toastPayload);
+              })
+              .catch((err) => {
+                console.error("No se pudo actualizar la agenda en tiempo real", err);
+                if (canUserReceiveTurnoRealtimeNotifications(user)) {
+                  notifyToast("No se pudo actualizar la agenda en tiempo real.", "error");
+                }
+              });
+          }, 500);
+        }
+      )
+      .subscribe();
+
+    return () => {
+      clearTimeout(refreshTimer);
+      supabaseRealtime.removeChannel(channel);
+    };
+  }, [user, reloadData]);
 
   useEffect(()=>{ reloadData().then(()=>setLoading(false)).catch(()=>setLoading(false)); },[]);
 
@@ -5351,6 +5787,7 @@ export default function App() {
   const navAdmin = [
     {id:"asistencia",label:"Asistencia",icon:"📋"},
     {id:"horarios",label:"Horarios",icon:"🗓️"},
+    {id:"bloqueo_horarios",label:"Bloqueo horarios",icon:"🔐"},
     {id:"turnos",label:"Turnos",icon:"📅"},
     {id:"reportes",label:"Reportes",icon:"📊"},
     {id:"adelantos",label:"Adelantos",icon:"💸"},
@@ -5365,6 +5802,7 @@ export default function App() {
   const navEncargada = [
     {id:"asistencia",label:"Asistencia",icon:"📋"},
     {id:"horarios",label:"Horarios",icon:"🗓️"},
+    {id:"bloqueo_horarios",label:"Bloqueo horarios",icon:"🔐"},
     {id:"turnos",label:"Turnos",icon:"📅"},
     {id:"reportes",label:"Reportes",icon:"📊"},
     {id:"adelantos",label:"Adelantos",icon:"💸"},
@@ -5383,8 +5821,9 @@ export default function App() {
 
   const renderSeccion = () => {
     if (seccion==="asistencia") return <AsistenciaDiaria data={data} reloadData={reloadData} user={user}/>;
-    if (seccion==="turnos") return user.rol!=="manicura" ? <AgendaTurnos data={data} reloadData={reloadData} user={user}/> : null;
+    if (seccion==="turnos") return user.rol!=="manicura" ? <AgendaTurnos data={data} reloadData={reloadData} user={user} agendaOpenRequest={agendaOpenRequest} onAgendaOpenRequestDone={() => setAgendaOpenRequest(null)}/> : null;
     if (seccion==="horarios") return <CalendarioHorarios data={data} reloadData={reloadData} user={user} agendaRequest={agendaRequest} onBackToReport={()=>{ setSeccion("reportes"); setMenuOpen(false); }}/>;
+    if (seccion==="bloqueo_horarios") return <BloqueoHorarios data={data} reloadData={reloadData} user={user}/>;
     if (seccion==="reportes") return <Reportes data={data} reloadData={reloadData} user={user} reportRestore={reportRestore} onOpenAgenda={(req)=>{ const restore={ tab:"cobertura", fecha:req.fecha, localId:req.localId || "" }; setReportRestore(restore); setAgendaRequest({...req, fromReport:true}); setSeccion("horarios"); setMenuOpen(false); }}/>;
     if (seccion==="adelantos") return user.rol!=="manicura" ? <AdelantosManicuras data={data} reloadData={reloadData} user={user}/> : null;
     if (seccion==="garantias") return user.rol!=="manicura" ? <GarantiasServicios data={data} reloadData={reloadData} user={user}/> : null;
@@ -5399,6 +5838,7 @@ export default function App() {
 
   return (
     <div style={{ minHeight:"100vh",background:"var(--color-background-tertiary)",display:"flex",flexDirection:"column" }}>
+      <ToastStack toasts={toasts} onDismiss={dismissToast} onAction={handleNotificationAction}/>
       <header style={{ background:COLORS.pink,color:"#fff",padding:"0 16px",height:66,display:"flex",alignItems:"center",justifyContent:"space-between",position:"sticky",top:0,zIndex:100 }}>
         <div style={{ display:"flex",alignItems:"center",gap:10 }}>
           <LogoMark size={48} variant="light"/>
@@ -5406,6 +5846,7 @@ export default function App() {
         </div>
         <div style={{ display:"flex",alignItems:"center",gap:10 }}>
           <span style={{ fontSize:13,opacity:0.9 }}>{user.nombre}</span>
+          <NotificationBell history={notificationHistory} open={notificationOpen} setOpen={setNotificationOpen} onClear={() => setNotificationHistory([])} onAction={handleNotificationAction}/>
           <button onClick={()=>{ localStorage.removeItem("niki_user"); setUser(null); setMenuOpen(false); }} style={{ background:"rgba(255,255,255,0.2)",border:"none",color:"#fff",borderRadius:6,padding:"4px 10px",fontSize:12,cursor:"pointer" }}>Salir</button>
           {!isDesktopMenu && <button onClick={()=>setMenuOpen(m=>!m)} style={{ background:"rgba(255,255,255,0.2)",border:"none",color:"#fff",borderRadius:6,padding:"6px 10px",fontSize:16,cursor:"pointer" }}>☰</button>}
         </div>
