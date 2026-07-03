@@ -161,6 +161,7 @@ const api = {
   upsertAsistencia: (d) => patchOrPost("asistencias", `user_id=eq.${d.user_id}&fecha=eq.${d.fecha}`, d),
   deleteAsistencia: (userId, fecha) => sb(`asistencias?user_id=eq.${userId}&fecha=eq.${fecha}`, { method: "DELETE", prefer: "" }),
   getPeriodos: () => sb("periodos_bloqueados?select=*"),
+  getPeriodosBloqueadosPara: (periodo, userId) => sb(`periodos_bloqueados?select=*&periodo=eq.${encodeURIComponent(periodo)}&user_id=eq.${parseInt(userId)}`),
   createPeriodo: (periodo, userId, localId, creadoPorUserId = null) => sb("periodos_bloqueados", { method: "POST", body: JSON.stringify({ periodo, user_id: parseInt(userId), local_id: localId ? parseInt(localId) : null, creado_por_user_id: creadoPorUserId ? parseInt(creadoPorUserId) : null }) }),
   deletePeriodo: (periodo, userId, localId = null) => {
     const localFilter = localId ? `&local_id=eq.${parseInt(localId)}` : "";
@@ -876,6 +877,33 @@ function CalendarioHorarios({ data, reloadData, user, agendaRequest, onBackToRep
     (periodoBloqueadoParaManicura(periodoDesdeFecha(f), uid) && !esAdmin) || !puedeEditarManicura(uid),
     [periodoBloqueadoParaManicura, periodoDesdeFecha, manicuraId, esAdmin, puedeEditarManicura]
   );
+
+  const periodoBloqueadoActualEnServidor = useCallback(async (f, uid = manicuraId) => {
+    const periodo = periodoDesdeFecha(f);
+    const localIdManicura = getLocalIdForManicura(uid);
+    const rows = await api.getPeriodosBloqueadosPara(periodo, uid);
+    return (rows || []).some(p => {
+      const rowLocalId = p.local_id ?? p.localId ?? null;
+      return rowLocalId == null || localIdManicura == null || parseInt(rowLocalId) === parseInt(localIdManicura);
+    });
+  }, [manicuraId, periodoDesdeFecha, getLocalIdForManicura]);
+
+  const validarEdicionHorarioActual = useCallback(async (uid, f) => {
+    if (!puedeEditarManicura(uid)) return false;
+    if (esAdmin) return true;
+
+    const estaBloqueado = await periodoBloqueadoActualEnServidor(f, uid);
+    if (!estaBloqueado) return true;
+
+    await reloadData();
+    notifyToast(
+      `Este mes fue bloqueado para edición de horarios. No se guardaron cambios para ${fechaLarga(f)}.`,
+      "warning",
+      { title: "Mes bloqueado" }
+    );
+    return false;
+  }, [puedeEditarManicura, esAdmin, periodoBloqueadoActualEnServidor, reloadData]);
+
   const bloqueado = (periodoBloqueadoParaManicura(periodoActivoKey, manicuraId) && !esAdmin) || !puedeEditarManicura(manicuraId);
   const feriados = new Set((data.feriados||[]).map(f=>f.fecha));
   const manicuras = data.users.filter(u=>u.rol==="manicura"&&u.activo&&(esAdmin || allowedLocalIds.includes(u.localId)));
@@ -984,7 +1012,7 @@ function CalendarioHorarios({ data, reloadData, user, agendaRequest, onBackToRep
 
   const saveBloqueFor = useCallback(async (uid, f, b, opts = {}) => {
     if (getAsistenciaFor(uid, f)) return false;
-    if (bloqueadoPorFecha(f, uid)) return false;
+    if (!(await validarEdicionHorarioActual(uid, f))) return false;
     const key = horarioKey(uid, f);
     const bl = b || (parseInt(uid) === parseInt(manicuraId) ? localH[f] || bloques[f] : localHAll[key] || getBloqueFor(uid, f));
     if (!bl) return false;
@@ -1003,13 +1031,13 @@ function CalendarioHorarios({ data, reloadData, user, agendaRequest, onBackToRep
     if (parseInt(uid) === parseInt(manicuraId)) setLocalH(p => { const n={...p}; delete n[f]; return n; });
     setLocalHAll(p => { const n={...p}; delete n[key]; return n; });
     return true;
-  }, [manicuraId, localH, localHAll, bloques, getBloqueFor, getAsistenciaFor, reloadData, confirmarCambioHorario, horarioKey, bloqueadoPorFecha, data.horarios, auditarHorario]);
+  }, [manicuraId, localH, localHAll, bloques, getBloqueFor, getAsistenciaFor, reloadData, confirmarCambioHorario, horarioKey, validarEdicionHorarioActual, data.horarios, auditarHorario]);
 
   const saveBloque = useCallback(async (f, b) => saveBloqueFor(parseInt(manicuraId), f, b), [manicuraId, saveBloqueFor]);
 
   const onAddBFor = useCallback(async (uid, f, b) => {
     if (getAsistenciaFor(uid, f)) return false;
-    if (bloqueadoPorFecha(f, uid)) return false;
+    if (!(await validarEdicionHorarioActual(uid, f))) return false;
     const key = horarioKey(uid, f);
     const alreadyPersisted = hasHorarioPersistidoFor(uid, f);
     if (alreadyPersisted && !(await confirmarCambioHorario(uid, f, "modificarlo"))) return false;
@@ -1025,20 +1053,20 @@ function CalendarioHorarios({ data, reloadData, user, agendaRequest, onBackToRep
     if (parseInt(uid) === parseInt(manicuraId)) setLocalH(p => { const n={...p}; delete n[f]; return n; });
     setLocalHAll(p => { const n={...p}; delete n[key]; return n; });
     return true;
-  }, [manicuraId, reloadData, getAsistenciaFor, confirmarCambioHorario, hasHorarioPersistidoFor, horarioKey, bloqueadoPorFecha, data.horarios, auditarHorario]);
+  }, [manicuraId, reloadData, getAsistenciaFor, confirmarCambioHorario, hasHorarioPersistidoFor, horarioKey, validarEdicionHorarioActual, data.horarios, auditarHorario]);
 
   const onAddB = useCallback(async (f, b) => onAddBFor(parseInt(manicuraId), f, b), [manicuraId, onAddBFor]);
 
   const onDeleteBFor = useCallback(async (uid, f) => {
     if (getAsistenciaFor(uid, f)) return false;
-    if (bloqueadoPorFecha(f, uid)) return false;
+    if (!(await validarEdicionHorarioActual(uid, f))) return false;
     if (!(await confirmarCambioHorario(uid, f, "eliminarlo"))) return false;
     const anterior = (data.horarios || []).find(h => parseInt(h.userId) === parseInt(uid) && h.fecha === f) || null;
     await api.deleteHorario(parseInt(uid), f);
     await auditarHorario({ accion:"HORARIO_ELIMINADO", uid:parseInt(uid), fecha:f, anterior, nuevo:null });
     await reloadData();
     return true;
-  }, [reloadData, getAsistenciaFor, confirmarCambioHorario, bloqueadoPorFecha, data.horarios, auditarHorario]);
+  }, [reloadData, getAsistenciaFor, confirmarCambioHorario, validarEdicionHorarioActual, data.horarios, auditarHorario]);
 
   const onDeleteB = useCallback(async (f) => onDeleteBFor(parseInt(manicuraId), f), [manicuraId, onDeleteBFor]);
 
@@ -1143,6 +1171,9 @@ function CalendarioHorarios({ data, reloadData, user, agendaRequest, onBackToRep
     if (!ok) return;
 
     for (const item of disponibles) {
+      if (!(await validarEdicionHorarioActual(uid, item.targetFecha))) {
+        return;
+      }
       const s = calFromSlot(item.bloque.startSlot);
       const e = calFromSlot(item.bloque.endSlot);
       const anterior = (data.horarios || []).find(h => parseInt(h.userId) === parseInt(uid) && h.fecha === item.targetFecha) || null;
@@ -1168,7 +1199,7 @@ function CalendarioHorarios({ data, reloadData, user, agendaRequest, onBackToRep
       disponibles.forEach(item => { delete n[horarioKey(uid, item.targetFecha)]; });
       return n;
     });
-  }, [manicuraId, puedeEditarManicura, getBloqueFor, getAsistenciaFor, bloqueadoPorFecha, hasHorarioPersistidoFor, pedirConfirmacion, reloadData, horarioKey, data.horarios, auditarHorario]);
+  }, [manicuraId, puedeEditarManicura, getBloqueFor, getAsistenciaFor, bloqueadoPorFecha, hasHorarioPersistidoFor, pedirConfirmacion, reloadData, horarioKey, data.horarios, auditarHorario, validarEdicionHorarioActual]);
 
   const repetirSemanaAnterior = useCallback(async () => {
     await repetirSemanaAnteriorParaDias(weekDays);
@@ -5714,7 +5745,7 @@ export default function App() {
     let refreshTimer = null;
 
     const channel = supabaseRealtime
-      .channel("agenda-turnos-realtime")
+      .channel("agenda-realtime")
       .on(
         "postgres_changes",
         {
@@ -5740,6 +5771,22 @@ export default function App() {
                 }
               });
           }, 500);
+        }
+      )
+      .on(
+        "postgres_changes",
+        {
+          event: "*",
+          schema: "public",
+          table: "periodos_bloqueados",
+        },
+        () => {
+          clearTimeout(refreshTimer);
+          refreshTimer = setTimeout(() => {
+            reloadData().catch((err) => {
+              console.error("No se pudo actualizar el bloqueo de horarios en tiempo real", err);
+            });
+          }, 300);
         }
       )
       .subscribe();
