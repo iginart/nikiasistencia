@@ -20,6 +20,17 @@ if (!document.getElementById("niki-font-global-style")) {
     button, input, select, textarea {
       letter-spacing: inherit;
     }
+    html, body, #root {
+      width: 100%;
+      max-width: 100%;
+      overflow-x: hidden;
+    }
+    body {
+      margin: 0;
+    }
+    * {
+      box-sizing: border-box;
+    }
     @keyframes nikiToastIn {
       from { opacity: 0; transform: translateY(-8px) scale(0.98); }
       to { opacity: 1; transform: translateY(0) scale(1); }
@@ -184,6 +195,10 @@ const api = {
   getComisionesImportaciones: () => sb("comisiones_importaciones?select=*&order=creado_en.desc&limit=10"),
   getComisionesCriterios: () => sb("comisiones_criterios_semanales?select=*"),
   upsertComisionCriterio: (d) => patchOrPost("comisiones_criterios_semanales", `periodo=eq.${d.periodo}&semana=eq.${d.semana}&user_id=eq.${d.user_id}`, d),
+  getComisionesConfiguracion: () => sb("comisiones_configuracion?select=*&order=activo.desc,id.asc"),
+  upsertComisionesConfiguracion: (d) => patchOrPost("comisiones_configuracion", `id=eq.${d.id || 1}`, d),
+  getComisionesManicuraConfig: () => sb("comisiones_manicura_config?select=*&order=user_id,local_id"),
+  upsertComisionesManicuraConfig: (d) => patchOrPost("comisiones_manicura_config", `user_id=eq.${d.user_id}&local_id=eq.${d.local_id || 0}`, d),
   getAdelantos: () => sb("adelantos_manicuras?select=*&order=fecha.desc,id.desc"),
   createAdelanto: (d) => sb("adelantos_manicuras", { method: "POST", body: JSON.stringify(d) }),
   updateAdelanto: (id, d) => sb(`adelantos_manicuras?id=eq.${id}`, { method: "PATCH", body: JSON.stringify(d) }),
@@ -283,6 +298,8 @@ function normalizeEncargadoLocal(x) { return { userId:x.user_id, localId:x.local
 function normalizeComision(c) { return { id:c.id, periodo:c.periodo, fechaPago:c.fecha_pago, localId:c.local_id, codigoExternoLocal:c.codigo_externo_local || "", nombreLocal:c.nombre_local || "", userId:c.user_id, codigoExternoManicura:c.codigo_externo_manicura || "", nombreManicura:c.nombre_manicura || "", servicio:c.servicio || "", cliente:c.cliente || "", precio:Number(c.precio || 0), comision:Number(c.comision || 0), hashRegistro:c.hash_registro || "", actualizadoEn:c.actualizado_en || "" }; }
 function normalizeComisionImportacion(i) { return { id:i.id, periodo:i.periodo, registros:i.registros || 0, totalPrecio:Number(i.total_precio || 0), totalComision:Number(i.total_comision || 0), estado:i.estado || "", mensaje:i.mensaje || "", creadoEn:i.creado_en || "" }; }
 function normalizeComisionCriterio(c) { return { id:c.id, periodo:c.periodo, semana:Number(c.semana || 0), userId:c.user_id, localId:c.local_id, porcentaje:Number(c.porcentaje || 0), motivo:c.motivo || "", actualizadoPor:c.actualizado_por_user_id, actualizadoEn:c.actualizado_en || "" }; }
+function normalizeComisionesConfiguracion(c) { return { id:c.id, nombre:c.nombre || "Configuración principal", activo:c.activo !== false, porcentajeBase:Number(c.porcentaje_base ?? 40), porcentajeReducido:Number(c.porcentaje_reducido ?? 35), horasObjetivoDefault:Number(c.horas_objetivo_default ?? 36), maxLlegadasTarde:Number(c.max_llegadas_tarde ?? 0), maxFaltasNoJustificadas:Number(c.max_faltas_no_justificadas ?? 0), contarFaltasJustificadas:c.contar_faltas_justificadas === true, toleranciaLlegadaTardeMinutos:Number(c.tolerancia_llegada_tarde_minutos ?? 0), actualizadoPor:c.actualizado_por_user_id, actualizadoEn:c.actualizado_en || "" }; }
+function normalizeComisionesManicuraConfig(c) { return { id:c.id, userId:c.user_id, localId:c.local_id, horasObjetivoSemanales:Number(c.horas_objetivo_semanales ?? 0), porcentajeBase:c.porcentaje_base === null || c.porcentaje_base === undefined ? null : Number(c.porcentaje_base), porcentajeReducido:c.porcentaje_reducido === null || c.porcentaje_reducido === undefined ? null : Number(c.porcentaje_reducido), maxLlegadasTarde:c.max_llegadas_tarde === null || c.max_llegadas_tarde === undefined ? null : Number(c.max_llegadas_tarde), maxFaltasNoJustificadas:c.max_faltas_no_justificadas === null || c.max_faltas_no_justificadas === undefined ? null : Number(c.max_faltas_no_justificadas), activo:c.activo !== false, actualizadoPor:c.actualizado_por_user_id, actualizadoEn:c.actualizado_en || "" }; }
 function normalizeAdelanto(a) { return { id:a.id, fecha:a.fecha, fechaDescuento:a.fecha_descuento || a.fecha, periodo:a.periodo || (a.fecha_descuento ? String(a.fecha_descuento).slice(0,7) : a.fecha ? String(a.fecha).slice(0,7) : ""), userId:a.user_id, localId:a.local_id, importe:Number(a.importe || 0), importeTotal:Number(a.importe_total || a.importe || 0), concepto:a.concepto || "", observacion:a.observacion || "", creadoPor:a.creado_por, creadoEn:a.creado_en || "", grupoId:a.grupo_id || "", cuotaNum:a.cuota_num || 1, cuotasTotal:a.cuotas_total || 1, tipoDescuento:a.tipo_descuento || "semana" }; }
 function normalizeGarantia(g) { return { id:g.id, fechaServicioOriginal:g.fecha_servicio_original, comisionOriginalId:g.comision_original_id, localId:g.local_id, manicuraOriginalId:g.manicura_original_id, nombreManicuraOriginal:g.nombre_manicura_original || "", cliente:g.cliente || "", servicio:g.servicio || "", importeComision:Number(g.importe_comision || 0), fechaReparacion:g.fecha_reparacion, manicuraReparacionId:g.manicura_reparacion_id, nombreManicuraReparacion:g.nombre_manicura_reparacion || "", servicioReparacionMismo:g.servicio_reparacion_mismo !== false, serviciosReparacion:Array.isArray(g.servicios_reparacion) ? g.servicios_reparacion : [], motivo:g.motivo || "", fotos:Array.isArray(g.fotos) ? g.fotos : [], creadoPor:g.creado_por_user_id, creadoEn:g.creado_en || "", actualizadoEn:g.actualizado_en || "" }; }
 function normalizeInformeDiario(i) { return { id:i.id, fecha:i.fecha, localId:i.local_id, turno:i.turno || "dia", importanteManana:i.importante_manana || "", urgentesGenerales:i.urgentes_generales || "", saldoEfectivoAnterior:Number(i.saldo_efectivo_anterior || 0), coincideEfectivoInicial:i.coincide_efectivo_inicial === true, efectivoCaja:Number(i.efectivo_caja || 0), coincideCaja:i.coincide_caja === true, mercadoPagoTotalReservas:i.mercado_pago_total_reservas || "", pagosRealizados:i.pagos_realizados || "", saldoAnterior:Number(i.saldo_anterior || 0), traspasoCajaGeneral:Number(i.traspaso_caja_general || 0), traspasoCajaEfectivo:Number(i.traspaso_caja_efectivo || 0), reclamos:i.reclamos || "", novedadesSalonManicuras:i.novedades_salon_manicuras || "", observacionesExtras:i.observaciones_extras || "", estado:i.estado || "borrador", creadoPor:i.creado_por_user_id, cerradoPor:i.cerrado_por_user_id, enviadoEn:i.enviado_en || "", cerradoEn:i.cerrado_en || "", creadoEn:i.creado_en || "", actualizadoEn:i.actualizado_en || "" }; }
@@ -298,7 +315,7 @@ function normalizeAgendaTurnoServicio(x) { return { id:x.id, turnoId:x.turno_id,
 function normalizeAgendaBloqueo(b) { return { id:b.id, fecha:b.fecha, localId:b.local_id, userId:b.user_id, inicio:(b.inicio||"").slice(0,5), fin:(b.fin||"").slice(0,5), tipo:b.tipo || "no_disponible", motivo:b.motivo || "", creadoPor:b.creado_por_user_id, creadoEn:b.creado_en || "", actualizadoEn:b.actualizado_en || "" }; }
 
 export const COLORS = {
-  pink: "#d4537e", pinkLight: "#fbeaf0", pinkDark: "#72243e",
+  pink: "#e1c6cc", pinkLight: "#f7edf0", pinkDark: "#72243e",
   gray: "#888780", grayLight: "#f1efe8",
   success: "#639922", successLight: "#eaf3de",
   danger: "#e24b4a", dangerLight: "#fcebeb",
@@ -510,6 +527,48 @@ function weekOfMonthValue(fecha) {
   const n = parseInt(label.replace(/\D/g, ""));
   return Number.isFinite(n) ? String(n) : "";
 }
+function startOfCommissionWeek(fecha) {
+  const d = typeof fecha === "string" ? parseDateLocal(fecha) : new Date(fecha);
+  if (!d || Number.isNaN(d.getTime())) return null;
+  d.setHours(12,0,0,0);
+  const day = d.getDay();
+  const diff = day === 0 ? -6 : 1 - day;
+  d.setDate(d.getDate() + diff);
+  return d;
+}
+function getCommissionWeekRangeFromStart(start) {
+  if (!start) return null;
+  const desde = new Date(start);
+  desde.setHours(12,0,0,0);
+  const hasta = new Date(desde);
+  hasta.setDate(hasta.getDate() + 5);
+  return { desde, hasta, desdeKey:dateKey(desde), hastaKey:dateKey(hasta) };
+}
+function getCommissionWeeksForMonth(year, monthIndex) {
+  const monthStart = new Date(year, monthIndex, 1, 12, 0, 0, 0);
+  const monthEnd = new Date(year, monthIndex + 1, 0, 12, 0, 0, 0);
+  let cursor = startOfCommissionWeek(monthStart);
+  const semanas = [];
+  let numero = 1;
+  while (cursor && cursor <= monthEnd) {
+    const range = getCommissionWeekRangeFromStart(cursor);
+    if (range && range.hasta >= monthStart && range.desde <= monthEnd) {
+      semanas.push({ numero, ...range, label:`Semana ${numero} · ${fmtFecha(range.desde)} al ${fmtFecha(range.hasta)}` });
+      numero += 1;
+    }
+    cursor.setDate(cursor.getDate() + 7);
+  }
+  return semanas;
+}
+function commissionWeekLabel(fecha) {
+  const start = startOfCommissionWeek(fecha);
+  const range = getCommissionWeekRangeFromStart(start);
+  return range ? `${fmtFecha(range.desde)} al ${fmtFecha(range.hasta)}` : weekOfMonthLabel(fecha);
+}
+function isDateInRangeKey(fecha, desdeKey, hastaKey) {
+  const f = String(fecha || "").slice(0,10);
+  return !!f && !!desdeKey && !!hastaKey && f >= desdeKey && f <= hastaKey;
+}
 function genToken() { return Math.random().toString(36).slice(2) + Math.random().toString(36).slice(2); }
 function getAssignedLocalIds(data, user) {
   if (!user) return [];
@@ -612,7 +671,7 @@ function ToastStack({ toasts, onDismiss, onAction }) {
 function NotificationBell({ history, open, setOpen, onClear, onAction }) {
   const unread = history.filter(n => !n.read).length;
   return <div style={{ position:"relative" }}>
-    <button type="button" onClick={() => setOpen(!open)} title="Notificaciones" style={{ position:"relative",background:"rgba(255,255,255,0.2)",border:"none",color:"#fff",borderRadius:8,padding:"6px 9px",fontSize:15,cursor:"pointer",display:"flex",alignItems:"center",gap:6 }}>
+    <button type="button" onClick={() => setOpen(!open)} title="Notificaciones" style={{ position:"relative",background:"rgba(114,36,62,0.12)",border:"none",color:COLORS.pinkDark,borderRadius:8,padding:"6px 9px",fontSize:15,cursor:"pointer",display:"flex",alignItems:"center",gap:6 }}>
       🔔
       {unread > 0 && <span style={{ position:"absolute",top:-5,right:-5,minWidth:17,height:17,borderRadius:999,background:COLORS.danger,color:"#fff",fontSize:10,fontWeight:800,display:"flex",alignItems:"center",justifyContent:"center",border:"2px solid #fff" }}>{Math.min(unread, 9)}</span>}
     </button>
@@ -819,6 +878,10 @@ function CalendarioHorarios({ data, reloadData, user, agendaRequest, onBackToRep
   const [miniCursor, setMiniCursor] = useState(new Date(hoy.getFullYear(), hoy.getMonth(), 1));
   const [manicuraId, setManicuraId] = useState(puedeGestionar ? (data.users.filter(u=>u.rol==="manicura"&&u.activo&&(esAdmin||allowedLocalIds.includes(u.localId)))[0]?.id||null) : user.id);
   const [navVisible, setNavVisible] = useState(!isMobile);
+  const calendarShellHeight = vista === "mes" ? (isMobile ? 560 : 560) : (isMobile ? "calc(100vh - 154px)" : 640);
+  const weeklyMinWidth = isMobile ? 520 : (navVisible ? 620 : 720);
+  const monthMinWidth = isMobile ? 520 : 0;
+  const compactMonth = isMobile || navVisible;
   const [modalDk, setModalDk] = useState(null);
   const [localH, setLocalH] = useState({});
   const [localHAll, setLocalHAll] = useState({});
@@ -1281,9 +1344,9 @@ function CalendarioHorarios({ data, reloadData, user, agendaRequest, onBackToRep
 
   // ── SEMANAL ──────────────────────────────────────────────────────
   const renderSemanal = () => (
-    <div style={{ display:"flex",flex:1,overflow:"hidden",flexDirection:"column" }}>
+    <div style={{ display:"flex",flex:1,overflowX:"auto",overflowY:"hidden",flexDirection:"column",minWidth:0 }}>
       {/* Header días — divisiones verticales claras */}
-      <div style={{ display:"flex",flexShrink:0,borderBottom:"0.5px solid rgba(120,120,120,0.24)" }}>
+      <div style={{ display:"flex",flexShrink:0,borderBottom:"0.5px solid rgba(120,120,120,0.24)",minWidth:weeklyMinWidth }}>
         <div style={{ width:44,flexShrink:0 }}/>
         <div style={{ flex:1,display:"grid",gridTemplateColumns:"repeat(6,1fr)" }}>
           {weekDays.map((d,i)=>{
@@ -1302,7 +1365,7 @@ function CalendarioHorarios({ data, reloadData, user, agendaRequest, onBackToRep
         </div>
       </div>
       {/* Cuerpo scrolleable: eje + grid juntos */}
-      <div ref={setScrollRef} style={{ flex:1,overflowY:"hidden",display:"flex" }}>
+      <div ref={setScrollRef} style={{ flex:1,overflowY:"hidden",display:"flex",minWidth:weeklyMinWidth }}>
         <div style={{ width:44,flexShrink:0,borderRight:"0.5px solid rgba(120,120,120,0.24)",position:"relative",height:CAL_GRID_H+18 }}>
           {CAL_LABEL_HOURS.map(h=>{
             const top=(h-CAL_START)*CAL_SLOT_H;
@@ -1415,15 +1478,17 @@ function CalendarioHorarios({ data, reloadData, user, agendaRequest, onBackToRep
   // ── MENSUAL ──────────────────────────────────────────────────────
   const renderMensual = () => {
     const dias=getDiasDelMes(anio,mes), sems=getSemanasCalendario(dias);
-    const rowH = Math.max(isMobile ? 58 : 74, Math.floor((520 - 34) / Math.max(sems.length, 1)));
-    return <div style={{ flex:1,overflow:"hidden" }}>
-      <div style={{ display:"grid",gridTemplateColumns:"repeat(6,1fr) 118px",borderBottom:"0.5px solid rgba(120,120,120,0.24)",position:"sticky",top:0,background:"var(--color-background-primary)",zIndex:2 }}>
+    const rowH = Math.max(isMobile ? 62 : 74, Math.floor((520 - 34) / Math.max(sems.length, 1)));
+    const monthGridCols = isMobile ? "repeat(6,minmax(62px,1fr)) 70px" : "repeat(6,1fr) 118px";
+    return <div style={{ flex:1,overflowX:"auto",overflowY:"hidden",minWidth:0 }}>
+      <div style={{ minWidth:monthMinWidth }}>
+      <div style={{ display:"grid",gridTemplateColumns:monthGridCols,borderBottom:"0.5px solid rgba(120,120,120,0.24)",position:"sticky",top:0,background:"var(--color-background-primary)",zIndex:2 }}>
         {DIAS_SEMANA.map(d=><div key={d} style={{ textAlign:"center",padding:"8px 4px",fontSize:11,fontWeight:500,color:"var(--color-text-secondary)",borderLeft:"0.5px solid rgba(120,120,120,0.24)" }}>{d}</div>)}
         <div style={{ textAlign:"center",padding:"8px 4px",fontSize:11,fontWeight:500,color:"var(--color-text-secondary)",borderLeft:"0.5px solid rgba(120,120,120,0.24)" }}>Sem.</div>
       </div>
       {sems.map((semana,si)=>{
         const totalSem=semana.reduce((a,d)=>d ? a+calHoras(getB(dateKey(d))) : a,0);
-        return <div key={si} style={{ display:"grid",gridTemplateColumns:"repeat(6,1fr) 118px",borderBottom:"0.5px solid rgba(120,120,120,0.24)",height:rowH }}>
+        return <div key={si} style={{ display:"grid",gridTemplateColumns:monthGridCols,borderBottom:"0.5px solid rgba(120,120,120,0.24)",height:rowH }}>
           {Array.from({length:6},(_,i)=>{
             const d=semana[i]; if(!d) return <div key={i} style={{ borderLeft:"0.5px solid rgba(120,120,120,0.24)" }}/>;
             const f=dateKey(d),b=getB(f),isToday=f===todayDk,fer=feriados.has(f),asis=getAsistencia(f),ai=asistenciaInfo(asis),lockedDia=bloqueadoPorFecha(f)||!!asis;
@@ -1437,7 +1502,7 @@ function CalendarioHorarios({ data, reloadData, user, agendaRequest, onBackToRep
               onPointerMove={e=>b&&showTooltip(e,f,b)}
               onPointerLeave={hideTooltip}
               onPointerCancel={hideTooltip}
-              style={{ borderLeft:"0.5px solid rgba(120,120,120,0.24)",padding:isMobile?4:5,cursor:"pointer",background:fer?COLORS.amberLight:(b?COLORS.pinkLight:"transparent"),touchAction:"manipulation" }}>
+              style={{ borderLeft:"0.5px solid rgba(120,120,120,0.24)",padding:isMobile?4:5,cursor:"pointer",background:fer?COLORS.amberLight:(b?COLORS.pinkLight:"transparent"),touchAction:"manipulation",overflow:"hidden",minWidth:0 }}>
               <div style={{ display:"flex",alignItems:"center",gap:4,marginBottom:5,minWidth:0 }}>
                 <div style={{ width:22,height:22,borderRadius:"50%",background:isToday?COLORS.pink:"transparent",display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0 }}>
                   <span style={{ fontSize:11,fontWeight:500,color:isToday?"#fff":fer?COLORS.amber:"var(--color-text-primary)" }}>{d.getDate()}</span>
@@ -1445,20 +1510,20 @@ function CalendarioHorarios({ data, reloadData, user, agendaRequest, onBackToRep
                 {fer && <span style={{ fontSize:9,color:COLORS.amber,fontWeight:500 }}>Feriado</span>}
                 {asis && <span style={{ marginLeft:"auto",width:18,height:18,borderRadius:"50%",background:ai.bg,color:ai.color,border:`1px solid ${ai.color}`,display:"flex",alignItems:"center",justifyContent:"center",fontSize:10,fontWeight:700,flexShrink:0 }}>{ai.icon}</span>}
               </div>
-              {b ? <div style={{ background:"#fff",border:`1px solid ${asis?ai.color:COLORS.pink}`,borderRadius:5,padding:"5px 6px",minWidth:0,overflow:"hidden",opacity:lockedDia&&asis?0.95:1 }}>
-                <p style={{ margin:0,fontSize:isMobile?9:10,color:asis?"#555":COLORS.pinkDark,fontWeight:600,lineHeight:1.25,whiteSpace:"normal" }}>Desde {calFmt(st.h,st.m)}</p>
-                <p style={{ margin:0,fontSize:isMobile?9:10,color:asis?"#555":COLORS.pinkDark,fontWeight:600,lineHeight:1.25,whiteSpace:"normal" }}>Hasta {calFmt(en.h,en.m)}</p>
-                <div style={{ display:"flex",alignItems:"center",justifyContent:"space-between",gap:4,marginTop:2 }}>
-                  <p style={{ margin:0,fontSize:isMobile?9:10,color:asis?ai.color:COLORS.pink,fontWeight:asis?600:400 }}>{asis?ai.label:calHoras(b).toFixed(1)+"h"}</p>
-                  {!lockedDia && <span style={{ fontSize:9,color:COLORS.gray,whiteSpace:"nowrap" }}>Editar</span>}
-                  {lockedDia && asis && <span style={{ fontSize:9,color:COLORS.gray,whiteSpace:"nowrap" }}>Bloq.</span>}
+              {b ? <div style={{ background:"#fff",border:`1px solid ${asis?ai.color:COLORS.pink}`,borderRadius:5,padding:compactMonth?"3px 4px":"5px 6px",minWidth:0,overflow:"hidden",opacity:lockedDia&&asis?0.95:1,maxHeight:"100%" }}>
+                <p style={{ margin:0,fontSize:compactMonth?9:(isMobile?9:10),color:asis?"#555":COLORS.pinkDark,fontWeight:600,lineHeight:1.15,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis" }}>{compactMonth?`${calFmt(st.h,st.m)}–${calFmt(en.h,en.m)}`:`Desde ${calFmt(st.h,st.m)}`}</p>
+                {!compactMonth && <p style={{ margin:0,fontSize:isMobile?9:10,color:asis?"#555":COLORS.pinkDark,fontWeight:600,lineHeight:1.25,whiteSpace:"normal" }}>Hasta {calFmt(en.h,en.m)}</p>}
+                <div style={{ display:"flex",alignItems:"center",justifyContent:"space-between",gap:4,marginTop:2,minWidth:0 }}>
+                  <p style={{ margin:0,fontSize:compactMonth?9:(isMobile?9:10),color:asis?ai.color:COLORS.pink,fontWeight:asis?600:400,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis" }}>{asis?(compactMonth?ai.label.replace("Llegó tarde","Tarde"):ai.label):calHoras(b).toFixed(1)+"h"}</p>
+                  {!compactMonth && !lockedDia && <span style={{ fontSize:9,color:COLORS.gray,whiteSpace:"nowrap" }}>Editar</span>}
+                  {!compactMonth && lockedDia && asis && <span style={{ fontSize:9,color:COLORS.gray,whiteSpace:"nowrap" }}>Bloq.</span>}
                 </div>
               </div>
-              : !lockedDia && <p style={{ margin:0,fontSize:10,color:"var(--color-text-secondary)",opacity:0.5 }}>+ agregar</p>}
+              : !lockedDia && <p style={{ margin:0,fontSize:compactMonth?9:10,color:"var(--color-text-secondary)",opacity:0.5,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis" }}>{compactMonth?"+":" + agregar"}</p>}
             </div>;
           })}
-          <div style={{ borderLeft:"0.5px solid rgba(120,120,120,0.24)",display:"flex",alignItems:"center",justifyContent:"center",gap:6,padding:"0 6px" }}>
-            <span style={{ fontSize:15,fontWeight:500,color:totalSem>0?COLORS.success:"var(--color-text-secondary)",whiteSpace:"nowrap" }}>{totalSem.toFixed(1)}h</span>
+          <div style={{ borderLeft:"0.5px solid rgba(120,120,120,0.24)",display:"flex",alignItems:"center",justifyContent:"center",gap:isMobile?3:6,padding:isMobile?"0 3px":"0 6px",overflow:"hidden" }}>
+            <span style={{ fontSize:isMobile?13:15,fontWeight:500,color:totalSem>0?COLORS.success:"var(--color-text-secondary)",whiteSpace:"nowrap" }}>{totalSem.toFixed(1)}h</span>
             <button
               onClick={(e)=>{ e.stopPropagation(); repetirSemanaAnteriorParaDias(semana.filter(Boolean)); }}
               disabled={bloqueado || !semana.some(Boolean)}
@@ -1468,6 +1533,7 @@ function CalendarioHorarios({ data, reloadData, user, agendaRequest, onBackToRep
           </div>
         </div>;
       })}
+      </div>
     </div>;
   };
 
@@ -1528,9 +1594,9 @@ function CalendarioHorarios({ data, reloadData, user, agendaRequest, onBackToRep
           <Btn onClick={() => { window.location.hash = "bloqueo_horarios"; }} variant="secondary" size="sm">🔐 Gestionar bloqueo de horarios</Btn>
         </div>}
       </div>
-      <div style={{ display:"flex",height:vista==="mes"?560:640,border:"0.5px solid rgba(120,120,120,0.18)",borderRadius:12,overflow:"hidden",background:"var(--color-background-primary)" }}>
+      <div style={{ display:"flex",height:calendarShellHeight,border:"0.5px solid rgba(120,120,120,0.18)",borderRadius:12,overflow:"hidden",background:"var(--color-background-primary)",maxWidth:"100%",minWidth:0 }}>
         {/* Panel lateral */}
-        {navVisible && <div style={{ width:190,flexShrink:0,borderRight:"0.5px solid rgba(120,120,120,0.18)",display:"flex",flexDirection:"column",background:"var(--color-background-secondary)" }}>
+        {navVisible && <div style={{ width:isMobile?200:190,flexShrink:0,borderRight:"0.5px solid rgba(120,120,120,0.18)",display:"flex",flexDirection:"column",background:"var(--color-background-secondary)",overflowY:"auto",overflowX:"hidden",minHeight:0,paddingBottom:12 }}>
           {puedeGestionar && <div style={{ padding:"10px 10px 6px" }}>
             <p style={{ margin:"0 0 6px",fontSize:11,fontWeight:500,color:"var(--color-text-secondary)",textTransform:"uppercase",letterSpacing:"0.05em" }}>Manicura</p>
             <select value={manicuraId||""} onChange={e=>setManicuraId(e.target.value)} style={{ width:"100%",border:"0.5px solid rgba(120,120,120,0.24)",borderRadius:6,padding:"6px 8px",fontSize:12,background:"var(--color-background-primary)",color:"var(--color-text-primary)" }}>
@@ -1608,7 +1674,7 @@ function CalendarioHorarios({ data, reloadData, user, agendaRequest, onBackToRep
           </div>}
         </div>}
         {/* Contenido principal */}
-        <div style={{ flex:1,display:"flex",flexDirection:"column",overflow:"hidden" }}>
+        <div style={{ flex:1,display:"flex",flexDirection:"column",overflow:"hidden",minWidth:0 }}>
           <div style={{ padding:"6px 10px",borderBottom:"0.5px solid rgba(120,120,120,0.18)",display:"flex",alignItems:"center",gap:8 }}>
             {/* Botón ocultar panel — claramente separado del período */}
             <button onClick={()=>setNavVisible(v=>!v)} title={navVisible?"Ocultar panel":"Mostrar panel"} style={{ background:"none",border:"0.5px solid rgba(120,120,120,0.24)",borderRadius:6,padding:"3px 10px",cursor:"pointer",fontSize:12,color:"var(--color-text-secondary)",whiteSpace:"nowrap",flexShrink:0 }}>
@@ -2141,6 +2207,8 @@ function Reportes({ data, user, onOpenAgenda, reportRestore, reloadData }) {
   const [collapsedComisiones, setCollapsedComisiones] = useState({});
   const [sortComisiones, setSortComisiones] = useState({ key:"fecha", dir:"desc" });
   const [garantiaDetalleComisiones, setGarantiaDetalleComisiones] = useState(null);
+  const [configComisionesDraft, setConfigComisionesDraft] = useState(null);
+  const [savingConfigComisiones, setSavingConfigComisiones] = useState(false);
   const [colsComisiones, setColsComisiones] = useState([
     { key:"fecha", label:"Fecha", width:90 },
     { key:"semana", label:"Semana", width:90 },
@@ -2272,7 +2340,7 @@ function Reportes({ data, user, onOpenAgenda, reportRestore, reloadData }) {
         <div style={{ padding:"10px 12px",borderBottom:"1px solid rgba(120,120,120,0.18)" }}><strong style={{ fontSize:14 }}>Mapa de calor por hora</strong><p style={{ margin:"2px 0 0",fontSize:12,color:"var(--color-text-secondary)" }}>Cantidad de manicuras activas por franja. Los colores comparan contra la demanda esperada del día.</p></div>
         <div style={{ overflowX:"auto" }}><div style={{ minWidth:720 }}>
           <div style={{ display:"grid",gridTemplateColumns:`88px repeat(${cobertura.horas.length},1fr)`,borderBottom:"1px solid rgba(120,120,120,0.16)" }}><div style={{ padding:7,fontSize:11,color:"var(--color-text-secondary)" }}>Día</div>{cobertura.horas.map(h=><div key={h} style={{ padding:7,textAlign:"center",fontSize:11,color:"var(--color-text-secondary)",borderLeft:"1px solid rgba(120,120,120,0.12)" }}>{String(Math.floor(h/60)).padStart(2,"0")}:00</div>)}</div>
-          {cobertura.items.map(it=><div key={it.fecha} style={{ display:"grid",gridTemplateColumns:`88px repeat(${cobertura.horas.length},1fr)`,borderBottom:"1px solid rgba(120,120,120,0.10)" }}><div style={{ padding:"7px 8px",fontSize:12,fontWeight:500 }}>{fmtFecha(it.dia)}</div>{it.hourly.map((qty,idx)=>{const minBase=Math.max(1,Math.round(it.regla.minimoDiario/2)); const shade=(palette,i)=>palette[Math.max(0,Math.min(palette.length-1,i))]; const palettes={danger:["#fff1f1","#ffdada","#f8b8b8","#e24b4a"],amber:["#fff6e8","#fae6c7","#f2c884","#ba7517"],success:["#f1f8e8","#dceec9","#b6d98c","#639922"],pink:["#fbeaf0","#f4c4d4","#e590ad","#72243e"]}; let bg,fg; let shadeIdx=0; if(qty===0){bg=palettes.danger[2];fg=COLORS.danger;} else if(qty<minBase){shadeIdx=qty;bg=shade(palettes.amber,shadeIdx);fg=shadeIdx>=3?"#fff":COLORS.amber;} else if(qty>it.regla.maximoDiario){shadeIdx=Math.min(3,qty-it.regla.maximoDiario);bg=shade(palettes.pink,shadeIdx);fg=shadeIdx>=3?"#fff":COLORS.pinkDark;} else {shadeIdx=Math.max(0,qty-minBase);bg=shade(palettes.success,shadeIdx);fg=shadeIdx>=3?"#fff":COLORS.success;} return <div key={idx} style={{ padding:7,textAlign:"center",fontSize:12,fontWeight:700,color:fg,background:bg,borderLeft:"1px solid rgba(120,120,120,0.10)",textShadow:fg==="#fff"?"0 1px 1px rgba(0,0,0,0.25)":"none" }}>{qty}</div>;})}</div>)}
+          {cobertura.items.map(it=><div key={it.fecha} style={{ display:"grid",gridTemplateColumns:`88px repeat(${cobertura.horas.length},1fr)`,borderBottom:"1px solid rgba(120,120,120,0.10)" }}><div style={{ padding:"7px 8px",fontSize:12,fontWeight:500 }}>{fmtFecha(it.dia)}</div>{it.hourly.map((qty,idx)=>{const minBase=Math.max(1,Math.round(it.regla.minimoDiario/2)); const shade=(palette,i)=>palette[Math.max(0,Math.min(palette.length-1,i))]; const palettes={danger:["#fff1f1","#ffdada","#f8b8b8","#e24b4a"],amber:["#fff6e8","#fae6c7","#f2c884","#ba7517"],success:["#f1f8e8","#dceec9","#b6d98c","#639922"],pink:["#f7edf0","#f4c4d4","#e590ad","#72243e"]}; let bg,fg; let shadeIdx=0; if(qty===0){bg=palettes.danger[2];fg=COLORS.danger;} else if(qty<minBase){shadeIdx=qty;bg=shade(palettes.amber,shadeIdx);fg=shadeIdx>=3?"#fff":COLORS.amber;} else if(qty>it.regla.maximoDiario){shadeIdx=Math.min(3,qty-it.regla.maximoDiario);bg=shade(palettes.pink,shadeIdx);fg=shadeIdx>=3?"#fff":COLORS.pinkDark;} else {shadeIdx=Math.max(0,qty-minBase);bg=shade(palettes.success,shadeIdx);fg=shadeIdx>=3?"#fff":COLORS.success;} return <div key={idx} style={{ padding:7,textAlign:"center",fontSize:12,fontWeight:700,color:fg,background:bg,borderLeft:"1px solid rgba(120,120,120,0.10)",textShadow:fg==="#fff"?"0 1px 1px rgba(0,0,0,0.25)":"none" }}>{qty}</div>;})}</div>)}
         </div></div>
       </Card>
       {garantiaDetalleComisiones&&<Modal title="Detalle de garantía" onClose={()=>setGarantiaDetalleComisiones(null)} width={560}>
@@ -2299,6 +2367,14 @@ function Reportes({ data, user, onOpenAgenda, reportRestore, reloadData }) {
     const userNameById = new Map((data.users||[]).map(u=>[u.id, u.nombre]));
     const allowedLocalNames = new Set(localesVisibles.map(l=>String(l.nombre||"").trim().toLowerCase()));
     const normalize = v => String(v || "").trim().toLowerCase();
+    const periodoPartsComisiones = String(periodoComisiones || "").split("-").map(Number);
+    const periodoYearComisiones = periodoPartsComisiones[0] || hoy.getFullYear();
+    const periodoMonthComisiones = (periodoPartsComisiones[1] || (hoy.getMonth()+1)) - 1;
+    const semanasComisionesPeriodo = getCommissionWeeksForMonth(periodoYearComisiones, periodoMonthComisiones);
+    const semanaSeleccionadaComision = semanaComisiones !== "todas" ? semanasComisionesPeriodo.find(w => String(w.numero) === String(semanaComisiones)) : null;
+    const semanaSeleccionadaDias = semanaSeleccionadaComision ? Array.from({ length:6 }, (_,i)=>addDaysLocal(semanaSeleccionadaComision.desdeKey, i)).filter(Boolean) : null;
+    const semanaKeysComision = (semanaSeleccionadaDias || []).map(d=>dateKey(d));
+    const fechaEnSemanaSeleccionada = (fecha) => semanaComisiones !== "todas" && semanaSeleccionadaComision ? isDateInRangeKey(fecha, semanaSeleccionadaComision.desdeKey, semanaSeleccionadaComision.hastaKey) : false;
     const displayManicuraComision = (u, fallback="") => (u?.codigoExterno || fallback || u?.nombre || "").trim();
     const puedeVerComision = (c) => {
       if (esAdmin) return true;
@@ -2308,7 +2384,7 @@ function Reportes({ data, user, onOpenAgenda, reportRestore, reloadData }) {
     };
     const baseRegistrosComisiones = (data.comisiones||[])
       .filter(c=>puedeVerComision(c))
-      .filter(c=>!periodoComisiones || c.periodo === periodoComisiones)
+      .filter(c=>semanaComisiones === "todas" ? (!periodoComisiones || c.periodo === periodoComisiones) : fechaEnSemanaSeleccionada(c.fechaPago))
       .filter(c=>localComisiones === "todos" || c.localId === parseInt(localComisiones) || normalize(c.nombreLocal) === normalize(localNameById.get(parseInt(localComisiones))))
       .filter(c=>manicuraComisiones === "todas" || c.userId === parseInt(manicuraComisiones) || normalize(c.nombreManicura) === normalize(userNameById.get(parseInt(manicuraComisiones))));
     const garantiaVisible = (g, tipo) => {
@@ -2319,7 +2395,7 @@ function Reportes({ data, user, onOpenAgenda, reportRestore, reloadData }) {
     };
     const ajustesGarantias = (data.garantias||[]).flatMap(g => {
       const periodoG = (g.fechaReparacion || "").slice(0,7);
-      if (!periodoComisiones || periodoG !== periodoComisiones) return [];
+      if (semanaComisiones === "todas" ? (!periodoComisiones || periodoG !== periodoComisiones) : !fechaEnSemanaSeleccionada(g.fechaReparacion)) return [];
       if (localComisiones !== "todos" && g.localId !== parseInt(localComisiones)) return [];
       const local = localNameById.get(g.localId) || "";
       const original = data.users.find(u=>u.id===g.manicuraOriginalId);
@@ -2340,12 +2416,12 @@ function Reportes({ data, user, onOpenAgenda, reportRestore, reloadData }) {
       return rows.filter(r => manicuraComisiones === "todas" || r.userId === parseInt(manicuraComisiones));
     });
     const baseRegistros = [...baseRegistrosComisiones, ...ajustesGarantias];
-    const semanasDisponibles = Array.from(new Set(baseRegistros.map(c=>weekOfMonthValue(c.fechaPago)).filter(Boolean))).sort((a,b)=>parseInt(a)-parseInt(b));
+    const semanasDisponibles = semanasComisionesPeriodo.map(w => String(w.numero));
     const registrosFiltrados = baseRegistros
-      .filter(c=>semanaComisiones === "todas" || weekOfMonthValue(c.fechaPago) === semanaComisiones);
+      .filter(c=>semanaComisiones === "todas" || fechaEnSemanaSeleccionada(c.fechaPago));
     const sortRawValue = (c, key) => {
       if (key === "fecha") return c.fechaPago || "";
-      if (key === "semana") return Number(weekOfMonthValue(c.fechaPago) || 0);
+      if (key === "semana") return dateKey(startOfCommissionWeek(c.fechaPago) || new Date(0));
       if (key === "local") return normalize(c.nombreLocal);
       if (key === "manicura") return normalize(c.nombreManicura);
       if (key === "servicio") return normalize(c.servicio);
@@ -2372,10 +2448,10 @@ function Reportes({ data, user, onOpenAgenda, reportRestore, reloadData }) {
     };
     const baseAdelantos = (data.adelantos||[])
       .filter(a=>puedeVerAdelanto(a))
-      .filter(a=>!periodoComisiones || a.periodo === periodoComisiones)
+      .filter(a=>semanaComisiones === "todas" ? (!periodoComisiones || a.periodo === periodoComisiones) : fechaEnSemanaSeleccionada(a.fechaDescuento || a.fecha))
       .filter(a=>localComisiones === "todos" || a.localId === parseInt(localComisiones))
       .filter(a=>manicuraComisiones === "todas" || a.userId === parseInt(manicuraComisiones));
-    const adelantos = baseAdelantos.filter(a=>semanaComisiones === "todas" || weekOfMonthValue(a.fechaDescuento || a.fecha) === semanaComisiones);
+    const adelantos = baseAdelantos.filter(a=>semanaComisiones === "todas" || fechaEnSemanaSeleccionada(a.fechaDescuento || a.fecha));
     const adelantoGroupKeysSeleccion = new Set(baseAdelantos.map(a=>a.grupoId || `adelanto-${a.id}`));
     const adelantosPlanesComisiones = buildAdelantoPlanes((data.adelantos||[]).filter(a=>puedeVerAdelanto(a)).filter(a=>adelantoGroupKeysSeleccion.has(a.grupoId || `adelanto-${a.id}`)));
     const planesPorUserComisiones = adelantosPlanesComisiones.reduce((map,p)=>{ const arr=map.get(p.userId)||[]; arr.push(p); map.set(p.userId,arr); return map; }, new Map());
@@ -2397,61 +2473,82 @@ function Reportes({ data, user, onOpenAgenda, reportRestore, reloadData }) {
       ? fmtDateTime(ultimaActualizacionSeleccion)
       : ultimaImportacionPeriodo?.creadoEn ? fmtDateTime(ultimaImportacionPeriodo.creadoEn) : "";
     const manicurasComision = puedeGestionar ? manicuras.filter(m => baseRegistros.some(c => c.userId === m.id || normalize(c.nombreManicura) === normalize(m.nombre)) || m.activo) : [user];
-    const periodoParts = String(periodoComisiones || "").split("-").map(Number);
-    const periodoYear = periodoParts[0] || hoy.getFullYear();
-    const periodoMonth = (periodoParts[1] || (hoy.getMonth()+1)) - 1;
-    const semanasPeriodo = getSemanas(getDiasDelMes(periodoYear, periodoMonth));
-    const semanaSeleccionadaDias = semanaComisiones !== "todas" ? semanasPeriodo[parseInt(semanaComisiones)-1] : null;
-    const sabadoPagoBase = saturdayForWeekDates(semanaSeleccionadaDias);
+    const sabadoPagoBase = semanaSeleccionadaComision ? new Date(semanaSeleccionadaComision.hasta) : null;
     const hoyPagoCheck = new Date();
     hoyPagoCheck.setHours(0,0,0,0);
     const sabadoPagoCheck = sabadoPagoBase ? new Date(sabadoPagoBase) : null;
     if (sabadoPagoCheck) sabadoPagoCheck.setHours(0,0,0,0);
     const semanaFinalizada = !!sabadoPagoCheck && hoyPagoCheck > sabadoPagoCheck;
     const pagoEstimado = semanaComisiones !== "todas" && !!sabadoPagoBase && !semanaFinalizada;
-    const semanaKeysComision = (semanaSeleccionadaDias || []).filter(Boolean).map(d=>dateKey(d));
     const minutesFromTimeComision = (hhmm) => {
       const [h,m] = String(hhmm||"").slice(0,5).split(":").map(Number);
       return (Number.isFinite(h)?h:0)*60 + (Number.isFinite(m)?m:0);
+    };
+    const configGeneralComisiones = (data.comisionesConfiguracion || []).find(c=>c.activo) || { id:1, porcentajeBase:40, porcentajeReducido:35, horasObjetivoDefault:36, maxLlegadasTarde:0, maxFaltasNoJustificadas:0, contarFaltasJustificadas:false, toleranciaLlegadaTardeMinutos:0 };
+    const configManicuraMap = new Map((data.comisionesManicuraConfig || []).filter(c=>c.activo).map(c=>[`${c.userId}|${c.localId || 0}`, c]));
+    const getConfigManicura = (uid, localIdValue=null) => configManicuraMap.get(`${uid}|${localIdValue || 0}`) || configManicuraMap.get(`${uid}|0`) || null;
+    const reglaComision = (uid, localIdValue=null) => {
+      const cfg = getConfigManicura(uid, localIdValue);
+      return {
+        horasObjetivo: Number(cfg?.horasObjetivoSemanales || configGeneralComisiones.horasObjetivoDefault || 36),
+        porcentajeBase: Number(cfg?.porcentajeBase || configGeneralComisiones.porcentajeBase || 40),
+        porcentajeReducido: Number(cfg?.porcentajeReducido || configGeneralComisiones.porcentajeReducido || 35),
+        maxLlegadasTarde: Number(cfg?.maxLlegadasTarde ?? configGeneralComisiones.maxLlegadasTarde ?? 0),
+        maxFaltasNoJustificadas: Number(cfg?.maxFaltasNoJustificadas ?? configGeneralComisiones.maxFaltasNoJustificadas ?? 0),
+        contarFaltasJustificadas: cfg?.contarFaltasJustificadas ?? configGeneralComisiones.contarFaltasJustificadas ?? false,
+        configuracionPropia: !!cfg,
+      };
     };
     const horasTeoricasSemana = (uid) => semanaKeysComision.reduce((acc,f)=>{
       const h = (data.horarios||[]).find(x=>x.userId===uid && x.fecha===f && x.trabaja && x.entrada && x.salida);
       if (!h) return acc;
       return acc + Math.max(0, minutesFromTimeComision(h.salida) - minutesFromTimeComision(h.entrada)) / 60;
     },0);
-    const faltasSemana = (uid) => semanaKeysComision.filter(f => (data.asistencias||[]).some(a=>a.userId===uid && a.fecha===f && a.estado==="ausente")).length;
-    const criterioKey = (uid) => `${periodoComisiones}|${semanaComisiones}|${uid}`;
+    const asistenciasSemanaUsuario = (uid) => semanaKeysComision.flatMap(f => (data.asistencias||[]).filter(a=>a.userId===uid && a.fecha===f));
+    const faltasSemana = (uid, localIdValue=null) => {
+      const regla = reglaComision(uid, localIdValue);
+      return asistenciasSemanaUsuario(uid).filter(a => a.estado === "ausente" && (regla.contarFaltasJustificadas || !a.certificado)).length;
+    };
+    const llegadasTardeSemana = (uid) => asistenciasSemanaUsuario(uid).filter(a => a.estado === "tarde").length;
+    const criterioKey = (uid, localIdValue=null) => `${periodoComisiones}|${semanaComisiones}|${uid}|${localIdValue || 0}`;
     const criteriosSemanaMap = new Map((data.comisionesCriterios||[])
       .filter(c=>c.periodo===periodoComisiones && String(c.semana)===String(semanaComisiones))
-      .map(c=>[criterioKey(c.userId), c]));
-    const porcentajeAutomatico = (uid) => {
-      if (!uid || semanaComisiones === "todas") return 40;
+      .map(c=>[criterioKey(c.userId, c.localId), c]));
+    const porcentajeAutomatico = (uid, localIdValue=null) => {
+      if (!uid || semanaComisiones === "todas") return Number(configGeneralComisiones.porcentajeBase || 40);
+      const regla = reglaComision(uid, localIdValue);
       const horas = horasTeoricasSemana(uid);
-      const faltas = faltasSemana(uid);
-      return (faltas > 0 || horas < 36) ? 35 : 40;
+      const faltas = faltasSemana(uid, localIdValue);
+      const tarde = llegadasTardeSemana(uid);
+      return (horas < regla.horasObjetivo || faltas > regla.maxFaltasNoJustificadas || tarde > regla.maxLlegadasTarde) ? regla.porcentajeReducido : regla.porcentajeBase;
     };
-    const criterioInfo = (uid) => {
-      const guardado = criteriosSemanaMap.get(criterioKey(uid));
-      const auto = porcentajeAutomatico(uid);
+    const criterioInfo = (uid, localIdValue=null) => {
+      const guardado = criteriosSemanaMap.get(criterioKey(uid, localIdValue)) || criteriosSemanaMap.get(criterioKey(uid, 0));
+      const regla = reglaComision(uid, localIdValue);
+      const auto = porcentajeAutomatico(uid, localIdValue);
       return {
         porcentaje: guardado?.porcentaje || auto,
         guardado: !!guardado,
         automatico: auto,
         horas: uid ? horasTeoricasSemana(uid) : 0,
-        faltas: uid ? faltasSemana(uid) : 0,
+        horasObjetivo: regla.horasObjetivo,
+        faltas: uid ? faltasSemana(uid, localIdValue) : 0,
+        llegadasTarde: uid ? llegadasTardeSemana(uid) : 0,
+        regla,
         motivo: guardado?.motivo || ""
       };
     };
-    const comisionAl35 = (com40) => Number(com40 || 0) * 0.875;
+    const comisionConPorcentaje = (comisionBase, porcentaje, porcentajeBase=40) => Number(comisionBase || 0) * (Number(porcentaje || porcentajeBase) / Math.max(1, Number(porcentajeBase || 40)));
+    const comisionAl35 = (com40) => comisionConPorcentaje(com40, Number(configGeneralComisiones.porcentajeReducido || 35), Number(configGeneralComisiones.porcentajeBase || 40));
     const comisionAplicadaRegistro = (c) => {
       const valor = Number(c?.comision || 0);
       if (!c || c.tipoRegistro === "garantia") return valor;
-      const info = criterioInfo(c.userId);
-      return info.porcentaje === 35 ? comisionAl35(valor) : valor;
+      const info = criterioInfo(c.userId, c.localId);
+      return comisionConPorcentaje(valor, info.porcentaje, info.regla?.porcentajeBase || configGeneralComisiones.porcentajeBase || 40);
     };
     const porcentajeAplicadoRegistro = (c) => {
       if (!c || c.tipoRegistro === "garantia") return null;
-      return criterioInfo(c.userId).porcentaje;
+      return criterioInfo(c.userId, c.localId).porcentaje;
     };
     const semanaKeysPorPeriodo = (periodo, semana) => {
       const [yy, mm] = String(periodo || "").split("-").map(Number);
@@ -2465,19 +2562,22 @@ function Reportes({ data, user, onOpenAgenda, reportRestore, reloadData }) {
       return acc + Math.max(0, minutesFromTimeComision(h.salida) - minutesFromTimeComision(h.entrada)) / 60;
     }, 0);
     const faltasSemanaFor = (uid, periodo, semana) => semanaKeysPorPeriodo(periodo, semana).filter(f => (data.asistencias || []).some(a => a.userId === uid && a.fecha === f && a.estado === "ausente")).length;
-    const criterioInfoFor = (uid, periodo, semana) => {
+    const criterioInfoFor = (uid, periodo, semana, localIdValue=null) => {
       if (!uid || !periodo || !semana) return { porcentaje: 40, guardado: false, automatico: 40, horas: 0, faltas: 0 };
-      const guardado = (data.comisionesCriterios || []).find(c => c.periodo === periodo && String(c.semana) === String(semana) && c.userId === uid);
+      const guardado = (data.comisionesCriterios || []).find(c => c.periodo === periodo && String(c.semana) === String(semana) && c.userId === uid && ((c.localId || 0) === (localIdValue || 0)))
+        || (data.comisionesCriterios || []).find(c => c.periodo === periodo && String(c.semana) === String(semana) && c.userId === uid && !c.localId);
       const horas = horasTeoricasSemanaFor(uid, periodo, semana);
       const faltas = faltasSemanaFor(uid, periodo, semana);
-      const automatico = (faltas > 0 || horas < 36) ? 35 : 40;
-      return { porcentaje: guardado?.porcentaje || automatico, guardado: !!guardado, automatico, horas, faltas };
+      const regla = reglaComision(uid, localIdValue);
+      const tarde = semanaKeysPorPeriodo(periodo, semana).filter(f => (data.asistencias || []).some(a => a.userId === uid && a.fecha === f && a.estado === "tarde")).length;
+      const automatico = (faltas > regla.maxFaltasNoJustificadas || horas < regla.horasObjetivo || tarde > regla.maxLlegadasTarde) ? regla.porcentajeReducido : regla.porcentajeBase;
+      return { porcentaje: guardado?.porcentaje || automatico, guardado: !!guardado, automatico, horas, faltas, llegadasTarde:tarde, regla };
     };
     const comisionAplicadaRegistroHistorica = (c) => {
       const valor = Number(c?.comision || 0);
       if (!c || c.tipoRegistro === "garantia") return valor;
-      const info = criterioInfoFor(c.userId, c.periodo || String(c.fechaPago || "").slice(0,7), weekOfMonthValue(c.fechaPago));
-      return info.porcentaje === 35 ? comisionAl35(valor) : valor;
+      const info = criterioInfoFor(c.userId, c.periodo || String(c.fechaPago || "").slice(0,7), weekOfMonthValue(c.fechaPago), c.localId);
+      return comisionConPorcentaje(valor, info.porcentaje, info.regla?.porcentajeBase || configGeneralComisiones.porcentajeBase || 40);
     };
     const guardarCriterioComision = async (uid, localIdValue, porcentaje) => {
       if (!uid || semanaComisiones === "todas") return;
@@ -2495,6 +2595,75 @@ function Reportes({ data, user, onOpenAgenda, reportRestore, reloadData }) {
         await reloadData();
       } catch(e) { notifyToast("No se pudo guardar el porcentaje de comisión: " + (e.message || e), "error"); }
     };
+    const abrirConfigComisiones = () => {
+      setConfigComisionesDraft({
+        general: { ...configGeneralComisiones },
+        manicuras: manicuras.map(m => {
+          const cfg = getConfigManicura(m.id, m.localId) || {};
+          return {
+            userId:m.id,
+            localId:m.localId || 0,
+            nombre:m.nombre,
+            local:localNameById.get(m.localId) || "Sin local",
+            horasObjetivoSemanales: cfg.horasObjetivoSemanales || "",
+            porcentajeBase: cfg.porcentajeBase ?? "",
+            porcentajeReducido: cfg.porcentajeReducido ?? "",
+            maxLlegadasTarde: cfg.maxLlegadasTarde ?? "",
+            maxFaltasNoJustificadas: cfg.maxFaltasNoJustificadas ?? "",
+            activo: cfg.activo !== false,
+          };
+        })
+      });
+    };
+    const updateConfigGeneralDraft = (key, value) => setConfigComisionesDraft(d => d ? ({ ...d, general:{ ...d.general, [key]: value } }) : d);
+    const updateConfigManicuraDraft = (idx, key, value) => setConfigComisionesDraft(d => d ? ({ ...d, manicuras:d.manicuras.map((r,i)=>i===idx?{...r,[key]:value}:r) }) : d);
+    const guardarConfigComisiones = async () => {
+      if (!configComisionesDraft) return;
+      setSavingConfigComisiones(true);
+      try {
+        const g = configComisionesDraft.general || {};
+        await api.upsertComisionesConfiguracion({
+          id:g.id || 1,
+          nombre:g.nombre || "Configuración principal",
+          activo:true,
+          porcentaje_base:Number(g.porcentajeBase || 40),
+          porcentaje_reducido:Number(g.porcentajeReducido || 35),
+          horas_objetivo_default:Number(g.horasObjetivoDefault || 36),
+          max_llegadas_tarde:Number(g.maxLlegadasTarde || 0),
+          max_faltas_no_justificadas:Number(g.maxFaltasNoJustificadas || 0),
+          contar_faltas_justificadas:!!g.contarFaltasJustificadas,
+          tolerancia_llegada_tarde_minutos:Number(g.toleranciaLlegadaTardeMinutos || 0),
+          actualizado_por_user_id:user.id,
+          actualizado_en:new Date().toISOString(),
+        });
+        for (const r of (configComisionesDraft.manicuras || [])) {
+          if (!r.userId) continue;
+          const horas = String(r.horasObjetivoSemanales ?? "").trim();
+          const payload = {
+            user_id:r.userId,
+            local_id:r.localId || 0,
+            horas_objetivo_semanales:horas === "" ? null : Number(horas),
+            porcentaje_base:String(r.porcentajeBase ?? "").trim() === "" ? null : Number(r.porcentajeBase),
+            porcentaje_reducido:String(r.porcentajeReducido ?? "").trim() === "" ? null : Number(r.porcentajeReducido),
+            max_llegadas_tarde:String(r.maxLlegadasTarde ?? "").trim() === "" ? null : Number(r.maxLlegadasTarde),
+            max_faltas_no_justificadas:String(r.maxFaltasNoJustificadas ?? "").trim() === "" ? null : Number(r.maxFaltasNoJustificadas),
+            activo:r.activo !== false,
+            actualizado_por_user_id:user.id,
+            actualizado_en:new Date().toISOString(),
+          };
+          if (payload.horas_objetivo_semanales !== null || payload.porcentaje_base !== null || payload.porcentaje_reducido !== null || payload.max_llegadas_tarde !== null || payload.max_faltas_no_justificadas !== null) {
+            await api.upsertComisionesManicuraConfig(payload);
+          }
+        }
+        await reloadData();
+        setConfigComisionesDraft(null);
+        notifyToast("Configuración de comisiones guardada.", "success");
+      } catch(e) {
+        notifyToast("No se pudo guardar la configuración de comisiones: " + (e.message || e), "error");
+      }
+      setSavingConfigComisiones(false);
+    };
+
     const manicurasPagoMap = new Map();
     registros.forEach(c => {
       const key = c.userId || normalize(c.nombreLocal + "|" + c.nombreManicura);
@@ -2533,7 +2702,7 @@ function Reportes({ data, user, onOpenAgenda, reportRestore, reloadData }) {
         const com40 = Number(c.comision || 0);
         prev.precio += Number(c.precio || 0);
         prev.comisionBase += com40;
-        prev.comision35 += comisionAl35(com40);
+        { const infoTemp = criterioInfo(c.userId, c.localId); prev.comision35 += comisionConPorcentaje(com40, infoTemp.regla?.porcentajeReducido || configGeneralComisiones.porcentajeReducido || 35, infoTemp.regla?.porcentajeBase || configGeneralComisiones.porcentajeBase || 40); }
         prev.servicios += 1;
       }
       if (!prev.localId && c.localId) prev.localId = c.localId;
@@ -2541,17 +2710,20 @@ function Reportes({ data, user, onOpenAgenda, reportRestore, reloadData }) {
       return map;
     }, new Map());
     for (const r of resumenMapComisiones.values()) {
-      const info = criterioInfo(r.userId);
+      const info = criterioInfo(r.userId, r.localId);
       r.porcentajeAplicado = info.porcentaje;
       r.porcentajeAutomatico = info.automatico;
       r.criterioGuardado = info.guardado;
       r.horasTeoricas = info.horas;
       r.faltas = info.faltas;
-      const baseFinal = r.porcentajeAplicado === 35 ? r.comision35 : r.comisionBase;
+      r.llegadasTarde = info.llegadasTarde;
+      r.horasObjetivo = info.horasObjetivo;
+      r.reglaComision = info.regla;
+      const baseFinal = comisionConPorcentaje(r.comisionBase, r.porcentajeAplicado, info.regla?.porcentajeBase || configGeneralComisiones.porcentajeBase || 40);
       r.comisionDefinitiva = baseFinal;
       r.neto = baseFinal + r.garantias - r.adelantos;
     }
-    adelantos.forEach(a=>{ const m=data.users.find(u=>u.id===a.userId); const l=data.locales.find(x=>x.id===a.localId); const key=a.userId || `adelanto-${a.id}`; const prev=resumenMapComisiones.get(key)||{ userId:a.userId, localId:a.localId, nombre:m?.codigoExterno||m?.nombre||"Sin manicura", local:l?.nombre||"", precio:0, comisionBase:0, comision35:0, comisionDefinitiva:0, porcentajeAplicado:40, porcentajeAutomatico:40, criterioGuardado:false, horasTeoricas:0, faltas:0, garantias:0, adelantos:0, neto:0, servicios:0, garantiasQty:0 }; prev.adelantos+=a.importe; const info=criterioInfo(prev.userId); prev.porcentajeAplicado=info.porcentaje; prev.porcentajeAutomatico=info.automatico; prev.criterioGuardado=info.guardado; prev.horasTeoricas=info.horas; prev.faltas=info.faltas; prev.comisionDefinitiva=prev.porcentajeAplicado===35?prev.comision35:prev.comisionBase; prev.neto=prev.comisionDefinitiva+prev.garantias-prev.adelantos; resumenMapComisiones.set(key,prev); });
+    adelantos.forEach(a=>{ const m=data.users.find(u=>u.id===a.userId); const l=data.locales.find(x=>x.id===a.localId); const key=a.userId || `adelanto-${a.id}`; const prev=resumenMapComisiones.get(key)||{ userId:a.userId, localId:a.localId, nombre:m?.codigoExterno||m?.nombre||"Sin manicura", local:l?.nombre||"", precio:0, comisionBase:0, comision35:0, comisionDefinitiva:0, porcentajeAplicado:40, porcentajeAutomatico:40, criterioGuardado:false, horasTeoricas:0, faltas:0, garantias:0, adelantos:0, neto:0, servicios:0, garantiasQty:0 }; prev.adelantos+=a.importe; const info=criterioInfo(prev.userId, prev.localId); prev.porcentajeAplicado=info.porcentaje; prev.porcentajeAutomatico=info.automatico; prev.criterioGuardado=info.guardado; prev.horasTeoricas=info.horas; prev.faltas=info.faltas; prev.llegadasTarde=info.llegadasTarde; prev.horasObjetivo=info.horasObjetivo; prev.reglaComision=info.regla; prev.comisionDefinitiva=comisionConPorcentaje(prev.comisionBase,prev.porcentajeAplicado,info.regla?.porcentajeBase||configGeneralComisiones.porcentajeBase||40); prev.neto=prev.comisionDefinitiva+prev.garantias-prev.adelantos; resumenMapComisiones.set(key,prev); });
     const resumenPorManicura = Array.from(resumenMapComisiones.values()).sort((a,b)=>b.neto-a.neto);
     const totalComisionDefinitiva = resumenPorManicura.reduce((a,r)=>a+Number(r.comisionDefinitiva||0)+Number(r.garantias||0),0);
     const netoPagarDefinitivo = resumenPorManicura.reduce((a,r)=>a+Number(r.neto||0),0);
@@ -2568,7 +2740,7 @@ function Reportes({ data, user, onOpenAgenda, reportRestore, reloadData }) {
       { id:"comision", label:"Comisión" },
     ];
     const groupLabel = (c, campo) => {
-      if (campo === "semana") return weekOfMonthLabel(c.fechaPago);
+      if (campo === "semana") return commissionWeekLabel(c.fechaPago);
       if (campo === "fecha") return (c.fechaPago||"").split("-").reverse().join("/");
       if (campo === "local") return c.nombreLocal || "Sin local";
       if (campo === "manicura") return c.nombreManicura || "Sin manicura";
@@ -2611,7 +2783,7 @@ function Reportes({ data, user, onOpenAgenda, reportRestore, reloadData }) {
     const renderCell = (c, key) => {
       const map = {
         fecha: fmtFechaCorta(c.fechaPago),
-        semana: weekOfMonthLabel(c.fechaPago),
+        semana: commissionWeekLabel(c.fechaPago),
         local: c.nombreLocal,
         manicura: c.nombreManicura,
         servicio: c.servicio,
@@ -2820,11 +2992,44 @@ function Reportes({ data, user, onOpenAgenda, reportRestore, reloadData }) {
     };
 
     return <>
+      {configComisionesDraft&&<Modal title="Configuración de comisiones" onClose={()=>setConfigComisionesDraft(null)} width={980}>
+        <div style={{ display:"flex",flexDirection:"column",gap:14 }}>
+          <div style={{ background:COLORS.infoLight,border:`1px solid ${COLORS.info}22`,borderRadius:10,padding:"10px 12px" }}>
+            <p style={{ margin:0,fontSize:13,color:COLORS.info }}>Estos parámetros definen el porcentaje automático semanal. Los valores por manicura pisan la configuración general. La semana de comisión se calcula de lunes a sábado y puede cruzar meses.</p>
+          </div>
+          <div style={{ display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(150px,1fr))",gap:10 }}>
+            <ModalInput label="% normal" type="number" value={configComisionesDraft.general.porcentajeBase} onChange={v=>updateConfigGeneralDraft("porcentajeBase",v)}/>
+            <ModalInput label="% reducido" type="number" value={configComisionesDraft.general.porcentajeReducido} onChange={v=>updateConfigGeneralDraft("porcentajeReducido",v)}/>
+            <ModalInput label="Horas objetivo default" type="number" value={configComisionesDraft.general.horasObjetivoDefault} onChange={v=>updateConfigGeneralDraft("horasObjetivoDefault",v)}/>
+            <ModalInput label="Llegadas tarde permitidas" type="number" value={configComisionesDraft.general.maxLlegadasTarde} onChange={v=>updateConfigGeneralDraft("maxLlegadasTarde",v)}/>
+            <ModalInput label="Faltas no justificadas permitidas" type="number" value={configComisionesDraft.general.maxFaltasNoJustificadas} onChange={v=>updateConfigGeneralDraft("maxFaltasNoJustificadas",v)}/>
+          </div>
+          <label style={{ display:"flex",alignItems:"center",gap:8,fontSize:13,color:"var(--color-text-secondary)" }}><input type="checkbox" checked={!!configComisionesDraft.general.contarFaltasJustificadas} onChange={e=>updateConfigGeneralDraft("contarFaltasJustificadas",e.target.checked)}/>Contar también faltas justificadas/certificadas como falta para comisión</label>
+          <div style={{ border:"1px solid rgba(120,120,120,0.14)",borderRadius:12,overflow:"hidden" }}>
+            <div style={{ display:"grid",gridTemplateColumns:"1.5fr 1fr 95px 85px 85px 85px 85px",gap:8,padding:"8px 10px",background:"var(--color-background-secondary)",fontSize:10,fontWeight:800,color:"var(--color-text-secondary)",textTransform:"uppercase",letterSpacing:"0.04em" }}>
+              <span>Manicura</span><span>Local</span><span>Horas</span><span>% normal</span><span>% reducido</span><span>Tardes</span><span>Faltas</span>
+            </div>
+            <div style={{ maxHeight:360,overflowY:"auto" }}>
+              {configComisionesDraft.manicuras.map((r,idx)=><div key={`${r.userId}-${r.localId}`} style={{ display:"grid",gridTemplateColumns:"1.5fr 1fr 95px 85px 85px 85px 85px",gap:8,padding:"8px 10px",alignItems:"center",borderTop:"1px solid rgba(120,120,120,0.08)",fontSize:12 }}>
+                <strong>{r.nombre}</strong>
+                <span style={{ color:"var(--color-text-secondary)" }}>{r.local}</span>
+                <input type="number" value={r.horasObjetivoSemanales} placeholder={String(configComisionesDraft.general.horasObjetivoDefault || 36)} onChange={e=>updateConfigManicuraDraft(idx,"horasObjetivoSemanales",e.target.value)} style={{ border:"1px solid var(--color-border-secondary)",borderRadius:7,padding:"6px 7px",fontSize:12,width:"100%",boxSizing:"border-box" }}/>
+                <input type="number" value={r.porcentajeBase} placeholder={String(configComisionesDraft.general.porcentajeBase || 40)} onChange={e=>updateConfigManicuraDraft(idx,"porcentajeBase",e.target.value)} style={{ border:"1px solid var(--color-border-secondary)",borderRadius:7,padding:"6px 7px",fontSize:12,width:"100%",boxSizing:"border-box" }}/>
+                <input type="number" value={r.porcentajeReducido} placeholder={String(configComisionesDraft.general.porcentajeReducido || 35)} onChange={e=>updateConfigManicuraDraft(idx,"porcentajeReducido",e.target.value)} style={{ border:"1px solid var(--color-border-secondary)",borderRadius:7,padding:"6px 7px",fontSize:12,width:"100%",boxSizing:"border-box" }}/>
+                <input type="number" value={r.maxLlegadasTarde} placeholder={String(configComisionesDraft.general.maxLlegadasTarde ?? 0)} onChange={e=>updateConfigManicuraDraft(idx,"maxLlegadasTarde",e.target.value)} style={{ border:"1px solid var(--color-border-secondary)",borderRadius:7,padding:"6px 7px",fontSize:12,width:"100%",boxSizing:"border-box" }}/>
+                <input type="number" value={r.maxFaltasNoJustificadas} placeholder={String(configComisionesDraft.general.maxFaltasNoJustificadas ?? 0)} onChange={e=>updateConfigManicuraDraft(idx,"maxFaltasNoJustificadas",e.target.value)} style={{ border:"1px solid var(--color-border-secondary)",borderRadius:7,padding:"6px 7px",fontSize:12,width:"100%",boxSizing:"border-box" }}/>
+              </div>)}
+            </div>
+          </div>
+          <div style={{ display:"flex",gap:8,justifyContent:"flex-end" }}><Btn variant="secondary" onClick={()=>setConfigComisionesDraft(null)}>Cancelar</Btn><Btn onClick={guardarConfigComisiones} disabled={savingConfigComisiones}>{savingConfigComisiones?"Guardando...":"Guardar configuración"}</Btn></div>
+        </div>
+      </Modal>}
       <div style={{ display:"flex",gap:8,marginBottom:16,flexWrap:"wrap",alignItems:"center" }}>
         <Select value={periodoComisiones} onChange={v=>{setPeriodoComisiones(v);setSemanaComisiones("todas");}} style={{ width:130 }}>{mesesDisponibles.map(p=><option key={p} value={p}>{p}</option>)}</Select>
-        <Select value={semanaComisiones} onChange={setSemanaComisiones} style={{ width:145 }}><option value="todas">Todas las semanas</option>{semanasDisponibles.map(s=><option key={s} value={s}>Semana {s}</option>)}</Select>
+        <Select value={semanaComisiones} onChange={setSemanaComisiones} style={{ width:245 }}><option value="todas">Todas las semanas</option>{semanasComisionesPeriodo.map(w=><option key={w.numero} value={w.numero}>{w.label}</option>)}</Select>
         {puedeGestionar&&<Select value={localComisiones} onChange={v=>{setLocalComisiones(v);setManicuraComisiones("todas");setSemanaComisiones("todas");}} style={{ width:190 }}><option value="todos">Todos los locales</option>{localesVisibles.map(l=><option key={l.id} value={l.id}>{l.nombre}</option>)}</Select>}
         {puedeGestionar&&<Select value={manicuraComisiones} onChange={v=>{setManicuraComisiones(v);setSemanaComisiones("todas");}} style={{ width:210 }}><option value="todas">Todas las manicuras</option>{manicurasComision.map(m=><option key={m.id} value={m.id}>{m.nombre}</option>)}</Select>}
+        {puedeGestionar&&<Btn variant="secondary" onClick={abrirConfigComisiones}>Configurar cálculo</Btn>}
         <span style={{ background:COLORS.pinkLight,color:COLORS.pinkDark,borderRadius:8,padding:"7px 10px",fontSize:12,fontWeight:600 }}>Tabla avanzada: clic en títulos para agrupar · arrastrá títulos/bordes</span>
         {gruposComisiones.length>0&&<button onClick={()=>{setGruposComisiones([]);setCollapsedComisiones({});}} style={{ background:"#fff",border:`1px solid ${COLORS.pink}44`,color:COLORS.pinkDark,borderRadius:8,padding:"7px 10px",fontSize:12,fontWeight:600,cursor:"pointer" }}>Desagrupar todo</button>}
         {gruposComisiones.length>0&&<div style={{ display:"flex",alignItems:"center",gap:6,flexWrap:"wrap",width:"100%",background:"var(--color-background-secondary)",border:"1px solid rgba(120,120,120,0.12)",borderRadius:10,padding:"7px 8px" }}>
@@ -2841,7 +3046,7 @@ function Reportes({ data, user, onOpenAgenda, reportRestore, reloadData }) {
       </div>
       <div style={{ display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(160px,1fr))",gap:10,marginBottom:14 }}>
         <Card><p style={{ margin:"0 0 4px",fontSize:11,color:"var(--color-text-secondary)",textTransform:"uppercase",letterSpacing:"0.04em" }}>Venta total</p><p style={{ margin:0,fontSize:22,fontWeight:600 }}>{fmtMoney(totalPrecio)}</p></Card>
-        <Card><p style={{ margin:"0 0 4px",fontSize:11,color:"var(--color-text-secondary)",textTransform:"uppercase",letterSpacing:"0.04em" }}>Comisión definitiva</p><p style={{ margin:0,fontSize:22,fontWeight:600,color:COLORS.pink }}>{fmtMoney(totalComisionDefinitiva)}</p><p style={{ margin:"2px 0 0",fontSize:11,color:"var(--color-text-secondary)" }}>40%: {fmtMoney(totalComision)} · 35%: {fmtMoney(totalComision35)}</p></Card>
+        <Card><p style={{ margin:"0 0 4px",fontSize:11,color:"var(--color-text-secondary)",textTransform:"uppercase",letterSpacing:"0.04em" }}>Comisión definitiva</p><p style={{ margin:0,fontSize:22,fontWeight:600,color:COLORS.pink }}>{fmtMoney(totalComisionDefinitiva)}</p><p style={{ margin:"2px 0 0",fontSize:11,color:"var(--color-text-secondary)" }}>{Number(configGeneralComisiones.porcentajeBase||40)}%: {fmtMoney(totalComision)} · reducido: {fmtMoney(totalComision35)}</p></Card>
         <Card><p style={{ margin:"0 0 4px",fontSize:11,color:"var(--color-text-secondary)",textTransform:"uppercase",letterSpacing:"0.04em" }}>Adelantos</p><p style={{ margin:0,fontSize:22,fontWeight:600,color:COLORS.amber }}>-{fmtMoney(totalAdelantos)}</p></Card>
         <Card><p style={{ margin:"0 0 4px",fontSize:11,color:"var(--color-text-secondary)",textTransform:"uppercase",letterSpacing:"0.04em" }}>Neto a pagar</p><p style={{ margin:0,fontSize:22,fontWeight:600,color:netoPagarDefinitivo>=0?COLORS.success:COLORS.danger }}>{fmtMoney(netoPagarDefinitivo)}</p></Card>
         <Card><p style={{ margin:"0 0 4px",fontSize:11,color:"var(--color-text-secondary)",textTransform:"uppercase",letterSpacing:"0.04em" }}>Ajustes garantías</p><p style={{ margin:0,fontSize:18,fontWeight:600,color:COLORS.success }}>+{fmtMoney(totalGarantiasAsignadas)}</p><p style={{ margin:"2px 0 0",fontSize:12,fontWeight:600,color:COLORS.danger }}>-{fmtMoney(totalGarantiasDescontadas)}</p></Card>
@@ -2904,17 +3109,17 @@ function Reportes({ data, user, onOpenAgenda, reportRestore, reloadData }) {
         <div style={{ display:"flex",alignItems:"center",justifyContent:"space-between",gap:8,marginBottom:10,flexWrap:"wrap" }}>
           <div>
             <h3 style={{ margin:0,fontSize:15,fontWeight:500 }}>Resumen por manicura</h3>
-            <p style={{ margin:"3px 0 0",fontSize:11,color:"var(--color-text-secondary)" }}>La comisión importada equivale al 40% de la venta. Se muestra también el cálculo al 35% y la comisión definitiva según selección o regla automática.</p>
+            <p style={{ margin:"3px 0 0",fontSize:11,color:"var(--color-text-secondary)" }}>La comisión importada equivale al porcentaje base. Se muestra también el cálculo reducido y la comisión definitiva según selección o regla automática.</p>
           </div>
-          {semanaComisiones==="todas"?<Badge color="info">Seleccioná una semana para definir 35% / 40%</Badge>:<Badge color="success">Semana {semanaComisiones}</Badge>}
+          {semanaComisiones==="todas"?<Badge color="info">Seleccioná una semana para definir porcentaje</Badge>:<Badge color="success">Semana {semanaComisiones}</Badge>}
         </div>
         <div style={{ overflowX:"auto" }}>
           <div style={{ minWidth:puedeGestionar?1120:1040 }}>
             <div style={{ display:"grid",gridTemplateColumns:puedeGestionar?"1fr 90px 95px 95px 115px 110px 105px 105px 110px":"1fr 90px 95px 95px 105px 105px 105px 110px",gap:8,alignItems:"center",padding:"0 8px 6px",borderBottom:"1px solid rgba(120,120,120,0.12)",marginBottom:6 }}>
               <span style={{ fontSize:10,fontWeight:700,color:"var(--color-text-secondary)",textTransform:"uppercase",letterSpacing:"0.04em" }}>Manicura</span>
               <span style={{ fontSize:10,fontWeight:700,color:"var(--color-text-secondary)",textTransform:"uppercase",letterSpacing:"0.04em",textAlign:"right" }}>Venta</span>
-              <span style={{ fontSize:10,fontWeight:700,color:"var(--color-text-secondary)",textTransform:"uppercase",letterSpacing:"0.04em",textAlign:"right" }}>40%</span>
-              <span style={{ fontSize:10,fontWeight:700,color:"var(--color-text-secondary)",textTransform:"uppercase",letterSpacing:"0.04em",textAlign:"right" }}>35%</span>
+              <span style={{ fontSize:10,fontWeight:700,color:"var(--color-text-secondary)",textTransform:"uppercase",letterSpacing:"0.04em",textAlign:"right" }}>% base</span>
+              <span style={{ fontSize:10,fontWeight:700,color:"var(--color-text-secondary)",textTransform:"uppercase",letterSpacing:"0.04em",textAlign:"right" }}>% reducido</span>
               {puedeGestionar&&<span style={{ fontSize:10,fontWeight:700,color:"var(--color-text-secondary)",textTransform:"uppercase",letterSpacing:"0.04em",textAlign:"center" }}>Aplicar</span>}
               <span style={{ fontSize:10,fontWeight:700,color:"var(--color-text-secondary)",textTransform:"uppercase",letterSpacing:"0.04em",textAlign:"right" }}>Definitiva</span>
               <span style={{ fontSize:10,fontWeight:700,color:"var(--color-text-secondary)",textTransform:"uppercase",letterSpacing:"0.04em",textAlign:"right" }}>Garantías</span>
@@ -2922,12 +3127,12 @@ function Reportes({ data, user, onOpenAgenda, reportRestore, reloadData }) {
               <span style={{ fontSize:10,fontWeight:700,color:"var(--color-text-secondary)",textTransform:"uppercase",letterSpacing:"0.04em",textAlign:"right" }}>Neto</span>
             </div>
             <div style={{ display:"flex",flexDirection:"column",gap:6 }}>{resumenPorManicura.slice(0,12).map((r,i)=><div key={i} style={{ display:"grid",gridTemplateColumns:puedeGestionar?"1fr 90px 95px 95px 115px 110px 105px 105px 110px":"1fr 90px 95px 95px 105px 105px 105px 110px",gap:8,alignItems:"center",padding:"7px 8px",borderRadius:8,background:"var(--color-background-secondary)" }}>
-              <div><p style={{ margin:0,fontSize:13,fontWeight:500 }}>{r.nombre}</p><p style={{ margin:0,fontSize:11,color:"var(--color-text-secondary)" }}>{r.local} · {r.servicios} servicios{semanaComisiones!=="todas"?` · ${Number(r.horasTeoricas||0).toFixed(1)}h teóricas · ${r.faltas||0} falta${(r.faltas||0)!==1?"s":""}`:""}{r.garantiasQty?` · ${r.garantiasQty} garantía${r.garantiasQty!==1?"s":""}`:""}</p></div>
+              <div><p style={{ margin:0,fontSize:13,fontWeight:500 }}>{r.nombre}</p><p style={{ margin:0,fontSize:11,color:"var(--color-text-secondary)" }}>{r.local} · {r.servicios} servicios{semanaComisiones!=="todas"?` · ${Number(r.horasTeoricas||0).toFixed(1)}h de ${Number(r.horasObjetivo||0).toFixed(1)}h · ${r.faltas||0} falta${(r.faltas||0)!==1?"s":""} · ${r.llegadasTarde||0} tarde${(r.llegadasTarde||0)!==1?"s":""}`:""}{r.garantiasQty?` · ${r.garantiasQty} garantía${r.garantiasQty!==1?"s":""}`:""}</p></div>
               <span style={{ fontSize:13,textAlign:"right",color:"var(--color-text-secondary)" }}>{fmtMoney(r.precio)}</span>
               <strong style={{ fontSize:14,textAlign:"right",color:COLORS.pink }}>{fmtMoney(r.comisionBase)}</strong>
               <strong style={{ fontSize:14,textAlign:"right",color:COLORS.amber }}>{fmtMoney(r.comision35)}</strong>
-              {puedeGestionar&&<div style={{ textAlign:"center" }}>{semanaComisiones!=="todas"&&r.userId?<select value={r.porcentajeAplicado} onChange={e=>guardarCriterioComision(r.userId,r.localId,e.target.value)} style={{ border:`1px solid ${r.criterioGuardado?COLORS.pink:"var(--color-border-secondary)"}`,borderRadius:8,padding:"5px 7px",fontSize:12,background:"#fff",color:"var(--color-text-primary)",fontFamily:"inherit" }} title={r.criterioGuardado?"Selección manual":"Sugerido automáticamente"}><option value={40}>40%</option><option value={35}>35%</option></select>:<span style={{ fontSize:11,color:"var(--color-text-secondary)" }}>—</span>}</div>}
-              <strong style={{ fontSize:14,textAlign:"right",color:r.porcentajeAplicado===35?COLORS.amber:COLORS.success }}>{fmtMoney(r.comisionDefinitiva)}</strong>
+              {puedeGestionar&&<div style={{ textAlign:"center" }}>{semanaComisiones!=="todas"&&r.userId?<select value={r.porcentajeAplicado} onChange={e=>guardarCriterioComision(r.userId,r.localId,e.target.value)} style={{ border:`1px solid ${r.criterioGuardado?COLORS.pink:"var(--color-border-secondary)"}`,borderRadius:8,padding:"5px 7px",fontSize:12,background:"#fff",color:"var(--color-text-primary)",fontFamily:"inherit" }} title={r.criterioGuardado?"Selección manual":"Sugerido automáticamente"}><option value={r.reglaComision?.porcentajeBase || configGeneralComisiones.porcentajeBase || 40}>{r.reglaComision?.porcentajeBase || configGeneralComisiones.porcentajeBase || 40}%</option><option value={r.reglaComision?.porcentajeReducido || configGeneralComisiones.porcentajeReducido || 35}>{r.reglaComision?.porcentajeReducido || configGeneralComisiones.porcentajeReducido || 35}%</option></select>:<span style={{ fontSize:11,color:"var(--color-text-secondary)" }}>—</span>}</div>}
+              <strong style={{ fontSize:14,textAlign:"right",color:Number(r.porcentajeAplicado)===Number(r.reglaComision?.porcentajeReducido || configGeneralComisiones.porcentajeReducido || 35)?COLORS.amber:COLORS.success }}>{fmtMoney(r.comisionDefinitiva)}</strong>
               <strong style={{ fontSize:14,textAlign:"right",color:r.garantias>0?COLORS.success:r.garantias<0?COLORS.danger:"var(--color-text-secondary)" }}>{r.garantias>0?"+":r.garantias<0?"-":""}{fmtMoney(Math.abs(r.garantias))}</strong>
               <AdelantoPlanTooltip planes={planesPorUserComisiones.get(r.userId) || []}><strong style={{ fontSize:14,textAlign:"right",color:COLORS.amber,cursor:(planesPorUserComisiones.get(r.userId)||[]).length?"help":"default" }}>-{fmtMoney(r.adelantos)}</strong></AdelantoPlanTooltip>
               <strong style={{ fontSize:14,textAlign:"right",color:r.neto>=0?COLORS.success:COLORS.danger }}>{fmtMoney(r.neto)}</strong>
@@ -3031,7 +3236,7 @@ function ConfiguracionCobertura({ data, reloadData, user }) {
   return <div>
     <div style={{ display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:16,flexWrap:"wrap",gap:8 }}><h2 style={{ margin:0,fontSize:18,fontWeight:500 }}>Configuración de cobertura por local</h2><Btn onClick={save} disabled={saving||!localId}>{saving?"Guardando...":"Guardar configuración"}</Btn></div>
     {ok&&<div style={{ background:COLORS.successLight,color:COLORS.success,borderRadius:8,padding:"8px 12px",fontSize:13,marginBottom:12 }}>Configuración guardada correctamente.</div>}
-    <Card style={{ marginBottom:14, background:turnoVisual.background, border:turnoVisual.border, overflow:"hidden" }}><h3 style={{ margin:"0 0 12px",fontSize:15,fontWeight:500 }}>Local</h3><Select value={localId} onChange={setLocalId} style={{ maxWidth:320 }}>{localesVisibles.map(l=><option key={l.id} value={l.id}>{l.nombre}</option>)}</Select></Card>
+    <Card style={{ marginBottom:14, background:COLORS.pinkLight, border:"1px solid rgba(120,120,120,0.14)", overflow:"hidden" }}><h3 style={{ margin:"0 0 12px",fontSize:15,fontWeight:500 }}>Local</h3><Select value={localId} onChange={setLocalId} style={{ maxWidth:320 }}>{localesVisibles.map(l=><option key={l.id} value={l.id}>{l.nombre}</option>)}</Select></Card>
     <Card style={{ marginBottom:14 }}><h3 style={{ margin:"0 0 12px",fontSize:15,fontWeight:500 }}>Parámetros generales</h3><div style={{ display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(160px,1fr))",gap:12 }}><div><label style={{ fontSize:12,color:"var(--color-text-secondary)",display:"block",marginBottom:4 }}>Hora de apertura</label><Input type="time" value={config.horaApertura} onChange={v=>setConfig(c=>({...c,horaApertura:v}))}/></div><div><label style={{ fontSize:12,color:"var(--color-text-secondary)",display:"block",marginBottom:4 }}>Hora de cierre</label><Input type="time" value={config.horaCierre} onChange={v=>setConfig(c=>({...c,horaCierre:v}))}/></div><div><label style={{ fontSize:12,color:"var(--color-text-secondary)",display:"block",marginBottom:4 }}>Minutos de apertura</label><Input type="number" value={config.minutosApertura} onChange={v=>setConfig(c=>({...c,minutosApertura:v}))}/></div><div><label style={{ fontSize:12,color:"var(--color-text-secondary)",display:"block",marginBottom:4 }}>Minutos de cierre</label><Input type="number" value={config.minutosCierre} onChange={v=>setConfig(c=>({...c,minutosCierre:v}))}/></div></div></Card>
     <Card style={{ padding:0,overflow:"hidden" }}><div style={{ padding:"12px 14px",borderBottom:"1px solid rgba(120,120,120,0.18)" }}><h3 style={{ margin:0,fontSize:15,fontWeight:500 }}>Reglas por día</h3><p style={{ margin:"3px 0 0",fontSize:12,color:"var(--color-text-secondary)" }}>Estos valores alimentan el reporte de cobertura del local seleccionado.</p></div><div style={{ overflowX:"auto" }}><div style={{ minWidth:760 }}><div style={{ display:"grid",gridTemplateColumns:"110px 130px repeat(4,1fr)",gap:8,padding:"8px 12px",fontSize:11,fontWeight:500,color:"var(--color-text-secondary)",borderBottom:"1px solid rgba(120,120,120,0.14)" }}>{["Día","Afluencia","Mín. día","Máx. día","Mín. apertura","Mín. cierre"].map(h=><span key={h}>{h}</span>)}</div>{reglas.map(r=><div key={r.diaSemana} style={{ display:"grid",gridTemplateColumns:"110px 130px repeat(4,1fr)",gap:8,padding:"8px 12px",alignItems:"center",borderBottom:"1px solid rgba(120,120,120,0.10)" }}><strong style={{ fontSize:13 }}>{DIAS_SEMANA[r.diaSemana-1]}</strong><Select value={r.afluencia} onChange={v=>setRegla(r.diaSemana,"afluencia",v)}><option value="baja">Baja</option><option value="media">Media</option><option value="alta">Alta</option></Select>{[["minimoDiario"],["maximoDiario"],["minimoApertura"],["minimoCierre"]].map(([campo])=><Input key={campo} type="number" value={r[campo]} onChange={v=>setRegla(r.diaSemana,campo,v)}/>)}</div>)}</div></div></Card>
   </div>;
@@ -4020,7 +4225,7 @@ function InformeDiario({ data, reloadData, user }) {
 
   const printInforme = (inf) => {
     const local = data.locales.find(l => l.id === inf.localId);
-    const html = `<!doctype html><html><head><title>Informe diario</title><style>body{font-family:Montserrat,Arial,sans-serif;margin:24px;color:#222}.title{text-align:center;font-size:22px;font-weight:700;border:1px solid #aaa;padding:8px;margin-bottom:12px}.row{display:grid;grid-template-columns:220px 1fr;border:1px solid #ddd;border-bottom:none}.row:last-child{border-bottom:1px solid #ddd}.label{background:#f7a8ce;color:white;font-weight:700;padding:10px;border-right:1px solid #ddd;text-align:center}.value{padding:10px;white-space:pre-wrap;min-height:28px}.danger{background:#ee3a37}.total{font-weight:700;background:#fbeaf0}</style></head><body><div class="title">INFORME DIARIO ${local?.nombre || ""}</div>${[
+    const html = `<!doctype html><html><head><title>Informe diario</title><style>body{font-family:Montserrat,Arial,sans-serif;margin:24px;color:#222}.title{text-align:center;font-size:22px;font-weight:700;border:1px solid #aaa;padding:8px;margin-bottom:12px}.row{display:grid;grid-template-columns:220px 1fr;border:1px solid #ddd;border-bottom:none}.row:last-child{border-bottom:1px solid #ddd}.label{background:#f7a8ce;color:white;font-weight:700;padding:10px;border-right:1px solid #ddd;text-align:center}.value{padding:10px;white-space:pre-wrap;min-height:28px}.danger{background:#ee3a37}.total{font-weight:700;background:#f7edf0}</style></head><body><div class="title">INFORME DIARIO ${local?.nombre || ""}</div>${[
       ["FECHA", parseDateLabel(inf.fecha)],
       ["IMPORTANTE PARA MAÑANA", inf.importanteManana],
       ["URGENTES GENERALES", inf.urgentesGenerales, "danger"],
@@ -5705,8 +5910,8 @@ export default function App() {
   }, [dismissToast, user?.rol]);
 
   const reloadData = useCallback(async () => {
-    const [users, locales, horarios, asistencias, periodos, feriados, reglasCobertura, configCobertura, encargadoLocales, comisiones, comisionesImportaciones, comisionesCriterios, adelantos, garantias, informesDiarios, agendaServicios, agendaManicuraServicios, agendaListasPrecios, agendaLocalListas, agendaPreciosServicios, agendaClientes, agendaTurnos, agendaTurnosPagos, agendaTurnoServicios, agendaBloqueos] = await Promise.all([
-      api.getUsers(), api.getLocales(), api.getHorarios(), api.getAsistencias(), api.getPeriodos(), api.getFeriados(), api.getReglasCobertura(), api.getConfigCobertura(), api.getEncargadoLocales(), api.getComisiones(), api.getComisionesImportaciones(), api.getComisionesCriterios(), api.getAdelantos(), api.getGarantias(), api.getInformesDiarios(), api.getAgendaServicios(), api.getAgendaManicuraServicios(), api.getAgendaListasPrecios(), api.getAgendaLocalListas(), api.getAgendaPreciosServicios(), api.getAgendaClientes(), api.getAgendaTurnos(), api.getAgendaTurnosPagos(), api.getAgendaTurnoServicios(), api.getAgendaBloqueos()
+    const [users, locales, horarios, asistencias, periodos, feriados, reglasCobertura, configCobertura, encargadoLocales, comisiones, comisionesImportaciones, comisionesCriterios, comisionesConfiguracion, comisionesManicuraConfig, adelantos, garantias, informesDiarios, agendaServicios, agendaManicuraServicios, agendaListasPrecios, agendaLocalListas, agendaPreciosServicios, agendaClientes, agendaTurnos, agendaTurnosPagos, agendaTurnoServicios, agendaBloqueos] = await Promise.all([
+      api.getUsers(), api.getLocales(), api.getHorarios(), api.getAsistencias(), api.getPeriodos(), api.getFeriados(), api.getReglasCobertura(), api.getConfigCobertura(), api.getEncargadoLocales(), api.getComisiones(), api.getComisionesImportaciones(), api.getComisionesCriterios(), api.getComisionesConfiguracion(), api.getComisionesManicuraConfig(), api.getAdelantos(), api.getGarantias(), api.getInformesDiarios(), api.getAgendaServicios(), api.getAgendaManicuraServicios(), api.getAgendaListasPrecios(), api.getAgendaLocalListas(), api.getAgendaPreciosServicios(), api.getAgendaClientes(), api.getAgendaTurnos(), api.getAgendaTurnosPagos(), api.getAgendaTurnoServicios(), api.getAgendaBloqueos()
     ]);
     const nextData = {
       users: users.map(normalizeUser),
@@ -5721,6 +5926,8 @@ export default function App() {
       comisiones: (comisiones||[]).map(normalizeComision),
       comisionesImportaciones: (comisionesImportaciones||[]).map(normalizeComisionImportacion),
       comisionesCriterios: (comisionesCriterios||[]).map(normalizeComisionCriterio),
+      comisionesConfiguracion: (comisionesConfiguracion||[]).map(normalizeComisionesConfiguracion),
+      comisionesManicuraConfig: (comisionesManicuraConfig||[]).map(normalizeComisionesManicuraConfig),
       adelantos: (adelantos||[]).map(normalizeAdelanto),
       garantias: (garantias||[]).map(normalizeGarantia),
       informesDiarios: (informesDiarios||[]).map(normalizeInformeDiario),
@@ -5884,9 +6091,9 @@ export default function App() {
   };
 
   return (
-    <div style={{ minHeight:"100vh",background:"var(--color-background-tertiary)",display:"flex",flexDirection:"column" }}>
+    <div style={{ minHeight:"100vh",background:"var(--color-background-tertiary)",display:"flex",flexDirection:"column",maxWidth:"100vw",overflowX:"hidden" }}>
       <ToastStack toasts={toasts} onDismiss={dismissToast} onAction={handleNotificationAction}/>
-      <header style={{ background:COLORS.pink,color:"#fff",padding:"0 16px",height:66,display:"flex",alignItems:"center",justifyContent:"space-between",position:"sticky",top:0,zIndex:100 }}>
+      <header style={{ background:"#e1c6cc",color:COLORS.pinkDark,padding:"0 16px",height:66,display:"flex",alignItems:"center",justifyContent:"space-between",position:"sticky",top:0,left:0,right:0,width:"100%",maxWidth:"100vw",boxSizing:"border-box",zIndex:100,overflow:"hidden",flexShrink:0 }}>
         <div style={{ display:"flex",alignItems:"center",gap:10 }}>
           <LogoMark size={48} variant="light"/>
           <span style={{ fontWeight:600,fontSize:15,letterSpacing:"-0.02em" }}>Niki Beauty Bar</span>
@@ -5894,11 +6101,11 @@ export default function App() {
         <div style={{ display:"flex",alignItems:"center",gap:10 }}>
           <span style={{ fontSize:13,opacity:0.9 }}>{user.nombre}</span>
           <NotificationBell history={notificationHistory} open={notificationOpen} setOpen={setNotificationOpen} onClear={() => setNotificationHistory([])} onAction={handleNotificationAction}/>
-          <button onClick={()=>{ localStorage.removeItem("niki_user"); setUser(null); setMenuOpen(false); }} style={{ background:"rgba(255,255,255,0.2)",border:"none",color:"#fff",borderRadius:6,padding:"4px 10px",fontSize:12,cursor:"pointer" }}>Salir</button>
-          {!isDesktopMenu && <button onClick={()=>setMenuOpen(m=>!m)} style={{ background:"rgba(255,255,255,0.2)",border:"none",color:"#fff",borderRadius:6,padding:"6px 10px",fontSize:16,cursor:"pointer" }}>☰</button>}
+          <button onClick={()=>{ localStorage.removeItem("niki_user"); setUser(null); setMenuOpen(false); }} style={{ background:"rgba(114,36,62,0.12)",border:"none",color:COLORS.pinkDark,borderRadius:6,padding:"4px 10px",fontSize:12,cursor:"pointer" }}>Salir</button>
+          {!isDesktopMenu && <button onClick={()=>setMenuOpen(m=>!m)} style={{ background:"rgba(114,36,62,0.12)",border:"none",color:COLORS.pinkDark,borderRadius:6,padding:"6px 10px",fontSize:16,cursor:"pointer" }}>☰</button>}
         </div>
       </header>
-      <div style={{ display:"flex",flex:1,position:"relative" }}>
+      <div style={{ display:"flex",flex:1,position:"relative",minWidth:0,maxWidth:"100vw",overflowX:"hidden" }}>
         {!isDesktopMenu && menuOpen && (
           <div
             onClick={() => setMenuOpen(false)}
@@ -5936,7 +6143,7 @@ export default function App() {
             {nav.map(item=><a key={item.id} href={`#${item.id}`} onClick={e=>{ if(e.ctrlKey||e.metaKey||e.shiftKey||e.button===1) return; e.preventDefault(); window.history.replaceState(null,"",`#${item.id}`); setSeccion(item.id); if(!isDesktopMenu) setMenuOpen(false); if(item.id!=="horarios") setAgendaRequest(null); }} style={{ display:"flex",alignItems:"center",gap:10,padding:"10px 12px",border:"none",borderRadius:8,cursor:"pointer",fontSize:14,textAlign:"left",background:seccion===item.id?COLORS.pinkLight:"transparent",color:seccion===item.id?COLORS.pinkDark:"var(--color-text-primary)",fontWeight:seccion===item.id?500:400,width:"100%",textDecoration:"none",boxSizing:"border-box" }}><span style={{ width:20,textAlign:"center",flexShrink:0 }}>{item.icon}</span>{item.label}</a>)}
           </div>
         </nav>
-        <main style={{ flex:1,padding:"20px 16px",maxWidth:1280,width:"100%",margin:"0 auto" }}>
+        <main style={{ flex:1,padding:"20px 16px",maxWidth:1280,width:"100%",margin:"0 auto",minWidth:0,overflowX:"hidden" }}>
           {renderSeccion()}
         </main>
       </div>
