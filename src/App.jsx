@@ -3153,10 +3153,13 @@ function Reportes({ data, user, onOpenAgenda, reportRestore, reloadData }) {
     </>;
   };
 
+  const tituloReporte = tab === "comisiones" ? "Reporte de comisiones" : tab === "cobertura" ? "Cobertura" : "Horas y asistencia";
+  const mostrarTabsHoras = tab !== "cobertura" && tab !== "comisiones";
+
   return (
     <div>
-      <h2 style={{ margin:"0 0 16px",fontSize:18,fontWeight:500 }}>Reportes</h2>
-      <div style={{ display:"flex",gap:4,background:"var(--color-background-secondary)",padding:4,borderRadius:10,marginBottom:20,width:"fit-content",flexWrap:"wrap" }}><TabBtn id="horas" label="Horas teóricas"/><TabBtn id="asistencia" label="Asistencia"/>{puedeVerCobertura && <TabBtn id="cobertura" label="Cobertura"/>}<TabBtn id="comisiones" label="Comisiones"/></div>
+      <h2 style={{ margin:"0 0 16px",fontSize:18,fontWeight:500 }}>{tituloReporte}</h2>
+      {mostrarTabsHoras && <div style={{ display:"flex",gap:4,background:"var(--color-background-secondary)",padding:4,borderRadius:10,marginBottom:20,width:"fit-content",flexWrap:"wrap" }}><TabBtn id="horas" label="Horas teóricas"/><TabBtn id="asistencia" label="Asistencia"/></div>}
       {tab!=="cobertura"&&tab!=="comisiones"&&puedeGestionar && <div style={{ display:"flex",gap:6,marginBottom:6,flexWrap:"wrap" }}>
         <Select value={filtroTipo} onChange={v=>{setFiltroTipo(v);setExpandidos({});}} style={{ width:130 }}><option value="manicura">Manicura</option><option value="local">Local</option><option value="todas">Todas</option></Select>
         {filtroTipo==="manicura"&&<Select value={filtroId} onChange={v=>{setFiltroId(v);setExpandidos({});}} style={{ flex:1,minWidth:160 }}>{manicuras.map(m=><option key={m.id} value={m.id}>{m.nombre}</option>)}</Select>}
@@ -3959,6 +3962,7 @@ function InformeDiario({ data, reloadData, user }) {
   const [mesFiltro, setMesFiltro] = useState(`${hoy.getFullYear()}-${String(hoy.getMonth()+1).padStart(2,"0")}`);
   const [localFiltro, setLocalFiltro] = useState(locales[0]?.id || "");
   const [form, setForm] = useState(null);
+  const [editorOpen, setEditorOpen] = useState(false);
   const [saving, setSaving] = useState(false);
   const [preview, setPreview] = useState(null);
   const [deleteTarget, setDeleteTarget] = useState(null);
@@ -4031,7 +4035,7 @@ function InformeDiario({ data, reloadData, user }) {
     else setForm(emptyForm(f, lid, turno));
   }, [fecha, localId, form?.turno, findInforme, emptyForm, getSaldoAnterior, getSaldoEfectivoAnterior]);
 
-  useEffect(() => { if (localId) loadForDateLocal(fecha, localId, form?.turno || "manana"); }, [fecha, localId]);
+  useEffect(() => { if (editorOpen && localId) loadForDateLocal(fecha, localId, form?.turno || "manana"); }, [fecha, localId, editorOpen]);
 
   const informesFiltrados = useMemo(() => {
     return (data.informesDiarios || [])
@@ -4210,6 +4214,7 @@ function InformeDiario({ data, reloadData, user }) {
       const savedNormalized = savedRaw ? normalizeInformeDiario(savedRaw) : { ...form, ...payload, localId: payload.local_id, estado: payload.estado, enviadoEn: payload.enviado_en };
       setForm(savedNormalized);
       await reloadData();
+      notifyToast(markSent ? "Informe guardado como enviado." : "Informe guardado.", "success", { title:"Informe diario" });
       if (markSent) setPreview(savedNormalized);
     } catch(e) { notifyToast("Error al guardar informe: " + e.message, "error"); }
     setSaving(false);
@@ -4220,7 +4225,7 @@ function InformeDiario({ data, reloadData, user }) {
     await api.deleteInformeDiario(deleteTarget.id);
     setDeleteTarget(null);
     await reloadData();
-    if (form?.id === deleteTarget.id) setForm(emptyForm(fecha, localId));
+    if (form?.id === deleteTarget.id) { setForm(emptyForm(fecha, localId)); setEditorOpen(false); }
   };
 
   const printInforme = (inf) => {
@@ -4274,18 +4279,83 @@ function InformeDiario({ data, reloadData, user }) {
   const TextArea = useCallback(({ value, onChange, rows=3, placeholder }) => <textarea value={value||""} onChange={e=>onChange(e.target.value)} rows={rows} placeholder={placeholder} style={{ width:"100%",boxSizing:"border-box",border:"0.5px solid var(--color-border-secondary)",borderRadius:8,padding:"8px 12px",fontSize:14,background:"var(--color-background-primary)",color:"var(--color-text-primary)",resize:"vertical",fontFamily:"inherit" }}/>, []);
   const MoneyInput = useCallback(({ value, onChange, readOnly=false }) => <input type="text" inputMode="decimal" value={value ?? ""} readOnly={readOnly} onChange={e=>onChange(e.target.value)} onBlur={()=>{ if (!readOnly) onChange(formatMoneyInput(value)); }} style={{ border:"0.5px solid var(--color-border-secondary)",borderRadius:8,padding:"8px 12px",fontSize:14,width:"100%",background:readOnly?"var(--color-background-secondary)":"var(--color-background-primary)",color:"var(--color-text-primary)",boxSizing:"border-box",fontFamily:"inherit",textAlign:"right" }}/>, [formatMoneyInput]);
 
+  const openInformeEditor = useCallback((inf) => {
+    if (!inf) return;
+    setFecha(inf.fecha);
+    setLocalId(String(inf.localId));
+    setLocalFiltro(String(inf.localId));
+    setMesFiltro(String(inf.fecha || "").slice(0, 7));
+    setForm({
+      ...inf,
+      saldoAnterior: getSaldoAnterior(inf.fecha, inf.localId, inf.turno || "manana", inf.id),
+      saldoEfectivoAnterior: getSaldoEfectivoAnterior(inf.fecha, inf.localId, inf.turno || "manana", inf.id),
+    });
+    setEditorOpen(true);
+  }, [getSaldoAnterior, getSaldoEfectivoAnterior]);
+
+  const startNewInforme = useCallback(() => {
+    const f = dateKey(new Date());
+    const lid = parseInt(localFiltro || localId || locales[0]?.id);
+    const turno = "manana";
+    if (!lid) return notifyToast("Seleccioná un local para generar el informe.", "warning");
+    const existing = findInforme(f, lid, turno);
+    setFecha(f);
+    setLocalId(String(lid));
+    setLocalFiltro(String(lid));
+    setMesFiltro(String(f).slice(0, 7));
+    if (existing) {
+      setForm({
+        ...existing,
+        saldoAnterior: getSaldoAnterior(f, lid, turno, existing.id),
+        saldoEfectivoAnterior: getSaldoEfectivoAnterior(f, lid, turno, existing.id),
+      });
+      notifyToast("Ya existía un informe para hoy. Lo abrimos para editar.", "info", { title:"Informe existente" });
+    } else {
+      setForm(emptyForm(f, lid, turno));
+    }
+    setEditorOpen(true);
+  }, [localFiltro, localId, locales, findInforme, emptyForm, getSaldoAnterior, getSaldoEfectivoAnterior]);
+
   if (!locales.length) return <Card><p style={{ margin:0,color:COLORS.danger }}>No tenés locales asignados para cargar informes diarios.</p></Card>;
 
   return <div>
-    <div style={{ display:"flex",alignItems:"center",justifyContent:"space-between",gap:8,flexWrap:"wrap",marginBottom:16 }}>
-      <h2 style={{ margin:0,fontSize:18,fontWeight:600 }}>Informe diario</h2>
-      <div style={{ display:"flex",gap:8,flexWrap:"wrap" }}>
-        <Btn onClick={()=>save(false)} disabled={saving}>{saving?"Guardando...":"Guardar"}</Btn>
-        <Btn onClick={()=>save(true)} variant="success" disabled={saving}>Guardar como enviado y preparar envío</Btn>
+    <div style={{ display:"flex",alignItems:"center",justifyContent:"space-between",gap:12,flexWrap:"wrap",marginBottom:16 }}>
+      <div>
+        <h2 style={{ margin:0,fontSize:22,fontWeight:700 }}>Informes diarios</h2>
+        <p style={{ margin:"4px 0 0",fontSize:13,color:"var(--color-text-secondary)" }}>Primero ves los informes existentes. Desde acá podés generar uno nuevo, editar, ver o imprimir.</p>
+      </div>
+      <div style={{ display:"flex",gap:8,flexWrap:"wrap",alignItems:"center" }}>
+        {editorOpen ? <>
+          <Btn variant="secondary" onClick={()=>setEditorOpen(false)} disabled={saving}>Volver al listado</Btn>
+          <Btn onClick={()=>save(false)} disabled={saving}>{saving?"Guardando...":"Guardar"}</Btn>
+          <Btn onClick={()=>save(true)} variant="success" disabled={saving}>Guardar como enviado</Btn>
+        </> : <Btn onClick={startNewInforme} style={{ fontWeight:800 }}>+ Generar nuevo informe</Btn>}
       </div>
     </div>
 
-    <Card style={{ marginBottom:14 }}>
+    {!editorOpen && <Card>
+      <div style={{ display:"flex",justifyContent:"space-between",gap:8,alignItems:"center",flexWrap:"wrap",marginBottom:12 }}>
+        <h3 style={{ margin:0,fontSize:17,fontWeight:700 }}>Informes existentes</h3>
+        <div style={{ display:"flex",gap:8,flexWrap:"wrap" }}>
+          <input type="month" value={mesFiltro} onChange={e=>setMesFiltro(e.target.value)} style={{ border:"0.5px solid var(--color-border-secondary)",borderRadius:8,padding:"7px 10px",fontSize:13,background:"var(--color-background-primary)",color:"var(--color-text-primary)" }}/>
+          <Select value={localFiltro} onChange={setLocalFiltro} style={{ width:180 }}>{locales.map(l=><option key={l.id} value={l.id}>{l.nombre}</option>)}</Select>
+        </div>
+      </div>
+      {informesFiltrados.length===0 ? <div style={{ border:"1px dashed var(--color-border-secondary)",borderRadius:12,padding:18,background:"var(--color-background-secondary)" }}>
+        <p style={{ margin:0,color:"var(--color-text-secondary)",fontSize:14 }}>No hay informes para los filtros seleccionados.</p>
+      </div> : <div style={{ display:"flex",flexDirection:"column",gap:8 }}>
+        {informesFiltrados.map(inf=>{ const loc=data.locales.find(l=>l.id===inf.localId); return <div key={inf.id} style={{ border:"0.5px solid var(--color-border-tertiary)",borderRadius:12,padding:12,display:"flex",gap:10,alignItems:"center",flexWrap:"wrap",background:"var(--color-background-primary)" }}>
+          <div style={{ flex:1,minWidth:220 }}><p style={{ margin:0,fontWeight:800 }}>{parseDateLabel(inf.fecha)} · {loc?.nombre} · {inf.turno === "manana" ? "Mañana" : inf.turno === "tarde" ? "Tarde" : "Día"}</p><p style={{ margin:"2px 0 0",fontSize:12,color:"var(--color-text-secondary)" }}>Cierre: {userLabel(inf.cerradoPor || inf.creadoPor)} · {inf.importanteManana || inf.novedadesSalonManicuras || "Sin observaciones principales"}</p></div>
+          <Badge color={inf.estado==="enviado"?"success":"gray"}>{inf.estado==="enviado"?"Enviado":"Borrador"}</Badge>
+          <Btn size="sm" variant="ghost" onClick={()=>openInformeEditor(inf)}>Editar</Btn>
+          <Btn size="sm" variant="secondary" onClick={()=>setPreview(inf)}>Ver</Btn>
+          <Btn size="sm" variant="ghost" onClick={()=>printInforme(inf)}>Imprimir</Btn>
+          <Btn size="sm" variant="danger" onClick={()=>setDeleteTarget(inf)}>Eliminar</Btn>
+        </div>;})}
+      </div>}
+    </Card>}
+
+    {editorOpen && <Card style={{ marginTop:14,marginBottom:14 }}>
       <div style={{ display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(180px,1fr))",gap:12,marginBottom:14 }}>
         <Field label="Local"><Select value={localId} onChange={v=>{setLocalId(v); setLocalFiltro(v);}}>{locales.map(l=><option key={l.id} value={l.id}>{l.nombre}</option>)}</Select></Field>
         <Field label="Fecha"><input type="date" value={fecha} onChange={e=>{setFecha(e.target.value); setMesFiltro(String(e.target.value).slice(0,7));}} style={{ width:"100%",border:`1.5px solid ${COLORS.pink}`,borderRadius:10,padding:"10px 12px",fontSize:17,fontWeight:700,background:COLORS.pinkLight,color:COLORS.pinkDark,boxSizing:"border-box",fontFamily:"inherit" }}/></Field>
@@ -4423,27 +4493,7 @@ function InformeDiario({ data, reloadData, user }) {
           <Field label="Observaciones / extras"><TextArea value={form.observacionesExtras} onChange={v=>setForm(f=>({...f,observacionesExtras:v}))} rows={4}/></Field>
         </div>
       </div>}
-    </Card>
-
-    <Card>
-      <div style={{ display:"flex",justifyContent:"space-between",gap:8,alignItems:"center",flexWrap:"wrap",marginBottom:12 }}>
-        <h3 style={{ margin:0,fontSize:15,fontWeight:600 }}>Informes guardados</h3>
-        <div style={{ display:"flex",gap:8,flexWrap:"wrap" }}>
-          <input type="month" value={mesFiltro} onChange={e=>setMesFiltro(e.target.value)} style={{ border:"0.5px solid var(--color-border-secondary)",borderRadius:8,padding:"7px 10px",fontSize:13,background:"var(--color-background-primary)",color:"var(--color-text-primary)" }}/>
-          <Select value={localFiltro} onChange={setLocalFiltro} style={{ width:180 }}>{locales.map(l=><option key={l.id} value={l.id}>{l.nombre}</option>)}</Select>
-        </div>
-      </div>
-      {informesFiltrados.length===0 ? <p style={{ margin:0,color:"var(--color-text-secondary)",fontSize:14 }}>No hay informes para los filtros seleccionados.</p> : <div style={{ display:"flex",flexDirection:"column",gap:8 }}>
-        {informesFiltrados.map(inf=>{ const loc=data.locales.find(l=>l.id===inf.localId); return <div key={inf.id} style={{ border:"0.5px solid var(--color-border-tertiary)",borderRadius:10,padding:12,display:"flex",gap:10,alignItems:"center",flexWrap:"wrap" }}>
-          <div style={{ flex:1,minWidth:220 }}><p style={{ margin:0,fontWeight:700 }}>{parseDateLabel(inf.fecha)} · {loc?.nombre} · {inf.turno === "manana" ? "Mañana" : inf.turno === "tarde" ? "Tarde" : "Día"}</p><p style={{ margin:"2px 0 0",fontSize:12,color:"var(--color-text-secondary)" }}>Cierre: {userLabel(inf.cerradoPor || inf.creadoPor)} · {inf.importanteManana || inf.novedadesSalonManicuras || "Sin observaciones principales"}</p></div>
-          <Badge color={inf.estado==="enviado"?"success":"gray"}>{inf.estado==="enviado"?"Enviado":"Borrador"}</Badge>
-          <Btn size="sm" variant="ghost" onClick={()=>{setFecha(inf.fecha);setLocalId(String(inf.localId));setForm({...inf});}}>Editar</Btn>
-          <Btn size="sm" variant="secondary" onClick={()=>setPreview(inf)}>Ver</Btn>
-          <Btn size="sm" variant="ghost" onClick={()=>printInforme(inf)}>Imprimir</Btn>
-          <Btn size="sm" variant="danger" onClick={()=>setDeleteTarget(inf)}>Eliminar</Btn>
-        </div>;})}
-      </div>}
-    </Card>
+    </Card>}
 
     {preview && <Modal title="Informe diario" onClose={()=>setPreview(null)} width={720}>
       <div style={{ display:"flex",justifyContent:"space-between",alignItems:"center",gap:8,flexWrap:"wrap",marginBottom:12 }}>
@@ -5841,9 +5891,10 @@ function defaultSectionForRole(role) {
   return role === "manicura" ? "horarios" : "asistencia";
 }
 function sectionAllowedForRole(section, role) {
-  const admin = ["asistencia","horarios","bloqueo_horarios","turnos","reportes","adelantos","garantias","informes","manicuras","encargadas","locales","cobertura_config","perfil"];
-  const encargada = ["asistencia","horarios","bloqueo_horarios","turnos","reportes","adelantos","garantias","informes","manicuras","cobertura_config","perfil"];
-  const manicura = ["horarios","reportes","perfil"];
+  const reportesOperativos = ["reportes","reportes_horas","reportes_cobertura","reportes_comisiones"];
+  const admin = ["inicio","asistencia","horarios","bloqueo_horarios",...reportesOperativos,"turnos","adelantos","garantias","informes","manicuras","encargadas","locales","cobertura_config","perfil"];
+  const encargada = ["inicio","asistencia","horarios","bloqueo_horarios",...reportesOperativos,"turnos","adelantos","garantias","informes","manicuras","cobertura_config","perfil"];
+  const manicura = ["inicio","horarios","reportes","reportes_horas","reportes_comisiones","perfil"];
   const allowed = role === "admin" ? admin : role === "encargada" ? encargada : manicura;
   return allowed.includes(section);
 }
@@ -5855,6 +5906,8 @@ export default function App() {
   });
   const [seccion, setSeccion] = useState(null);
   const [menuOpen, setMenuOpen] = useState(false);
+  const [mobileMenuGroup, setMobileMenuGroup] = useState(null);
+  const [desktopMenuGroupsOpen, setDesktopMenuGroupsOpen] = useState({});
   const [isDesktopMenu, setIsDesktopMenu] = useState(() => window.innerWidth >= 768);
   const [loading, setLoading] = useState(true);
   const [agendaRequest, setAgendaRequest] = useState(null);
@@ -6038,47 +6091,289 @@ export default function App() {
   if (loading) return <div style={{ minHeight:"100vh",display:"flex",alignItems:"center",justifyContent:"center" }}><p style={{ color:"var(--color-text-secondary)",fontSize:14 }}>Conectando con Supabase...</p></div>;
   if (!user) return <Login onLogin={u=>{ localStorage.setItem("niki_user", JSON.stringify(u)); setUser(u); const target=readSectionHash(); setSeccion(target && sectionAllowedForRole(target,u.rol) ? target : defaultSectionForRole(u.rol)); }} reloadData={reloadData}/>;
 
-  const navAdmin = [
-    {id:"asistencia",label:"Asistencia",icon:"📋"},
-    {id:"horarios",label:"Horarios",icon:"🗓️"},
-    {id:"bloqueo_horarios",label:"Bloqueo horarios",icon:"🔐"},
-    {id:"turnos",label:"Turnos",icon:"📅"},
-    {id:"reportes",label:"Reportes",icon:"📊"},
-    {id:"adelantos",label:"Adelantos",icon:"💸"},
-    {id:"garantias",label:"Garantías",icon:"🛠️"},
-    {id:"informes",label:"Informe diario",icon:"📝"},
-    {id:"manicuras",label:"Manicuras",icon:"💅"},
-    {id:"encargadas",label:"Encargadas",icon:"👩‍💼"},
-    {id:"locales",label:"Locales",icon:"🏠"},
-    {id:"cobertura_config",label:"Cobertura",icon:"⚙️"},
-    {id:"perfil",label:"Mi perfil",icon:"👤"},
+  const menuGroupsBase = [
+    {
+      id: "asistencia_horarios",
+      label: "Asistencia y Horarios",
+      icon: "🕒",
+      items: [
+        { id: "asistencia", label: "Asistencia", icon: "📋" },
+        { id: "horarios", label: "Horarios", icon: "🗓️" },
+        { id: "bloqueo_horarios", label: "Bloqueos", icon: "🔐" },
+        { id: "reportes_horas", label: "Horas y asistencia", icon: "⏱️" },
+        { id: "reportes_cobertura", label: "Cobertura", icon: "📈" },
+      ],
+    },
+    {
+      id: "turnos",
+      label: "Turnos",
+      icon: "📅",
+      items: [
+        { id: "turnos", label: "Turnos", icon: "📅" },
+      ],
+    },
+    {
+      id: "comisiones",
+      label: "Comisiones",
+      icon: "💰",
+      items: [
+        { id: "reportes_comisiones", label: "Reporte de comisiones", icon: "📊" },
+        { id: "garantias", label: "Garantías", icon: "🛠️" },
+        { id: "adelantos", label: "Adelantos", icon: "💸" },
+      ],
+    },
+    {
+      id: "reportes",
+      label: "Reportes",
+      icon: "📝",
+      items: [
+        { id: "informes", label: "Informe diario", icon: "📝" },
+      ],
+    },
+    {
+      id: "configuracion",
+      label: "Configuración",
+      icon: "⚙️",
+      items: [
+        { id: "manicuras", label: "Manicuras", icon: "💅" },
+        { id: "encargadas", label: "Encargadas", icon: "👩‍💼" },
+        { id: "locales", label: "Locales", icon: "🏠" },
+        { id: "cobertura_config", label: "Config. cobertura", icon: "⚙️" },
+        { id: "perfil", label: "Mi perfil", icon: "👤" },
+      ],
+    },
   ];
-  const navEncargada = [
-    {id:"asistencia",label:"Asistencia",icon:"📋"},
-    {id:"horarios",label:"Horarios",icon:"🗓️"},
-    {id:"bloqueo_horarios",label:"Bloqueo horarios",icon:"🔐"},
-    {id:"turnos",label:"Turnos",icon:"📅"},
-    {id:"reportes",label:"Reportes",icon:"📊"},
-    {id:"adelantos",label:"Adelantos",icon:"💸"},
-    {id:"garantias",label:"Garantías",icon:"🛠️"},
-    {id:"informes",label:"Informe diario",icon:"📝"},
-    {id:"manicuras",label:"Manicuras",icon:"💅"},
-    {id:"cobertura_config",label:"Cobertura",icon:"⚙️"},
-    {id:"perfil",label:"Mi perfil",icon:"👤"},
-  ];
-  const navManicura = [
-    {id:"horarios",label:"Mis horarios",icon:"🗓️"},
-    {id:"reportes",label:"Mis reportes",icon:"📊"},
-    {id:"perfil",label:"Mi perfil",icon:"👤"},
-  ];
-  const nav = user.rol==="admin" ? navAdmin : user.rol==="encargada" ? navEncargada : navManicura;
+
+  const menuGroups = menuGroupsBase
+    .map(group => ({
+      ...group,
+      items: group.items.filter(item => sectionAllowedForRole(item.id, user.rol)),
+    }))
+    .filter(group => group.items.length > 0);
+
+  const allMenuItems = menuGroups.flatMap(group => group.items);
+  const currentMenuItem = allMenuItems.find(item => item.id === seccion);
+  const currentGroup = menuGroups.find(group => group.items.some(item => item.id === seccion));
+
+  const goToSection = (id) => {
+    if (!id) return;
+    if (id === "mas") {
+      setMobileMenuGroup(null);
+      setMenuOpen(true);
+      return;
+    }
+    if (!sectionAllowedForRole(id, user.rol)) return;
+    window.history.replaceState(null, "", `#${id}`);
+    setSeccion(id);
+    if (id !== "horarios") setAgendaRequest(null);
+    setMenuOpen(false);
+    setMobileMenuGroup(null);
+  };
+
+  const toggleDesktopMenuGroup = (groupId) => {
+    setDesktopMenuGroupsOpen(prev => ({ ...prev, [groupId]: !prev[groupId] }));
+  };
+
+  const mobileBottomItems = [
+    { id: "inicio", label: "Inicio", icon: "⌂" },
+    { id: "turnos", label: "Turnos", icon: "📅" },
+    { id: "horarios", label: "Horarios", icon: "🗓️" },
+    { id: "reportes_comisiones", label: "Comisiones", icon: "💰" },
+    { id: "mas", label: "Más", icon: "☰" },
+  ].filter(item => item.id === "mas" || sectionAllowedForRole(item.id, user.rol));
+
+  const renderHomeCard = (item, subtitle = "") => (
+    <button
+      key={item.id}
+      onClick={() => goToSection(item.id)}
+      style={{
+        border: "1px solid rgba(114,36,62,0.12)",
+        background: "#fff",
+        borderRadius: 18,
+        padding: 18,
+        minHeight: 104,
+        textAlign: "left",
+        boxShadow: "0 10px 26px rgba(0,0,0,0.06)",
+        cursor: "pointer",
+        display: "flex",
+        flexDirection: "column",
+        justifyContent: "space-between",
+        gap: 12,
+      }}
+    >
+      <span style={{ fontSize: 25 }}>{item.icon}</span>
+      <span>
+        <strong style={{ display: "block", color: "var(--color-text-primary)", fontSize: 15, marginBottom: 4 }}>{item.label}</strong>
+        {subtitle && <small style={{ color: "var(--color-text-secondary)", fontSize: 12, lineHeight: 1.35 }}>{subtitle}</small>}
+      </span>
+    </button>
+  );
+
+  const renderMobileHome = () => {
+    const quickBase = user.rol === "manicura"
+      ? [
+          [{ id: "horarios", label: "Mis horarios", icon: "🗓️" }, "Cargar y revisar horarios"],
+          [{ id: "reportes_horas", label: "Mis horas", icon: "⏱️" }, "Horas y asistencia"],
+          [{ id: "reportes_comisiones", label: "Mis comisiones", icon: "💰" }, "Resumen de comisiones"],
+          [{ id: "perfil", label: "Mi perfil", icon: "👤" }, "Datos y contraseña"],
+        ]
+      : [
+          [{ id: "turnos", label: "Turnos", icon: "📅" }, "Agenda y reservas"],
+          [{ id: "horarios", label: "Horarios", icon: "🗓️" }, "Carga del equipo"],
+          [{ id: "bloqueo_horarios", label: "Bloqueos", icon: "🔐" }, "Habilitar edición mensual"],
+          [{ id: "reportes_comisiones", label: "Comisiones", icon: "💰" }, "Reporte y cálculo"],
+          [{ id: "informes", label: "Informe diario", icon: "📝" }, "Cierre operativo"],
+          [{ id: "mas", label: "Más opciones", icon: "☰" }, "Configuración y reportes"],
+        ];
+
+    const quick = quickBase.filter(([item]) => item.id === "mas" || sectionAllowedForRole(item.id, user.rol));
+
+    return (
+      <div>
+        <div style={{ marginBottom: 18 }}>
+          <p style={{ margin: "0 0 6px", color: "var(--color-text-secondary)", fontSize: 13 }}>Hola, {user.nombre}</p>
+          <h2 style={{ margin: 0, fontSize: 24, fontWeight: 600, color: "var(--color-text-primary)" }}>¿Qué querés hacer?</h2>
+        </div>
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(145px, 1fr))", gap: 12 }}>
+          {quick.map(([item, subtitle]) => renderHomeCard(item, subtitle))}
+        </div>
+      </div>
+    );
+  };
+
+  const renderMobileMenu = () => {
+    const selectedGroup = mobileMenuGroup ? menuGroups.find(group => group.id === mobileMenuGroup) : null;
+
+    return (
+      <>
+        <div
+          onClick={() => { setMenuOpen(false); setMobileMenuGroup(null); }}
+          style={{
+            position:"fixed",
+            top:66,
+            left:0,
+            right:0,
+            bottom:64,
+            background:"rgba(0,0,0,0.22)",
+            zIndex:998,
+          }}
+        />
+        <section
+          style={{
+            position:"fixed",
+            top:66,
+            left:0,
+            right:0,
+            bottom:64,
+            background:"var(--color-background-tertiary)",
+            zIndex:999,
+            overflowY:"auto",
+            padding:"16px",
+            boxSizing:"border-box",
+          }}
+        >
+          <div style={{ maxWidth: 520, margin: "0 auto" }}>
+            <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", gap:12, marginBottom:14 }}>
+              <button
+                onClick={() => selectedGroup ? setMobileMenuGroup(null) : setMenuOpen(false)}
+                style={{ border:"none", background:"#fff", borderRadius:12, padding:"10px 12px", color:COLORS.pinkDark, fontWeight:600, cursor:"pointer", boxShadow:"0 6px 18px rgba(0,0,0,0.06)" }}
+              >
+                ← {selectedGroup ? "Volver" : "Cerrar"}
+              </button>
+              <strong style={{ fontSize:16, color:"var(--color-text-primary)" }}>{selectedGroup ? selectedGroup.label : "Más opciones"}</strong>
+              <span style={{ width:64 }} />
+            </div>
+
+            {!selectedGroup ? (
+              <div style={{ display:"grid", gap:12 }}>
+                {menuGroups.map(group => (
+                  <button
+                    key={group.id}
+                    onClick={() => setMobileMenuGroup(group.id)}
+                    style={{
+                      border:"1px solid rgba(114,36,62,0.12)",
+                      background:"#fff",
+                      borderRadius:18,
+                      padding:"16px 18px",
+                      display:"flex",
+                      alignItems:"center",
+                      justifyContent:"space-between",
+                      gap:12,
+                      boxShadow:"0 10px 26px rgba(0,0,0,0.06)",
+                      cursor:"pointer",
+                      textAlign:"left",
+                    }}
+                  >
+                    <span style={{ display:"flex", alignItems:"center", gap:12 }}>
+                      <span style={{ width:38, height:38, borderRadius:14, background:COLORS.pinkLight, color:COLORS.pinkDark, display:"grid", placeItems:"center", fontSize:19 }}>{group.icon}</span>
+                      <span>
+                        <strong style={{ display:"block", fontSize:15, color:"var(--color-text-primary)" }}>{group.label}</strong>
+                        <small style={{ color:"var(--color-text-secondary)", fontSize:12 }}>{group.items.length} opciones</small>
+                      </span>
+                    </span>
+                    <span style={{ color:COLORS.pinkDark, fontWeight:700 }}>›</span>
+                  </button>
+                ))}
+              </div>
+            ) : (
+              <div style={{ display:"grid", gap:10 }}>
+                {selectedGroup.items.map(item => (
+                  <button
+                    key={item.id}
+                    onClick={() => goToSection(item.id)}
+                    style={{
+                      border:"1px solid rgba(114,36,62,0.12)",
+                      background:seccion===item.id?COLORS.pinkLight:"#fff",
+                      borderRadius:16,
+                      padding:"15px 16px",
+                      display:"flex",
+                      alignItems:"center",
+                      gap:12,
+                      boxShadow:"0 8px 22px rgba(0,0,0,0.05)",
+                      cursor:"pointer",
+                      textAlign:"left",
+                    }}
+                  >
+                    <span style={{ width:34, height:34, borderRadius:12, background:"#fff", color:COLORS.pinkDark, display:"grid", placeItems:"center", fontSize:17 }}>{item.icon}</span>
+                    <strong style={{ color:seccion===item.id?COLORS.pinkDark:"var(--color-text-primary)", fontSize:14 }}>{item.label}</strong>
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
+        </section>
+      </>
+    );
+  };
+
+  const renderReportes = (tab, key) => (
+    <Reportes
+      key={key}
+      data={data}
+      reloadData={reloadData}
+      user={user}
+      reportRestore={{ ...(reportRestore || {}), tab }}
+      onOpenAgenda={(req)=>{
+        const restore={ tab:"cobertura", fecha:req.fecha, localId:req.localId || "" };
+        setReportRestore(restore);
+        setAgendaRequest({...req, fromReport:true});
+        setSeccion("horarios");
+        setMenuOpen(false);
+        setMobileMenuGroup(null);
+      }}
+    />
+  );
 
   const renderSeccion = () => {
+    if (seccion==="inicio") return renderMobileHome();
     if (seccion==="asistencia") return <AsistenciaDiaria data={data} reloadData={reloadData} user={user}/>;
     if (seccion==="turnos") return user.rol!=="manicura" ? <AgendaTurnos data={data} reloadData={reloadData} user={user} agendaOpenRequest={agendaOpenRequest} onAgendaOpenRequestDone={() => setAgendaOpenRequest(null)}/> : null;
-    if (seccion==="horarios") return <CalendarioHorarios data={data} reloadData={reloadData} user={user} agendaRequest={agendaRequest} onBackToReport={()=>{ setSeccion("reportes"); setMenuOpen(false); }}/>;
+    if (seccion==="horarios") return <CalendarioHorarios data={data} reloadData={reloadData} user={user} agendaRequest={agendaRequest} onBackToReport={()=>{ setSeccion("reportes_cobertura"); setMenuOpen(false); setMobileMenuGroup(null); }}/>;
     if (seccion==="bloqueo_horarios") return <BloqueoHorarios data={data} reloadData={reloadData} user={user}/>;
-    if (seccion==="reportes") return <Reportes data={data} reloadData={reloadData} user={user} reportRestore={reportRestore} onOpenAgenda={(req)=>{ const restore={ tab:"cobertura", fecha:req.fecha, localId:req.localId || "" }; setReportRestore(restore); setAgendaRequest({...req, fromReport:true}); setSeccion("horarios"); setMenuOpen(false); }}/>;
+    if (seccion==="reportes_horas") return renderReportes("horas", "reportes_horas");
+    if (seccion==="reportes_cobertura") return user.rol!=="manicura" ? renderReportes("cobertura", "reportes_cobertura") : null;
+    if (seccion==="reportes_comisiones") return renderReportes("comisiones", "reportes_comisiones");
+    if (seccion==="reportes") return renderReportes("horas", "reportes");
     if (seccion==="adelantos") return user.rol!=="manicura" ? <AdelantosManicuras data={data} reloadData={reloadData} user={user}/> : null;
     if (seccion==="garantias") return user.rol!=="manicura" ? <GarantiasServicios data={data} reloadData={reloadData} user={user}/> : null;
     if (seccion==="informes") return user.rol!=="manicura" ? <InformeDiario data={data} reloadData={reloadData} user={user}/> : null;
@@ -6093,60 +6388,146 @@ export default function App() {
   return (
     <div style={{ minHeight:"100vh",background:"var(--color-background-tertiary)",display:"flex",flexDirection:"column",maxWidth:"100vw",overflowX:"hidden" }}>
       <ToastStack toasts={toasts} onDismiss={dismissToast} onAction={handleNotificationAction}/>
-      <header style={{ background:"#e1c6cc",color:COLORS.pinkDark,padding:"0 16px",height:66,display:"flex",alignItems:"center",justifyContent:"space-between",position:"sticky",top:0,left:0,right:0,width:"100%",maxWidth:"100vw",boxSizing:"border-box",zIndex:100,overflow:"hidden",flexShrink:0 }}>
-        <div style={{ display:"flex",alignItems:"center",gap:10 }}>
+      <header style={{ background:"#e1c6cc",color:COLORS.pinkDark,padding:"0 16px",height:66,display:"flex",alignItems:"center",justifyContent:"space-between",position:"sticky",top:0,left:0,right:0,width:"100%",maxWidth:"100vw",boxSizing:"border-box",zIndex:1000,overflow:"hidden",flexShrink:0 }}>
+        <div style={{ display:"flex",alignItems:"center",gap:10,minWidth:0 }}>
           <LogoMark size={48} variant="light"/>
-          <span style={{ fontWeight:600,fontSize:15,letterSpacing:"-0.02em" }}>Niki Beauty Bar</span>
+          <span style={{ fontWeight:600,fontSize:15,letterSpacing:"-0.02em",whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis" }}>Niki Beauty Bar</span>
         </div>
-        <div style={{ display:"flex",alignItems:"center",gap:10 }}>
-          <span style={{ fontSize:13,opacity:0.9 }}>{user.nombre}</span>
+        <div style={{ display:"flex",alignItems:"center",gap:8,flexShrink:0 }}>
+          {isDesktopMenu && <span style={{ fontSize:13,opacity:0.9 }}>{user.nombre}</span>}
           <NotificationBell history={notificationHistory} open={notificationOpen} setOpen={setNotificationOpen} onClear={() => setNotificationHistory([])} onAction={handleNotificationAction}/>
-          <button onClick={()=>{ localStorage.removeItem("niki_user"); setUser(null); setMenuOpen(false); }} style={{ background:"rgba(114,36,62,0.12)",border:"none",color:COLORS.pinkDark,borderRadius:6,padding:"4px 10px",fontSize:12,cursor:"pointer" }}>Salir</button>
-          {!isDesktopMenu && <button onClick={()=>setMenuOpen(m=>!m)} style={{ background:"rgba(114,36,62,0.12)",border:"none",color:COLORS.pinkDark,borderRadius:6,padding:"6px 10px",fontSize:16,cursor:"pointer" }}>☰</button>}
+          <button onClick={()=>{ localStorage.removeItem("niki_user"); setUser(null); setMenuOpen(false); setMobileMenuGroup(null); }} style={{ background:"rgba(114,36,62,0.12)",border:"none",color:COLORS.pinkDark,borderRadius:6,padding:"4px 10px",fontSize:12,cursor:"pointer" }}>Salir</button>
         </div>
       </header>
+
       <div style={{ display:"flex",flex:1,position:"relative",minWidth:0,maxWidth:"100vw",overflowX:"hidden" }}>
-        {!isDesktopMenu && menuOpen && (
-          <div
-            onClick={() => setMenuOpen(false)}
-            style={{
-              position:"fixed",
-              top:66,
-              left:0,
-              right:0,
-              bottom:0,
-              background:"rgba(0,0,0,0.32)",
-              zIndex:998,
-            }}
-          />
+        {isDesktopMenu && (
+          <nav style={{
+            width:244,
+            background:"#fff",
+            borderRight:"0.5px solid rgba(120,120,120,0.18)",
+            overflowX:"hidden",
+            flexShrink:0,
+            position:"sticky",
+            top:66,
+            zIndex:1,
+            alignSelf:"flex-start",
+            maxHeight:"calc(100vh - 66px)",
+            overflowY:"auto",
+          }}>
+            <div style={{ padding:"14px 10px 18px",display:"flex",flexDirection:"column",gap:14,minWidth:220 }}>
+              {menuGroups.map(group => {
+                const activeGroup = group.items.some(item => item.id === seccion);
+                const isOpen = !!desktopMenuGroupsOpen[group.id] || activeGroup;
+                return (
+                  <div key={group.id} style={{ borderRadius:14, overflow:"hidden" }}>
+                    <button
+                      type="button"
+                      onClick={() => toggleDesktopMenuGroup(group.id)}
+                      aria-expanded={isOpen}
+                      style={{
+                        width:"100%",
+                        border:"none",
+                        background:activeGroup?"rgba(225,198,204,0.34)":"transparent",
+                        color:activeGroup?COLORS.pinkDark:COLORS.gray,
+                        borderRadius:12,
+                        padding:"10px 10px",
+                        display:"flex",
+                        alignItems:"center",
+                        justifyContent:"space-between",
+                        gap:8,
+                        cursor:"pointer",
+                        transition:"background 180ms ease, color 180ms ease",
+                      }}
+                    >
+                      <span style={{ display:"flex",alignItems:"center",gap:8,minWidth:0 }}>
+                        <span style={{ width:22,height:22,borderRadius:9,background:activeGroup?"#fff":COLORS.pinkLight,color:COLORS.pinkDark,display:"grid",placeItems:"center",fontSize:12,flexShrink:0 }}>{group.icon}</span>
+                        <span style={{ fontSize:11,fontWeight:800,textTransform:"uppercase",letterSpacing:"0.055em",whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis" }}>{group.label}</span>
+                      </span>
+                      <span style={{ fontSize:14,fontWeight:800,color:COLORS.pinkDark,transform:isOpen?"rotate(90deg)":"rotate(0deg)",transition:"transform 220ms ease",lineHeight:1 }}>›</span>
+                    </button>
+                    <div style={{
+                      maxHeight:isOpen?Math.max(80, group.items.length * 48):0,
+                      opacity:isOpen?1:0,
+                      overflow:"hidden",
+                      transition:"max-height 260ms ease, opacity 180ms ease",
+                    }}>
+                      <div style={{ display:"flex",flexDirection:"column",gap:3,padding:"6px 0 2px 28px",marginLeft:12,borderLeft:"1px solid rgba(114,36,62,0.12)" }}>
+                        {group.items.map(item => (
+                          <a
+                            key={item.id}
+                            href={`#${item.id}`}
+                            onClick={e=>{ if(e.ctrlKey||e.metaKey||e.shiftKey||e.button===1) return; e.preventDefault(); goToSection(item.id); }}
+                            style={{
+                              display:"flex",
+                              alignItems:"center",
+                              gap:9,
+                              padding:"8px 10px",
+                              border:"1px solid transparent",
+                              borderRadius:11,
+                              cursor:"pointer",
+                              fontSize:13,
+                              textAlign:"left",
+                              background:seccion===item.id?COLORS.pinkLight:"transparent",
+                              color:seccion===item.id?COLORS.pinkDark:"var(--color-text-primary)",
+                              fontWeight:seccion===item.id?650:400,
+                              width:"100%",
+                              textDecoration:"none",
+                              boxSizing:"border-box",
+                              transition:"background 160ms ease, color 160ms ease, transform 160ms ease",
+                            }}
+                          >
+                            <span style={{ width:18,textAlign:"center",flexShrink:0,fontSize:13,opacity:0.9 }}>{item.icon}</span>
+                            <span style={{ whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis" }}>{item.label}</span>
+                          </a>
+                        ))}
+                      </div>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </nav>
         )}
-        <nav style={{
-          width:isDesktopMenu?220:(menuOpen?280:0),
-          maxWidth:isDesktopMenu?220:"82vw",
-          background:"#fff",
-          borderRight:isDesktopMenu||menuOpen?"0.5px solid rgba(120,120,120,0.18)":"none",
-          overflowX:"hidden",
-          transition:"width 0.2s ease",
-          flexShrink:0,
-          position:isDesktopMenu?"sticky":"fixed",
-          top:66,
-          left:0,
-          bottom:isDesktopMenu?"auto":0,
-          zIndex:isDesktopMenu?1:999,
-          alignSelf:"flex-start",
-          maxHeight:"calc(100vh - 66px)",
-          overflowY:"auto",
-          boxShadow:!isDesktopMenu&&menuOpen?"8px 0 28px rgba(0,0,0,0.22)":"none",
-          pointerEvents:isDesktopMenu||menuOpen?"auto":"none",
-        }}>
-          <div style={{ padding:"12px 8px",display:"flex",flexDirection:"column",gap:2,minWidth:220 }}>
-            {nav.map(item=><a key={item.id} href={`#${item.id}`} onClick={e=>{ if(e.ctrlKey||e.metaKey||e.shiftKey||e.button===1) return; e.preventDefault(); window.history.replaceState(null,"",`#${item.id}`); setSeccion(item.id); if(!isDesktopMenu) setMenuOpen(false); if(item.id!=="horarios") setAgendaRequest(null); }} style={{ display:"flex",alignItems:"center",gap:10,padding:"10px 12px",border:"none",borderRadius:8,cursor:"pointer",fontSize:14,textAlign:"left",background:seccion===item.id?COLORS.pinkLight:"transparent",color:seccion===item.id?COLORS.pinkDark:"var(--color-text-primary)",fontWeight:seccion===item.id?500:400,width:"100%",textDecoration:"none",boxSizing:"border-box" }}><span style={{ width:20,textAlign:"center",flexShrink:0 }}>{item.icon}</span>{item.label}</a>)}
-          </div>
-        </nav>
-        <main style={{ flex:1,padding:"20px 16px",maxWidth:1280,width:"100%",margin:"0 auto",minWidth:0,overflowX:"hidden" }}>
+
+        {!isDesktopMenu && menuOpen && renderMobileMenu()}
+
+        <main style={{ flex:1,padding:isDesktopMenu?"20px 16px":"18px 14px 88px",maxWidth:1280,width:"100%",margin:"0 auto",minWidth:0,overflowX:"hidden",boxSizing:"border-box" }}>
+          {!isDesktopMenu && seccion !== "inicio" && (
+            <div style={{ display:"flex",alignItems:"center",gap:8,margin:"0 0 12px",fontSize:12,color:"var(--color-text-secondary)" }}>
+              <button onClick={() => goToSection("inicio")} style={{ border:"none",background:"transparent",padding:0,color:COLORS.pinkDark,fontWeight:700,cursor:"pointer" }}>Inicio</button>
+              {currentGroup && <><span>›</span><span>{currentGroup.label}</span></>}
+              {currentMenuItem && <><span>›</span><strong style={{ color:"var(--color-text-primary)" }}>{currentMenuItem.label}</strong></>}
+            </div>
+          )}
           {renderSeccion()}
         </main>
       </div>
+
+      {!isDesktopMenu && (
+        <nav style={{ position:"fixed",left:0,right:0,bottom:0,height:64,background:"#fff",borderTop:"1px solid rgba(120,120,120,0.18)",boxShadow:"0 -10px 28px rgba(0,0,0,0.08)",display:"grid",gridTemplateColumns:`repeat(${mobileBottomItems.length}, 1fr)`,zIndex:1001 }}>
+          {mobileBottomItems.map(item => {
+            const active = item.id === "mas"
+              ? menuOpen
+              : item.id === "inicio"
+                ? seccion === "inicio"
+                : item.id === "reportes_comisiones"
+                  ? seccion === "reportes_comisiones"
+                  : seccion === item.id;
+            return (
+              <button
+                key={item.id}
+                onClick={() => goToSection(item.id)}
+                style={{ border:"none",background:active?COLORS.pinkLight:"#fff",color:active?COLORS.pinkDark:"var(--color-text-secondary)",fontSize:11,fontWeight:active?700:600,display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",gap:3,cursor:"pointer",padding:"6px 2px" }}
+              >
+                <span style={{ fontSize:18,lineHeight:1 }}>{item.icon}</span>
+                <span style={{ whiteSpace:"nowrap" }}>{item.label}</span>
+              </button>
+            );
+          })}
+        </nav>
+      )}
     </div>
   );
 }
+
