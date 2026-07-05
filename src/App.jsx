@@ -123,6 +123,21 @@ const sb = async (path, opts = {}) => {
   return text ? JSON.parse(text) : null;
 };
 
+const sbAll = async (path, opts = {}) => {
+  const pageSize = opts.pageSize || 1000;
+  let offset = 0;
+  let all = [];
+  while (true) {
+    const separator = path.includes("?") ? "&" : "?";
+    const rows = await sb(`${path}${separator}limit=${pageSize}&offset=${offset}`, opts);
+    const batch = Array.isArray(rows) ? rows : [];
+    all = all.concat(batch);
+    if (batch.length < pageSize) break;
+    offset += pageSize;
+  }
+  return all;
+};
+
 const patchOrPost = async (table, matchQuery, data) => {
   const patchRes = await fetch(`${SUPABASE_URL}/rest/v1/${table}?${matchQuery}`, {
     method: "PATCH",
@@ -159,6 +174,28 @@ const api = {
     if (!res.ok || data?.ok === false) throw new Error(data?.error || txt || "No se pudo cambiar la contraseña");
     return data;
   },
+  solicitarResetPassword: async (identificador) => {
+    const res = await fetch(`${SUPABASE_URL}/functions/v1/solicitar-reset-password-niki`, {
+      method: "POST",
+      headers: { apikey: SUPABASE_KEY, Authorization: `Bearer ${SUPABASE_KEY}`, "Content-Type": "application/json" },
+      body: JSON.stringify({ identificador }),
+    });
+    const txt = await res.text();
+    const data = txt ? JSON.parse(txt) : null;
+    if (!res.ok || data?.ok === false) throw new Error(data?.error || txt || "No se pudo solicitar el blanqueo");
+    return data;
+  },
+  enviarInvitacionUsuario: async (payload) => {
+    const res = await fetch(`${SUPABASE_URL}/functions/v1/enviar-invitacion-niki`, {
+      method: "POST",
+      headers: { apikey: SUPABASE_KEY, Authorization: `Bearer ${SUPABASE_KEY}`, "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+    const txt = await res.text();
+    const data = txt ? JSON.parse(txt) : null;
+    if (!res.ok || data?.ok === false) throw new Error(data?.error || txt || "No se pudo enviar la invitación");
+    return data;
+  },
   createUser: (d) => sb("users", { method: "POST", body: JSON.stringify(d) }),
   updateUser: (id, d) => sb(`users?id=eq.${id}`, { method: "PATCH", body: JSON.stringify(d) }),
   getLocales: () => sb("locales?select=*&order=id"),
@@ -191,7 +228,7 @@ const api = {
   getConfigCobertura: () => sb("config_cobertura?select=*&order=local_id"),
   upsertConfigCobertura: (d) => patchOrPost("config_cobertura", `local_id=eq.${d.local_id}`, d),
   getEncargadoLocales: () => sb("encargado_locales?select=*"),
-  getComisiones: () => sb("comisiones_detalle?select=*&order=fecha_pago.desc,id.desc"),
+  getComisiones: () => sbAll("comisiones_detalle?select=*&order=fecha_pago.desc,id.desc"),
   getComisionesImportaciones: () => sb("comisiones_importaciones?select=*&order=creado_en.desc&limit=10"),
   getComisionesCriterios: () => sb("comisiones_criterios_semanales?select=*"),
   upsertComisionCriterio: (d) => patchOrPost("comisiones_criterios_semanales", `periodo=eq.${d.periodo}&semana=eq.${d.semana}&user_id=eq.${d.user_id}`, d),
@@ -289,6 +326,15 @@ const api = {
 };
 
 function normalizeUser(u) { return { id: u.id, nombre: u.nombre, usuario: u.usuario, email: u.email || "", rol: u.rol, localId: u.local_id, activo: u.activo, codigoExterno: u.codigo_externo || "", telefono: u.telefono || "", sessionToken: u.session_token || u.sessionToken || "" }; }
+function isValidEmail(email) {
+  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(email || "").trim());
+}
+function passwordSeguraBasica(password) {
+  const p = String(password || "");
+  if (p.length < 8) return "La contraseña debe tener al menos 8 caracteres.";
+  if (p === "niki123") return "La nueva contraseña no puede ser niki123.";
+  return "";
+}
 function normalizeHorario(h) { return { id: h.id, userId: h.user_id, fecha: h.fecha, entrada: h.entrada || "", salida: h.salida || "", trabaja: h.trabaja }; }
 function normalizeAsistencia(a) { return { id: a.id, userId: a.user_id, fecha: a.fecha, estado: a.estado, entradaReal: a.entrada_real || "", salidaReal: a.salida_real || "", motivo: a.motivo || "", certificado: a.certificado, tipoDoc: a.tipo_doc || "" }; }
 function normalizePeriodo(p) { return { id: p.id, periodo: p.periodo, userId: p.user_id ?? p.userId ?? null, localId: p.local_id ?? p.localId ?? null, creadoPorUserId: p.creado_por_user_id ?? null, creadoEn: p.creado_en || "" }; }
@@ -1718,30 +1764,91 @@ function Login({ onLogin, reloadData }) {
   const [msg, setMsg] = useState("");
   const [tokenValido, setTokenValido] = useState(null);
   const [loading, setLoading] = useState(false);
+  const [securityUser, setSecurityUser] = useState(null);
+  const [securityEmail, setSecurityEmail] = useState("");
+  const [securityPassword, setSecurityPassword] = useState("");
+  const [securityPassword2, setSecurityPassword2] = useState("");
+
+  useEffect(() => {
+    const parseResetHash = () => {
+      const raw = String(window.location.hash || "");
+      const clean = raw.replace(/^#\/?/, "");
+      if (!clean.startsWith("reset-password")) return;
+      const query = clean.includes("?") ? clean.slice(clean.indexOf("?")) : "";
+      const params = new URLSearchParams(query);
+      const tk = String(params.get("token") || "").trim();
+      if (tk) {
+        setToken(tk);
+        setTokenValido({ token: tk });
+        setVista("nueva");
+        setMsg("");
+      }
+    };
+    parseResetHash();
+    window.addEventListener("hashchange", parseResetHash);
+    return () => window.removeEventListener("hashchange", parseResetHash);
+  }, []);
 
   const handleLogin = async () => {
     setLoading(true); setErr("");
     try {
       const data = await api.login(u.trim(), p);
       const found = normalizeUser({ ...data.user, session_token: data.session_token });
-      if (found?.activo) { await reloadData(); onLogin(found); }
+      if (found?.activo) {
+        const requiereEmail = !String(found.email || "").trim();
+        const requiereCambioPassword = p === "niki123";
+        if (requiereEmail || requiereCambioPassword) {
+          setSecurityUser({ ...found, passwordTemporal: requiereCambioPassword });
+          setSecurityEmail(found.email || "");
+          setSecurityPassword("");
+          setSecurityPassword2("");
+          setMsg("");
+          setVista("seguridad");
+        } else {
+          await reloadData();
+          onLogin(found);
+        }
+      }
       else setErr("Usuario o contraseña incorrectos.");
     } catch { setErr("Usuario o contraseña incorrectos."); }
+    setLoading(false);
+  };
+
+  const handleCompletarSeguridad = async () => {
+    setMsg("");
+    if (!securityUser) return;
+    const emailLimpio = String(securityEmail || "").trim().toLowerCase();
+    if (!isValidEmail(emailLimpio)) { setMsg("Ingresá un email válido."); return; }
+    if (securityUser.passwordTemporal) {
+      const passErr = passwordSeguraBasica(securityPassword);
+      if (passErr) { setMsg(passErr); return; }
+      if (securityPassword !== securityPassword2) { setMsg("Las contraseñas no coinciden."); return; }
+    }
+    setLoading(true);
+    try {
+      const ahora = new Date().toISOString();
+      await api.updateUser(securityUser.id, { email: emailLimpio, email_actualizado_en: ahora });
+      if (securityUser.passwordTemporal) {
+        await api.changePassword({ mode:"self", actor_id:securityUser.id, session_token:securityUser.sessionToken, target_user_id:securityUser.id, new_password:securityPassword });
+        await api.updateUser(securityUser.id, { password_actualizado_en: ahora });
+      }
+      await reloadData();
+      notifyToast("Datos de seguridad actualizados.", "success", { title:"Seguridad actualizada" });
+      onLogin({ ...securityUser, email: emailLimpio });
+    } catch(e) {
+      setMsg("No se pudieron guardar los datos: " + (e.message || e));
+    }
     setLoading(false);
   };
 
   const handleRecuperar = async () => {
     setLoading(true); setMsg("");
     try {
-      const users = await api.getUsers();
-      const user = users.map(normalizeUser).find(x => x.email && x.email.toLowerCase() === email.trim().toLowerCase() && x.activo);
-      if (user) {
-        await api.deleteTokenByUser(user.id);
-        const tk = genToken();
-        await api.createToken({ token: tk, user_id: user.id, expiry: Date.now() + 30 * 60 * 1000 });
-        setMsg(`Demo — tu token es: ${tk}`);
-      } else setMsg("Si el mail existe, vas a recibir las instrucciones.");
-    } catch { setMsg("Error al procesar."); }
+      await api.solicitarResetPassword(email.trim());
+      setMsg("Si el usuario existe y tiene email cargado, vas a recibir las instrucciones en unos minutos.");
+    } catch(e) {
+      setMsg("No se pudo procesar la solicitud. Probá nuevamente.");
+    }
     setLoading(false);
   };
 
@@ -1753,13 +1860,18 @@ function Login({ onLogin, reloadData }) {
   };
 
   const handleNuevaPassword = async () => {
-    if (!nueva || nueva !== nueva2) { setMsg("Las contraseñas no coinciden."); return; }
+    setMsg("");
+    const passErr = passwordSeguraBasica(nueva);
+    if (passErr) { setMsg(passErr); return; }
+    if (nueva !== nueva2) { setMsg("Las contraseñas no coinciden."); return; }
+    if (!tokenValido?.token) { setMsg("El link no es válido o está incompleto."); return; }
     setLoading(true);
     try {
       await api.changePassword({ mode:"reset", token: tokenValido.token, new_password: nueva });
       setVista("login"); setMsg(""); setNueva(""); setNueva2(""); setToken(""); setErr("");
+      window.location.hash = "";
       notifyToast("Contraseña actualizada. Ya podés ingresar.", "success", { title:"Contraseña actualizada" });
-    } catch { setMsg("Error al guardar."); }
+    } catch(e) { setMsg(e.message || "Error al guardar."); }
     setLoading(false);
   };
 
@@ -1778,12 +1890,29 @@ function Login({ onLogin, reloadData }) {
           <Btn onClick={handleLogin} disabled={loading} style={{ width:"100%",justifyContent:"center" }}>{loading?"Ingresando...":"Ingresar"}</Btn>
           <button onClick={()=>{ setVista("recuperar"); setMsg(""); setEmail(""); }} style={{ background:"none",border:"none",color:COLORS.pink,fontSize:13,cursor:"pointer",textAlign:"center",marginTop:4 }}>¿Olvidaste tu contraseña?</button>
         </div>}
+        {vista==="seguridad" && <div style={{ display:"flex",flexDirection:"column",gap:12 }}>
+          <div style={{ background:COLORS.infoLight,border:`1px solid ${COLORS.info}33`,borderRadius:12,padding:12 }}>
+            <p style={{ margin:"0 0 4px",fontWeight:600,color:COLORS.info }}>Completá tus datos de seguridad</p>
+            <p style={{ margin:0,fontSize:13,color:"var(--color-text-secondary)" }}>
+              {securityUser?.passwordTemporal
+                ? "Para continuar necesitás cargar tu email y cambiar la contraseña temporal."
+                : "Para continuar necesitás cargar un email válido."}
+            </p>
+          </div>
+          <Input value={securityEmail} onChange={setSecurityEmail} type="email" placeholder="Email"/>
+          {securityUser?.passwordTemporal && <>
+            <Input value={securityPassword} onChange={setSecurityPassword} type="password" placeholder="Nueva contraseña"/>
+            <Input value={securityPassword2} onChange={setSecurityPassword2} type="password" placeholder="Repetir nueva contraseña"/>
+            <p style={{ margin:0,fontSize:12,color:"var(--color-text-secondary)" }}>Mínimo 8 caracteres. No puede ser niki123.</p>
+          </>}
+          {msg && <p style={{ margin:0,fontSize:13,color:COLORS.danger }}>{msg}</p>}
+          <Btn onClick={handleCompletarSeguridad} disabled={loading} style={{ width:"100%",justifyContent:"center" }}>{loading?"Guardando...":"Guardar y continuar"}</Btn>
+        </div>}
         {vista==="recuperar" && <div style={{ display:"flex",flexDirection:"column",gap:12 }}>
-          <p style={{ margin:0,fontSize:13,color:"var(--color-text-secondary)" }}>Ingresá tu mail y te enviamos un token.</p>
-          <Input value={email} onChange={setEmail} placeholder="tu@mail.com" type="email"/>
-          {msg && <p style={{ margin:0,fontSize:13,color:msg.startsWith("Demo")?COLORS.info:COLORS.success,wordBreak:"break-all" }}>{msg}</p>}
-          <Btn onClick={handleRecuperar} disabled={loading} style={{ width:"100%",justifyContent:"center" }}>{loading?"Enviando...":"Enviar token"}</Btn>
-          {msg && <Btn onClick={()=>{ setVista("token"); setMsg(""); }} variant="secondary" style={{ width:"100%",justifyContent:"center" }}>Tengo mi token →</Btn>}
+          <p style={{ margin:0,fontSize:13,color:"var(--color-text-secondary)" }}>Ingresá tu usuario o email y te enviamos un link para cambiar la contraseña.</p>
+          <Input value={email} onChange={setEmail} placeholder="Usuario o email"/>
+          {msg && <p style={{ margin:0,fontSize:13,color:COLORS.success,wordBreak:"break-word" }}>{msg}</p>}
+          <Btn onClick={handleRecuperar} disabled={loading} style={{ width:"100%",justifyContent:"center" }}>{loading?"Enviando...":"Enviar instrucciones"}</Btn>
           <button onClick={()=>setVista("login")} style={{ background:"none",border:"none",color:"var(--color-text-secondary)",fontSize:13,cursor:"pointer",textAlign:"center" }}>← Volver</button>
         </div>}
         {vista==="token" && <div style={{ display:"flex",flexDirection:"column",gap:12 }}>
@@ -1794,7 +1923,7 @@ function Login({ onLogin, reloadData }) {
           <button onClick={()=>setVista("recuperar")} style={{ background:"none",border:"none",color:"var(--color-text-secondary)",fontSize:13,cursor:"pointer",textAlign:"center" }}>← Volver</button>
         </div>}
         {vista==="nueva" && <div style={{ display:"flex",flexDirection:"column",gap:12 }}>
-          <p style={{ margin:0,fontSize:13,color:"var(--color-text-secondary)" }}>Elegí tu nueva contraseña.</p>
+          <p style={{ margin:0,fontSize:13,color:"var(--color-text-secondary)" }}>Elegí tu nueva contraseña para NikiAsistencia.</p>
           <Input value={nueva} onChange={setNueva} type="password" placeholder="Nueva contraseña"/>
           <Input value={nueva2} onChange={setNueva2} type="password" placeholder="Repetir contraseña"/>
           {msg && <p style={{ margin:0,fontSize:13,color:COLORS.danger }}>{msg}</p>}
@@ -1821,6 +1950,7 @@ function ABMManicuras({ data, reloadData, user }) {
   const save = async () => {
     setFormErr("");
     if (!form.nombre.trim()||!form.usuario.trim()) { setFormErr("Nombre y usuario son obligatorios."); return; }
+    if (!isValidEmail(form.email)) { setFormErr("El email es obligatorio y debe ser válido."); return; }
     if (!localesPermitidos.some(l => l.id === parseInt(form.localId))) { setFormErr("No podés asignar manicuras a ese local."); return; }
     if (modal==="new") {
       if (!form.password) { setFormErr("Ingresá una contraseña."); return; }
@@ -1831,17 +1961,39 @@ function ABMManicuras({ data, reloadData, user }) {
     setSaving(true);
     try {
       if (modal==="new") {
-        await api.createUser({ nombre:form.nombre.trim(),usuario:form.usuario.trim(),email:form.email.trim(),codigo_externo:(form.codigoExterno||"").trim()||null,password:form.password,rol:"manicura",local_id:parseInt(form.localId)||null,activo:true });
+        const ahora = new Date().toISOString();
+        const created = await api.createUser({ nombre:form.nombre.trim(),usuario:form.usuario.trim(),email:form.email.trim().toLowerCase(),email_actualizado_en:ahora,codigo_externo:(form.codigoExterno||"").trim()||null,password:form.password,password_actualizado_en:form.password==="niki123"?null:ahora,rol:"manicura",local_id:parseInt(form.localId)||null,activo:true });
+        const nuevoId = created?.[0]?.id;
+        if (nuevoId) {
+          try {
+            await api.enviarInvitacionUsuario({ actor_id:user.id, session_token:user.sessionToken, target_user_id:nuevoId });
+            notifyToast("Manicura creada e invitación enviada por email.", "success", { title:"Invitación enviada" });
+          } catch(invErr) {
+            notifyToast("La manicura se creó, pero no se pudo enviar la invitación: " + (invErr.message || invErr), "warning", { title:"Invitación pendiente" });
+          }
+        }
       } else {
-        const upd = { nombre:form.nombre.trim(),usuario:form.usuario.trim(),email:form.email?.trim()||"",codigo_externo:(form.codigoExterno||"").trim()||null,local_id:parseInt(form.localId)||null };
+        const upd = { nombre:form.nombre.trim(),usuario:form.usuario.trim(),email:form.email.trim().toLowerCase(),email_actualizado_en:new Date().toISOString(),codigo_externo:(form.codigoExterno||"").trim()||null,local_id:parseInt(form.localId)||null };
         await api.updateUser(form.id, upd);
-        if (form.password) await api.changePassword({ mode:"admin_set", actor_id:user.id, session_token:user.sessionToken, target_user_id:form.id, new_password:form.password });
+        if (form.password) {
+          await api.changePassword({ mode:"admin_set", actor_id:user.id, session_token:user.sessionToken, target_user_id:form.id, new_password:form.password });
+          await api.updateUser(form.id, { password_actualizado_en: form.password==="niki123" ? null : new Date().toISOString() });
+        }
       }
       await reloadData(); setModal(null);
     } catch(e) { setFormErr("Error al guardar: "+e.message); }
     setSaving(false);
   };
   const toggle = async (u) => { await api.updateUser(u.id,{activo:!u.activo}); await reloadData(); };
+  const reenviarInvitacion = async (u) => {
+    if (!u?.email) { notifyToast("La manicura no tiene email cargado.", "warning"); return; }
+    try {
+      await api.enviarInvitacionUsuario({ actor_id:user.id, session_token:user.sessionToken, target_user_id:u.id });
+      notifyToast(`Invitación enviada a ${u.email}.`, "success", { title:"Invitación enviada" });
+    } catch(e) {
+      notifyToast("No se pudo enviar la invitación: " + (e.message || e), "error");
+    }
+  };
   return (
     <div>
       <div style={{ display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:16 }}>
@@ -1859,6 +2011,7 @@ function ABMManicuras({ data, reloadData, user }) {
             </div>
             <Badge color={m.activo?"success":"gray"}>{m.activo?"Activa":"Inactiva"}</Badge>
             <Btn onClick={()=>openEdit(m)} variant="ghost" size="sm">Editar</Btn>
+            <Btn onClick={()=>reenviarInvitacion(m)} variant="ghost" size="sm" disabled={!m.email}>Invitar</Btn>
             <Btn onClick={()=>toggle(m)} variant="ghost" size="sm" style={{ color:m.activo?COLORS.danger:COLORS.success }}>{m.activo?"Desactivar":"Activar"}</Btn>
           </Card>;
         })}
@@ -1977,12 +2130,21 @@ function MiPerfil({ data, reloadData, user, setUser }) {
     setErr(""); setOk(false);
     if (!form.nombre.trim()) { setErr("El nombre es obligatorio."); return; }
     if (!form.usuario.trim()) { setErr("El usuario es obligatorio."); return; }
+    if (!isValidEmail(form.email)) { setErr("El email es obligatorio y debe ser válido."); return; }
+    if (form.password) {
+      const passErr = passwordSeguraBasica(form.password);
+      if (passErr) { setErr(passErr); return; }
+    }
     if (form.password&&form.password!==form.password2) { setErr("Las contraseñas no coinciden."); return; }
     setSaving(true);
     try {
-      const upd = {nombre:form.nombre.trim(),usuario:form.usuario.trim(),email:form.email.trim()};
+      const ahora = new Date().toISOString();
+      const upd = {nombre:form.nombre.trim(),usuario:form.usuario.trim(),email:form.email.trim().toLowerCase(),email_actualizado_en:ahora};
       await api.updateUser(user.id,upd);
-      if (form.password) await api.changePassword({ mode:"self", actor_id:user.id, session_token:user.sessionToken, target_user_id:user.id, new_password:form.password });
+      if (form.password) {
+        await api.changePassword({ mode:"self", actor_id:user.id, session_token:user.sessionToken, target_user_id:user.id, new_password:form.password });
+        await api.updateUser(user.id,{ password_actualizado_en: ahora });
+      }
       await reloadData(); setUser({...user,...upd}); setOk(true);
     } catch(e) { setErr("Error al guardar: "+e.message); }
     setSaving(false);
@@ -2198,10 +2360,14 @@ function Reportes({ data, user, onOpenAgenda, reportRestore, reloadData }) {
   const [fechaHasta, setFechaHasta] = useState(dateKey(hoy));
   const [expandidos, setExpandidos] = useState({});
   const [localCobertura, setLocalCobertura] = useState(reportRestore?.localId || localesVisibles[0]?.id || "");
-  const [periodoComisiones, setPeriodoComisiones] = useState(fmtPeriodo(hoy));
-  const [localComisiones, setLocalComisiones] = useState(puedeGestionar ? "todos" : String(user.localId || ""));
+  const periodoComisionesInicial = fmtPeriodo(hoy);
+  const semanasComisionesIniciales = getCommissionWeeksForMonth(hoy.getFullYear(), hoy.getMonth());
+  const semanaActualComisiones = semanasComisionesIniciales.find(w => dateKey(startOfCommissionWeek(hoy)) === w.desdeKey)?.numero || semanasComisionesIniciales[0]?.numero || "";
+  const localComisionesInicial = String(user.localId || localesVisibles[0]?.id || "");
+  const [periodoComisiones, setPeriodoComisiones] = useState(periodoComisionesInicial);
+  const [localComisiones, setLocalComisiones] = useState(localComisionesInicial);
   const [manicuraComisiones, setManicuraComisiones] = useState(puedeGestionar ? "todas" : String(user.id));
-  const [semanaComisiones, setSemanaComisiones] = useState("todas");
+  const [semanaComisiones, setSemanaComisiones] = useState(semanaActualComisiones ? String(semanaActualComisiones) : "");
   const [gruposComisiones, setGruposComisiones] = useState([]);
   const [menuColComisiones, setMenuColComisiones] = useState(null);
   const [collapsedComisiones, setCollapsedComisiones] = useState({});
@@ -2371,10 +2537,11 @@ function Reportes({ data, user, onOpenAgenda, reportRestore, reloadData }) {
     const periodoYearComisiones = periodoPartsComisiones[0] || hoy.getFullYear();
     const periodoMonthComisiones = (periodoPartsComisiones[1] || (hoy.getMonth()+1)) - 1;
     const semanasComisionesPeriodo = getCommissionWeeksForMonth(periodoYearComisiones, periodoMonthComisiones);
-    const semanaSeleccionadaComision = semanaComisiones !== "todas" ? semanasComisionesPeriodo.find(w => String(w.numero) === String(semanaComisiones)) : null;
+    const sinSemanaComisiones = !semanaComisiones || semanaComisiones === "todas";
+    const semanaSeleccionadaComision = !sinSemanaComisiones ? semanasComisionesPeriodo.find(w => String(w.numero) === String(semanaComisiones)) : null;
     const semanaSeleccionadaDias = semanaSeleccionadaComision ? Array.from({ length:6 }, (_,i)=>addDaysLocal(semanaSeleccionadaComision.desdeKey, i)).filter(Boolean) : null;
     const semanaKeysComision = (semanaSeleccionadaDias || []).map(d=>dateKey(d));
-    const fechaEnSemanaSeleccionada = (fecha) => semanaComisiones !== "todas" && semanaSeleccionadaComision ? isDateInRangeKey(fecha, semanaSeleccionadaComision.desdeKey, semanaSeleccionadaComision.hastaKey) : false;
+    const fechaEnSemanaSeleccionada = (fecha) => !sinSemanaComisiones && semanaSeleccionadaComision ? isDateInRangeKey(fecha, semanaSeleccionadaComision.desdeKey, semanaSeleccionadaComision.hastaKey) : false;
     const displayManicuraComision = (u, fallback="") => (u?.codigoExterno || fallback || u?.nombre || "").trim();
     const puedeVerComision = (c) => {
       if (esAdmin) return true;
@@ -2382,10 +2549,13 @@ function Reportes({ data, user, onOpenAgenda, reportRestore, reloadData }) {
       const localOk = !c.localId || c.localId === user.localId || normalize(c.nombreLocal) === normalize(localNameById.get(user.localId));
       return (c.userId === user.id || normalize(c.nombreManicura) === normalize(user.nombre)) && localOk;
     };
+    const localesComisionesDisponibles = localesVisibles.filter(l => !!l?.id);
+    const localComisionesSeleccionado = parseInt(localComisiones || localComisionesInicial || localesComisionesDisponibles[0]?.id || "");
+    const manicurasComisionesDisponibles = manicuras.filter(m => !localComisionesSeleccionado || m.localId === localComisionesSeleccionado);
     const baseRegistrosComisiones = (data.comisiones||[])
       .filter(c=>puedeVerComision(c))
-      .filter(c=>semanaComisiones === "todas" ? (!periodoComisiones || c.periodo === periodoComisiones) : fechaEnSemanaSeleccionada(c.fechaPago))
-      .filter(c=>localComisiones === "todos" || c.localId === parseInt(localComisiones) || normalize(c.nombreLocal) === normalize(localNameById.get(parseInt(localComisiones))))
+      .filter(c=>!sinSemanaComisiones && fechaEnSemanaSeleccionada(c.fechaPago))
+      .filter(c=>!localComisionesSeleccionado || c.localId === localComisionesSeleccionado || normalize(c.nombreLocal) === normalize(localNameById.get(localComisionesSeleccionado)))
       .filter(c=>manicuraComisiones === "todas" || c.userId === parseInt(manicuraComisiones) || normalize(c.nombreManicura) === normalize(userNameById.get(parseInt(manicuraComisiones))));
     const garantiaVisible = (g, tipo) => {
       const uid = tipo === "reparacion" ? g.manicuraReparacionId : g.manicuraOriginalId;
@@ -2395,8 +2565,8 @@ function Reportes({ data, user, onOpenAgenda, reportRestore, reloadData }) {
     };
     const ajustesGarantias = (data.garantias||[]).flatMap(g => {
       const periodoG = (g.fechaReparacion || "").slice(0,7);
-      if (semanaComisiones === "todas" ? (!periodoComisiones || periodoG !== periodoComisiones) : !fechaEnSemanaSeleccionada(g.fechaReparacion)) return [];
-      if (localComisiones !== "todos" && g.localId !== parseInt(localComisiones)) return [];
+      if (sinSemanaComisiones || !fechaEnSemanaSeleccionada(g.fechaReparacion)) return [];
+      if (localComisionesSeleccionado && g.localId !== localComisionesSeleccionado) return [];
       const local = localNameById.get(g.localId) || "";
       const original = data.users.find(u=>u.id===g.manicuraOriginalId);
       const reparacion = data.users.find(u=>u.id===g.manicuraReparacionId);
@@ -2417,8 +2587,7 @@ function Reportes({ data, user, onOpenAgenda, reportRestore, reloadData }) {
     });
     const baseRegistros = [...baseRegistrosComisiones, ...ajustesGarantias];
     const semanasDisponibles = semanasComisionesPeriodo.map(w => String(w.numero));
-    const registrosFiltrados = baseRegistros
-      .filter(c=>semanaComisiones === "todas" || fechaEnSemanaSeleccionada(c.fechaPago));
+    const registrosFiltrados = baseRegistros;
     const sortRawValue = (c, key) => {
       if (key === "fecha") return c.fechaPago || "";
       if (key === "semana") return dateKey(startOfCommissionWeek(c.fechaPago) || new Date(0));
@@ -2448,10 +2617,10 @@ function Reportes({ data, user, onOpenAgenda, reportRestore, reloadData }) {
     };
     const baseAdelantos = (data.adelantos||[])
       .filter(a=>puedeVerAdelanto(a))
-      .filter(a=>semanaComisiones === "todas" ? (!periodoComisiones || a.periodo === periodoComisiones) : fechaEnSemanaSeleccionada(a.fechaDescuento || a.fecha))
-      .filter(a=>localComisiones === "todos" || a.localId === parseInt(localComisiones))
+      .filter(a=>!sinSemanaComisiones && fechaEnSemanaSeleccionada(a.fechaDescuento || a.fecha))
+      .filter(a=>!localComisionesSeleccionado || a.localId === localComisionesSeleccionado)
       .filter(a=>manicuraComisiones === "todas" || a.userId === parseInt(manicuraComisiones));
-    const adelantos = baseAdelantos.filter(a=>semanaComisiones === "todas" || fechaEnSemanaSeleccionada(a.fechaDescuento || a.fecha));
+    const adelantos = baseAdelantos;
     const adelantoGroupKeysSeleccion = new Set(baseAdelantos.map(a=>a.grupoId || `adelanto-${a.id}`));
     const adelantosPlanesComisiones = buildAdelantoPlanes((data.adelantos||[]).filter(a=>puedeVerAdelanto(a)).filter(a=>adelantoGroupKeysSeleccion.has(a.grupoId || `adelanto-${a.id}`)));
     const planesPorUserComisiones = adelantosPlanesComisiones.reduce((map,p)=>{ const arr=map.get(p.userId)||[]; arr.push(p); map.set(p.userId,arr); return map; }, new Map());
@@ -2472,14 +2641,14 @@ function Reportes({ data, user, onOpenAgenda, reportRestore, reloadData }) {
     const ultimaImportacionTexto = ultimaActualizacionSeleccion
       ? fmtDateTime(ultimaActualizacionSeleccion)
       : ultimaImportacionPeriodo?.creadoEn ? fmtDateTime(ultimaImportacionPeriodo.creadoEn) : "";
-    const manicurasComision = puedeGestionar ? manicuras.filter(m => baseRegistros.some(c => c.userId === m.id || normalize(c.nombreManicura) === normalize(m.nombre)) || m.activo) : [user];
+    const manicurasComision = puedeGestionar ? manicurasComisionesDisponibles : [user];
     const sabadoPagoBase = semanaSeleccionadaComision ? new Date(semanaSeleccionadaComision.hasta) : null;
     const hoyPagoCheck = new Date();
     hoyPagoCheck.setHours(0,0,0,0);
     const sabadoPagoCheck = sabadoPagoBase ? new Date(sabadoPagoBase) : null;
     if (sabadoPagoCheck) sabadoPagoCheck.setHours(0,0,0,0);
     const semanaFinalizada = !!sabadoPagoCheck && hoyPagoCheck > sabadoPagoCheck;
-    const pagoEstimado = semanaComisiones !== "todas" && !!sabadoPagoBase && !semanaFinalizada;
+    const pagoEstimado = !sinSemanaComisiones && !!sabadoPagoBase && !semanaFinalizada;
     const minutesFromTimeComision = (hhmm) => {
       const [h,m] = String(hhmm||"").slice(0,5).split(":").map(Number);
       return (Number.isFinite(h)?h:0)*60 + (Number.isFinite(m)?m:0);
@@ -2515,7 +2684,7 @@ function Reportes({ data, user, onOpenAgenda, reportRestore, reloadData }) {
       .filter(c=>c.periodo===periodoComisiones && String(c.semana)===String(semanaComisiones))
       .map(c=>[criterioKey(c.userId, c.localId), c]));
     const porcentajeAutomatico = (uid, localIdValue=null) => {
-      if (!uid || semanaComisiones === "todas") return Number(configGeneralComisiones.porcentajeBase || 40);
+      if (!uid || sinSemanaComisiones) return Number(configGeneralComisiones.porcentajeBase || 40);
       const regla = reglaComision(uid, localIdValue);
       const horas = horasTeoricasSemana(uid);
       const faltas = faltasSemana(uid, localIdValue);
@@ -2580,7 +2749,7 @@ function Reportes({ data, user, onOpenAgenda, reportRestore, reloadData }) {
       return comisionConPorcentaje(valor, info.porcentaje, info.regla?.porcentajeBase || configGeneralComisiones.porcentajeBase || 40);
     };
     const guardarCriterioComision = async (uid, localIdValue, porcentaje) => {
-      if (!uid || semanaComisiones === "todas") return;
+      if (!uid || sinSemanaComisiones) return;
       try {
         await api.upsertComisionCriterio({
           periodo: periodoComisiones,
@@ -2691,7 +2860,20 @@ function Reportes({ data, user, onOpenAgenda, reportRestore, reloadData }) {
       const fechaPago = sabadoPagoBase ? addDaysLocal(dateKey(sabadoPagoBase), trabajaSabado ? 2 : 3) : null;
       return { ...m, trabajaSabado, asistenciaSabado:asistenciaSabado?.estado || "", fechaPago: fechaPago ? dateKey(fechaPago) : "", neto:m.comision - m.adelantos };
     }).sort((a,b)=>(a.fechaPago||"").localeCompare(b.fechaPago||"") || String(a.nombre).localeCompare(String(b.nombre)));
-    const mesesDisponibles = Array.from(new Set([fmtPeriodo(hoy), ...(data.comisiones||[]).map(c=>c.periodo).filter(Boolean)])).sort().reverse();
+    const anioComisionesSeleccionado = periodoYearComisiones;
+    const mesComisionesSeleccionado = periodoMonthComisiones + 1;
+    const aniosComisionesDisponibles = Array.from(new Set([hoy.getFullYear()-1, hoy.getFullYear(), hoy.getFullYear()+1, anioComisionesSeleccionado])).sort((a,b)=>b-a);
+    const mesesComisionesDisponibles = MESES.map((label, idx) => ({ numero:idx+1, label }));
+    const setPeriodoComisionesParts = (year, month) => {
+      const nuevoPeriodo = `${year}-${String(month).padStart(2,"0")}`;
+      setPeriodoComisiones(nuevoPeriodo);
+      const semanasNuevoPeriodo = getCommissionWeeksForMonth(Number(year), Number(month)-1);
+      const hoyKey = dateKey(startOfCommissionWeek(hoy));
+      const semanaDefault = nuevoPeriodo === fmtPeriodo(hoy)
+        ? semanasNuevoPeriodo.find(w => w.desdeKey === hoyKey)?.numero
+        : semanasNuevoPeriodo[0]?.numero;
+      setSemanaComisiones(semanaDefault ? String(semanaDefault) : "");
+    };
     const resumenMapComisiones = registros.reduce((map,c)=>{
       const key=c.userId || c.nombreManicura;
       const prev=map.get(key)||{ userId:c.userId, localId:c.localId, nombre:c.nombreManicura, local:c.nombreLocal, precio:0, comisionBase:0, comision35:0, comisionDefinitiva:0, porcentajeAplicado:40, porcentajeAutomatico:40, criterioGuardado:false, horasTeoricas:0, faltas:0, garantias:0, adelantos:0, neto:0, servicios:0, garantiasQty:0 };
@@ -2902,16 +3084,14 @@ function Reportes({ data, user, onOpenAgenda, reportRestore, reloadData }) {
       const label = agrupables.find(a=>a.id===g.campo)?.label || g.campo;
       const priceColIdx = colsComisiones.findIndex(c=>c.key==="precio");
       const comColIdx = colsComisiones.findIndex(c=>c.key==="comision");
+      const titleEndColumn = priceColIdx > 0 ? priceColIdx + 1 : -1;
       return <div key={g.id} style={{ display:"grid",gridTemplateColumns:gridColumns,gap:8,padding:"8px 12px",fontSize:12,alignItems:"center",borderBottom:"1px solid rgba(120,120,120,0.10)",background:g.level===0?"var(--color-background-secondary)":"rgba(212,83,126,0.045)" }}>
-        {colsComisiones.map((col,idx)=>{
-          if (idx === 0) return <button key={col.key} onClick={()=>toggleGroup(g.id)} style={{ display:"flex",alignItems:"center",gap:7,textAlign:"left",border:"none",background:"transparent",cursor:"pointer",padding:0,fontSize:12,color:"var(--color-text-primary)",paddingLeft:g.level*18,overflow:"hidden" }}>
-            <span style={{ color:COLORS.pink,fontWeight:800,flexShrink:0 }}>{collapsed?"▶":"▼"}</span>
-            <span style={{ minWidth:0,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap" }}><strong>{label}: {g.grupo}</strong> <span style={{ color:"var(--color-text-secondary)",fontWeight:400 }}>· {g.servicios} servicios · {g.clientesQty} clientes</span></span>
-          </button>;
-          if (idx === priceColIdx) return <span key={col.key} style={{ textAlign:"right",color:"var(--color-text-secondary)",fontWeight:600 }}>{fmtMoney(g.precio)}</span>;
-          if (idx === comColIdx) return <strong key={col.key} style={{ textAlign:"right",color:COLORS.pink }}>{fmtMoney(g.comision)}</strong>;
-          return <span key={col.key} style={{ fontSize:11,color:"var(--color-text-secondary)",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap" }}>{idx===1 ? `${fmtFechaCorta(g.desde)}${g.desde!==g.hasta?` – ${fmtFechaCorta(g.hasta)}`:""}` : ""}</span>;
-        })}
+        <button onClick={()=>toggleGroup(g.id)} style={{ gridColumn:`1 / ${titleEndColumn}`,display:"flex",alignItems:"center",gap:7,textAlign:"left",border:"none",background:"transparent",cursor:"pointer",padding:0,fontSize:12,color:"var(--color-text-primary)",paddingLeft:g.level*18,overflow:"visible",minWidth:0 }}>
+          <span style={{ color:COLORS.pink,fontWeight:800,flexShrink:0 }}>{collapsed?"▶":"▼"}</span>
+          <span style={{ minWidth:0,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap" }}><strong>{label}: {g.grupo}</strong> <span style={{ color:"var(--color-text-secondary)",fontWeight:400 }}>· {g.servicios} servicios · {g.clientesQty} clientes</span></span>
+        </button>
+        {priceColIdx >= 0 && <span style={{ gridColumn:priceColIdx+1,textAlign:"right",color:"var(--color-text-secondary)",fontWeight:600,whiteSpace:"nowrap" }}>{fmtMoney(g.precio)}</span>}
+        {comColIdx >= 0 && <strong style={{ gridColumn:comColIdx+1,textAlign:"right",color:COLORS.pink,whiteSpace:"nowrap" }}>{fmtMoney(g.comision)}</strong>}
       </div>;
     };
 
@@ -2927,7 +3107,7 @@ function Reportes({ data, user, onOpenAgenda, reportRestore, reloadData }) {
     const shortDateCom = f => (f || "").split("-").reverse().slice(0,2).join("/");
     const allComisionesMetricas = (data.comisiones || [])
       .filter(c => puedeVerComision(c))
-      .filter(c => localComisiones === "todos" || c.localId === parseInt(localComisiones) || normalize(c.nombreLocal) === normalize(localNameById.get(parseInt(localComisiones))))
+      .filter(c => !localComisionesSeleccionado || c.localId === localComisionesSeleccionado || normalize(c.nombreLocal) === normalize(localNameById.get(localComisionesSeleccionado)))
       .filter(c => manicuraComisiones === "todas" || c.userId === parseInt(manicuraComisiones) || normalize(c.nombreManicura) === normalize(userNameById.get(parseInt(manicuraComisiones))));
     const sumaMetricasComisiones = (items) => items.reduce((acc, c) => {
       acc.venta += Number(c.precio || 0);
@@ -2948,12 +3128,12 @@ function Reportes({ data, user, onOpenAgenda, reportRestore, reloadData }) {
       const idx = keys.indexOf(todayKey);
       return idx >= 0 ? idx : keys.length - 1;
     })();
-    const compareCurrentKeys = semanaComisiones !== "todas" && semanaKeysComision.length
+    const compareCurrentKeys = !sinSemanaComisiones && semanaKeysComision.length
       ? new Set(semanaKeysComision.filter((_, idx) => idx <= compareCutoffIndex))
       : new Set();
     const comparePreviousKeys = new Set(Array.from(compareCurrentKeys).map(f => dateKey(addDaysLocal(f, -7))));
-    const compareCurrentItems = semanaComisiones !== "todas" ? allComisionesMetricas.filter(c => compareCurrentKeys.has(c.fechaPago)) : [];
-    const comparePreviousItems = semanaComisiones !== "todas" ? allComisionesMetricas.filter(c => comparePreviousKeys.has(c.fechaPago)) : [];
+    const compareCurrentItems = !sinSemanaComisiones ? allComisionesMetricas.filter(c => compareCurrentKeys.has(c.fechaPago)) : [];
+    const comparePreviousItems = !sinSemanaComisiones ? allComisionesMetricas.filter(c => comparePreviousKeys.has(c.fechaPago)) : [];
     const compareCurrent = sumaMetricasComisiones(compareCurrentItems);
     const comparePrevious = sumaMetricasComisiones(comparePreviousItems);
     const trendWeekStart = (f) => {
@@ -3025,10 +3205,11 @@ function Reportes({ data, user, onOpenAgenda, reportRestore, reloadData }) {
         </div>
       </Modal>}
       <div style={{ display:"flex",gap:8,marginBottom:16,flexWrap:"wrap",alignItems:"center" }}>
-        <Select value={periodoComisiones} onChange={v=>{setPeriodoComisiones(v);setSemanaComisiones("todas");}} style={{ width:130 }}>{mesesDisponibles.map(p=><option key={p} value={p}>{p}</option>)}</Select>
-        <Select value={semanaComisiones} onChange={setSemanaComisiones} style={{ width:245 }}><option value="todas">Todas las semanas</option>{semanasComisionesPeriodo.map(w=><option key={w.numero} value={w.numero}>{w.label}</option>)}</Select>
-        {puedeGestionar&&<Select value={localComisiones} onChange={v=>{setLocalComisiones(v);setManicuraComisiones("todas");setSemanaComisiones("todas");}} style={{ width:190 }}><option value="todos">Todos los locales</option>{localesVisibles.map(l=><option key={l.id} value={l.id}>{l.nombre}</option>)}</Select>}
-        {puedeGestionar&&<Select value={manicuraComisiones} onChange={v=>{setManicuraComisiones(v);setSemanaComisiones("todas");}} style={{ width:210 }}><option value="todas">Todas las manicuras</option>{manicurasComision.map(m=><option key={m.id} value={m.id}>{m.nombre}</option>)}</Select>}
+        {puedeGestionar&&<Select value={localComisiones || String(localComisionesSeleccionado || "")} onChange={v=>{setLocalComisiones(v);setManicuraComisiones("todas");}} style={{ width:190 }}>{localesComisionesDisponibles.map(l=><option key={l.id} value={l.id}>{l.nombre}</option>)}</Select>}
+        {puedeGestionar&&<Select value={manicuraComisiones} onChange={setManicuraComisiones} style={{ width:220 }}><option value="todas">Todas las manicuras</option>{manicurasComision.map(m=><option key={m.id} value={m.id}>{m.nombre}</option>)}</Select>}
+        <Select value={String(anioComisionesSeleccionado)} onChange={v=>setPeriodoComisionesParts(parseInt(v), mesComisionesSeleccionado)} style={{ width:110 }}>{aniosComisionesDisponibles.map(a=><option key={a} value={a}>{a}</option>)}</Select>
+        <Select value={String(mesComisionesSeleccionado)} onChange={v=>setPeriodoComisionesParts(anioComisionesSeleccionado, parseInt(v))} style={{ width:145 }}>{mesesComisionesDisponibles.map(m=><option key={m.numero} value={m.numero}>{m.label}</option>)}</Select>
+        <Select value={semanaComisiones || ""} onChange={setSemanaComisiones} style={{ width:260 }}><option value="">Seleccionar semana</option>{semanasComisionesPeriodo.map(w=><option key={w.numero} value={w.numero}>{w.label}</option>)}</Select>
         {puedeGestionar&&<Btn variant="secondary" onClick={abrirConfigComisiones}>Configurar cálculo</Btn>}
         <span style={{ background:COLORS.pinkLight,color:COLORS.pinkDark,borderRadius:8,padding:"7px 10px",fontSize:12,fontWeight:600 }}>Tabla avanzada: clic en títulos para agrupar · arrastrá títulos/bordes</span>
         {gruposComisiones.length>0&&<button onClick={()=>{setGruposComisiones([]);setCollapsedComisiones({});}} style={{ background:"#fff",border:`1px solid ${COLORS.pink}44`,color:COLORS.pinkDark,borderRadius:8,padding:"7px 10px",fontSize:12,fontWeight:600,cursor:"pointer" }}>Desagrupar todo</button>}
@@ -3042,7 +3223,7 @@ function Reportes({ data, user, onOpenAgenda, reportRestore, reloadData }) {
           </span>;})}
           <span style={{ fontSize:11,color:"var(--color-text-secondary)" }}>Se aplican en este orden: {gruposComisiones.map(g=>agrupables.find(a=>a.id===g)?.label||g).join(" → ")}</span>
         </div>}
-        <span style={{ fontSize:12,color:"var(--color-text-secondary)",marginLeft:"auto" }}>Última importación{semanaComisiones!=="todas"?" de la selección":""}: {ultimaImportacionTexto || "Sin datos"}{ultimaImportacionPeriodo?.registros && semanaComisiones==="todas" ? ` · ${ultimaImportacionPeriodo.registros} registros` : ""}</span>
+        <span style={{ fontSize:12,color:"var(--color-text-secondary)",marginLeft:"auto" }}>Última importación{!sinSemanaComisiones?" de la selección":""}: {ultimaImportacionTexto || "Sin datos"}{ultimaImportacionPeriodo?.registros && sinSemanaComisiones ? ` · ${ultimaImportacionPeriodo.registros} registros` : ""}</span>
       </div>
       <div style={{ display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(160px,1fr))",gap:10,marginBottom:14 }}>
         <Card><p style={{ margin:"0 0 4px",fontSize:11,color:"var(--color-text-secondary)",textTransform:"uppercase",letterSpacing:"0.04em" }}>Venta total</p><p style={{ margin:0,fontSize:22,fontWeight:600 }}>{fmtMoney(totalPrecio)}</p></Card>
@@ -3054,17 +3235,17 @@ function Reportes({ data, user, onOpenAgenda, reportRestore, reloadData }) {
         <Card><p style={{ margin:"0 0 4px",fontSize:11,color:"var(--color-text-secondary)",textTransform:"uppercase",letterSpacing:"0.04em" }}>Clientes</p><p style={{ margin:0,fontSize:22,fontWeight:600 }}>{clientes}</p></Card>
       </div>
       <div style={{ display:"grid",gridTemplateColumns:"minmax(360px,1fr) minmax(380px,0.95fr)",gap:14,alignItems:"start",marginBottom:14 }}>
-        <div><Card style={{ marginBottom:0,border:semanaComisiones==="todas"?`1px solid ${COLORS.info}33`:semanaFinalizada?`1px solid ${COLORS.success}33`:`1px solid ${COLORS.amber}33`,background:semanaComisiones==="todas"?COLORS.infoLight:semanaFinalizada?COLORS.successLight:COLORS.amberLight }}>
+        <div><Card style={{ marginBottom:0,border:sinSemanaComisiones?`1px solid ${COLORS.info}33`:semanaFinalizada?`1px solid ${COLORS.success}33`:`1px solid ${COLORS.amber}33`,background:sinSemanaComisiones?COLORS.infoLight:semanaFinalizada?COLORS.successLight:COLORS.amberLight }}>
   <div style={{ display:"flex",justifyContent:"space-between",alignItems:"flex-start",gap:12,flexWrap:"wrap" }}>
     <div style={{ flex:1,minWidth:260 }}>
-      <h3 style={{ margin:"0 0 4px",fontSize:15,fontWeight:600,color:semanaComisiones==="todas"?COLORS.info:semanaFinalizada?COLORS.success:COLORS.amber }}>Fecha de pago de comisiones</h3>
-      {semanaComisiones==="todas" ? <p style={{ margin:0,fontSize:13,color:COLORS.info }}>Seleccioná una semana para calcular la fecha de pago.</p>
+      <h3 style={{ margin:"0 0 4px",fontSize:15,fontWeight:600,color:sinSemanaComisiones?COLORS.info:semanaFinalizada?COLORS.success:COLORS.amber }}>Fecha de pago de comisiones</h3>
+      {sinSemanaComisiones ? <p style={{ margin:0,fontSize:13,color:COLORS.info }}>Seleccioná una semana para calcular la fecha de pago.</p>
       : !semanaFinalizada ? <p style={{ margin:0,fontSize:13,color:COLORS.amber }}>La semana seleccionada todavía no está cerrada. Se muestra una fecha estimada en base a la agenda teórica del sábado {sabadoPagoBase?fmtFecha(sabadoPagoBase):""}. La fecha definitiva se confirmará cuando pase ese sábado.</p>
       : <p style={{ margin:0,fontSize:13,color:COLORS.success }}>Semana cerrada el sábado {fmtFecha(sabadoPagoBase)}. Si la manicura trabajó ese sábado, cobra el lunes siguiente; si no trabajó, el martes siguiente.</p>}
     </div>
-    {semanaComisiones!=="todas"&&sabadoPagoBase&&<div style={{ textAlign:"right" }}><p style={{ margin:0,fontSize:11,color:"var(--color-text-secondary)",textTransform:"uppercase",letterSpacing:"0.04em" }}>Sábado de control</p><p style={{ margin:0,fontSize:18,fontWeight:600 }}>{fmtFecha(sabadoPagoBase)}</p></div>}
+    {!sinSemanaComisiones&&sabadoPagoBase&&<div style={{ textAlign:"right" }}><p style={{ margin:0,fontSize:11,color:"var(--color-text-secondary)",textTransform:"uppercase",letterSpacing:"0.04em" }}>Sábado de control</p><p style={{ margin:0,fontSize:18,fontWeight:600 }}>{fmtFecha(sabadoPagoBase)}</p></div>}
   </div>
-  {semanaComisiones!=="todas"&&fechasPagoComisiones.length>0&&<div style={{ marginTop:12,display:"flex",flexDirection:"column",gap:6 }}>
+  {!sinSemanaComisiones&&fechasPagoComisiones.length>0&&<div style={{ marginTop:12,display:"flex",flexDirection:"column",gap:6 }}>
     {fechasPagoComisiones.map((pago,i)=><div key={`${pago.userId||pago.nombre}-${i}`} style={{ display:"grid",gridTemplateColumns:"1fr 120px 120px 115px",gap:8,alignItems:"center",background:"rgba(255,255,255,0.68)",borderRadius:8,padding:"7px 9px" }}>
       <div><p style={{ margin:0,fontSize:13,fontWeight:600 }}>{pago.nombre}</p><p style={{ margin:0,fontSize:11,color:"var(--color-text-secondary)" }}>{pago.local||"Sin local"} · {pago.trabajaSabado?"Trabaja sábado":"No trabaja sábado"}{pagoEstimado?" · estimado por agenda":""}</p></div>
       <Badge color={pagoEstimado?"amber":pago.trabajaSabado?"success":"amber"}>{pagoEstimado?`Estimado ${pago.trabajaSabado?"lunes":"martes"}`:pago.trabajaSabado?"Lunes":"Martes"}</Badge>
@@ -3074,7 +3255,7 @@ function Reportes({ data, user, onOpenAgenda, reportRestore, reloadData }) {
   </div>}
 </Card></div>
         <div style={{ display:"flex",flexDirection:"column",gap:14 }}>
-          {semanaComisiones !== "todas" && <Card style={{ marginBottom:0 }}>
+          {!sinSemanaComisiones && <Card style={{ marginBottom:0 }}>
   <div style={{ display:"flex",justifyContent:"space-between",alignItems:"flex-start",gap:12,flexWrap:"wrap",marginBottom:12 }}>
     <div>
       <h3 style={{ margin:"0 0 3px",fontSize:15,fontWeight:600 }}>Comparativo vs semana anterior</h3>
@@ -3111,7 +3292,7 @@ function Reportes({ data, user, onOpenAgenda, reportRestore, reloadData }) {
             <h3 style={{ margin:0,fontSize:15,fontWeight:500 }}>Resumen por manicura</h3>
             <p style={{ margin:"3px 0 0",fontSize:11,color:"var(--color-text-secondary)" }}>La comisión importada equivale al porcentaje base. Se muestra también el cálculo reducido y la comisión definitiva según selección o regla automática.</p>
           </div>
-          {semanaComisiones==="todas"?<Badge color="info">Seleccioná una semana para definir porcentaje</Badge>:<Badge color="success">Semana {semanaComisiones}</Badge>}
+          {sinSemanaComisiones?<Badge color="info">Seleccioná una semana para definir porcentaje</Badge>:<Badge color="success">Semana {semanaComisiones}</Badge>}
         </div>
         <div style={{ overflowX:"auto" }}>
           <div style={{ minWidth:puedeGestionar?1120:1040 }}>
@@ -3127,11 +3308,11 @@ function Reportes({ data, user, onOpenAgenda, reportRestore, reloadData }) {
               <span style={{ fontSize:10,fontWeight:700,color:"var(--color-text-secondary)",textTransform:"uppercase",letterSpacing:"0.04em",textAlign:"right" }}>Neto</span>
             </div>
             <div style={{ display:"flex",flexDirection:"column",gap:6 }}>{resumenPorManicura.slice(0,12).map((r,i)=><div key={i} style={{ display:"grid",gridTemplateColumns:puedeGestionar?"1fr 90px 95px 95px 115px 110px 105px 105px 110px":"1fr 90px 95px 95px 105px 105px 105px 110px",gap:8,alignItems:"center",padding:"7px 8px",borderRadius:8,background:"var(--color-background-secondary)" }}>
-              <div><p style={{ margin:0,fontSize:13,fontWeight:500 }}>{r.nombre}</p><p style={{ margin:0,fontSize:11,color:"var(--color-text-secondary)" }}>{r.local} · {r.servicios} servicios{semanaComisiones!=="todas"?` · ${Number(r.horasTeoricas||0).toFixed(1)}h de ${Number(r.horasObjetivo||0).toFixed(1)}h · ${r.faltas||0} falta${(r.faltas||0)!==1?"s":""} · ${r.llegadasTarde||0} tarde${(r.llegadasTarde||0)!==1?"s":""}`:""}{r.garantiasQty?` · ${r.garantiasQty} garantía${r.garantiasQty!==1?"s":""}`:""}</p></div>
+              <div><p style={{ margin:0,fontSize:13,fontWeight:500 }}>{r.nombre}</p><p style={{ margin:0,fontSize:11,color:"var(--color-text-secondary)" }}>{r.local} · {r.servicios} servicios{!sinSemanaComisiones?` · ${Number(r.horasTeoricas||0).toFixed(1)}h de ${Number(r.horasObjetivo||0).toFixed(1)}h · ${r.faltas||0} falta${(r.faltas||0)!==1?"s":""} · ${r.llegadasTarde||0} tarde${(r.llegadasTarde||0)!==1?"s":""}`:""}{r.garantiasQty?` · ${r.garantiasQty} garantía${r.garantiasQty!==1?"s":""}`:""}</p></div>
               <span style={{ fontSize:13,textAlign:"right",color:"var(--color-text-secondary)" }}>{fmtMoney(r.precio)}</span>
               <strong style={{ fontSize:14,textAlign:"right",color:COLORS.pink }}>{fmtMoney(r.comisionBase)}</strong>
               <strong style={{ fontSize:14,textAlign:"right",color:COLORS.amber }}>{fmtMoney(r.comision35)}</strong>
-              {puedeGestionar&&<div style={{ textAlign:"center" }}>{semanaComisiones!=="todas"&&r.userId?<select value={r.porcentajeAplicado} onChange={e=>guardarCriterioComision(r.userId,r.localId,e.target.value)} style={{ border:`1px solid ${r.criterioGuardado?COLORS.pink:"var(--color-border-secondary)"}`,borderRadius:8,padding:"5px 7px",fontSize:12,background:"#fff",color:"var(--color-text-primary)",fontFamily:"inherit" }} title={r.criterioGuardado?"Selección manual":"Sugerido automáticamente"}><option value={r.reglaComision?.porcentajeBase || configGeneralComisiones.porcentajeBase || 40}>{r.reglaComision?.porcentajeBase || configGeneralComisiones.porcentajeBase || 40}%</option><option value={r.reglaComision?.porcentajeReducido || configGeneralComisiones.porcentajeReducido || 35}>{r.reglaComision?.porcentajeReducido || configGeneralComisiones.porcentajeReducido || 35}%</option></select>:<span style={{ fontSize:11,color:"var(--color-text-secondary)" }}>—</span>}</div>}
+              {puedeGestionar&&<div style={{ textAlign:"center" }}>{!sinSemanaComisiones&&r.userId?<select value={r.porcentajeAplicado} onChange={e=>guardarCriterioComision(r.userId,r.localId,e.target.value)} style={{ border:`1px solid ${r.criterioGuardado?COLORS.pink:"var(--color-border-secondary)"}`,borderRadius:8,padding:"5px 7px",fontSize:12,background:"#fff",color:"var(--color-text-primary)",fontFamily:"inherit" }} title={r.criterioGuardado?"Selección manual":"Sugerido automáticamente"}><option value={r.reglaComision?.porcentajeBase || configGeneralComisiones.porcentajeBase || 40}>{r.reglaComision?.porcentajeBase || configGeneralComisiones.porcentajeBase || 40}%</option><option value={r.reglaComision?.porcentajeReducido || configGeneralComisiones.porcentajeReducido || 35}>{r.reglaComision?.porcentajeReducido || configGeneralComisiones.porcentajeReducido || 35}%</option></select>:<span style={{ fontSize:11,color:"var(--color-text-secondary)" }}>—</span>}</div>}
               <strong style={{ fontSize:14,textAlign:"right",color:Number(r.porcentajeAplicado)===Number(r.reglaComision?.porcentajeReducido || configGeneralComisiones.porcentajeReducido || 35)?COLORS.amber:COLORS.success }}>{fmtMoney(r.comisionDefinitiva)}</strong>
               <strong style={{ fontSize:14,textAlign:"right",color:r.garantias>0?COLORS.success:r.garantias<0?COLORS.danger:"var(--color-text-secondary)" }}>{r.garantias>0?"+":r.garantias<0?"-":""}{fmtMoney(Math.abs(r.garantias))}</strong>
               <AdelantoPlanTooltip planes={planesPorUserComisiones.get(r.userId) || []}><strong style={{ fontSize:14,textAlign:"right",color:COLORS.amber,cursor:(planesPorUserComisiones.get(r.userId)||[]).length?"help":"default" }}>-{fmtMoney(r.adelantos)}</strong></AdelantoPlanTooltip>
@@ -3893,7 +4074,7 @@ function AdelantosManicuras({ data, reloadData, user }) {
 }
 
 // ── ABM ENCARGADAS ────────────────────────────────────────────────
-function ABMEncargadas({ data, reloadData }) {
+function ABMEncargadas({ data, reloadData, user }) {
   const [modal, setModal] = useState(null);
   const [form, setForm] = useState({});
   const [formErr, setFormErr] = useState("");
@@ -3906,6 +4087,7 @@ function ABMEncargadas({ data, reloadData }) {
   const save = async () => {
     setFormErr("");
     if (!form.nombre?.trim() || !form.usuario?.trim()) { setFormErr("Nombre y usuario son obligatorios."); return; }
+    if (!isValidEmail(form.email)) { setFormErr("El email es obligatorio y debe ser válido."); return; }
     if (!(form.localIds||[]).length) { setFormErr("Asigná al menos un local."); return; }
     if (modal === "new") {
       if (!form.password) { setFormErr("Ingresá una contraseña."); return; }
@@ -3915,12 +4097,24 @@ function ABMEncargadas({ data, reloadData }) {
     try {
       let userId = form.id;
       if (modal === "new") {
-        const created = await api.createUser({ nombre:form.nombre.trim(), usuario:form.usuario.trim(), email:form.email?.trim()||"", password:form.password, rol:"encargada", local_id:null, activo:true });
+        const ahora = new Date().toISOString();
+        const created = await api.createUser({ nombre:form.nombre.trim(), usuario:form.usuario.trim(), email:form.email.trim().toLowerCase(), email_actualizado_en:ahora, password:form.password, password_actualizado_en:form.password==="niki123"?null:ahora, rol:"encargada", local_id:null, activo:true });
         userId = created?.[0]?.id;
+        if (userId) {
+          try {
+            await api.enviarInvitacionUsuario({ actor_id:user.id, session_token:user.sessionToken, target_user_id:userId });
+            notifyToast("Encargada creada e invitación enviada por email.", "success", { title:"Invitación enviada" });
+          } catch(invErr) {
+            notifyToast("La encargada se creó, pero no se pudo enviar la invitación: " + (invErr.message || invErr), "warning", { title:"Invitación pendiente" });
+          }
+        }
       } else {
-        const upd = { nombre:form.nombre.trim(), usuario:form.usuario.trim(), email:form.email?.trim()||"" };
+        const upd = { nombre:form.nombre.trim(), usuario:form.usuario.trim(), email:form.email.trim().toLowerCase(), email_actualizado_en:new Date().toISOString() };
         await api.updateUser(form.id, upd);
-        if (form.password) await api.changePassword({ mode:"admin_set", actor_id:user.id, session_token:user.sessionToken, target_user_id:form.id, new_password:form.password });
+        if (form.password) {
+          await api.changePassword({ mode:"admin_set", actor_id:user.id, session_token:user.sessionToken, target_user_id:form.id, new_password:form.password });
+          await api.updateUser(form.id, { password_actualizado_en: form.password==="niki123" ? null : new Date().toISOString() });
+        }
       }
       await api.setEncargadoLocales(userId, form.localIds);
       await reloadData(); setModal(null);
@@ -3928,10 +4122,19 @@ function ABMEncargadas({ data, reloadData }) {
     setSaving(false);
   };
   const toggle = async (u) => { await api.updateUser(u.id,{activo:!u.activo}); await reloadData(); };
+  const reenviarInvitacion = async (u) => {
+    if (!u?.email) { notifyToast("La encargada no tiene email cargado.", "warning"); return; }
+    try {
+      await api.enviarInvitacionUsuario({ actor_id:user.id, session_token:user.sessionToken, target_user_id:u.id });
+      notifyToast(`Invitación enviada a ${u.email}.`, "success", { title:"Invitación enviada" });
+    } catch(e) {
+      notifyToast("No se pudo enviar la invitación: " + (e.message || e), "error");
+    }
+  };
   return <div>
     <div style={{ display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:16 }}><h2 style={{ margin:0,fontSize:18,fontWeight:500 }}>Encargadas</h2><Btn onClick={openNew} size="sm">+ Nueva</Btn></div>
     <div style={{ display:"flex",flexDirection:"column",gap:8 }}>
-      {encargadas.map(e=>{ const locs=localesDe(e.id).map(id=>data.locales.find(l=>l.id===id)?.nombre).filter(Boolean).join(", "); return <Card key={e.id} style={{ display:"flex",alignItems:"center",gap:12,flexWrap:"wrap" }}><Avatar nombre={e.nombre}/><div style={{ flex:1,minWidth:0 }}><p style={{ margin:0,fontWeight:500,fontSize:14 }}>{e.nombre}</p><p style={{ margin:0,fontSize:12,color:"var(--color-text-secondary)" }}>{e.usuario} · {e.email||"Sin mail"} · {locs||"Sin locales"}</p></div><Badge color={e.activo?"success":"gray"}>{e.activo?"Activa":"Inactiva"}</Badge><Btn onClick={()=>openEdit(e)} variant="ghost" size="sm">Editar</Btn><Btn onClick={()=>toggle(e)} variant="ghost" size="sm" style={{ color:e.activo?COLORS.danger:COLORS.success }}>{e.activo?"Desactivar":"Activar"}</Btn></Card>; })}
+      {encargadas.map(e=>{ const locs=localesDe(e.id).map(id=>data.locales.find(l=>l.id===id)?.nombre).filter(Boolean).join(", "); return <Card key={e.id} style={{ display:"flex",alignItems:"center",gap:12,flexWrap:"wrap" }}><Avatar nombre={e.nombre}/><div style={{ flex:1,minWidth:0 }}><p style={{ margin:0,fontWeight:500,fontSize:14 }}>{e.nombre}</p><p style={{ margin:0,fontSize:12,color:"var(--color-text-secondary)" }}>{e.usuario} · {e.email||"Sin mail"} · {locs||"Sin locales"}</p></div><Badge color={e.activo?"success":"gray"}>{e.activo?"Activa":"Inactiva"}</Badge><Btn onClick={()=>openEdit(e)} variant="ghost" size="sm">Editar</Btn><Btn onClick={()=>reenviarInvitacion(e)} variant="ghost" size="sm" disabled={!e.email}>Invitar</Btn><Btn onClick={()=>toggle(e)} variant="ghost" size="sm" style={{ color:e.activo?COLORS.danger:COLORS.success }}>{e.activo?"Desactivar":"Activar"}</Btn></Card>; })}
     </div>
     {modal && <Modal title={modal==="new"?"Nueva encargada":"Editar encargada"} onClose={()=>setModal(null)}>
       <div style={{ display:"flex",flexDirection:"column",gap:14 }}>
@@ -6379,7 +6582,7 @@ export default function App() {
     if (seccion==="informes") return user.rol!=="manicura" ? <InformeDiario data={data} reloadData={reloadData} user={user}/> : null;
     if (seccion==="manicuras") return <ABMManicuras data={data} reloadData={reloadData} user={user}/>;
     if (seccion==="locales") return user.rol==="admin" ? <ABMLocales data={data} reloadData={reloadData}/> : null;
-    if (seccion==="encargadas") return user.rol==="admin" ? <ABMEncargadas data={data} reloadData={reloadData}/> : null;
+    if (seccion==="encargadas") return user.rol==="admin" ? <ABMEncargadas data={data} reloadData={reloadData} user={user}/> : null;
     if (seccion==="cobertura_config") return <ConfiguracionCobertura data={data} reloadData={reloadData} user={user}/>;
     if (seccion==="perfil") return <MiPerfil data={data} reloadData={reloadData} user={user} setUser={setUser}/>;
     return null;
