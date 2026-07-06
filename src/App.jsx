@@ -218,9 +218,12 @@ const api = {
   getPeriodosBloqueadosPara: (periodo, userId) => sb(`periodos_bloqueados?select=*&periodo=eq.${encodeURIComponent(periodo)}&user_id=eq.${parseInt(userId)}`),
   createPeriodo: (periodo, userId, localId, creadoPorUserId = null) => sb("periodos_bloqueados", { method: "POST", body: JSON.stringify({ periodo, user_id: parseInt(userId), local_id: localId ? parseInt(localId) : null, creado_por_user_id: creadoPorUserId ? parseInt(creadoPorUserId) : null }) }),
   deletePeriodo: (periodo, userId, localId = null) => {
-    const localFilter = localId ? `&local_id=eq.${parseInt(localId)}` : "";
-    return sb(`periodos_bloqueados?periodo=eq.${encodeURIComponent(periodo)}&user_id=eq.${parseInt(userId)}${localFilter}`, { method: "DELETE", prefer: "" });
+    // Ojo: algunos bloqueos históricos pueden tener local_id vacío/null.
+    // Como cada manicura pertenece a un local, borrar por período + manicura evita que queden bloqueos
+    // viejos que visualmente siguen apareciendo después de presionar Habilitar.
+    return sb(`periodos_bloqueados?periodo=eq.${encodeURIComponent(periodo)}&user_id=eq.${parseInt(userId)}`, { method: "DELETE", prefer: "" });
   },
+  deletePeriodoById: (id) => sb(`periodos_bloqueados?id=eq.${parseInt(id)}`, { method: "DELETE", prefer: "" }),
   createAuditoriaEvento: (d) => sb("auditoria_eventos", { method: "POST", body: JSON.stringify(d) }),
   getTokens: () => sb("reset_tokens?select=*"),
   createToken: (d) => sb("reset_tokens", { method: "POST", body: JSON.stringify(d) }),
@@ -756,7 +759,7 @@ function ToastStack({ toasts, onDismiss, onAction }) {
   };
   if (!toasts.length) return null;
   return (
-    <div aria-live="polite" aria-atomic="true" style={{ position:"fixed",right:16,top:82,zIndex:20000,display:"flex",flexDirection:"column",gap:10,width:"min(360px, calc(100vw - 32px))",pointerEvents:"none" }}>
+    <div aria-live="polite" aria-atomic="true" style={{ position:"fixed",right:16,top:76,zIndex:999999,display:"flex",flexDirection:"column",gap:10,width:"min(360px, calc(100vw - 32px))",pointerEvents:"none" }}>
       {toasts.map(t => {
         const m = meta[t.type] || meta.info;
         return <div key={t.id} onClick={() => t.action && onAction?.(t.action, t.id)} title={t.action ? "Ver detalle" : undefined} style={{ background:"#fff",border:`1px solid ${m.border}33`,borderLeft:`5px solid ${m.border}`,borderRadius:13,boxShadow:"0 12px 34px rgba(0,0,0,0.18)",padding:"11px 12px",display:"flex",gap:10,alignItems:"flex-start",pointerEvents:"auto",animation:"nikiToastIn 0.18s ease-out",cursor:t.action?"pointer":"default" }}>
@@ -966,22 +969,28 @@ function BloqueCalendario({ fecha, bloque, onChange, onCommit, onDelete, bloquea
   );
 }
 
-function CalendarioHorarios({ data, reloadData, user, agendaRequest, onBackToReport }) {
+function CalendarioHorarios({ data, reloadData, user, agendaRequest, onBackToReport, savedState = null, onStateChange = null }) {
   const hoy = new Date();
   const esAdmin = isAdminLikeRole(user.rol);
   const esEncargada = user.rol === "encargada";
   const puedeGestionar = esAdmin || esEncargada;
   const allowedLocalIds = getAssignedLocalIds(data, user);
   const isMobile = window.innerWidth < 640;
-  const [vista, setVista] = useState("semana");
-  const [weekStart, setWeekStart] = useState(getMon(hoy));
-  const [diaVista, setDiaVista] = useState(dateKey(hoy));
-  const [localDiaId, setLocalDiaId] = useState("");
-  const [mes, setMes] = useState(hoy.getMonth() === 11 ? 0 : hoy.getMonth() + 1);
-  const [anio, setAnio] = useState(hoy.getMonth() === 11 ? hoy.getFullYear() + 1 : hoy.getFullYear());
-  const [miniCursor, setMiniCursor] = useState(new Date(hoy.getFullYear(), hoy.getMonth(), 1));
-  const [manicuraId, setManicuraId] = useState(puedeGestionar ? (data.users.filter(u=>u.rol==="manicura"&&u.activo&&(esAdmin||allowedLocalIds.includes(u.localId)))[0]?.id||null) : user.id);
-  const [navVisible, setNavVisible] = useState(!isMobile);
+  const defaultManicuraId = puedeGestionar ? (data.users.filter(u=>u.rol==="manicura"&&u.activo&&(esAdmin||allowedLocalIds.includes(u.localId)))[0]?.id||null) : user.id;
+  const parseSavedDate = (value, fallback) => {
+    if (!value) return fallback;
+    const d = new Date(String(value) + "T12:00:00");
+    return Number.isNaN(d.getTime()) ? fallback : d;
+  };
+  const [vista, setVista] = useState(savedState?.vista || "semana");
+  const [weekStart, setWeekStart] = useState(() => parseSavedDate(savedState?.weekStart, getMon(hoy)));
+  const [diaVista, setDiaVista] = useState(savedState?.diaVista || dateKey(hoy));
+  const [localDiaId, setLocalDiaId] = useState(savedState?.localDiaId || "");
+  const [mes, setMes] = useState(Number.isInteger(savedState?.mes) ? savedState.mes : (hoy.getMonth() === 11 ? 0 : hoy.getMonth() + 1));
+  const [anio, setAnio] = useState(Number.isInteger(savedState?.anio) ? savedState.anio : (hoy.getMonth() === 11 ? hoy.getFullYear() + 1 : hoy.getFullYear()));
+  const [miniCursor, setMiniCursor] = useState(() => parseSavedDate(savedState?.miniCursor, new Date(hoy.getFullYear(), hoy.getMonth(), 1)));
+  const [manicuraId, setManicuraId] = useState(savedState?.manicuraId ?? defaultManicuraId);
+  const [navVisible, setNavVisible] = useState(savedState?.navVisible ?? !isMobile);
   const calendarShellHeight = vista === "mes" ? (isMobile ? 560 : 560) : (isMobile ? "calc(100vh - 154px)" : 640);
   const weeklyMinWidth = isMobile ? 520 : (navVisible ? 620 : 720);
   const monthMinWidth = isMobile ? 520 : 0;
@@ -997,6 +1006,20 @@ function CalendarioHorarios({ data, reloadData, user, agendaRequest, onBackToRep
   const tooltipTimer = useRef(null);
   const saveTimers = useRef({});
   const [tooltip, setTooltip] = useState(null);
+
+  useEffect(() => {
+    onStateChange?.({
+      vista,
+      weekStart: dateKey(weekStart),
+      diaVista,
+      localDiaId,
+      mes,
+      anio,
+      miniCursor: dateKey(miniCursor),
+      manicuraId,
+      navVisible,
+    });
+  }, [vista, weekStart, diaVista, localDiaId, mes, anio, miniCursor, manicuraId, navVisible]);
 
   useEffect(() => {
     if (!agendaRequest?.fecha) return;
@@ -2494,7 +2517,7 @@ function AsistenciaDiaria({ data, reloadData, user }) {
 
 // ── REPORTES ───────────────────────────────────────────────────────
 
-function Reportes({ data, user, onOpenAgenda, reportRestore, reloadData }) {
+function Reportes({ data, user, onOpenAgenda, reportRestore, reloadData, savedState = null, onStateChange = null }) {
   const hoy = new Date();
   const esAdmin = isAdminLikeRole(user.rol);
   const esEncargada = user.rol === "encargada";
@@ -2502,31 +2525,31 @@ function Reportes({ data, user, onOpenAgenda, reportRestore, reloadData }) {
   const puedeVerCobertura = puedeGestionar;
   const allowedLocalIds = getAssignedLocalIds(data, user);
   const localesVisibles = esAdmin ? data.locales : data.locales.filter(l => allowedLocalIds.includes(l.id));
-  const initialReportTab = reportRestore?.tab === "cobertura" && !puedeVerCobertura ? "horas" : (reportRestore?.tab || "horas");
+  const initialReportTab = reportRestore?.tab === "cobertura" && !puedeVerCobertura ? "horas" : (reportRestore?.tab || savedState?.tab || "horas");
   const [tab, setTab] = useState(initialReportTab);
-  const [filtroTipo, setFiltroTipo] = useState(puedeGestionar ? "manicura" : "manicura");
-  const [filtroId, setFiltroId] = useState(puedeGestionar ? (data.users.filter(u=>u.rol==="manicura"&&(esAdmin||allowedLocalIds.includes(u.localId)))[0]?.id || "") : user.id);
+  const [filtroTipo, setFiltroTipo] = useState(savedState?.filtroTipo || (puedeGestionar ? "manicura" : "manicura"));
+  const [filtroId, setFiltroId] = useState(savedState?.filtroId ?? (puedeGestionar ? (data.users.filter(u=>u.rol==="manicura"&&(esAdmin||allowedLocalIds.includes(u.localId)))[0]?.id || "") : user.id));
   const restoreDate = reportRestore?.fecha ? new Date(reportRestore.fecha + "T12:00:00") : null;
-  const [mes, setMes] = useState(restoreDate ? restoreDate.getMonth() : hoy.getMonth());
-  const [anio, setAnio] = useState(restoreDate ? restoreDate.getFullYear() : hoy.getFullYear());
-  const [filtroSemana, setFiltroSemana] = useState("todas");
-  const [filtroEstado, setFiltroEstado] = useState("todos");
-  const [fechaDesde, setFechaDesde] = useState(dateKey(new Date(hoy.getFullYear(),hoy.getMonth(),1)));
-  const [fechaHasta, setFechaHasta] = useState(dateKey(hoy));
-  const [expandidos, setExpandidos] = useState({});
-  const [localCobertura, setLocalCobertura] = useState(reportRestore?.localId || localesVisibles[0]?.id || "");
+  const [mes, setMes] = useState(Number.isInteger(savedState?.mes) ? savedState.mes : (restoreDate ? restoreDate.getMonth() : hoy.getMonth()));
+  const [anio, setAnio] = useState(Number.isInteger(savedState?.anio) ? savedState.anio : (restoreDate ? restoreDate.getFullYear() : hoy.getFullYear()));
+  const [filtroSemana, setFiltroSemana] = useState(savedState?.filtroSemana || "todas");
+  const [filtroEstado, setFiltroEstado] = useState(savedState?.filtroEstado || "todos");
+  const [fechaDesde, setFechaDesde] = useState(savedState?.fechaDesde || dateKey(new Date(hoy.getFullYear(),hoy.getMonth(),1)));
+  const [fechaHasta, setFechaHasta] = useState(savedState?.fechaHasta || dateKey(hoy));
+  const [expandidos, setExpandidos] = useState(savedState?.expandidos || {});
+  const [localCobertura, setLocalCobertura] = useState(reportRestore?.localId || savedState?.localCobertura || localesVisibles[0]?.id || "");
   const periodoComisionesInicial = fmtPeriodo(hoy);
   const semanasComisionesIniciales = getCommissionWeeksForMonth(hoy.getFullYear(), hoy.getMonth());
   const semanaActualComisiones = semanasComisionesIniciales.find(w => dateKey(startOfCommissionWeek(hoy)) === w.desdeKey)?.numero || semanasComisionesIniciales[0]?.numero || "";
   const localComisionesInicial = String(user.localId || localesVisibles[0]?.id || "");
-  const [periodoComisiones, setPeriodoComisiones] = useState(periodoComisionesInicial);
-  const [localComisiones, setLocalComisiones] = useState(localComisionesInicial);
-  const [manicuraComisiones, setManicuraComisiones] = useState(puedeGestionar ? "todas" : String(user.id));
-  const [semanaComisiones, setSemanaComisiones] = useState(semanaActualComisiones ? String(semanaActualComisiones) : "");
-  const [gruposComisiones, setGruposComisiones] = useState([]);
+  const [periodoComisiones, setPeriodoComisiones] = useState(savedState?.periodoComisiones || periodoComisionesInicial);
+  const [localComisiones, setLocalComisiones] = useState(savedState?.localComisiones || localComisionesInicial);
+  const [manicuraComisiones, setManicuraComisiones] = useState(savedState?.manicuraComisiones || (puedeGestionar ? "todas" : String(user.id)));
+  const [semanaComisiones, setSemanaComisiones] = useState(savedState?.semanaComisiones || (semanaActualComisiones ? String(semanaActualComisiones) : ""));
+  const [gruposComisiones, setGruposComisiones] = useState(savedState?.gruposComisiones || []);
   const [menuColComisiones, setMenuColComisiones] = useState(null);
-  const [collapsedComisiones, setCollapsedComisiones] = useState({});
-  const [sortComisiones, setSortComisiones] = useState({ key:"fecha", dir:"desc" });
+  const [collapsedComisiones, setCollapsedComisiones] = useState(savedState?.collapsedComisiones || {});
+  const [sortComisiones, setSortComisiones] = useState(savedState?.sortComisiones || { key:"fecha", dir:"desc" });
   const [garantiaDetalleComisiones, setGarantiaDetalleComisiones] = useState(null);
   const [configComisionesDraft, setConfigComisionesDraft] = useState(null);
   const [savingConfigComisiones, setSavingConfigComisiones] = useState(false);
@@ -2540,6 +2563,29 @@ function Reportes({ data, user, onOpenAgenda, reportRestore, reloadData }) {
     { key:"precio", label:"Precio", width:110 },
     { key:"comision", label:"Comisión", width:110 },
   ]);
+  useEffect(() => {
+    onStateChange?.({
+      tab,
+      filtroTipo,
+      filtroId,
+      mes,
+      anio,
+      filtroSemana,
+      filtroEstado,
+      fechaDesde,
+      fechaHasta,
+      expandidos,
+      localCobertura,
+      periodoComisiones,
+      localComisiones,
+      manicuraComisiones,
+      semanaComisiones,
+      gruposComisiones,
+      collapsedComisiones,
+      sortComisiones,
+    });
+  }, [tab, filtroTipo, filtroId, mes, anio, filtroSemana, filtroEstado, fechaDesde, fechaHasta, expandidos, localCobertura, periodoComisiones, localComisiones, manicuraComisiones, semanaComisiones, gruposComisiones, collapsedComisiones, sortComisiones]);
+
   const manicuras = data.users.filter(u=>u.rol==="manicura"&&u.activo&&(esAdmin || allowedLocalIds.includes(u.localId)));
   const semanasDelMes = useMemo(()=>getSemanas(getDiasDelMes(anio,mes)),[anio,mes]);
 
@@ -6211,16 +6257,20 @@ function buildTurnoToastPayload(appData, rawTurno, eventType, currentUser) {
 }
 
 
-function BloqueoHorarios({ data, reloadData, user }) {
+function BloqueoHorarios({ data, reloadData, user, savedState = null, onStateChange = null }) {
   const esAdmin = isAdminLikeRole(user.rol);
   const puedeGestionar = esAdmin || user.rol === "encargada";
   const allowedLocalIds = getAssignedLocalIds(data, user);
   const localesVisibles = (data.locales || []).filter(l => esAdmin || allowedLocalIds.includes(l.id));
   const hoy = new Date();
-  const [localId, setLocalId] = useState(() => String(localesVisibles[0]?.id || ""));
-  const [periodo, setPeriodo] = useState(() => addMonthsPeriodo(hoy, 1));
-  const [estado, setEstado] = useState("todos");
-  const [busqueda, setBusqueda] = useState("");
+  const [localId, setLocalId] = useState(() => savedState?.localId || String(localesVisibles[0]?.id || ""));
+  const [periodo, setPeriodo] = useState(() => savedState?.periodo || addMonthsPeriodo(hoy, 1));
+  const [estado, setEstado] = useState(savedState?.estado || "todos");
+  const [busqueda, setBusqueda] = useState(savedState?.busqueda || "");
+
+  useEffect(() => {
+    onStateChange?.({ localId, periodo, estado, busqueda });
+  }, [localId, periodo, estado, busqueda]);
 
   useEffect(() => {
     if (!localId && localesVisibles[0]?.id) setLocalId(String(localesVisibles[0].id));
@@ -6283,7 +6333,11 @@ function BloqueoHorarios({ data, reloadData, user }) {
     if (!puedeGestionar || !localId || !manicura?.id) return;
     const existente = getBloqueo(manicura.id);
     if (!existente) return;
-    await api.deletePeriodo(periodo, manicura.id, localId);
+    if (existente?.id) {
+      await api.deletePeriodoById(existente.id);
+    } else {
+      await api.deletePeriodo(periodo, manicura.id, localId);
+    }
     await auditar({ accion:"BLOQUEO_HORARIOS_ELIMINADO", manicura, bloqueo:existente, datosAnteriores:existente });
     await reloadData();
     notifyToast(`Se habilitó la edición de horarios de ${manicura.nombre} para ${periodoLabel(periodo)}.`, "success");
@@ -6392,6 +6446,15 @@ export default function App() {
   const [toasts, setToasts] = useState([]);
   const [notificationHistory, setNotificationHistory] = useState([]);
   const [notificationOpen, setNotificationOpen] = useState(false);
+  const [screenState, setScreenState] = useState({
+    horarios: null,
+    bloqueoHorarios: null,
+    reportes: {},
+  });
+
+  const saveScreenState = useCallback((key, value) => {
+    setScreenState(prev => ({ ...prev, [key]: value }));
+  }, []);
 
   const dismissToast = useCallback((id) => {
     setToasts(prev => prev.filter(t => t.id !== id));
@@ -6731,7 +6794,9 @@ export default function App() {
             left:0,
             right:0,
             bottom:64,
-            background:"rgba(0,0,0,0.22)",
+            background:"rgba(245,239,242,0.34)",
+            backdropFilter:"blur(8px)",
+            WebkitBackdropFilter:"blur(8px)",
             zIndex:998,
           }}
         />
@@ -6742,7 +6807,9 @@ export default function App() {
             left:0,
             right:0,
             bottom:64,
-            background:"var(--color-background-tertiary)",
+            background:"rgba(248,245,246,0.78)",
+            backdropFilter:"blur(10px)",
+            WebkitBackdropFilter:"blur(10px)",
             zIndex:999,
             overflowY:"auto",
             padding:"16px",
@@ -6829,6 +6896,8 @@ export default function App() {
       data={data}
       reloadData={reloadData}
       user={user}
+      savedState={screenState.reportes?.[tab] || null}
+      onStateChange={(state)=>setScreenState(prev => ({ ...prev, reportes: { ...(prev.reportes || {}), [tab]: state } }))}
       reportRestore={{ ...(reportRestore || {}), tab }}
       onOpenAgenda={(req)=>{
         const restore={ tab:"cobertura", fecha:req.fecha, localId:req.localId || "" };
@@ -6845,8 +6914,8 @@ export default function App() {
     if (seccion==="inicio") return renderMobileHome();
     if (seccion==="asistencia") return <AsistenciaDiaria data={data} reloadData={reloadData} user={user}/>;
     if (seccion==="turnos") return user.rol==="admin" ? <AgendaTurnos data={data} reloadData={reloadData} user={user} agendaOpenRequest={agendaOpenRequest} onAgendaOpenRequestDone={() => setAgendaOpenRequest(null)}/> : null;
-    if (seccion==="horarios") return <CalendarioHorarios data={data} reloadData={reloadData} user={user} agendaRequest={agendaRequest} onBackToReport={()=>{ setSeccion("reportes_cobertura"); setMenuOpen(false); setMobileMenuGroup(null); }}/>;
-    if (seccion==="bloqueo_horarios") return <BloqueoHorarios data={data} reloadData={reloadData} user={user}/>;
+    if (seccion==="horarios") return <CalendarioHorarios data={data} reloadData={reloadData} user={user} agendaRequest={agendaRequest} savedState={screenState.horarios} onStateChange={(state)=>saveScreenState("horarios", state)} onBackToReport={()=>{ setSeccion("reportes_cobertura"); setMenuOpen(false); setMobileMenuGroup(null); }}/>;
+    if (seccion==="bloqueo_horarios") return <BloqueoHorarios data={data} reloadData={reloadData} user={user} savedState={screenState.bloqueoHorarios} onStateChange={(state)=>saveScreenState("bloqueoHorarios", state)}/>;
     if (seccion==="reportes_horas") return renderReportes("horas", "reportes_horas");
     if (seccion==="reportes_cobertura") return user.rol!=="manicura" ? renderReportes("cobertura", "reportes_cobertura") : null;
     if (seccion==="reportes_comisiones") return renderReportes("comisiones", "reportes_comisiones");
@@ -6865,7 +6934,7 @@ export default function App() {
   return (
     <div style={{ minHeight:"100vh",background:"var(--color-background-tertiary)",display:"flex",flexDirection:"column",maxWidth:"100vw",overflowX:"hidden" }}>
       <ToastStack toasts={toasts} onDismiss={dismissToast} onAction={handleNotificationAction}/>
-      <header style={{ background:"#e1c6cc",color:COLORS.pinkDark,padding:"0 16px",height:66,display:"flex",alignItems:"center",justifyContent:"space-between",position:"sticky",top:0,left:0,right:0,width:"100%",maxWidth:"100vw",boxSizing:"border-box",zIndex:1000,overflow:"hidden",flexShrink:0 }}>
+      <header style={{ background:"#e1c6cc",color:COLORS.pinkDark,padding:"0 16px",height:66,display:"flex",alignItems:"center",justifyContent:"space-between",position:"sticky",top:0,left:0,right:0,width:"100%",maxWidth:"100vw",boxSizing:"border-box",zIndex:1000,overflow:"visible",flexShrink:0 }}>
         <div style={{ display:"flex",alignItems:"center",gap:10,minWidth:0 }}>
           <LogoMark size={48} variant="light"/>
           <span style={{ fontWeight:600,fontSize:15,letterSpacing:"-0.02em",whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis" }}>Niki Beauty Bar</span>
