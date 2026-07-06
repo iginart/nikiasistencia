@@ -202,6 +202,12 @@ const api = {
   createLocal: (d) => sb("locales", { method: "POST", body: JSON.stringify(d) }),
   updateLocal: (id, d) => sb(`locales?id=eq.${id}`, { method: "PATCH", body: JSON.stringify(d) }),
   deleteLocal: (id) => sb(`locales?id=eq.${id}`, { method: "DELETE", prefer: "" }),
+  getUsuarioLocales: () => sb("usuario_locales?select=*"),
+  setUsuarioLocales: async (userId, localIds) => {
+    await sb(`usuario_locales?user_id=eq.${userId}`, { method:"DELETE", prefer:"" });
+    if (!localIds?.length) return [];
+    return sb("usuario_locales", { method:"POST", body:JSON.stringify(localIds.map(local_id=>({ user_id:userId, local_id:parseInt(local_id) }))) });
+  },
   getHorarios: () => sb("horarios?select=*"),
   upsertHorario: (d) => patchOrPost("horarios", `user_id=eq.${d.user_id}&fecha=eq.${d.fecha}`, d),
   deleteHorario: (userId, fecha) => sb(`horarios?user_id=eq.${userId}&fecha=eq.${fecha}`, { method: "DELETE", prefer: "" }),
@@ -326,6 +332,30 @@ const api = {
 };
 
 function normalizeUser(u) { return { id: u.id, nombre: u.nombre, usuario: u.usuario, email: u.email || "", rol: u.rol, localId: u.local_id, activo: u.activo, codigoExterno: u.codigo_externo || "", telefono: u.telefono || "", sessionToken: u.session_token || u.sessionToken || "" }; }
+function normalizeLocal(l) {
+  const tipoLocal = l.tipo_local || l.tipoLocal || "propio";
+  const zona = l.zona || "estandar";
+  return {
+    ...l,
+    id: l.id,
+    nombre: l.nombre || "",
+    direccion: l.direccion || "",
+    codigoExterno: l.codigo_externo || l.codigoExterno || "",
+    codigo_externo: l.codigo_externo || l.codigoExterno || "",
+    tipoLocal,
+    tipo_local: tipoLocal,
+    franquiciadoNombre: l.franquiciado_nombre || l.franquiciadoNombre || "",
+    franquiciado_nombre: l.franquiciado_nombre || l.franquiciadoNombre || "",
+    franquiciadoEmail: l.franquiciado_email || l.franquiciadoEmail || "",
+    franquiciado_email: l.franquiciado_email || l.franquiciadoEmail || "",
+    franquiciadoTelefono: l.franquiciado_telefono || l.franquiciadoTelefono || "",
+    franquiciado_telefono: l.franquiciado_telefono || l.franquiciadoTelefono || "",
+    zona,
+    fechaApertura: l.fecha_apertura || l.fechaApertura || "",
+    fecha_apertura: l.fecha_apertura || l.fechaApertura || "",
+  };
+}
+function normalizeUsuarioLocal(x) { return { userId:x.user_id, localId:x.local_id }; }
 function isValidEmail(email) {
   return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(email || "").trim());
 }
@@ -616,9 +646,36 @@ function isDateInRangeKey(fecha, desdeKey, hastaKey) {
   return !!f && !!desdeKey && !!hastaKey && f >= desdeKey && f <= hastaKey;
 }
 function genToken() { return Math.random().toString(36).slice(2) + Math.random().toString(36).slice(2); }
+function isAdminRole(role) {
+  return role === "admin";
+}
+function isCasaMatrizRole(role) {
+  return role === "casa_matriz";
+}
+function isAdminLikeRole(role) {
+  return role === "admin" || role === "casa_matriz";
+}
+function roleLabel(role) {
+  if (role === "admin") return "Admin";
+  if (role === "casa_matriz") return "Casa Matriz";
+  if (role === "encargada") return "Encargada";
+  if (role === "manicura") return "Manicura";
+  return role || "";
+}
+function canManageUserRole(actor, targetRole) {
+  if (!actor) return false;
+  if (actor.rol === "admin") return true;
+  if (actor.rol === "casa_matriz") return targetRole !== "admin";
+  return false;
+}
 function getAssignedLocalIds(data, user) {
   if (!user) return [];
   if (user.rol === "admin") return (data.locales || []).map(l => l.id);
+  if (user.rol === "casa_matriz") {
+    const propios = (data.locales || []).filter(l => (l.tipoLocal || l.tipo_local || "propio") === "propio").map(l => l.id);
+    const franquiciasAsignadas = (data.usuarioLocales || []).filter(x => x.userId === user.id).map(x => x.localId);
+    return Array.from(new Set([...propios, ...franquiciasAsignadas]));
+  }
   if (user.rol === "encargada") return (data.encargadoLocales || []).filter(x => x.userId === user.id).map(x => x.localId);
   return user.localId ? [user.localId] : [];
 }
@@ -628,8 +685,9 @@ function canSeeLocal(data, user, localId) {
 }
 function filterUsersByScope(data, user, users) {
   if (user?.rol === "admin") return users;
+  if (user?.rol === "casa_matriz") return users.filter(u => u.rol !== "admin");
   const allowed = new Set(getAssignedLocalIds(data, user));
-  if (user?.rol === "encargada") return users.filter(u => u.rol !== "admin" && allowed.has(u.localId));
+  if (user?.rol === "encargada") return users.filter(u => u.rol !== "admin" && u.rol !== "casa_matriz" && allowed.has(u.localId));
   return users.filter(u => u.id === user?.id);
 }
 function getConfigForLocal(data, localId) {
@@ -910,7 +968,7 @@ function BloqueCalendario({ fecha, bloque, onChange, onCommit, onDelete, bloquea
 
 function CalendarioHorarios({ data, reloadData, user, agendaRequest, onBackToReport }) {
   const hoy = new Date();
-  const esAdmin = user.rol === "admin";
+  const esAdmin = isAdminLikeRole(user.rol);
   const esEncargada = user.rol === "encargada";
   const puedeGestionar = esAdmin || esEncargada;
   const allowedLocalIds = getAssignedLocalIds(data, user);
@@ -1940,7 +1998,7 @@ function ABMManicuras({ data, reloadData, user }) {
   const [form, setForm] = useState({});
   const [formErr, setFormErr] = useState("");
   const [saving, setSaving] = useState(false);
-  const esAdmin = user.rol === "admin";
+  const esAdmin = isAdminLikeRole(user.rol);
   const allowedLocalIds = getAssignedLocalIds(data, user);
   const localesPermitidos = esAdmin ? data.locales : data.locales.filter(l => allowedLocalIds.includes(l.id));
   const manicuras = data.users.filter(u => u.rol === "manicura" && (esAdmin || allowedLocalIds.includes(u.localId)));
@@ -2045,44 +2103,122 @@ function ABMManicuras({ data, reloadData, user }) {
 }
 
 // ── ABM LOCALES ────────────────────────────────────────────────────
-function ABMLocales({ data, reloadData }) {
+function ABMLocales({ data, reloadData, user }) {
   const [modal, setModal] = useState(null);
   const [form, setForm] = useState({});
   const [saving, setSaving] = useState(false);
+  const [formErr, setFormErr] = useState("");
   const [listaLocalModal, setListaLocalModal] = useState(null);
+  const esAdmin = user?.rol === "admin";
+  const allowedLocalIds = useMemo(() => new Set(getAssignedLocalIds(data, user)), [data, user]);
+  const localesVisibles = useMemo(() => {
+    if (esAdmin) return data.locales || [];
+    return (data.locales || []).filter(l => allowedLocalIds.has(l.id));
+  }, [data.locales, esAdmin, allowedLocalIds]);
+
   const getListaLocal = (localId) => {
     const rel = (data.agendaLocalListas||[]).find(x=>x.localId===localId&&x.activo);
     return rel ? (data.agendaListasPrecios||[]).find(l=>l.id===rel.listaId) : null;
   };
-  const openNew = () => { setForm({nombre:"",direccion:"",codigoExterno:""}); setModal("new"); };
-  const openEdit = l => { setForm({...l,codigoExterno:l.codigo_externo||l.codigoExterno||""}); setModal("edit"); };
+  const defaultLocalForm = () => ({
+    nombre:"",
+    direccion:"",
+    codigoExterno:"",
+    tipoLocal:"propio",
+    zona:"estandar",
+    fechaApertura:"",
+    franquiciadoNombre:"",
+    franquiciadoEmail:"",
+    franquiciadoTelefono:"",
+  });
+  const openNew = () => { setForm(defaultLocalForm()); setFormErr(""); setModal("new"); };
+  const openEdit = l => {
+    if (!esAdmin && !allowedLocalIds.has(l.id)) {
+      notifyToast("No tenés permiso para editar este local.", "warning");
+      return;
+    }
+    setForm({
+      ...defaultLocalForm(),
+      ...l,
+      codigoExterno:l.codigoExterno || l.codigo_externo || "",
+      tipoLocal:l.tipoLocal || l.tipo_local || "propio",
+      zona:l.zona || "estandar",
+      fechaApertura:l.fechaApertura || l.fecha_apertura || "",
+      franquiciadoNombre:l.franquiciadoNombre || l.franquiciado_nombre || "",
+      franquiciadoEmail:l.franquiciadoEmail || l.franquiciado_email || "",
+      franquiciadoTelefono:l.franquiciadoTelefono || l.franquiciado_telefono || "",
+    });
+    setFormErr("");
+    setModal("edit");
+  };
+
+  const buildPayload = () => {
+    const tipo = form.tipoLocal || "propio";
+    return {
+      nombre:String(form.nombre || "").trim(),
+      direccion:String(form.direccion || "").trim() || null,
+      codigo_externo:String(form.codigoExterno || "").trim() || null,
+      tipo_local:tipo,
+      zona:form.zona || "estandar",
+      fecha_apertura:form.fechaApertura || null,
+      franquiciado_nombre:tipo === "franquicia" ? (String(form.franquiciadoNombre || "").trim() || null) : null,
+      franquiciado_email:tipo === "franquicia" ? (String(form.franquiciadoEmail || "").trim().toLowerCase() || null) : null,
+      franquiciado_telefono:tipo === "franquicia" ? (String(form.franquiciadoTelefono || "").trim() || null) : null,
+    };
+  };
+
   const save = async () => {
-    if (!form.nombre) return; setSaving(true);
+    setFormErr("");
+    const payload = buildPayload();
+    if (!payload.nombre) { setFormErr("El nombre del local es obligatorio."); return; }
+    if (payload.tipo_local === "franquicia" && !payload.franquiciado_nombre) { setFormErr("Para una franquicia, cargá al menos el nombre del franquiciado."); return; }
+    if (payload.franquiciado_email && !isValidEmail(payload.franquiciado_email)) { setFormErr("El email del franquiciado no es válido."); return; }
+    if (user?.rol === "casa_matriz" && modal === "edit" && !allowedLocalIds.has(form.id)) { setFormErr("No tenés permiso para modificar este local."); return; }
+
+    setSaving(true);
     try {
-      if (modal==="new") await api.createLocal({nombre:form.nombre,direccion:form.direccion,codigo_externo:(form.codigoExterno||"").trim()||null});
-      else await api.updateLocal(form.id,{nombre:form.nombre,direccion:form.direccion,codigo_externo:(form.codigoExterno||"").trim()||null});
+      if (modal==="new") await api.createLocal(payload);
+      else await api.updateLocal(form.id, payload);
       await reloadData(); setModal(null);
-    } catch(e) { notifyToast("Error: " + e.message, "error"); }
+    } catch(e) { setFormErr("Error al guardar: " + (e.message || e)); }
     setSaving(false);
   };
   const del = async (id) => {
+    if (!esAdmin && !allowedLocalIds.has(id)) { notifyToast("No tenés permiso para eliminar este local.", "warning"); return; }
     if (data.users.some(u=>u.localId===id)) { notifyToast("Hay manicuras asignadas a este local.", "warning"); return; }
     await api.deleteLocal(id); await reloadData();
   };
+
+  const tipoLabel = (l) => (l.tipoLocal || l.tipo_local || "propio") === "franquicia" ? "Franquicia" : "Propio";
+  const zonaLabel = (z) => z === "premium" ? "Premium" : z === "exclusiva" ? "Exclusiva" : "Estándar";
+
   return (
     <div>
       <div style={{ display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:16 }}>
-        <h2 style={{ margin:0,fontSize:18,fontWeight:500 }}>Locales</h2>
+        <div>
+          <h2 style={{ margin:0,fontSize:18,fontWeight:500 }}>Locales</h2>
+          {user?.rol === "casa_matriz" && <p style={{ margin:"3px 0 0",fontSize:12,color:"var(--color-text-secondary)" }}>Ves todos los locales propios y las franquicias asignadas a tu usuario.</p>}
+        </div>
         <Btn onClick={openNew} size="sm">+ Nuevo</Btn>
       </div>
       <div style={{ display:"flex",flexDirection:"column",gap:8 }}>
-        {data.locales.map(l=>{
+        {localesVisibles.map(l=>{
           const qty=data.users.filter(u=>u.localId===l.id&&u.rol==="manicura").length;
           const lista = getListaLocal(l.id);
+          const tipo = l.tipoLocal || l.tipo_local || "propio";
           return <Card key={l.id} style={{ display:"flex",alignItems:"center",gap:12,flexWrap:"wrap" }}>
-            <div style={{ flex:1 }}>
-              <p style={{ margin:0,fontWeight:500,fontSize:14 }}>{l.nombre}</p>
-              <p style={{ margin:0,fontSize:12,color:"var(--color-text-secondary)" }}>{l.direccion}{(l.codigo_externo||l.codigoExterno)?` · Código externo: ${l.codigo_externo||l.codigoExterno}`:""}</p>
+            <div style={{ flex:1,minWidth:220 }}>
+              <div style={{ display:"flex",alignItems:"center",gap:8,flexWrap:"wrap" }}>
+                <p style={{ margin:0,fontWeight:500,fontSize:14 }}>{l.nombre}</p>
+                <Badge color={tipo === "franquicia" ? "amber" : "info"}>{tipoLabel(l)}</Badge>
+                <Badge color={l.zona === "exclusiva" ? "pink" : l.zona === "premium" ? "amber" : "gray"}>{zonaLabel(l.zona)}</Badge>
+              </div>
+              <p style={{ margin:"3px 0 0",fontSize:12,color:"var(--color-text-secondary)" }}>
+                {l.direccion || "Sin dirección"}{(l.codigoExterno||l.codigo_externo)?` · Código externo: ${l.codigoExterno||l.codigo_externo}`:""}{l.fechaApertura?` · Apertura: ${fmtFecha(parseDateLocal(l.fechaApertura))}`:""}
+              </p>
+              {tipo === "franquicia" && <p style={{ margin:"3px 0 0",fontSize:12,color:"var(--color-text-secondary)" }}>
+                Franquiciado: <strong>{l.franquiciadoNombre || "Sin nombre"}</strong>{l.franquiciadoEmail?` · ${l.franquiciadoEmail}`:""}{l.franquiciadoTelefono?` · ${l.franquiciadoTelefono}`:""}
+              </p>}
               <p style={{ margin:"3px 0 0",fontSize:12,color:lista?COLORS.success:"var(--color-text-secondary)" }}>Lista de precios: <strong>{lista?.nombre || "Sin lista asignada"}</strong></p>
             </div>
             <Badge color="info">{qty} manicura{qty!==1?"s":""}</Badge>
@@ -2097,6 +2233,25 @@ function ABMLocales({ data, reloadData }) {
           <ModalInput label="Nombre" value={form.nombre||""} onChange={v=>setForm(f=>({...f,nombre:v}))}/>
           <ModalInput label="Dirección" value={form.direccion||""} onChange={v=>setForm(f=>({...f,direccion:v}))}/>
           <ModalInputWithHelp label="Código externo" value={form.codigoExterno||""} onChange={v=>setForm(f=>({...f,codigoExterno:v}))} help="Debe coincidir con el nombre o código del local que llega desde AgendaPro/Qlik. Se usa para vincular ventas y comisiones con el local correcto."/>
+          <div style={{ display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(180px,1fr))",gap:12 }}>
+            <ModalSelect label="Tipo de local" value={form.tipoLocal||"propio"} onChange={v=>setForm(f=>({...f,tipoLocal:v}))}>
+              <option value="propio">Propio</option>
+              <option value="franquicia">Franquicia</option>
+            </ModalSelect>
+            <ModalSelect label="Zona" value={form.zona||"estandar"} onChange={v=>setForm(f=>({...f,zona:v}))}>
+              <option value="estandar">Estándar</option>
+              <option value="premium">Premium</option>
+              <option value="exclusiva">Exclusiva</option>
+            </ModalSelect>
+            <div><label style={{ fontSize:12,color:"var(--color-text-secondary)",display:"block",marginBottom:4 }}>Fecha de apertura</label><input type="date" value={form.fechaApertura||""} onChange={e=>setForm(f=>({...f,fechaApertura:e.target.value}))} style={{ width:"100%",border:"1.5px solid #e0e0e0",borderRadius:8,padding:"9px 12px",fontSize:14,background:"#fafafa",color:"#1a1a1a",boxSizing:"border-box" }}/></div>
+          </div>
+          {(form.tipoLocal||"propio") === "franquicia" && <div style={{ border:"1px dashed #ead3dc",background:COLORS.pinkLight,borderRadius:12,padding:12,display:"flex",flexDirection:"column",gap:12 }}>
+            <p style={{ margin:0,fontSize:13,fontWeight:600,color:COLORS.pinkDark }}>Datos del franquiciado</p>
+            <ModalInput label="Nombre del franquiciado" value={form.franquiciadoNombre||""} onChange={v=>setForm(f=>({...f,franquiciadoNombre:v}))}/>
+            <ModalInput label="Email del franquiciado" type="email" value={form.franquiciadoEmail||""} onChange={v=>setForm(f=>({...f,franquiciadoEmail:v}))}/>
+            <ModalInput label="Teléfono del franquiciado" value={form.franquiciadoTelefono||""} onChange={v=>setForm(f=>({...f,franquiciadoTelefono:v}))}/>
+          </div>}
+          {formErr && <p style={{ margin:0,fontSize:13,color:COLORS.danger,background:COLORS.dangerLight,padding:"8px 12px",borderRadius:8 }}>{formErr}</p>}
           <div style={{ display:"flex",gap:8,marginTop:4 }}>
             <Btn onClick={save} disabled={saving} style={{ flex:1,justifyContent:"center" }}>{saving?"Guardando...":"Guardar"}</Btn>
             <Btn onClick={()=>setModal(null)} variant="secondary" style={{ flex:1,justifyContent:"center" }}>Cancelar</Btn>
@@ -2181,7 +2336,7 @@ function AsistenciaDiaria({ data, reloadData, user }) {
   const [formAus, setFormAus] = useState({});
   const [formTarde, setFormTarde] = useState({});
   const allowedLocalIds = getAssignedLocalIds(data, user);
-  const localesVisibles = (user.rol === "admin"
+  const localesVisibles = (isAdminLikeRole(user.rol)
     ? data.locales
     : data.locales.filter(l => allowedLocalIds.includes(l.id))
   ).sort((a,b)=>(a.nombre||"").localeCompare(b.nombre||""));
@@ -2341,7 +2496,7 @@ function AsistenciaDiaria({ data, reloadData, user }) {
 
 function Reportes({ data, user, onOpenAgenda, reportRestore, reloadData }) {
   const hoy = new Date();
-  const esAdmin = user.rol === "admin";
+  const esAdmin = isAdminLikeRole(user.rol);
   const esEncargada = user.rol === "encargada";
   const puedeGestionar = esAdmin || esEncargada;
   const puedeVerCobertura = puedeGestionar;
@@ -3391,7 +3546,7 @@ function Reportes({ data, user, onOpenAgenda, reportRestore, reloadData }) {
 }
 
 function ConfiguracionCobertura({ data, reloadData, user }) {
-  const esAdmin = user.rol === "admin";
+  const esAdmin = isAdminLikeRole(user.rol);
   const allowedLocalIds = getAssignedLocalIds(data, user);
   const localesVisibles = esAdmin ? data.locales : data.locales.filter(l => allowedLocalIds.includes(l.id));
   const [localId,setLocalId] = useState(localesVisibles[0]?.id || "");
@@ -3432,7 +3587,7 @@ function ConfiguracionCobertura({ data, reloadData, user }) {
 // ── GARANTÍAS DE SERVICIOS ────────────────────────────────────────
 function GarantiasServicios({ data, reloadData, user }) {
   const hoy = new Date();
-  const esAdmin = user.rol === "admin";
+  const esAdmin = isAdminLikeRole(user.rol);
   const esEncargada = user.rol === "encargada";
   const allowedLocalIds = esAdmin ? data.locales.map(l=>l.id) : (data.encargadoLocales||[]).filter(x=>x.userId===user.id).map(x=>x.localId);
   const locales = data.locales.filter(l=>allowedLocalIds.includes(l.id));
@@ -3668,7 +3823,7 @@ function GarantiasServicios({ data, reloadData, user }) {
 
 function AdelantosManicuras({ data, reloadData, user }) {
   const hoy = new Date();
-  const esAdmin = user.rol === "admin";
+  const esAdmin = isAdminLikeRole(user.rol);
   const esEncargada = user.rol === "encargada";
   const allowedLocalIds = getAssignedLocalIds(data, user);
   const localesPermitidos = esAdmin ? data.locales : data.locales.filter(l => allowedLocalIds.includes(l.id));
@@ -4079,51 +4234,121 @@ function ABMEncargadas({ data, reloadData, user }) {
   const [form, setForm] = useState({});
   const [formErr, setFormErr] = useState("");
   const [saving, setSaving] = useState(false);
-  const encargadas = data.users.filter(u => u.rol === "encargada");
-  const localesDe = (uid) => (data.encargadoLocales||[]).filter(x=>x.userId===uid).map(x=>x.localId);
-  const openNew = () => { setForm({ nombre:"",usuario:"",email:"",password:"",password2:"",localIds:[] }); setFormErr(""); setModal("new"); };
-  const openEdit = u => { setForm({...u,password:"",password2:"",localIds:localesDe(u.id)}); setFormErr(""); setModal("edit"); };
+  const actorEsAdmin = user.rol === "admin";
+  const actorEsCasaMatriz = user.rol === "casa_matriz";
+  const rolesGestionables = actorEsAdmin
+    ? ["admin", "casa_matriz", "encargada"]
+    : ["casa_matriz", "encargada"];
+
+  const usuariosInternos = data.users
+    .filter(u => ["admin", "casa_matriz", "encargada"].includes(u.rol))
+    .filter(u => actorEsAdmin || u.rol !== "admin")
+    .sort((a,b) => (roleLabel(a.rol) + a.nombre).localeCompare(roleLabel(b.rol) + b.nombre));
+
+  const localesDeEncargada = (uid) => (data.encargadoLocales||[]).filter(x=>x.userId===uid).map(x=>x.localId);
+  const franquiciasDeCasaMatriz = (uid) => (data.usuarioLocales||[]).filter(x=>x.userId===uid).map(x=>x.localId);
+  const localesGestionables = user.rol === "admin" ? (data.locales || []) : (data.locales || []).filter(l => getAssignedLocalIds(data, user).includes(l.id));
+  const franquiciasDisponibles = (data.locales || []).filter(l => (l.tipoLocal || l.tipo_local || "propio") === "franquicia");
+
+  const openNew = () => {
+    const rolInicial = actorEsAdmin ? "encargada" : "encargada";
+    setForm({ nombre:"",usuario:"",email:"",password:"",password2:"",rol:rolInicial,localIds:[] });
+    setFormErr("");
+    setModal("new");
+  };
+
+  const openEdit = u => {
+    if (!canManageUserRole(user, u.rol)) {
+      notifyToast("No tenés permiso para modificar este tipo de usuario.", "warning");
+      return;
+    }
+    setForm({...u,password:"",password2:"",localIds:u.rol === "encargada" ? localesDeEncargada(u.id) : u.rol === "casa_matriz" ? franquiciasDeCasaMatriz(u.id) : []});
+    setFormErr("");
+    setModal("edit");
+  };
+
   const toggleLocal = (id) => setForm(f => ({ ...f, localIds:(f.localIds||[]).includes(id) ? (f.localIds||[]).filter(x=>x!==id) : [...(f.localIds||[]), id] }));
+
   const save = async () => {
     setFormErr("");
+    const rolDestino = form.rol || "encargada";
+
+    if (!rolesGestionables.includes(rolDestino)) {
+      setFormErr(actorEsAdmin ? "Seleccioná un rol válido." : "No podés crear o asignar ese tipo de usuario.");
+      return;
+    }
+    if (modal === "edit") {
+      const original = data.users.find(u => u.id === form.id);
+      if (original && !canManageUserRole(user, original.rol)) {
+        setFormErr("No tenés permiso para modificar este usuario.");
+        return;
+      }
+    }
     if (!form.nombre?.trim() || !form.usuario?.trim()) { setFormErr("Nombre y usuario son obligatorios."); return; }
     if (!isValidEmail(form.email)) { setFormErr("El email es obligatorio y debe ser válido."); return; }
-    if (!(form.localIds||[]).length) { setFormErr("Asigná al menos un local."); return; }
+    if (rolDestino === "encargada" && !(form.localIds||[]).length) { setFormErr("Asigná al menos un local para una encargada."); return; }
     if (modal === "new") {
       if (!form.password) { setFormErr("Ingresá una contraseña."); return; }
       if (form.password !== form.password2) { setFormErr("Las contraseñas no coinciden."); return; }
     } else if (form.password && form.password !== form.password2) { setFormErr("Las contraseñas no coinciden."); return; }
+
     setSaving(true);
     try {
       let userId = form.id;
       if (modal === "new") {
         const ahora = new Date().toISOString();
-        const created = await api.createUser({ nombre:form.nombre.trim(), usuario:form.usuario.trim(), email:form.email.trim().toLowerCase(), email_actualizado_en:ahora, password:form.password, password_actualizado_en:form.password==="niki123"?null:ahora, rol:"encargada", local_id:null, activo:true });
+        const created = await api.createUser({
+          nombre:form.nombre.trim(),
+          usuario:form.usuario.trim(),
+          email:form.email.trim().toLowerCase(),
+          email_actualizado_en:ahora,
+          password:form.password,
+          password_actualizado_en:form.password==="niki123"?null:ahora,
+          rol:rolDestino,
+          local_id:null,
+          activo:true
+        });
         userId = created?.[0]?.id;
         if (userId) {
           try {
             await api.enviarInvitacionUsuario({ actor_id:user.id, session_token:user.sessionToken, target_user_id:userId });
-            notifyToast("Encargada creada e invitación enviada por email.", "success", { title:"Invitación enviada" });
+            notifyToast("Usuario creado e invitación enviada por email.", "success", { title:"Invitación enviada" });
           } catch(invErr) {
-            notifyToast("La encargada se creó, pero no se pudo enviar la invitación: " + (invErr.message || invErr), "warning", { title:"Invitación pendiente" });
+            notifyToast("El usuario se creó, pero no se pudo enviar la invitación: " + (invErr.message || invErr), "warning", { title:"Invitación pendiente" });
           }
         }
       } else {
-        const upd = { nombre:form.nombre.trim(), usuario:form.usuario.trim(), email:form.email.trim().toLowerCase(), email_actualizado_en:new Date().toISOString() };
+        const upd = {
+          nombre:form.nombre.trim(),
+          usuario:form.usuario.trim(),
+          email:form.email.trim().toLowerCase(),
+          email_actualizado_en:new Date().toISOString(),
+          rol:rolDestino,
+          local_id:null
+        };
         await api.updateUser(form.id, upd);
         if (form.password) {
           await api.changePassword({ mode:"admin_set", actor_id:user.id, session_token:user.sessionToken, target_user_id:form.id, new_password:form.password });
           await api.updateUser(form.id, { password_actualizado_en: form.password==="niki123" ? null : new Date().toISOString() });
         }
       }
-      await api.setEncargadoLocales(userId, form.localIds);
+
+      await api.setEncargadoLocales(userId, rolDestino === "encargada" ? (form.localIds || []) : []);
+      await api.setUsuarioLocales(userId, rolDestino === "casa_matriz" ? (form.localIds || []) : []);
       await reloadData(); setModal(null);
     } catch(e) { setFormErr("Error al guardar: "+e.message); }
     setSaving(false);
   };
-  const toggle = async (u) => { await api.updateUser(u.id,{activo:!u.activo}); await reloadData(); };
+
+  const toggle = async (u) => {
+    if (!canManageUserRole(user, u.rol)) { notifyToast("No tenés permiso para modificar este usuario.", "warning"); return; }
+    await api.updateUser(u.id,{activo:!u.activo});
+    await reloadData();
+  };
+
   const reenviarInvitacion = async (u) => {
-    if (!u?.email) { notifyToast("La encargada no tiene email cargado.", "warning"); return; }
+    if (!canManageUserRole(user, u.rol)) { notifyToast("No tenés permiso para invitar este usuario.", "warning"); return; }
+    if (!u?.email) { notifyToast("El usuario no tiene email cargado.", "warning"); return; }
     try {
       await api.enviarInvitacionUsuario({ actor_id:user.id, session_token:user.sessionToken, target_user_id:u.id });
       notifyToast(`Invitación enviada a ${u.email}.`, "success", { title:"Invitación enviada" });
@@ -4131,20 +4356,71 @@ function ABMEncargadas({ data, reloadData, user }) {
       notifyToast("No se pudo enviar la invitación: " + (e.message || e), "error");
     }
   };
+
   return <div>
-    <div style={{ display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:16 }}><h2 style={{ margin:0,fontSize:18,fontWeight:500 }}>Encargadas</h2><Btn onClick={openNew} size="sm">+ Nueva</Btn></div>
-    <div style={{ display:"flex",flexDirection:"column",gap:8 }}>
-      {encargadas.map(e=>{ const locs=localesDe(e.id).map(id=>data.locales.find(l=>l.id===id)?.nombre).filter(Boolean).join(", "); return <Card key={e.id} style={{ display:"flex",alignItems:"center",gap:12,flexWrap:"wrap" }}><Avatar nombre={e.nombre}/><div style={{ flex:1,minWidth:0 }}><p style={{ margin:0,fontWeight:500,fontSize:14 }}>{e.nombre}</p><p style={{ margin:0,fontSize:12,color:"var(--color-text-secondary)" }}>{e.usuario} · {e.email||"Sin mail"} · {locs||"Sin locales"}</p></div><Badge color={e.activo?"success":"gray"}>{e.activo?"Activa":"Inactiva"}</Badge><Btn onClick={()=>openEdit(e)} variant="ghost" size="sm">Editar</Btn><Btn onClick={()=>reenviarInvitacion(e)} variant="ghost" size="sm" disabled={!e.email}>Invitar</Btn><Btn onClick={()=>toggle(e)} variant="ghost" size="sm" style={{ color:e.activo?COLORS.danger:COLORS.success }}>{e.activo?"Desactivar":"Activar"}</Btn></Card>; })}
+    <div style={{ display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:16 }}>
+      <h2 style={{ margin:0,fontSize:18,fontWeight:500 }}>Usuarios internos</h2>
+      <Btn onClick={openNew} size="sm">+ Nuevo</Btn>
     </div>
-    {modal && <Modal title={modal==="new"?"Nueva encargada":"Editar encargada"} onClose={()=>setModal(null)}>
+    <p style={{ margin:"-8px 0 14px",fontSize:13,color:"var(--color-text-secondary)" }}>
+      Admin puede gestionar todos los perfiles. Casa Matriz puede gestionar usuarios internos, excepto usuarios Admin.
+    </p>
+    <div style={{ display:"flex",flexDirection:"column",gap:8 }}>
+      {usuariosInternos.map(e=>{
+        const locs=e.rol === "encargada"
+          ? localesDeEncargada(e.id).map(id=>data.locales.find(l=>l.id===id)?.nombre).filter(Boolean).join(", ")
+          : e.rol === "casa_matriz"
+            ? franquiciasDeCasaMatriz(e.id).map(id=>data.locales.find(l=>l.id===id)?.nombre).filter(Boolean).join(", ")
+            : "";
+        const bloqueado = !canManageUserRole(user, e.rol);
+        return <Card key={e.id} style={{ display:"flex",alignItems:"center",gap:12,flexWrap:"wrap" }}>
+          <Avatar nombre={e.nombre}/>
+          <div style={{ flex:1,minWidth:0 }}>
+            <p style={{ margin:0,fontWeight:500,fontSize:14 }}>{e.nombre}</p>
+            <p style={{ margin:0,fontSize:12,color:"var(--color-text-secondary)" }}>
+              {e.usuario} · {e.email||"Sin mail"} · {roleLabel(e.rol)}{locs?` · ${locs}`:""}
+            </p>
+          </div>
+          <Badge color={e.activo?"success":"gray"}>{e.activo?"Activa":"Inactiva"}</Badge>
+          <Btn onClick={()=>openEdit(e)} variant="ghost" size="sm" disabled={bloqueado}>Editar</Btn>
+          <Btn onClick={()=>reenviarInvitacion(e)} variant="ghost" size="sm" disabled={!e.email || bloqueado}>Invitar</Btn>
+          <Btn onClick={()=>toggle(e)} variant="ghost" size="sm" disabled={bloqueado} style={{ color:e.activo?COLORS.danger:COLORS.success }}>{e.activo?"Desactivar":"Activar"}</Btn>
+        </Card>;
+      })}
+    </div>
+    {modal && <Modal title={modal==="new"?"Nuevo usuario interno":"Editar usuario interno"} onClose={()=>setModal(null)}>
       <div style={{ display:"flex",flexDirection:"column",gap:14 }}>
         <ModalInput label="Nombre completo" value={form.nombre||""} onChange={v=>setForm(f=>({...f,nombre:v}))}/>
         <ModalInput label="Usuario" value={form.usuario||""} onChange={v=>setForm(f=>({...f,usuario:v}))}/>
         <ModalInput label="Email" type="email" value={form.email||""} onChange={v=>setForm(f=>({...f,email:v}))}/>
-        <div style={{ borderTop:"1px dashed #eee",paddingTop:14 }}><p style={{ margin:"0 0 10px",fontSize:13,color:"#888" }}>{modal==="edit"?"Dejá en blanco para no cambiar la contraseña":"Contraseña"}</p><div style={{ display:"flex",flexDirection:"column",gap:14 }}><ModalInput label={modal==="edit"?"Nueva contraseña":"Contraseña"} type="password" value={form.password||""} onChange={v=>setForm(f=>({...f,password:v}))}/><ModalInput label="Repetir contraseña" type="password" value={form.password2||""} onChange={v=>setForm(f=>({...f,password2:v}))}/></div></div>
-        <div><label style={{ fontSize:13,fontWeight:500,color:"#555",display:"block",marginBottom:6 }}>Locales asignados</label><div style={{ display:"flex",flexDirection:"column",gap:6,maxHeight:150,overflowY:"auto",border:"1px solid #eee",borderRadius:8,padding:8 }}>{data.locales.map(l=><label key={l.id} style={{ display:"flex",gap:8,alignItems:"center",fontSize:14 }}><input type="checkbox" checked={(form.localIds||[]).includes(l.id)} onChange={()=>toggleLocal(l.id)}/>{l.nombre}</label>)}</div></div>
+        <ModalSelect label="Tipo de usuario" value={form.rol||"encargada"} onChange={v=>setForm(f=>({...f,rol:v,localIds:["encargada","casa_matriz"].includes(v)?(f.localIds||[]):[]}))}>
+          {rolesGestionables.map(r => <option key={r} value={r}>{roleLabel(r)}</option>)}
+        </ModalSelect>
+        <div style={{ borderTop:"1px dashed #eee",paddingTop:14 }}>
+          <p style={{ margin:"0 0 10px",fontSize:13,color:"#888" }}>{modal==="edit"?"Dejá en blanco para no cambiar la contraseña":"Contraseña"}</p>
+          <div style={{ display:"flex",flexDirection:"column",gap:14 }}>
+            <ModalInput label={modal==="edit"?"Nueva contraseña":"Contraseña"} type="password" value={form.password||""} onChange={v=>setForm(f=>({...f,password:v}))}/>
+            <ModalInput label="Repetir contraseña" type="password" value={form.password2||""} onChange={v=>setForm(f=>({...f,password2:v}))}/>
+          </div>
+        </div>
+        {(form.rol||"encargada") === "encargada" && <div>
+          <label style={{ fontSize:13,fontWeight:500,color:"#555",display:"block",marginBottom:6 }}>Locales asignados</label>
+          <div style={{ display:"flex",flexDirection:"column",gap:6,maxHeight:150,overflowY:"auto",border:"1px solid #eee",borderRadius:8,padding:8 }}>
+            {localesGestionables.map(l=><label key={l.id} style={{ display:"flex",gap:8,alignItems:"center",fontSize:14 }}><input type="checkbox" checked={(form.localIds||[]).includes(l.id)} onChange={()=>toggleLocal(l.id)}/>{l.nombre}</label>)}
+          </div>
+        </div>}
+        {(form.rol||"encargada") === "casa_matriz" && <div>
+          <label style={{ fontSize:13,fontWeight:500,color:"#555",display:"block",marginBottom:6 }}>Franquicias habilitadas</label>
+          <p style={{ margin:"0 0 8px",fontSize:12,color:"var(--color-text-secondary)" }}>Los locales propios se incluyen automáticamente. Marcá solo las franquicias que este usuario puede ver y editar.</p>
+          <div style={{ display:"flex",flexDirection:"column",gap:6,maxHeight:150,overflowY:"auto",border:"1px solid #eee",borderRadius:8,padding:8 }}>
+            {franquiciasDisponibles.length ? franquiciasDisponibles.map(l=><label key={l.id} style={{ display:"flex",gap:8,alignItems:"center",fontSize:14 }}><input type="checkbox" checked={(form.localIds||[]).includes(l.id)} onChange={()=>toggleLocal(l.id)}/>{l.nombre}</label>) : <span style={{ fontSize:13,color:"var(--color-text-secondary)" }}>No hay franquicias cargadas.</span>}
+          </div>
+        </div>}
         {formErr && <p style={{ margin:0,fontSize:13,color:COLORS.danger,background:COLORS.dangerLight,padding:"8px 12px",borderRadius:8 }}>{formErr}</p>}
-        <div style={{ display:"flex",gap:8,marginTop:4 }}><Btn onClick={save} disabled={saving} style={{ flex:1,justifyContent:"center" }}>{saving?"Guardando...":"Guardar"}</Btn><Btn onClick={()=>setModal(null)} variant="secondary" style={{ flex:1,justifyContent:"center" }}>Cancelar</Btn></div>
+        <div style={{ display:"flex",gap:8,marginTop:4 }}>
+          <Btn onClick={save} disabled={saving} style={{ flex:1,justifyContent:"center" }}>{saving?"Guardando...":"Guardar"}</Btn>
+          <Btn onClick={()=>setModal(null)} variant="secondary" style={{ flex:1,justifyContent:"center" }}>Cancelar</Btn>
+        </div>
       </div>
     </Modal>}
   </div>;
@@ -4154,7 +4430,7 @@ function ABMEncargadas({ data, reloadData, user }) {
 // ── INFORME DIARIO ─────────────────────────────────────────────────
 function InformeDiario({ data, reloadData, user }) {
   const hoy = new Date();
-  const esAdmin = user.rol === "admin";
+  const esAdmin = isAdminLikeRole(user.rol);
   const allowedLocalIds = useMemo(() => {
     if (esAdmin) return data.locales.map(l => l.id);
     return (data.encargadoLocales || []).filter(x => x.userId === user.id).map(x => x.localId);
@@ -5878,17 +6154,12 @@ function AgendaTurnos({ data, reloadData, user, agendaOpenRequest, onAgendaOpenR
 
 
 function canUserReceiveTurnoRealtimeNotifications(currentUser) {
-  return currentUser?.rol === "admin" || currentUser?.rol === "encargada";
+  return currentUser?.rol === "admin";
 }
 
 function canUserSeeAgendaTurno(appData, currentUser, turno) {
   if (!canUserReceiveTurnoRealtimeNotifications(currentUser) || !turno) return false;
-  if (currentUser.rol === "admin") return true;
-  if (currentUser.rol === "encargada") {
-    const allowed = new Set((appData.encargadoLocales || []).filter(x => x.userId === currentUser.id).map(x => x.localId));
-    return allowed.has(parseInt(turno.localId));
-  }
-  return false;
+  return currentUser.rol === "admin";
 }
 
 function buildTurnoToastPayload(appData, rawTurno, eventType, currentUser) {
@@ -5941,7 +6212,7 @@ function buildTurnoToastPayload(appData, rawTurno, eventType, currentUser) {
 
 
 function BloqueoHorarios({ data, reloadData, user }) {
-  const esAdmin = user.rol === "admin";
+  const esAdmin = isAdminLikeRole(user.rol);
   const puedeGestionar = esAdmin || user.rol === "encargada";
   const allowedLocalIds = getAssignedLocalIds(data, user);
   const localesVisibles = (data.locales || []).filter(l => esAdmin || allowedLocalIds.includes(l.id));
@@ -6096,11 +6367,13 @@ function defaultSectionForRole(role) {
 function sectionAllowedForRole(section, role) {
   const reportesOperativos = ["reportes","reportes_horas","reportes_cobertura","reportes_comisiones"];
   const admin = ["inicio","asistencia","horarios","bloqueo_horarios",...reportesOperativos,"turnos","adelantos","garantias","informes","manicuras","encargadas","locales","cobertura_config","perfil"];
-  const encargada = ["inicio","asistencia","horarios","bloqueo_horarios",...reportesOperativos,"turnos","adelantos","garantias","informes","manicuras","cobertura_config","perfil"];
+  const casaMatriz = ["inicio","asistencia","horarios","bloqueo_horarios",...reportesOperativos,"adelantos","garantias","informes","manicuras","encargadas","locales","cobertura_config","perfil"];
+  const encargada = ["inicio","asistencia","horarios","bloqueo_horarios",...reportesOperativos,"adelantos","garantias","informes","manicuras","cobertura_config","perfil"];
   const manicura = ["inicio","horarios","reportes","reportes_horas","reportes_comisiones","perfil"];
-  const allowed = role === "admin" ? admin : role === "encargada" ? encargada : manicura;
+  const allowed = role === "admin" ? admin : role === "casa_matriz" ? casaMatriz : role === "encargada" ? encargada : manicura;
   return allowed.includes(section);
 }
+
 export default function App() {
   const [data, setData] = useState(null);
   const [user, setUser] = useState(() => {
@@ -6166,12 +6439,12 @@ export default function App() {
   }, [dismissToast, user?.rol]);
 
   const reloadData = useCallback(async () => {
-    const [users, locales, horarios, asistencias, periodos, feriados, reglasCobertura, configCobertura, encargadoLocales, comisiones, comisionesImportaciones, comisionesCriterios, comisionesConfiguracion, comisionesManicuraConfig, adelantos, garantias, informesDiarios, agendaServicios, agendaManicuraServicios, agendaListasPrecios, agendaLocalListas, agendaPreciosServicios, agendaClientes, agendaTurnos, agendaTurnosPagos, agendaTurnoServicios, agendaBloqueos] = await Promise.all([
-      api.getUsers(), api.getLocales(), api.getHorarios(), api.getAsistencias(), api.getPeriodos(), api.getFeriados(), api.getReglasCobertura(), api.getConfigCobertura(), api.getEncargadoLocales(), api.getComisiones(), api.getComisionesImportaciones(), api.getComisionesCriterios(), api.getComisionesConfiguracion(), api.getComisionesManicuraConfig(), api.getAdelantos(), api.getGarantias(), api.getInformesDiarios(), api.getAgendaServicios(), api.getAgendaManicuraServicios(), api.getAgendaListasPrecios(), api.getAgendaLocalListas(), api.getAgendaPreciosServicios(), api.getAgendaClientes(), api.getAgendaTurnos(), api.getAgendaTurnosPagos(), api.getAgendaTurnoServicios(), api.getAgendaBloqueos()
+    const [users, locales, horarios, asistencias, periodos, feriados, reglasCobertura, configCobertura, encargadoLocales, usuarioLocales, comisiones, comisionesImportaciones, comisionesCriterios, comisionesConfiguracion, comisionesManicuraConfig, adelantos, garantias, informesDiarios, agendaServicios, agendaManicuraServicios, agendaListasPrecios, agendaLocalListas, agendaPreciosServicios, agendaClientes, agendaTurnos, agendaTurnosPagos, agendaTurnoServicios, agendaBloqueos] = await Promise.all([
+      api.getUsers(), api.getLocales(), api.getHorarios(), api.getAsistencias(), api.getPeriodos(), api.getFeriados(), api.getReglasCobertura(), api.getConfigCobertura(), api.getEncargadoLocales(), api.getUsuarioLocales(), api.getComisiones(), api.getComisionesImportaciones(), api.getComisionesCriterios(), api.getComisionesConfiguracion(), api.getComisionesManicuraConfig(), api.getAdelantos(), api.getGarantias(), api.getInformesDiarios(), api.getAgendaServicios(), api.getAgendaManicuraServicios(), api.getAgendaListasPrecios(), api.getAgendaLocalListas(), api.getAgendaPreciosServicios(), api.getAgendaClientes(), api.getAgendaTurnos(), api.getAgendaTurnosPagos(), api.getAgendaTurnoServicios(), api.getAgendaBloqueos()
     ]);
     const nextData = {
       users: users.map(normalizeUser),
-      locales,
+      locales: (locales||[]).map(normalizeLocal),
       horarios: horarios.map(normalizeHorario),
       asistencias: asistencias.map(normalizeAsistencia),
       periodosBloqueados: periodos.map(normalizePeriodo),
@@ -6179,6 +6452,7 @@ export default function App() {
       reglasCobertura: reglasCobertura.map(normalizeReglaCobertura),
       configCobertura: (configCobertura||[]).map(normalizeConfigCobertura),
       encargadoLocales: (encargadoLocales||[]).map(normalizeEncargadoLocal),
+      usuarioLocales: (usuarioLocales||[]).map(normalizeUsuarioLocal),
       comisiones: (comisiones||[]).map(normalizeComision),
       comisionesImportaciones: (comisionesImportaciones||[]).map(normalizeComisionImportacion),
       comisionesCriterios: (comisionesCriterios||[]).map(normalizeComisionCriterio),
@@ -6339,7 +6613,7 @@ export default function App() {
       icon: "⚙️",
       items: [
         { id: "manicuras", label: "Manicuras", icon: "💅" },
-        { id: "encargadas", label: "Encargadas", icon: "👩‍💼" },
+        { id: "encargadas", label: "Usuarios", icon: "👥" },
         { id: "locales", label: "Locales", icon: "🏠" },
         { id: "cobertura_config", label: "Config. cobertura", icon: "⚙️" },
         { id: "perfil", label: "Mi perfil", icon: "👤" },
@@ -6570,7 +6844,7 @@ export default function App() {
   const renderSeccion = () => {
     if (seccion==="inicio") return renderMobileHome();
     if (seccion==="asistencia") return <AsistenciaDiaria data={data} reloadData={reloadData} user={user}/>;
-    if (seccion==="turnos") return user.rol!=="manicura" ? <AgendaTurnos data={data} reloadData={reloadData} user={user} agendaOpenRequest={agendaOpenRequest} onAgendaOpenRequestDone={() => setAgendaOpenRequest(null)}/> : null;
+    if (seccion==="turnos") return user.rol==="admin" ? <AgendaTurnos data={data} reloadData={reloadData} user={user} agendaOpenRequest={agendaOpenRequest} onAgendaOpenRequestDone={() => setAgendaOpenRequest(null)}/> : null;
     if (seccion==="horarios") return <CalendarioHorarios data={data} reloadData={reloadData} user={user} agendaRequest={agendaRequest} onBackToReport={()=>{ setSeccion("reportes_cobertura"); setMenuOpen(false); setMobileMenuGroup(null); }}/>;
     if (seccion==="bloqueo_horarios") return <BloqueoHorarios data={data} reloadData={reloadData} user={user}/>;
     if (seccion==="reportes_horas") return renderReportes("horas", "reportes_horas");
@@ -6581,8 +6855,8 @@ export default function App() {
     if (seccion==="garantias") return user.rol!=="manicura" ? <GarantiasServicios data={data} reloadData={reloadData} user={user}/> : null;
     if (seccion==="informes") return user.rol!=="manicura" ? <InformeDiario data={data} reloadData={reloadData} user={user}/> : null;
     if (seccion==="manicuras") return <ABMManicuras data={data} reloadData={reloadData} user={user}/>;
-    if (seccion==="locales") return user.rol==="admin" ? <ABMLocales data={data} reloadData={reloadData}/> : null;
-    if (seccion==="encargadas") return user.rol==="admin" ? <ABMEncargadas data={data} reloadData={reloadData} user={user}/> : null;
+    if (seccion==="locales") return ["admin", "casa_matriz"].includes(user.rol) ? <ABMLocales data={data} reloadData={reloadData} user={user}/> : null;
+    if (seccion==="encargadas") return ["admin", "casa_matriz"].includes(user.rol) ? <ABMEncargadas data={data} reloadData={reloadData} user={user}/> : null;
     if (seccion==="cobertura_config") return <ConfiguracionCobertura data={data} reloadData={reloadData} user={user}/>;
     if (seccion==="perfil") return <MiPerfil data={data} reloadData={reloadData} user={user} setUser={setUser}/>;
     return null;
