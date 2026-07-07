@@ -2,6 +2,7 @@ import React, { useEffect, useState } from "react";
 import ReactDOM from "react-dom/client";
 import App from "./App.jsx";
 import PublicBookingPlaceholder from "./PublicBookingPlaceholder.jsx";
+import { registerServiceWorker } from "./registerServiceWorker.js";
 
 function readRoute() {
   return window.location.hash === "#/turnos" ? "turnos" : "interno";
@@ -24,3 +25,5 @@ ReactDOM.createRoot(document.getElementById("root")).render(
     <RootRouter />
   </React.StrictMode>
 );
+
+registerServiceWorker();
