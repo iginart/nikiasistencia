@@ -185,6 +185,28 @@ const api = {
     if (!res.ok || data?.ok === false) throw new Error(data?.error || txt || "No se pudo solicitar el blanqueo");
     return data;
   },
+  solicitarVerificacionEmail: async (payload) => {
+    const res = await fetch(`${SUPABASE_URL}/functions/v1/login-niki`, {
+      method: "POST",
+      headers: { apikey: SUPABASE_KEY, Authorization: `Bearer ${SUPABASE_KEY}`, "Content-Type": "application/json" },
+      body: JSON.stringify({ action:"send_email_verification", ...payload }),
+    });
+    const txt = await res.text();
+    const data = txt ? JSON.parse(txt) : null;
+    if (!res.ok || data?.ok === false) throw new Error(data?.error || txt || "No se pudo enviar el código de verificación");
+    return data;
+  },
+  confirmarVerificacionEmail: async (payload) => {
+    const res = await fetch(`${SUPABASE_URL}/functions/v1/login-niki`, {
+      method: "POST",
+      headers: { apikey: SUPABASE_KEY, Authorization: `Bearer ${SUPABASE_KEY}`, "Content-Type": "application/json" },
+      body: JSON.stringify({ action:"confirm_email_verification", ...payload }),
+    });
+    const txt = await res.text();
+    const data = txt ? JSON.parse(txt) : null;
+    if (!res.ok || data?.ok === false) throw new Error(data?.error || txt || "No se pudo validar el email");
+    return data;
+  },
   enviarInvitacionUsuario: async (payload) => {
     const res = await fetch(`${SUPABASE_URL}/functions/v1/enviar-invitacion-niki`, {
       method: "POST",
@@ -706,6 +728,25 @@ function Btn({ children, onClick, variant="primary", size="md", disabled, style 
   return <button style={{...base,...v[variant]}} onClick={onClick} disabled={disabled}>{children}</button>;
 }
 function Input({ value, onChange, type="text", placeholder, style }) { return <input type={type} value={value} onChange={e=>onChange(e.target.value)} placeholder={placeholder} style={{ border:"0.5px solid rgba(120,120,120,0.24)",borderRadius:8,padding:"8px 12px",fontSize:14,width:"100%",background:"var(--color-background-primary)",color:"var(--color-text-primary)",boxSizing:"border-box",...style }}/>; }
+function PasswordInput({ value, onChange, placeholder = "Contraseña", style }) {
+  const [visible, setVisible] = useState(false);
+  return <div style={{ position:"relative",width:"100%" }}>
+    <Input
+      value={value}
+      onChange={onChange}
+      type={visible ? "text" : "password"}
+      placeholder={placeholder}
+      style={{ paddingRight:42,...style }}
+    />
+    <button
+      type="button"
+      onClick={() => setVisible(v => !v)}
+      aria-label={visible ? "Ocultar contraseña" : "Mostrar contraseña"}
+      title={visible ? "Ocultar contraseña" : "Mostrar contraseña"}
+      style={{ position:"absolute",right:8,top:"50%",transform:"translateY(-50%)",border:"none",background:"transparent",cursor:"pointer",fontSize:15,lineHeight:1,color:"var(--color-text-secondary)",padding:4 }}
+    >{visible ? "🙈" : "👁️"}</button>
+  </div>;
+}
 function Select({ value, onChange, children, style }) { return <select value={value} onChange={e=>onChange(e.target.value)} style={{ border:"0.5px solid rgba(120,120,120,0.24)",borderRadius:8,padding:"8px 12px",fontSize:14,width:"100%",background:"var(--color-background-primary)",color:"var(--color-text-primary)",...style }}>{children}</select>; }
 function SearchableSelect({ label, value, onChange, options = [], placeholder = "Buscar...", disabled = false, style, compact = false }) {
   const [open, setOpen] = useState(false);
@@ -1849,6 +1890,8 @@ function Login({ onLogin, reloadData }) {
   const [securityEmail, setSecurityEmail] = useState("");
   const [securityPassword, setSecurityPassword] = useState("");
   const [securityPassword2, setSecurityPassword2] = useState("");
+  const [securityStep, setSecurityStep] = useState("form");
+  const [securityCode, setSecurityCode] = useState("");
 
   useEffect(() => {
     const parseResetHash = () => {
@@ -1883,6 +1926,8 @@ function Login({ onLogin, reloadData }) {
           setSecurityEmail(found.email || "");
           setSecurityPassword("");
           setSecurityPassword2("");
+          setSecurityStep("form");
+          setSecurityCode("");
           setMsg("");
           setVista("seguridad");
         } else {
@@ -1899,6 +1944,7 @@ function Login({ onLogin, reloadData }) {
     setMsg("");
     if (!securityUser) return;
     const emailLimpio = String(securityEmail || "").trim().toLowerCase();
+    const requiereVerificarEmail = !String(securityUser.email || "").trim();
     if (!isValidEmail(emailLimpio)) { setMsg("Ingresá un email válido."); return; }
     if (securityUser.passwordTemporal) {
       const passErr = passwordSeguraBasica(securityPassword);
@@ -1907,19 +1953,65 @@ function Login({ onLogin, reloadData }) {
     }
     setLoading(true);
     try {
+      if (requiereVerificarEmail) {
+        await api.solicitarVerificacionEmail({
+          actor_id:securityUser.id,
+          session_token:securityUser.sessionToken,
+          email:emailLimpio,
+        });
+        setSecurityStep("verify_email");
+        setSecurityCode("");
+        setMsg(`Te enviamos un código de verificación a ${emailLimpio}. Ingresalo para continuar.`);
+      } else {
+        const ahora = new Date().toISOString();
+        await api.updateUser(securityUser.id, { email: emailLimpio, email_actualizado_en: ahora });
+        if (securityUser.passwordTemporal) {
+          await api.changePassword({ mode:"self", actor_id:securityUser.id, session_token:securityUser.sessionToken, target_user_id:securityUser.id, new_password:securityPassword });
+          await api.updateUser(securityUser.id, { password_actualizado_en: ahora });
+        }
+        await reloadData();
+        notifyToast("Datos de seguridad actualizados.", "success", { title:"Seguridad actualizada" });
+        onLogin({ ...securityUser, email: emailLimpio });
+      }
+    } catch(e) {
+      setMsg("No se pudieron guardar los datos: " + (e.message || e));
+    }
+    setLoading(false);
+  };
+
+  const handleConfirmarEmailSeguridad = async () => {
+    setMsg("");
+    if (!securityUser) return;
+    const emailLimpio = String(securityEmail || "").trim().toLowerCase();
+    const codigo = String(securityCode || "").trim();
+    if (!isValidEmail(emailLimpio)) { setMsg("Ingresá un email válido."); return; }
+    if (!codigo) { setMsg("Ingresá el código que recibiste por email."); return; }
+    setLoading(true);
+    try {
+      await api.confirmarVerificacionEmail({
+        actor_id:securityUser.id,
+        session_token:securityUser.sessionToken,
+        email:emailLimpio,
+        codigo,
+      });
       const ahora = new Date().toISOString();
-      await api.updateUser(securityUser.id, { email: emailLimpio, email_actualizado_en: ahora });
       if (securityUser.passwordTemporal) {
         await api.changePassword({ mode:"self", actor_id:securityUser.id, session_token:securityUser.sessionToken, target_user_id:securityUser.id, new_password:securityPassword });
         await api.updateUser(securityUser.id, { password_actualizado_en: ahora });
       }
       await reloadData();
-      notifyToast("Datos de seguridad actualizados.", "success", { title:"Seguridad actualizada" });
+      notifyToast("Email verificado y datos de seguridad actualizados.", "success", { title:"Seguridad actualizada" });
       onLogin({ ...securityUser, email: emailLimpio });
     } catch(e) {
-      setMsg("No se pudieron guardar los datos: " + (e.message || e));
+      setMsg("No se pudo validar el email: " + (e.message || e));
     }
     setLoading(false);
+  };
+
+  const handleCambiarEmailSeguridad = () => {
+    setSecurityStep("form");
+    setSecurityCode("");
+    setMsg("");
   };
 
   const handleRecuperar = async () => {
@@ -1965,8 +2057,8 @@ function Login({ onLogin, reloadData }) {
           <p style={{ margin:"4px 0 0",fontSize:13,color:"var(--color-text-secondary)" }}>NIKI OS</p>
         </div>
         {vista==="login" && <div style={{ display:"flex",flexDirection:"column",gap:12 }}>
-          <Input value={u} onChange={setU} placeholder="Usuario"/>
-          <Input value={p} onChange={setP} type="password" placeholder="Contraseña"/>
+          <Input value={u} onChange={setU} placeholder="Usuario o email"/>
+          <PasswordInput value={p} onChange={setP} placeholder="Contraseña"/>
           {err && <p style={{ margin:0,fontSize:13,color:COLORS.danger }}>{err}</p>}
           <Btn onClick={handleLogin} disabled={loading} style={{ width:"100%",justifyContent:"center" }}>{loading?"Ingresando...":"Ingresar"}</Btn>
           <button onClick={()=>{ setVista("recuperar"); setMsg(""); setEmail(""); }} style={{ background:"none",border:"none",color:COLORS.pink,fontSize:13,cursor:"pointer",textAlign:"center",marginTop:4 }}>¿Olvidaste tu contraseña?</button>
@@ -1975,19 +2067,29 @@ function Login({ onLogin, reloadData }) {
           <div style={{ background:COLORS.infoLight,border:`1px solid ${COLORS.info}33`,borderRadius:12,padding:12 }}>
             <p style={{ margin:"0 0 4px",fontWeight:600,color:COLORS.info }}>Completá tus datos de seguridad</p>
             <p style={{ margin:0,fontSize:13,color:"var(--color-text-secondary)" }}>
-              {securityUser?.passwordTemporal
-                ? "Para continuar necesitás cargar tu email y cambiar la contraseña temporal."
-                : "Para continuar necesitás cargar un email válido."}
+              {securityStep === "verify_email"
+                ? "Para confirmar que tenés acceso, ingresá el código que enviamos a tu email."
+                : securityUser?.passwordTemporal
+                  ? "Para continuar necesitás cargar tu email y cambiar la contraseña temporal."
+                  : "Para continuar necesitás cargar y verificar un email válido."}
             </p>
           </div>
-          <Input value={securityEmail} onChange={setSecurityEmail} type="email" placeholder="Email"/>
-          {securityUser?.passwordTemporal && <>
-            <Input value={securityPassword} onChange={setSecurityPassword} type="password" placeholder="Nueva contraseña"/>
-            <Input value={securityPassword2} onChange={setSecurityPassword2} type="password" placeholder="Repetir nueva contraseña"/>
-            <p style={{ margin:0,fontSize:12,color:"var(--color-text-secondary)" }}>Mínimo 8 caracteres. No puede ser niki123.</p>
+          {securityStep === "form" ? <>
+            <Input value={securityEmail} onChange={setSecurityEmail} type="email" placeholder="Email"/>
+            {securityUser?.passwordTemporal && <>
+              <PasswordInput value={securityPassword} onChange={setSecurityPassword} placeholder="Nueva contraseña"/>
+              <PasswordInput value={securityPassword2} onChange={setSecurityPassword2} placeholder="Repetir nueva contraseña"/>
+              <p style={{ margin:0,fontSize:12,color:"var(--color-text-secondary)" }}>Mínimo 8 caracteres. No puede ser niki123.</p>
+            </>}
+            {msg && <p style={{ margin:0,fontSize:13,color:msg.startsWith("Te enviamos")?COLORS.success:COLORS.danger }}>{msg}</p>}
+            <Btn onClick={handleCompletarSeguridad} disabled={loading} style={{ width:"100%",justifyContent:"center" }}>{loading?"Enviando...":"Enviar código y continuar"}</Btn>
+          </> : <>
+            <p style={{ margin:0,fontSize:13,color:"var(--color-text-secondary)",wordBreak:"break-word" }}>Email a verificar: <strong>{securityEmail}</strong></p>
+            <Input value={securityCode} onChange={setSecurityCode} placeholder="Código de verificación"/>
+            {msg && <p style={{ margin:0,fontSize:13,color:msg.startsWith("Te enviamos")?COLORS.success:COLORS.danger }}>{msg}</p>}
+            <Btn onClick={handleConfirmarEmailSeguridad} disabled={loading} style={{ width:"100%",justifyContent:"center" }}>{loading?"Validando...":"Validar email y continuar"}</Btn>
+            <button onClick={handleCambiarEmailSeguridad} disabled={loading} style={{ background:"none",border:"none",color:"var(--color-text-secondary)",fontSize:13,cursor:"pointer",textAlign:"center" }}>Cambiar email</button>
           </>}
-          {msg && <p style={{ margin:0,fontSize:13,color:COLORS.danger }}>{msg}</p>}
-          <Btn onClick={handleCompletarSeguridad} disabled={loading} style={{ width:"100%",justifyContent:"center" }}>{loading?"Guardando...":"Guardar y continuar"}</Btn>
         </div>}
         {vista==="recuperar" && <div style={{ display:"flex",flexDirection:"column",gap:12 }}>
           <p style={{ margin:0,fontSize:13,color:"var(--color-text-secondary)" }}>Ingresá tu usuario o email y te enviamos un link para cambiar la contraseña.</p>
@@ -2005,8 +2107,8 @@ function Login({ onLogin, reloadData }) {
         </div>}
         {vista==="nueva" && <div style={{ display:"flex",flexDirection:"column",gap:12 }}>
           <p style={{ margin:0,fontSize:13,color:"var(--color-text-secondary)" }}>Elegí tu nueva contraseña para NIKI OS.</p>
-          <Input value={nueva} onChange={setNueva} type="password" placeholder="Nueva contraseña"/>
-          <Input value={nueva2} onChange={setNueva2} type="password" placeholder="Repetir contraseña"/>
+          <PasswordInput value={nueva} onChange={setNueva} placeholder="Nueva contraseña"/>
+          <PasswordInput value={nueva2} onChange={setNueva2} placeholder="Repetir contraseña"/>
           {msg && <p style={{ margin:0,fontSize:13,color:COLORS.danger }}>{msg}</p>}
           <Btn onClick={handleNuevaPassword} disabled={loading} style={{ width:"100%",justifyContent:"center" }}>{loading?"Guardando...":"Guardar contraseña"}</Btn>
         </div>}
