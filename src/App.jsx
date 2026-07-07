@@ -1962,7 +1962,7 @@ function Login({ onLogin, reloadData }) {
         <div style={{ textAlign:"center",marginBottom:24 }}>
           <div style={{ display:"flex",justifyContent:"center",marginBottom:14 }}><LogoMark size={104} variant="soft"/></div>
           <h2 style={{ margin:0,fontSize:20,fontWeight:500 }}>Niki Beauty Bar</h2>
-          <p style={{ margin:"4px 0 0",fontSize:13,color:"var(--color-text-secondary)" }}>Control de asistencia</p>
+          <p style={{ margin:"4px 0 0",fontSize:13,color:"var(--color-text-secondary)" }}>NIKI OS</p>
         </div>
         {vista==="login" && <div style={{ display:"flex",flexDirection:"column",gap:12 }}>
           <Input value={u} onChange={setU} placeholder="Usuario"/>
@@ -2004,7 +2004,7 @@ function Login({ onLogin, reloadData }) {
           <button onClick={()=>setVista("recuperar")} style={{ background:"none",border:"none",color:"var(--color-text-secondary)",fontSize:13,cursor:"pointer",textAlign:"center" }}>← Volver</button>
         </div>}
         {vista==="nueva" && <div style={{ display:"flex",flexDirection:"column",gap:12 }}>
-          <p style={{ margin:0,fontSize:13,color:"var(--color-text-secondary)" }}>Elegí tu nueva contraseña para NikiAsistencia.</p>
+          <p style={{ margin:0,fontSize:13,color:"var(--color-text-secondary)" }}>Elegí tu nueva contraseña para NIKI OS.</p>
           <Input value={nueva} onChange={setNueva} type="password" placeholder="Nueva contraseña"/>
           <Input value={nueva2} onChange={setNueva2} type="password" placeholder="Repetir contraseña"/>
           {msg && <p style={{ margin:0,fontSize:13,color:COLORS.danger }}>{msg}</p>}
