@@ -6629,7 +6629,24 @@ export default function App() {
   }, [user, seccion]);
 
   if (loading) return <div style={{ minHeight:"100vh",display:"flex",alignItems:"center",justifyContent:"center" }}><p style={{ color:"var(--color-text-secondary)",fontSize:14 }}>Conectando con Supabase...</p></div>;
-  if (!user) return <Login onLogin={u=>{ localStorage.setItem("niki_user", JSON.stringify(u)); setUser(u); const target=readSectionHash(); setSeccion(target && sectionAllowedForRole(target,u.rol) ? target : defaultSectionForRole(u.rol)); }} reloadData={reloadData}/>;
+  if (!user) return <Login onLogin={u=>{
+    localStorage.setItem("niki_user", JSON.stringify(u));
+    setUser(u);
+
+    const isMobileOrPwa =
+      window.innerWidth < 768 ||
+      window.matchMedia?.("(display-mode: standalone)")?.matches ||
+      window.navigator.standalone === true;
+
+    if (isMobileOrPwa && sectionAllowedForRole("inicio", u.rol)) {
+      window.history.replaceState(null, "", "#inicio");
+      setSeccion("inicio");
+      return;
+    }
+
+    const target=readSectionHash();
+    setSeccion(target && sectionAllowedForRole(target,u.rol) ? target : defaultSectionForRole(u.rol));
+  }} reloadData={reloadData}/>;
 
   const menuGroupsBase = [
     {
