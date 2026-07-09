@@ -35,6 +35,14 @@ if (!document.getElementById("niki-font-global-style")) {
       from { opacity: 0; transform: translateY(-8px) scale(0.98); }
       to { opacity: 1; transform: translateY(0) scale(1); }
     }
+    @keyframes nikiSplashPulse {
+      0%, 100% { opacity: 0.38; transform: scale(0.94); }
+      50% { opacity: 1; transform: scale(1.04); }
+    }
+    @keyframes nikiSplashFade {
+      from { opacity: 0; }
+      to { opacity: 1; }
+    }
   `;
   document.head.appendChild(style);
 }
@@ -467,6 +475,38 @@ export function LogoMark({ size = 32, variant = "light" }) {
       }}
     >
       NB
+    </div>
+  );
+}
+
+
+function NikiSplash({ text = "", fullScreen = true, compact = false }) {
+  const logoSize = fullScreen ? (compact ? 112 : 120) : (compact ? 128 : 120);
+  return (
+    <div
+      aria-live="polite"
+      aria-busy="true"
+      style={{
+        position: "fixed",
+        inset: 0,
+        width: "100vw",
+        height: "100vh",
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+        background: fullScreen ? "rgba(255,255,255,0.96)" : "rgba(255,255,255,0.96)",
+        backdropFilter: "blur(3px)",
+        zIndex: fullScreen ? 999998 : 999997,
+        pointerEvents: "none",
+        animation: "nikiSplashFade 0.18s ease-out",
+      }}
+    >
+      <div style={{ display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",gap:compact?8:12 }}>
+        <div style={{ animation:"nikiSplashPulse 1.05s ease-in-out infinite" }}>
+          <LogoMark size={logoSize} variant="dark" />
+        </div>
+        {text && <p style={{ margin:0,fontSize:compact?11:13,fontWeight:600,color:COLORS.pinkDark,letterSpacing:"0.02em" }}>{text}</p>}
+      </div>
     </div>
   );
 }
@@ -1873,6 +1913,1053 @@ function CalendarioHorarios({ data, reloadData, user, agendaRequest, onBackToRep
   );
 }
 
+
+// ── CENTRO DE AYUDA ────────────────────────────────────────────────
+const HELP_PROFILE_LABELS = {
+  admin: "Administrador",
+  casa_matriz: "Casa matriz",
+  encargada: "Encargadas",
+  manicura: "Manicuras",
+};
+
+const HELP_PROFILE_COLORS = {
+  admin: "danger",
+  casa_matriz: "pink",
+  encargada: "info",
+  manicura: "success",
+};
+
+const HELP_TOPICS = [
+  {
+    id: "primer-ingreso",
+    title: "Primer ingreso y contraseña",
+    icon: "🔐",
+    profiles: ["casa_matriz", "encargada", "manicura"],
+    summary: "Cómo entrar por primera vez, validar email y cambiar la contraseña temporal.",
+    sections: [
+      {
+        heading: "Qué necesitás para ingresar",
+        text: "Para entrar a NIKI OS tenés que usar tu usuario o tu email, junto con tu contraseña. El usuario o email no distingue mayúsculas y minúsculas. La contraseña sí las distingue, por eso hay que escribirla exactamente como corresponde.",
+      },
+      {
+        heading: "Primer ingreso",
+        text: "Si es tu primer ingreso, el sistema puede pedirte que cargues un email y cambies la contraseña temporal. El email se valida con un código que llega a tu casilla. Esto confirma que el correo existe y que tenés acceso.",
+      },
+      {
+        heading: "Si no recibís el código",
+        bullets: [
+          "Revisá la carpeta de spam o correo no deseado.",
+          "Confirmá que escribiste bien la dirección de email.",
+          "Si el problema continúa, avisá a tu encargada o a administración.",
+        ],
+      },
+    ],
+  },
+  {
+    id: "instalar-app",
+    title: "Instalar NIKI OS en el celular",
+    icon: "📲",
+    profiles: ["casa_matriz", "encargada", "manicura"],
+    summary: "Cómo usar NIKI OS como aplicación instalada en el celular o la computadora.",
+    sections: [
+      {
+        heading: "Para qué sirve instalarla",
+        text: "Instalar NIKI OS permite abrir el sistema desde un ícono, como si fuera una aplicación. Es más cómodo para el uso diario y evita tener que buscar la página cada vez.",
+      },
+      {
+        heading: "Antes de empezar",
+        bullets: [
+          "Abrí el navegador del celular y entrá a os.nikibeautybar.com.",
+          "Ingresá al sistema al menos una vez para confirmar que tu usuario funciona.",
+          "Usá una conexión estable a internet durante la instalación.",
+        ],
+      },
+      {
+        heading: "Android con Chrome",
+        bullets: [
+          "Abrí os.nikibeautybar.com desde Chrome.",
+          "Tocá el menú de los tres puntos del navegador.",
+          "Elegí Instalar app o Agregar a la pantalla principal.",
+          "Confirmá la instalación.",
+          "Buscá el ícono de NIKI OS en la pantalla del celular y abrilo desde ahí.",
+        ],
+      },
+      {
+        heading: "iPhone con Safari",
+        bullets: [
+          "Abrí os.nikibeautybar.com desde Safari.",
+          "Tocá el botón Compartir.",
+          "Elegí Agregar a pantalla de inicio.",
+          "Confirmá el nombre NIKI OS y tocá Agregar.",
+          "Abrí NIKI OS desde el nuevo ícono de la pantalla de inicio.",
+        ],
+      },
+      {
+        heading: "Computadora con Edge o Chrome",
+        bullets: [
+          "Entrá a os.nikibeautybar.com.",
+          "Si aparece el ícono de instalación en la barra del navegador, presionalo y confirmá.",
+          "Si no aparece, abrí el menú del navegador y buscá la opción Instalar aplicación o Apps.",
+          "Una vez instalada, podés abrirla desde el acceso directo de Windows.",
+        ],
+      },
+      {
+        heading: "Cómo saber si quedó bien instalada",
+        bullets: [
+          "Se abre en una ventana propia o desde un ícono de la pantalla principal.",
+          "No debería mostrar la barra de direcciones como una pestaña común del navegador.",
+          "Puede aparecer una pequeña marca del navegador en el ícono, sobre todo si se instaló desde Edge. Eso es normal.",
+        ],
+        note: "Aunque esté instalada como app, NIKI OS necesita conexión a internet para operar con datos actualizados.",
+      },
+    ],
+  },
+  {
+    id: "horarios",
+    title: "Horarios",
+    icon: "🗓️",
+    profiles: ["casa_matriz", "encargada", "manicura"],
+    summary: "Carga semanal, vista mensual, edición y períodos bloqueados.",
+    sections: [
+      {
+        heading: "Para qué sirve",
+        text: "La pantalla de Horarios permite cargar y consultar los días y horarios de trabajo. Las manicuras pueden revisar sus propios horarios, y las encargadas o casa matriz pueden gestionar horarios del equipo según sus permisos.",
+      },
+      {
+        heading: "Elegir la vista de trabajo",
+        bullets: [
+          "La vista semanal sirve para cargar o corregir días puntuales con más detalle.",
+          "La vista mensual sirve para revisar el mes completo, detectar días sin cargar y ver el total de horas por semana.",
+          "Las encargadas también pueden usar la vista por día para revisar varias manicuras del local en una misma pantalla.",
+        ],
+      },
+      {
+        heading: "Cómo cargar un horario",
+        bullets: [
+          "Entrá a Horarios.",
+          "Elegí el período o la semana que querés cargar.",
+          "Seleccioná el día correspondiente.",
+          "Indicá hora de entrada y hora de salida.",
+          "Guardá el cambio y revisá que el bloque haya quedado visible en la grilla.",
+        ],
+      },
+      {
+        heading: "Cómo editar un horario cargado",
+        text: "Una vez cargado, el horario puede modificarse siempre que el período esté habilitado y el día no tenga asistencia registrada. Esto evita modificar información que ya fue usada para controles posteriores.",
+      },
+      {
+        heading: "Si el período está bloqueado",
+        text: "Cuando un período está bloqueado, ya no se puede modificar desde tu usuario. Si necesitás corregir un horario de un período bloqueado, hablá con tu encargada o con administración para que revisen el caso.",
+        note: "El bloqueo se usa para cuidar la información antes de revisar asistencia, comisiones u otros reportes.",
+      },
+      {
+        heading: "Consejos para evitar errores",
+        bullets: [
+          "Revisá siempre que estés parada en el mes correcto.",
+          "Antes de pedir una corrección, verificá si el período aparece bloqueado.",
+          "Si un día ya tiene asistencia, pedí ayuda antes de modificar horarios relacionados.",
+        ],
+      },
+    ],
+  },
+  {
+    id: "bloqueos",
+    title: "Bloqueo de horarios",
+    icon: "🔐",
+    profiles: ["casa_matriz", "encargada"],
+    summary: "Cómo habilitar o bloquear períodos de carga de horarios.",
+    sections: [
+      {
+        heading: "Para qué sirve",
+        text: "El bloqueo de horarios permite cerrar un período para evitar cambios después de que la información fue revisada. Es útil cuando ya se controló la planificación o cuando los datos impactan en reportes.",
+      },
+      {
+        heading: "Qué pasa al bloquear",
+        bullets: [
+          "Las manicuras dejan de poder editar ese período.",
+          "Las encargadas pueden ordenar correcciones antes de cerrar el mes.",
+          "Casa matriz puede revisar el estado general de los períodos.",
+        ],
+      },
+      {
+        heading: "Qué hacer ante un pedido de corrección",
+        text: "Si una manicura necesita corregir un horario bloqueado, primero hay que validar el motivo. Si corresponde, se habilita el período, se corrige el dato y luego se vuelve a bloquear.",
+      },
+    ],
+  },
+  {
+    id: "asistencia",
+    title: "Asistencia",
+    icon: "📋",
+    profiles: ["casa_matriz", "encargada"],
+    summary: "Registro y control de asistencia del equipo.",
+    sections: [
+      {
+        heading: "Para qué sirve",
+        text: "La asistencia permite registrar si una manicura asistió, llegó tarde o estuvo ausente. Esta información ayuda a controlar el cumplimiento de horarios y puede impactar en reportes operativos.",
+      },
+      {
+        heading: "Relación con horarios",
+        text: "Cuando un día ya tiene asistencia registrada, el horario puede quedar protegido para evitar cambios inconsistentes. Si hay que corregir algo, revisalo con cuidado antes de modificar datos relacionados.",
+      },
+    ],
+  },
+  {
+    id: "turnos",
+    title: "Turnos",
+    icon: "📅",
+    profiles: ["casa_matriz", "encargada"],
+    summary: "Gestión de agenda, reservas, cambios y cancelaciones.",
+    sections: [
+      {
+        heading: "Para qué sirve",
+        text: "La agenda de turnos permite cargar reservas, asignar manicuras, seleccionar servicios y registrar pagos. También ayuda a mantener ordenada la operación diaria del local.",
+      },
+      {
+        heading: "Cambios y cancelaciones",
+        text: "Cuando se modifica o elimina un turno, el sistema puede mostrar notificaciones para encargadas y administración. Si un turno eliminado no muestra todos los datos, puede deberse a que el registro original ya no está completo.",
+      },
+    ],
+  },
+  {
+    id: "comisiones",
+    title: "Comisiones",
+    icon: "💰",
+    profiles: ["casa_matriz", "encargada", "manicura"],
+    summary: "Reporte, actualización nocturna, adelantos, garantías y análisis del detalle.",
+    sections: [
+      {
+        heading: "Para qué sirve",
+        text: "El reporte de comisiones permite consultar el detalle de los servicios realizados y cómo se compone el total a cobrar. La manicura puede revisar su información y las encargadas o casa matriz pueden analizar los datos según sus permisos.",
+      },
+      {
+        heading: "Cuándo se actualiza",
+        text: "El reporte de comisiones se actualiza automáticamente por la noche, una vez por día. Si hoy se cargaron nuevos datos, es posible que se vean reflejados recién al día siguiente.",
+      },
+      {
+        heading: "Qué contempla",
+        bullets: [
+          "Servicios realizados e importes de comisión.",
+          "Adelantos cargados para la manicura.",
+          "Garantías aplicadas sobre servicios que debieron corregirse.",
+          "Totales y detalles del período consultado.",
+        ],
+      },
+      {
+        heading: "Cómo se calculan las garantías",
+        text: "Cuando se registra una garantía, se toma como referencia la comisión del servicio original. El sistema deja relacionado el servicio, la cliente, la manicura original, el motivo y la reparación realizada. Ese importe puede impactar en el cálculo del período correspondiente.",
+      },
+      {
+        heading: "Cómo usar el detalle de comisiones",
+        bullets: [
+          "Ordená columnas para revisar primero fechas, locales, servicios o importes.",
+          "Agrupá columnas para ver subtotales por manicura, local, servicio o período.",
+          "Usá filtros para buscar una cliente, servicio o caso puntual.",
+          "Revisá el detalle antes de consultar una diferencia, porque el total puede incluir adelantos o garantías.",
+        ],
+      },
+      {
+        heading: "Si ves una diferencia",
+        bullets: [
+          "Confirmá que el reporte ya se actualizó durante la noche.",
+          "Revisá si hay adelantos cargados.",
+          "Revisá si hay garantías aplicadas.",
+          "Verificá que estés mirando el período correcto.",
+          "Controlá que no haya filtros activos que oculten parte de la información.",
+        ],
+        note: "Si después de revisar estos puntos la diferencia continúa, avisá a tu encargada o a administración con el período y el caso que estás revisando.",
+      },
+    ],
+  },
+  {
+    id: "adelantos",
+    title: "Adelantos",
+    icon: "💸",
+    profiles: ["casa_matriz", "encargada"],
+    summary: "Carga y seguimiento de adelantos que impactan en comisiones.",
+    sections: [
+      {
+        heading: "Para qué sirven",
+        text: "Los adelantos registran importes entregados por anticipado a una manicura. Luego se descuentan de las comisiones según la fecha y la forma en que fueron cargados.",
+      },
+      {
+        heading: "Cómo revisar el impacto",
+        text: "En el reporte de comisiones puede verse el efecto de los adelantos sobre el total a cobrar. Si una manicura consulta una diferencia, este es uno de los primeros puntos a revisar.",
+      },
+    ],
+  },
+  {
+    id: "garantias",
+    title: "Garantías",
+    icon: "🛠️",
+    profiles: ["casa_matriz", "encargada"],
+    summary: "Cómo registrar garantías y cómo impactan en las comisiones.",
+    sections: [
+      {
+        heading: "Qué es una garantía",
+        text: "Una garantía se registra cuando un servicio debe corregirse o rehacerse. El objetivo es dejar trazabilidad del caso y reflejar correctamente el impacto en comisiones.",
+      },
+      {
+        heading: "Cómo se calcula el impacto",
+        text: "La garantía toma como referencia la comisión del servicio original. Al registrarla, se identifica la manicura original, el servicio, el cliente, el motivo, la fecha de reparación y la manicura que hizo la reparación.",
+      },
+      {
+        heading: "Qué información conviene revisar",
+        bullets: [
+          "Servicio original y fecha.",
+          "Manicura original.",
+          "Motivo de la garantía.",
+          "Servicio realizado para reparar el caso.",
+          "Importe de comisión afectado.",
+        ],
+        note: "La garantía no busca castigar sin contexto, sino ordenar el caso y que el cálculo sea transparente.",
+      },
+    ],
+  },
+  {
+    id: "informes",
+    title: "Informe diario",
+    icon: "📝",
+    profiles: ["casa_matriz", "encargada"],
+    summary: "Carga de novedades, caja, reclamos y cierre operativo del local.",
+    sections: [
+      {
+        heading: "Para qué sirve",
+        text: "El informe diario concentra novedades importantes del local: caja, pagos realizados, reclamos, novedades del salón y observaciones generales. Sirve para que la información operativa quede ordenada y disponible.",
+      },
+      {
+        heading: "Buenas prácticas",
+        bullets: [
+          "Cargarlo al final del día o al cierre del turno correspondiente.",
+          "Ser clara con los reclamos o novedades importantes.",
+          "Revisar los importes antes de cerrar o enviar el informe.",
+        ],
+      },
+    ],
+  },
+  {
+    id: "usuarios-locales",
+    title: "Usuarios, manicuras y locales",
+    icon: "👥",
+    profiles: ["casa_matriz"],
+    summary: "Alta de usuarios, invitaciones, roles, locales propios y franquicias.",
+    sections: [
+      {
+        heading: "Usuarios y roles",
+        text: "Cada usuario tiene un perfil que define qué puede ver y usar. Casa matriz tiene acceso administrativo, las encargadas gestionan la operación de sus locales y las manicuras acceden principalmente a sus horarios, horas, comisiones y perfil.",
+      },
+      {
+        heading: "Email e invitaciones",
+        text: "El email es importante porque permite enviar invitaciones y recuperar contraseñas. Para usuarios nuevos, la invitación por email ayuda a confirmar que la persona tiene acceso a esa casilla.",
+      },
+      {
+        heading: "Locales",
+        text: "La gestión de locales permite administrar locales propios y franquicias, asignaciones y datos operativos. Estos datos se usan para filtrar información y limitar accesos según corresponda.",
+      },
+    ],
+  },
+  {
+    id: "problemas",
+    title: "Qué hacer si algo no funciona",
+    icon: "🆘",
+    profiles: ["casa_matriz", "encargada", "manicura"],
+    summary: "Pasos simples para resolver dudas frecuentes antes de pedir soporte.",
+    sections: [
+      {
+        heading: "Revisá primero esto",
+        bullets: [
+          "Confirmá que tenés conexión a internet.",
+          "Actualizá la página o cerrá y volvé a abrir la app instalada.",
+          "Verificá que estás usando el período correcto.",
+          "Revisá si hay filtros activos en los reportes.",
+          "Si no podés editar horarios, verificá si el período está bloqueado.",
+        ],
+      },
+      {
+        heading: "Cuándo pedir ayuda",
+        text: "Si después de revisar estos puntos el problema sigue, avisá a tu encargada o a administración indicando qué estabas intentando hacer, en qué pantalla estabas y qué mensaje apareció.",
+      },
+    ],
+  },
+];
+
+function HelpRoleBadge({ role }) {
+  return <Badge color={HELP_PROFILE_COLORS[role] || "gray"}>{HELP_PROFILE_LABELS[role] || role}</Badge>;
+}
+
+
+
+const ROADMAP_BASELINE = [
+  { area:"Acceso y seguridad", status:"Productivo", estadoColor:"success", avance:100, detalle:"Acceso centralizado con usuario o email, recupero de contraseña, cambio obligatorio cuando corresponde y validación de correo por código. Deja preparada una base segura para operar desde locales, casa matriz y equipos externos.", perfiles:"Todos" },
+  { area:"Centro de ayuda", status:"Productivo", estadoColor:"success", avance:100, detalle:"Manual web integrado a NIKI OS, disponible desde el login y desde la app. Incluye buscador, filtros por perfil y explicaciones operativas orientadas a reducir consultas repetidas.", perfiles:"Todos" },
+  { area:"Usuarios, perfiles y permisos", status:"Productivo", estadoColor:"success", avance:100, detalle:"Administración de usuarios con roles diferenciados. Permite separar responsabilidades entre Administrador, Casa Matriz, Encargadas y Manicuras, manteniendo cada pantalla dentro del alcance correcto.", perfiles:"Administrador / Casa matriz" },
+  { area:"Locales y franquicias", status:"Productivo", estadoColor:"success", avance:100, detalle:"Gestión de locales propios y franquicias con datos operativos, zona, fecha de apertura, responsables y visibilidad por usuario. Es la base para crecer a una red más ordenada.", perfiles:"Administrador / Casa matriz" },
+  { area:"Horarios", status:"Productivo", estadoColor:"success", avance:100, detalle:"Carga y edición de horarios desde vistas semanal, mensual y diaria, con totales, repetición de semanas y bloqueo automático cuando ya existe asistencia registrada.", perfiles:"Todos" },
+  { area:"Bloqueo de horarios", status:"Productivo", estadoColor:"success", avance:100, detalle:"Cierre y reapertura controlada de períodos para evitar cambios fuera de tiempo. Ayuda a proteger la información que luego se usa en asistencia, comisiones y controles operativos.", perfiles:"Administrador / Casa matriz / Encargadas" },
+  { area:"Asistencia", status:"Operativo", estadoColor:"info", avance:80, detalle:"Registro manual de asistencia, llegadas tarde y ausencias. Funciona como base operativa hasta incorporar fichaje con QR, geolocalización y validaciones automáticas.", perfiles:"Casa matriz / Encargadas" },
+  { area:"Reportes operativos", status:"Productivo", estadoColor:"success", avance:100, detalle:"Reportes para analizar horas, cobertura, comisiones y operación por período, local y colaboradora. Permiten revisar desvíos y tomar decisiones con mejor información.", perfiles:"Según permisos" },
+  { area:"Comisiones", status:"Productivo", estadoColor:"success", avance:100, detalle:"Reporte de comisiones con actualización nocturna, detalle de servicios, totales, adelantos y garantías. Permite explicar cómo se compone cada liquidación.", perfiles:"Todos" },
+  { area:"Adelantos", status:"Productivo", estadoColor:"success", avance:100, detalle:"Carga y seguimiento de adelantos con impacto en comisiones. Mejora la trazabilidad de descuentos y evita cálculos manuales dispersos.", perfiles:"Casa matriz / Encargadas" },
+  { area:"Garantías", status:"Productivo", estadoColor:"success", avance:100, detalle:"Registro de garantías con servicio original, reparación, manicura involucrada, fotos, motivo e impacto sobre comisiones. Ordena casos sensibles y permite seguimiento.", perfiles:"Casa matriz / Encargadas" },
+  { area:"Informe diario", status:"Productivo", estadoColor:"success", avance:100, detalle:"Carga diaria de novedades, caja, reclamos, observaciones y temas importantes del local. Funciona como bitácora operativa para encargadas y seguimiento centralizado.", perfiles:"Casa matriz / Encargadas" },
+  { area:"Agenda interna de turnos", status:"En evolución", estadoColor:"amber", avance:60, detalle:"Base funcional para servicios, precios, clientes, turnos, pagos y notificaciones. Es el primer paso hacia un portal completo de reservas para clientas.", perfiles:"Casa matriz / Encargadas" },
+  { area:"PWA / app instalada", status:"Base implementada", estadoColor:"info", avance:70, detalle:"Instalación como app desde navegador y acceso rápido desde celular o computadora. Actualmente requiere conexión para operar con datos actualizados.", perfiles:"Todos" },
+];
+
+const ROADMAP_STATUS_OPTIONS = ["Idea", "Planificado", "En análisis", "En diseño", "En desarrollo", "En prueba", "Implementado", "Pausado"];
+const ROADMAP_PHASE_OPTIONS = ["Fase 1", "Fase 2", "Fase 3", "Fase 4", "Fase 5", "Contenido", "Backlog"];
+const ROADMAP_PRIORITY_OPTIONS = ["Alta", "Media", "Baja"];
+const ROADMAP_PLAN_OPTIONS = ["Plan Base", "Plan Pro", "Plan Premium"];
+const ROADMAP_PLAN_META = {
+  "Plan Base": {
+    color: "gray",
+    icon: "•",
+    title: "Plan Base",
+    detalle: "Funciones esenciales para operar NIKI OS: usuarios, locales, ayuda, horarios, asistencia básica, comisiones, adelantos, garantías e informes diarios.",
+  },
+  "Plan Pro": {
+    color: "info",
+    icon: "✦",
+    title: "Plan Pro",
+    detalle: "Módulos avanzados para profesionalizar la gestión: comunicaciones, RRHH, QR + GPS, auditorías, stock, cajas, tableros y automatizaciones operativas.",
+  },
+  "Plan Premium": {
+    color: "pink",
+    icon: "✦✦",
+    title: "Plan Premium",
+    detalle: "Capacidades diferenciales para escalar valor: IA, portal de clientas, fidelización, reservas inteligentes, Rewards/Destellos y experiencias de mayor impacto comercial.",
+  },
+};
+
+const ROADMAP_FEATURES_SEED = [
+  {
+    id:"roadmap-producto", fase:"Fase 1", fechaOrden:"2026-08", nombre:"Roadmap editable del producto", modulo:"Producto", estado:"En desarrollo", avance:70, prioridad:"Alta", impacto:"Alto", monetizacion:"Plan Base", valor:"Ordena prioridades, fechas y evolución del producto.",
+    detalle:"Convertir el roadmap en una herramienta viva de gestión de producto. El objetivo es que Administración pueda actualizar fase, fecha, estado y avance a medida que el sistema evoluciona, mientras Casa Matriz lo consulta en modo lectura.",
+    alcance:["Página interna visible para Administrador y Casa Matriz.","Edición reservada exclusivamente al perfil Administrador.","Orden cronológico automático y vista tipo línea de tiempo."],
+    dependencias:"Definir si la persistencia definitiva queda en Supabase para que todos vean la misma versión.", notas:"Primera versión editable dentro de NIKI OS."
+  },
+  {
+    id:"comunicaciones", fase:"Fase 1", fechaOrden:"2026-09", nombre:"Comunicaciones internas", modulo:"Cultura y operación", estado:"Planificado", avance:0, prioridad:"Alta", impacto:"Alto", monetizacion:"Plan Pro", valor:"Reduce dependencia de WhatsApp y mejora trazabilidad.",
+    detalle:"Crear un canal oficial de comunicación dentro de NIKI OS para centralizar avisos, capacitaciones, reconocimientos y mensajes urgentes. La prioridad es que la información importante no quede perdida en grupos de WhatsApp y que cada usuario vea lo que corresponde a su rol o local.",
+    alcance:["Feed con categorías, comentarios y reacciones.","Publicaciones fijadas y segmentadas por local o perfil.","Notificaciones push para comunicados relevantes."],
+    dependencias:"Base de usuarios, roles, locales y notificaciones push.", notas:"Casa Matriz publica; el equipo lee y participa según permisos."
+  },
+  {
+    id:"asistencia-qr-gps", fase:"Fase 1", fechaOrden:"2026-09", nombre:"Asistencia con QR + GPS", modulo:"RRHH", estado:"Planificado", avance:0, prioridad:"Alta", impacto:"Alto", monetizacion:"Plan Pro", valor:"Presentismo confiable para operación, comisiones y premios.",
+    detalle:"Automatizar el fichaje de entrada y salida desde cada local. La colaboradora escanea un QR fijo en recepción y el sistema valida que esté físicamente dentro del radio permitido de la sucursal.",
+    alcance:["QR fijo por local.","Validación GPS con radio configurable.","Reporte de presentismo conectado con comisiones y futuros premios."],
+    dependencias:"Coordenadas por local, permisos de ubicación del dispositivo y reglas de tolerancia.", notas:"Debe contemplar casos sin señal, permisos denegados y celulares con GPS impreciso."
+  },
+  {
+    id:"rrhh-turnos", fase:"Fase 1", fechaOrden:"2026-10", nombre:"RRHH & turnos del equipo", modulo:"RRHH", estado:"Planificado", avance:0, prioridad:"Alta", impacto:"Alto", monetizacion:"Plan Pro", valor:"Aumenta autogestión y reduce coordinación manual.",
+    detalle:"Incorporar una experiencia de autogestión para que las colaboradoras carguen disponibilidad, soliciten francos, propongan cambios de turno y consulten vacantes internas. La encargada mantiene control sobre excepciones y aprobaciones.",
+    alcance:["Grilla semanal con turnos Mañana y Tarde.","Carga mensual abierta del 1 al 5.","Validación de mínimo de 36 horas semanales.","Solicitudes de francos, cambios y avisos de ausencia."],
+    dependencias:"Horarios, asistencia, perfiles por local y reglas de aprobación.", notas:"Debe ser extremadamente simple en celular."
+  },
+  {
+    id:"auditorias", fase:"Fase 1", fechaOrden:"2026-10", nombre:"Auditorías y calidad", modulo:"Calidad", estado:"Planificado", avance:0, prioridad:"Alta", impacto:"Alto", monetizacion:"Plan Pro", valor:"Estandariza operación y mejora control de la red.",
+    detalle:"Digitalizar visitas de control, auditorías de Casa Matriz y Misterioso Shopper. Cada visita genera puntaje, detalle por rubro, observaciones y acciones de mejora para el local.",
+    alcance:["Puntaje sobre 100 por visita.","Rubros: atención, limpieza, protocolo, tiempos y venta complementaria.","Ranking de locales y dashboard de red."],
+    dependencias:"Locales, usuarios evaluadores y definición de formularios de auditoría.", notas:"Los puntajes pueden alimentar Destellos y planes de mejora."
+  },
+  {
+    id:"alertas-demanda", fase:"Fase 2", fechaOrden:"2026-11", nombre:"Alertas de demanda", modulo:"Planificación", estado:"En análisis", avance:10, prioridad:"Media", impacto:"Alto", monetizacion:"Plan Pro", valor:"Mejor cobertura en días pico y mayor facturación potencial.",
+    detalle:"Anticipar días de demanda alta para incentivar que más manicuras se anoten en los turnos con mayor oportunidad comercial. El sistema cruza patrones de facturación, quincenas, feriados y estacionalidad.",
+    alcance:["Clasificación de demanda Alta o Muy Alta.","Notificaciones anticipadas.","Estimación de comisión potencial por día o turno."],
+    dependencias:"Historial de ventas/facturación, calendario de feriados y turnos cargados.", notas:"La predicción debe ser explicable para generar confianza."
+  },
+  {
+    id:"niki-lab", fase:"Fase 2", fechaOrden:"2026-12", nombre:"Niki Lab", modulo:"Innovación", estado:"Planificado", avance:0, prioridad:"Media", impacto:"Medio", monetizacion:"Plan Pro", valor:"Convierte ideas del equipo en mejora continua.",
+    detalle:"Crear un buzón de innovación donde cualquier persona del equipo pueda proponer mejoras. La red vota las ideas y Casa Matriz administra su evaluación hasta aprobarlas o descartarlas.",
+    alcance:["Estados de gestión: Nueva, En análisis, Aprobada y Descartada.","Votación interna y comentarios.","Ideas aprobadas pueden otorgar Destellos."],
+    dependencias:"Usuarios, roles, notificaciones y futuro módulo de Destellos.", notas:"Buen módulo cultural para adopción de la app."
+  },
+  {
+    id:"destellos", fase:"Fase 2", fechaOrden:"2027-01", nombre:"Niki Rewards / Destellos", modulo:"Reconocimiento", estado:"Planificado", avance:0, prioridad:"Alta", impacto:"Alto", monetizacion:"Plan Premium", valor:"Motivación, retención y cultura de desempeño.",
+    detalle:"Implementar un programa de reconocimiento interno con moneda propia. Los Destellos premian conductas alineadas a la marca y se canjean a través de Loyalz por beneficios, productos o experiencias.",
+    alcance:["Saldo personal e historial de movimientos.","Ranking mensual por local y de toda la red.","Catálogo de premios canjeables.","Asignación por reseñas, auditorías, antigüedad y capacitaciones."],
+    dependencias:"Integración Loyalz, auditorías, capacitaciones y reglas de asignación.", notas:"1 Destello equivale a $1.000 ARS según definición inicial."
+  },
+  {
+    id:"obras", fase:"Fase 2", fechaOrden:"2027-02", nombre:"Obras y aperturas", modulo:"Expansión", estado:"Planificado", avance:0, prioridad:"Media", impacto:"Medio", monetizacion:"Plan Pro", valor:"Transparencia sobre aperturas y remodelaciones.",
+    detalle:"Seguimiento visual de obras para aperturas y remodelaciones. Permite consultar avance, presupuesto, responsables, fechas clave y novedades con fotos desde una única pantalla.",
+    alcance:["Línea de tiempo de etapas desde búsqueda de local hasta inauguración.","Presupuesto total y ejecutado con barra de avance.","Feed de actualizaciones con fotos."],
+    dependencias:"Definir perfiles externos, permisos de inversores y almacenamiento de imágenes.", notas:"Útil para franquiciadas e inversores sin abrir información sensible de otros módulos."
+  },
+  {
+    id:"bot-niki", fase:"Fase 2", fechaOrden:"2027-03", nombre:"Bot Niki", modulo:"Soporte interno", estado:"En análisis", avance:5, prioridad:"Media", impacto:"Medio", monetizacion:"Plan Pro", valor:"Reduce consultas repetidas y acelera respuestas operativas.",
+    detalle:"Asistente conversacional entrenado con manuales operativos, reglas internas y contenido del Centro de Ayuda. Debe responder dudas frecuentes y escalar cuando no pueda resolver.",
+    alcance:["Respuestas sobre horarios, comisiones, asistencia, turnos y reglas.","Entrenamiento con manuales internos.","Escalamiento a encargada o Casa Matriz."],
+    dependencias:"Centro de ayuda consolidado, política de respuestas y API de IA.", notas:"Evitar que invente reglas; debe responder con base en contenido aprobado."
+  },
+  {
+    id:"insumos-stock", fase:"Fase 3", fechaOrden:"2027-04", nombre:"Insumos & Stock", modulo:"Compras", estado:"Planificado", avance:0, prioridad:"Media", impacto:"Alto", monetizacion:"Plan Pro", valor:"Ordena compras y refuerza el circuito autorizado.",
+    detalle:"Calcular pedidos mensuales sugeridos a partir del volumen estimado de servicios y coeficientes de consumo. El objetivo es reducir faltantes, compras no autorizadas y pedidos armados manualmente.",
+    alcance:["Coeficientes por insumo y servicio.","Pedido sugerido por local.","Envío del pedido a Niki Store.","Control de stock de depósito para Casa Matriz."],
+    dependencias:"Catálogo de insumos, servicios, Niki Store y datos históricos de consumo.", notas:"Clave para franquicias: comprar insumos autorizados."
+  },
+  {
+    id:"cotizador-ia", fase:"Fase 3", fechaOrden:"2027-05", nombre:"Cotizador IA de nail art", modulo:"IA comercial", estado:"En análisis", avance:10, prioridad:"Media", impacto:"Alto", monetizacion:"Plan Premium", valor:"Estandariza precios y reduce discusiones de cobro.",
+    detalle:"Permitir que la manicurista suba una foto del diseño solicitado y reciba una clasificación objetiva del nail art con precio sugerido según la tabla vigente. Busca eliminar discrecionalidad y mejorar consistencia comercial.",
+    alcance:["Carga desde cámara o galería.","Clasificación Incluido, Simple o Complejo.","Precio Standard y Premium.","Tabla de precios administrable sin tocar código."],
+    dependencias:"Modelo de visión, tabla de precios administrable y validación de tiempos/respuestas.", notas:"Debe responder rápido y mostrar confianza/criterio para que el equipo lo adopte."
+  },
+  {
+    id:"tableros-kpi", fase:"Fase 3", fechaOrden:"2027-06", nombre:"Tableros de control y KPI", modulo:"Gerencia", estado:"Planificado", avance:0, prioridad:"Alta", impacto:"Alto", monetizacion:"Plan Pro", valor:"Mejora decisiones de gerencia y seguimiento de locales.",
+    detalle:"Concentrar indicadores clave para analizar ventas, visitas, productividad, cobertura, comisiones, garantías, auditorías y evolución por local o red.",
+    alcance:["KPI por local, zona y red.","Comparaciones contra meses cercanos para evitar distorsiones por inflación.","Vistas ejecutivas para gerencias."],
+    dependencias:"Calidad de datos de ventas, asistencia, comisiones y auditorías.", notas:"Puede convivir con Qlik o reemplazar reportes internos gradualmente."
+  },
+  {
+    id:"organigrama-proyectos", fase:"Fase 3", fechaOrden:"2027-07", nombre:"Organigrama y proyectos Casa Matriz", modulo:"Casa Matriz", estado:"Planificado", avance:0, prioridad:"Baja", impacto:"Medio", monetizacion:"Plan Base", valor:"Ordena responsabilidades del equipo central.",
+    detalle:"Crear una vista clara de roles, contactos y responsabilidades de Casa Matriz, junto con seguimiento simple de tareas y proyectos internos.",
+    alcance:["Organigrama con áreas y contactos.","Proyectos con responsables, fechas y estado.","Línea de tiempo básica de iniciativas internas."],
+    dependencias:"Definición de estructura interna y permisos.", notas:"No debería competir con herramientas complejas; foco en visibilidad."
+  },
+  {
+    id:"portal-clientas", fase:"Fase 4", fechaOrden:"2027-08", nombre:"Portal de turnos para clientas", modulo:"Reservas", estado:"Estratégico", avance:0, prioridad:"Alta", impacto:"Muy alto", monetizacion:"Plan Premium", valor:"Permite reemplazar AgendaPro como gestor de citas.",
+    detalle:"Evolucionar NIKI OS hacia un gestor completo de reservas para clientas, usando disponibilidad real de manicuras, servicios, precios y reglas comerciales propias de la marca.",
+    alcance:["Reserva online por local, servicio y disponibilidad.","Sugerencias de horarios y servicios relacionados.","Recordatorios de próximo servicio.","Base para bot de reservas con IA."],
+    dependencias:"Agenda interna, servicios, precios, horarios, clientes, notificaciones y pagos.", notas:"Es uno de los módulos más estratégicos del producto."
+  },
+  {
+    id:"pos-cobranza", fase:"Fase 4", fechaOrden:"2027-09", nombre:"Integración con terminales POS", modulo:"Cobranza", estado:"Planificado", avance:0, prioridad:"Alta", impacto:"Alto", monetizacion:"Plan Pro", valor:"Cierra el circuito turno, cobro y comprobante.",
+    detalle:"Integrar NIKI OS con terminales o proveedores de cobranza para iniciar cobros desde el sistema, recibir confirmación y reducir carga manual en caja.",
+    alcance:["Envío de importe a terminal o proveedor.","Confirmación automática del pago.","Registro del medio de pago en el turno o caja."],
+    dependencias:"Proveedor de terminales, caja, portal de turnos y definición de flujo de cobro.", notas:"Evaluar Mercado Pago, Payway, Nave u otros."
+  },
+  {
+    id:"arca-afip", fase:"Fase 4", fechaOrden:"2027-10", nombre:"Facturación ARCA / AFIP", modulo:"Fiscal", estado:"Planificado", avance:0, prioridad:"Alta", impacto:"Alto", monetizacion:"Plan Pro", valor:"Automatiza comprobantes y reduce doble carga.",
+    detalle:"Emitir comprobantes fiscales desde el sistema cuando corresponda, integrando el flujo de cobro, caja y datos de la clienta o consumidor final.",
+    alcance:["Solicitud de CAE.","Emisión de comprobante.","Registro asociado a venta, caja o turno.","Preparación para escenarios multi-CUIT."],
+    dependencias:"Definición fiscal, certificados, puntos de venta, caja y cobros.", notas:"Debe diseñarse con mucho cuidado por impacto fiscal."
+  },
+  {
+    id:"cajas-gastos", fase:"Fase 4", fechaOrden:"2027-11", nombre:"Cajas, gastos y facturas de compra", modulo:"Administración", estado:"Planificado", avance:0, prioridad:"Media", impacto:"Alto", monetizacion:"Plan Pro", valor:"Ordena dinero diario, gastos y documentación.",
+    detalle:"Incorporar gestión de caja diaria, carga de gastos, facturas de compra y conciliación básica para que el local y Casa Matriz compartan una misma visión administrativa.",
+    alcance:["Apertura y cierre de caja.","Carga de gastos y comprobantes.","Control de diferencias y observaciones.","Reportes por local y período."],
+    dependencias:"Informe diario, medios de pago, roles y almacenamiento de archivos.", notas:"Puede reemplazar partes del informe diario cuando madure."
+  },
+  {
+    id:"fidelidad-clientes", fase:"Fase 5", fechaOrden:"2028-01", nombre:"Programa de fidelidad de clientas", modulo:"Marketing", estado:"Idea", avance:0, prioridad:"Media", impacto:"Alto", monetizacion:"Plan Premium", valor:"Aumenta recurrencia y vínculo con clientas.",
+    detalle:"Crear beneficios, puntos o campañas para clientas frecuentes, conectando historial de turnos, consumos y preferencias para incentivar recompra y recomendación.",
+    alcance:["Perfil de clienta y historial.","Beneficios por frecuencia o consumo.","Campañas segmentadas.","Recordatorios y sugerencias de próximo servicio."],
+    dependencias:"Portal de clientas, pagos, historial de servicios y comunicación externa.", notas:"Debe alinearse con la marca y no competir con Destellos internos."
+  },
+  {
+    id:"bot-reservas-ia", fase:"Fase 5", fechaOrden:"2028-02", nombre:"Bot de reservas con IA", modulo:"IA clientas", estado:"Idea", avance:0, prioridad:"Media", impacto:"Alto", monetizacion:"Plan Premium", valor:"Mejora conversión y atención fuera de horario.",
+    detalle:"Asistente para que clientas consulten disponibilidad, pidan recomendaciones y reserven turnos mediante conversación guiada, conectado al portal y a la agenda real.",
+    alcance:["Consulta de disponibilidad.","Sugerencia de servicios relacionados.","Reserva asistida.","Recordatorios y reprogramaciones."],
+    dependencias:"Portal de turnos, agenda estable, reglas comerciales y canal de comunicación definido.", notas:"No hacerlo antes de tener agenda y portal sólidos."
+  },
+  {
+    id:"frases-cafe", fase:"Contenido", fechaOrden:"2028-03", nombre:"Frases del Café", modulo:"Contenido", estado:"Idea", avance:0, prioridad:"Baja", impacto:"Bajo", monetizacion:"Plan Base", valor:"Suma identidad y experiencia en locales con cafetería.",
+    detalle:"Administrar frases diarias o semanales para pizarras de cafeterías Amélie, manteniendo tono de marca y evitando que cada local tenga que inventar contenido.",
+    alcance:["Calendario de frases.","Categorías por temporada o campaña.","Vista simple para encargadas."],
+    dependencias:"Definir responsable editorial y locales alcanzados.", notas:"Módulo chico, útil como contenido de marca."
+  },
+];
+
+function roadmapMonthLabel(value) {
+  if (!value) return "Sin fecha";
+  const [y, m] = String(value).split("-").map(Number);
+  if (!y || !m) return value;
+  return `${MESES[m - 1]} ${y}`;
+}
+function addRoadmapMonths(value, offset) {
+  const [y, m] = String(value || "").split("-").map(Number);
+  if (!y || !m) return "";
+  const d = new Date(y, m - 1 + offset, 1);
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
+}
+function roadmapMonthSequence(items) {
+  const months = sortRoadmapItems(items).map(x => x.fechaOrden).filter(Boolean).sort();
+  if (!months.length) return ["Sin fecha"];
+  const start = addRoadmapMonths(months[0], 0);
+  const end = addRoadmapMonths(months[months.length - 1], 0);
+  const result = [];
+  let cursor = start;
+  let guard = 0;
+  while (cursor && cursor <= end && guard < 48) {
+    result.push(cursor);
+    cursor = addRoadmapMonths(cursor, 1);
+    guard += 1;
+  }
+  const hasNoDate = items.some(x => !x.fechaOrden);
+  return hasNoDate ? [...result, "Sin fecha"] : result;
+}
+function normalizeRoadmapPlan(value) {
+  const raw = String(value || "").trim();
+  if (ROADMAP_PLAN_OPTIONS.includes(raw)) return raw;
+  const v = raw.toLowerCase();
+  if (!v) return "Plan Base";
+  if (v.includes("premium") || v.includes("ia") || v.includes("addon")) return "Plan Premium";
+  if (v.includes("pro") || v.includes("franqu") || v.includes("gerencial") || v.includes("cobranza") || v.includes("fiscal")) return "Plan Pro";
+  return "Plan Base";
+}
+function roadmapPlanMeta(plan) {
+  const normalized = normalizeRoadmapPlan(plan);
+  return ROADMAP_PLAN_META[normalized] || ROADMAP_PLAN_META["Plan Base"];
+}
+function RoadmapPlanBadge({ plan, showDetail = false }) {
+  const normalized = normalizeRoadmapPlan(plan);
+  const meta = roadmapPlanMeta(normalized);
+  return <div style={{ display:"flex",flexDirection:"column",gap:6 }}>
+    <Badge color={meta.color}>{meta.icon} {meta.title}</Badge>
+    {showDetail && <p style={{ margin:0,fontSize:12,lineHeight:1.4,color:"var(--color-text-secondary)" }}>{meta.detalle}</p>}
+  </div>;
+}
+
+function roadmapStatusColor(status) {
+  if (["Implementado", "En desarrollo"].includes(status)) return "success";
+  if (["En análisis", "En diseño", "En prueba"].includes(status)) return "info";
+  if (status === "Pausado") return "amber";
+  if (status === "Idea") return "gray";
+  return "pink";
+}
+function roadmapPriorityColor(priority) {
+  if (priority === "Alta") return "danger";
+  if (priority === "Media") return "amber";
+  return "gray";
+}
+function sortRoadmapItems(items) {
+  const phaseRank = Object.fromEntries(ROADMAP_PHASE_OPTIONS.map((x, i) => [x, i]));
+  return [...items].sort((a, b) => String(a.fechaOrden || "9999-99").localeCompare(String(b.fechaOrden || "9999-99")) || (phaseRank[a.fase] ?? 99) - (phaseRank[b.fase] ?? 99) || String(a.nombre || "").localeCompare(String(b.nombre || "")));
+}
+function normalizeRoadmapDbItem(row) {
+  return {
+    id: row.id,
+    fase: row.fase || "Backlog",
+    fechaOrden: row.fecha_estimada || row.fechaOrden || "",
+    nombre: row.nombre || "",
+    modulo: row.modulo || "",
+    estado: row.estado || "Idea",
+    avance: Number(row.avance || 0),
+    prioridad: row.prioridad || "Media",
+    impacto: row.impacto || "Medio",
+    monetizacion: normalizeRoadmapPlan(row.monetizacion),
+    valor: row.valor || "",
+    detalle: row.detalle || "",
+    alcance: Array.isArray(row.alcance) ? row.alcance : [],
+    dependencias: row.dependencias || "",
+    notas: row.notas_internas || row.notas || "",
+  };
+}
+function roadmapToDbPayload(item) {
+  return {
+    id: item.id,
+    nombre: item.nombre,
+    modulo: item.modulo,
+    fase: item.fase,
+    fecha_estimada: item.fechaOrden || null,
+    estado: item.estado,
+    avance: Number(item.avance || 0),
+    prioridad: item.prioridad,
+    impacto: item.impacto,
+    monetizacion: normalizeRoadmapPlan(item.monetizacion),
+    valor: item.valor || "",
+    detalle: item.detalle || "",
+    alcance: Array.isArray(item.alcance) ? item.alcance : [],
+    dependencias: item.dependencias || "",
+    notas_internas: item.notas || "",
+    visible: true,
+  };
+}
+async function getRoadmapItemsFromDb() {
+  const rows = await sb("roadmap_items?select=*&visible=eq.true&order=fecha_estimada.asc,fase.asc,nombre.asc");
+  return (rows || []).map(normalizeRoadmapDbItem);
+}
+async function updateRoadmapItemInDb(item) {
+  const payload = roadmapToDbPayload(item);
+  return sb(`roadmap_items?id=eq.${encodeURIComponent(item.id)}`, { method:"PATCH", body:JSON.stringify(payload) });
+}
+
+function RoadmapStatusBadge({ children, color = "gray" }) {
+  return <Badge color={color}>{children}</Badge>;
+}
+
+function RoadmapEditModal({ item, onClose, onSave }) {
+  const [draft, setDraft] = useState(item);
+  const update = (field, value) => setDraft(d => ({ ...d, [field]: value }));
+  return <Modal title={`Editar roadmap · ${item.nombre}`} onClose={onClose} width={620}>
+    <div style={{ display:"grid",gridTemplateColumns:"repeat(auto-fit, minmax(180px, 1fr))",gap:12 }}>
+      <div><label style={{ fontSize:12,fontWeight:700,color:"#555",display:"block",marginBottom:5 }}>Fase</label><Select value={draft.fase} onChange={v=>update("fase", v)}>{ROADMAP_PHASE_OPTIONS.map(x=><option key={x} value={x}>{x}</option>)}</Select></div>
+      <div><label style={{ fontSize:12,fontWeight:700,color:"#555",display:"block",marginBottom:5 }}>Fecha estimada</label><Input type="month" value={draft.fechaOrden || ""} onChange={v=>update("fechaOrden", v)}/></div>
+      <div><label style={{ fontSize:12,fontWeight:700,color:"#555",display:"block",marginBottom:5 }}>Estado</label><Select value={draft.estado} onChange={v=>update("estado", v)}>{ROADMAP_STATUS_OPTIONS.map(x=><option key={x} value={x}>{x}</option>)}</Select></div>
+      <div><label style={{ fontSize:12,fontWeight:700,color:"#555",display:"block",marginBottom:5 }}>Prioridad</label><Select value={draft.prioridad} onChange={v=>update("prioridad", v)}>{ROADMAP_PRIORITY_OPTIONS.map(x=><option key={x} value={x}>{x}</option>)}</Select></div>
+    </div>
+    <div style={{ marginTop:14 }}>
+      <label style={{ fontSize:12,fontWeight:700,color:"#555",display:"block",marginBottom:5 }}>Avance: {Number(draft.avance || 0)}%</label>
+      <input type="range" min="0" max="100" step="5" value={Number(draft.avance || 0)} onChange={e=>update("avance", Number(e.target.value))} style={{ width:"100%" }}/>
+      <p style={{ margin:"6px 0 0",fontSize:11,lineHeight:1.35,color:"var(--color-text-secondary)" }}>Por ahora el avance se actualiza manualmente desde Admin. Más adelante se puede automatizar conectándolo con hitos, tareas o releases.</p>
+    </div>
+    <div style={{ marginTop:14 }}>
+      <label style={{ fontSize:12,fontWeight:700,color:"#555",display:"block",marginBottom:5 }}>Plan</label>
+      <Select value={normalizeRoadmapPlan(draft.monetizacion)} onChange={v=>update("monetizacion", v)}>
+        {ROADMAP_PLAN_OPTIONS.map(x=><option key={x} value={x}>{x}</option>)}
+      </Select>
+      <div style={{ marginTop:8,background:"var(--color-background-secondary)",borderRadius:10,padding:10 }}>
+        <RoadmapPlanBadge plan={draft.monetizacion} showDetail />
+      </div>
+    </div>
+    <div style={{ marginTop:14 }}>
+      <label style={{ fontSize:12,fontWeight:700,color:"#555",display:"block",marginBottom:5 }}>Notas internas</label>
+      <textarea value={draft.notas || ""} onChange={e=>update("notas", e.target.value)} rows={4} style={{ width:"100%",border:"1px solid rgba(120,120,120,0.24)",borderRadius:10,padding:10,fontSize:13,resize:"vertical",boxSizing:"border-box" }}/>
+    </div>
+    <div style={{ display:"flex",justifyContent:"flex-end",gap:8,marginTop:16 }}>
+      <Btn variant="secondary" onClick={onClose}>Cancelar</Btn>
+      <Btn variant="primary" onClick={() => onSave(draft)}>Guardar cambios</Btn>
+    </div>
+  </Modal>;
+}
+
+function RoadmapTimeline({ items, canEdit = false, onMoveItem = null }) {
+  const ordered = sortRoadmapItems(items);
+  const months = roadmapMonthSequence(ordered).slice(0, 36);
+  const [dragOverMonth, setDragOverMonth] = useState("");
+  const handleDragStart = (ev, item) => {
+    if (!canEdit) return;
+    ev.dataTransfer.effectAllowed = "move";
+    ev.dataTransfer.setData("text/plain", item.id);
+  };
+  const handleDrop = (ev, month) => {
+    if (!canEdit || !onMoveItem) return;
+    ev.preventDefault();
+    const id = ev.dataTransfer.getData("text/plain");
+    setDragOverMonth("");
+    if (id) onMoveItem(id, month === "Sin fecha" ? "" : month);
+  };
+  return <div style={{ overflowX:"auto",paddingBottom:4 }}>
+    {canEdit && <p style={{ margin:"0 0 10px",fontSize:12,lineHeight:1.4,color:"var(--color-text-secondary)" }}>Tip: arrastrá una tarjeta a otro mes para cambiar su fecha estimada sin abrir el editor.</p>}
+    <div style={{ minWidth:Math.max(760, months.length * 150),display:"grid",gridTemplateColumns:`repeat(${Math.max(months.length,1)}, minmax(140px, 1fr))`,gap:8 }}>
+      {months.map(month => {
+        const isDropTarget = canEdit && dragOverMonth === month;
+        const monthItems = ordered.filter(x => (x.fechaOrden || "Sin fecha") === month);
+        return <div key={month} onDragOver={ev=>{ if(canEdit){ ev.preventDefault(); ev.dataTransfer.dropEffect="move"; setDragOverMonth(month); } }} onDragLeave={()=>setDragOverMonth(m=>m===month?"":m)} onDrop={ev=>handleDrop(ev, month)} style={{ border:`1px solid ${isDropTarget ? COLORS.pink : "rgba(120,120,120,0.14)"}`,borderRadius:14,background:isDropTarget?COLORS.pinkLight:"#fff",padding:10,minHeight:150,transition:"background 0.15s ease, border 0.15s ease" }}>
+          <p style={{ margin:"0 0 8px",fontSize:12,fontWeight:800,color:COLORS.pinkDark,textTransform:"uppercase" }}>{month === "Sin fecha" ? month : roadmapMonthLabel(month)}</p>
+          <div style={{ display:"flex",flexDirection:"column",gap:7 }}>
+            {monthItems.length === 0 && canEdit && <div style={{ border:"1px dashed rgba(114,36,62,0.22)",borderRadius:10,padding:"12px 8px",fontSize:11,color:"var(--color-text-secondary)",textAlign:"center" }}>Soltar acá</div>}
+            {monthItems.map(item => <div key={item.id} draggable={canEdit} onDragStart={ev=>handleDragStart(ev,item)} title={`${item.nombre} · ${item.estado} · ${item.avance}%${canEdit ? " · Arrastrar para cambiar mes" : ""}`} style={{ border:`1px solid ${item.estado === "Implementado" ? COLORS.success : COLORS.pink}33`,background:item.estado === "Implementado" ? COLORS.successLight : COLORS.pinkLight,borderRadius:10,padding:"7px 8px",cursor:canEdit?"grab":"default",boxShadow:canEdit?"0 3px 10px rgba(0,0,0,0.04)":"none" }}>
+              <p style={{ margin:"0 0 4px",fontSize:11,fontWeight:800,color:item.estado === "Implementado" ? COLORS.success : COLORS.pinkDark,lineHeight:1.25 }}>{item.nombre}</p>
+              <div style={{ height:5,background:"rgba(255,255,255,0.75)",borderRadius:999,overflow:"hidden" }}><div style={{ width:`${Math.max(0, Math.min(100, Number(item.avance || 0)))}%`,height:"100%",background:item.estado === "Implementado" ? COLORS.success : COLORS.pink,borderRadius:999 }}/></div>
+            </div>)}
+          </div>
+        </div>;
+      })}
+    </div>
+  </div>;
+}
+
+function RoadmapPage({ user = null, onBack = null }) {
+  const canSee = ["admin", "casa_matriz"].includes(user?.rol);
+  const canEdit = user?.rol === "admin";
+  const [fase, setFase] = useState("todas");
+  const [estadoFiltro, setEstadoFiltro] = useState("todos");
+  const [items, setItems] = useState(() => sortRoadmapItems(ROADMAP_FEATURES_SEED));
+  const [source, setSource] = useState("seed");
+  const [msg, setMsg] = useState("");
+  const [editing, setEditing] = useState(null);
+
+  useEffect(() => {
+    if (!canSee) return;
+    let cancelled = false;
+    getRoadmapItemsFromDb()
+      .then(rows => {
+        if (cancelled) return;
+        if (rows.length) {
+          setItems(sortRoadmapItems(rows));
+          setSource("db");
+        }
+      })
+      .catch(err => {
+        console.warn("Roadmap DB no disponible, usando definición local", err);
+        if (!cancelled) {
+          setSource("seed");
+          setMsg("Vista cargada desde la definición local. Para guardar cambios compartidos, primero hay que crear la tabla roadmap_items.");
+        }
+      });
+    return () => { cancelled = true; };
+  }, [canSee]);
+
+  const fases = ["todas", ...Array.from(new Set(items.map(f => f.fase)))];
+  const estados = ["todos", ...Array.from(new Set(items.map(f => f.estado)))];
+  const features = sortRoadmapItems(items).filter(item => (fase === "todas" || item.fase === fase) && (estadoFiltro === "todos" || item.estado === estadoFiltro));
+  const implemented = items.filter(x => x.estado === "Implementado").length;
+  const avgProgress = items.length ? Math.round(items.reduce((a,x)=>a+Number(x.avance||0),0)/items.length) : 0;
+  const backButton = onBack ? <Btn onClick={onBack} variant="secondary" size="sm">← Volver</Btn> : null;
+
+  const saveItem = async (draft) => {
+    const normalized = { ...draft, avance:Math.max(0, Math.min(100, Number(draft.avance || 0))) };
+    setItems(prev => sortRoadmapItems(prev.map(x => x.id === normalized.id ? normalized : x)));
+    setEditing(null);
+    if (source !== "db") {
+      setMsg("Cambio aplicado en esta vista. Para que quede compartido y permanente, hay que crear la tabla roadmap_items y cargar el seed inicial.");
+      return;
+    }
+    try {
+      await updateRoadmapItemInDb(normalized);
+      setMsg("Roadmap actualizado.");
+    } catch (err) {
+      console.error(err);
+      setMsg("No se pudo guardar en Supabase. El cambio quedó aplicado solo en esta vista hasta recargar.");
+    }
+  };
+
+  const moveItemToMonth = async (id, fechaOrden) => {
+    if (!canEdit) return;
+    const current = items.find(x => x.id === id);
+    if (!current || current.fechaOrden === fechaOrden) return;
+    const updated = { ...current, fechaOrden };
+    setItems(prev => sortRoadmapItems(prev.map(x => x.id === id ? updated : x)));
+    const destino = fechaOrden ? roadmapMonthLabel(fechaOrden) : "Sin fecha";
+    if (source !== "db") {
+      setMsg(`Cambio aplicado en esta vista: ${updated.nombre} movido a ${destino}. Para que quede permanente, hay que guardar el roadmap en Supabase.`);
+      return;
+    }
+    try {
+      await updateRoadmapItemInDb(updated);
+      setMsg(`${updated.nombre} movido a ${destino}.`);
+    } catch (err) {
+      console.error(err);
+      setMsg("No se pudo guardar el cambio de mes en Supabase. El cambio quedó aplicado solo en esta vista hasta recargar.");
+    }
+  };
+
+  if (!canSee) {
+    return <div style={{ minHeight:"100vh",background:"var(--color-background-tertiary)",padding:16 }}>
+      <div style={{ maxWidth:820,margin:"0 auto" }}>
+        <Card>
+          <h1 style={{ margin:"0 0 8px",fontSize:24,color:COLORS.pinkDark }}>Roadmap no disponible</h1>
+          <p style={{ margin:0,fontSize:14,lineHeight:1.55,color:"var(--color-text-secondary)" }}>Esta página es visible solo para Administrador y Casa matriz.</p>
+        </Card>
+      </div>
+    </div>;
+  }
+
+  return <div style={{ minHeight:"100vh",background:"var(--color-background-tertiary)",padding:16 }}>
+    <div style={{ maxWidth:1220,margin:"0 auto",display:"flex",flexDirection:"column",gap:16 }}>
+      <Card style={{ background:"linear-gradient(135deg, #fff 0%, #f7edf0 100%)",padding:"24px 22px" }}>
+        <div style={{ display:"flex",alignItems:"flex-start",justifyContent:"space-between",gap:16,flexWrap:"wrap" }}>
+          <div style={{ display:"flex",alignItems:"center",gap:14,minWidth:0 }}>
+            <LogoMark size={58} variant="light"/>
+            <div>
+              <p style={{ margin:"0 0 5px",fontSize:12,color:COLORS.pinkDark,fontWeight:800,textTransform:"uppercase",letterSpacing:"0.06em" }}>NIKI OS</p>
+              <h1 style={{ margin:0,fontSize:30,lineHeight:1.1,color:"var(--color-text-primary)" }}>Roadmap de funcionalidades</h1>
+              <p style={{ margin:"8px 0 0",fontSize:14,lineHeight:1.5,color:"var(--color-text-secondary)",maxWidth:800 }}>Línea base productiva, próximos módulos, estado de avance y visión comercial del producto. Casa Matriz puede consultar. La edición queda reservada al perfil Administrador.</p>
+            </div>
+          </div>
+          <div style={{ display:"flex",gap:8,flexWrap:"wrap",alignItems:"center" }}>
+            <RoadmapStatusBadge color={canEdit ? "danger" : "gray"}>{canEdit ? "Modo edición Admin" : "Modo lectura"}</RoadmapStatusBadge>
+            {backButton}
+          </div>
+        </div>
+      </Card>
+
+      {msg && <Card style={{ background:source === "db" ? COLORS.successLight : COLORS.amberLight,border:`1px solid ${source === "db" ? COLORS.success : COLORS.amber}44` }}><p style={{ margin:0,fontSize:13,lineHeight:1.45,color:source === "db" ? COLORS.success : COLORS.amber }}>{msg}</p></Card>}
+
+      <div style={{ display:"grid",gridTemplateColumns:"repeat(auto-fit, minmax(210px, 1fr))",gap:12 }}>
+        <Card><p style={{ margin:"0 0 5px",fontSize:12,color:"var(--color-text-secondary)",fontWeight:700,textTransform:"uppercase" }}>Línea base</p><p style={{ margin:0,fontSize:28,fontWeight:800,color:COLORS.pinkDark }}>{ROADMAP_BASELINE.length}</p><p style={{ margin:"4px 0 0",fontSize:13,color:"var(--color-text-secondary)" }}>capacidades ya implementadas o en uso</p></Card>
+        <Card><p style={{ margin:"0 0 5px",fontSize:12,color:"var(--color-text-secondary)",fontWeight:700,textTransform:"uppercase" }}>Nuevos módulos</p><p style={{ margin:0,fontSize:28,fontWeight:800,color:COLORS.pinkDark }}>{items.length}</p><p style={{ margin:"4px 0 0",fontSize:13,color:"var(--color-text-secondary)" }}>funcionalidades planificadas</p></Card>
+        <Card><p style={{ margin:"0 0 5px",fontSize:12,color:"var(--color-text-secondary)",fontWeight:700,textTransform:"uppercase" }}>Implementados</p><p style={{ margin:0,fontSize:28,fontWeight:800,color:COLORS.success }}>{implemented}</p><p style={{ margin:"4px 0 0",fontSize:13,color:"var(--color-text-secondary)" }}>módulos finalizados del roadmap</p></Card>
+        <Card><p style={{ margin:"0 0 5px",fontSize:12,color:"var(--color-text-secondary)",fontWeight:700,textTransform:"uppercase" }}>Avance promedio</p><p style={{ margin:0,fontSize:28,fontWeight:800,color:COLORS.pinkDark }}>{avgProgress}%</p><p style={{ margin:"4px 0 0",fontSize:13,color:"var(--color-text-secondary)" }}>sobre próximas funcionalidades</p></Card>
+      </div>
+
+      <Card>
+        <div style={{ display:"flex",alignItems:"center",justifyContent:"space-between",gap:12,flexWrap:"wrap",marginBottom:14 }}>
+          <div>
+            <h2 style={{ margin:"0 0 4px",fontSize:20,color:COLORS.pinkDark }}>Línea base actual</h2>
+            <p style={{ margin:0,fontSize:13,color:"var(--color-text-secondary)",lineHeight:1.45 }}>Esto es lo que ya forma parte del producto y sirve como punto de partida comercial.</p>
+          </div>
+          <RoadmapStatusBadge color="success">Base productiva</RoadmapStatusBadge>
+        </div>
+        <div style={{ display:"grid",gridTemplateColumns:"repeat(auto-fit, minmax(270px, 1fr))",gap:12 }}>
+          {ROADMAP_BASELINE.map((item, idx) => <div key={idx} style={{ border:"1px solid rgba(120,120,120,0.14)",borderRadius:14,padding:14,background:"#fff" }}>
+            <div style={{ display:"flex",justifyContent:"space-between",gap:8,alignItems:"flex-start",marginBottom:8 }}>
+              <h3 style={{ margin:0,fontSize:15,color:"var(--color-text-primary)" }}>{item.area}</h3>
+              <RoadmapStatusBadge color={item.estadoColor}>{item.status}</RoadmapStatusBadge>
+            </div>
+            <p style={{ margin:"0 0 9px",fontSize:13,lineHeight:1.5,color:"var(--color-text-secondary)" }}>{item.detalle}</p>
+            <div style={{ height:6,background:"rgba(120,120,120,0.12)",borderRadius:999,overflow:"hidden",marginBottom:8 }}><div style={{ width:`${item.avance || 100}%`,height:"100%",background:item.estadoColor === "success" ? COLORS.success : COLORS.info,borderRadius:999 }}/></div>
+            <p style={{ margin:0,fontSize:12,color:COLORS.pinkDark,fontWeight:700 }}>Visible para: {item.perfiles}</p>
+          </div>)}
+        </div>
+      </Card>
+
+      <Card>
+        <div style={{ display:"flex",alignItems:"center",justifyContent:"space-between",gap:12,flexWrap:"wrap",marginBottom:14 }}>
+          <div>
+            <h2 style={{ margin:"0 0 4px",fontSize:20,color:COLORS.pinkDark }}>Línea de tiempo</h2>
+            <p style={{ margin:0,fontSize:13,color:"var(--color-text-secondary)",lineHeight:1.45 }}>Vista rápida del roadmap ordenado por fecha estimada. Los cambios de fecha reacomodan automáticamente esta línea.</p>
+          </div>
+        </div>
+        <RoadmapTimeline items={items} canEdit={canEdit} onMoveItem={moveItemToMonth}/>
+      </Card>
+
+      <Card>
+        <div style={{ display:"flex",alignItems:"center",justifyContent:"space-between",gap:12,flexWrap:"wrap",marginBottom:14 }}>
+          <div>
+            <h2 style={{ margin:"0 0 4px",fontSize:20,color:COLORS.pinkDark }}>Próximas funcionalidades</h2>
+            <p style={{ margin:0,fontSize:13,color:"var(--color-text-secondary)",lineHeight:1.45 }}>Ordenadas cronológicamente por fecha estimada. Administración puede ajustar fase, fecha, estado y avance.</p>
+          </div>
+          <div style={{ display:"flex",gap:8,flexWrap:"wrap" }}>
+            {fases.map(f => <button key={f} type="button" onClick={() => setFase(f)} style={{ border:`1px solid ${fase===f?COLORS.pink:"rgba(120,120,120,0.22)"}`,background:fase===f?COLORS.pinkLight:"#fff",color:fase===f?COLORS.pinkDark:"var(--color-text-primary)",borderRadius:999,padding:"7px 12px",fontSize:12,fontWeight:800,cursor:"pointer" }}>{f === "todas" ? "Todas" : f}</button>)}
+            {estados.map(e => <button key={e} type="button" onClick={() => setEstadoFiltro(e)} style={{ border:`1px solid ${estadoFiltro===e?COLORS.info:"rgba(120,120,120,0.22)"}`,background:estadoFiltro===e?COLORS.infoLight:"#fff",color:estadoFiltro===e?COLORS.info:"var(--color-text-primary)",borderRadius:999,padding:"7px 12px",fontSize:12,fontWeight:800,cursor:"pointer" }}>{e === "todos" ? "Todos los estados" : e}</button>)}
+          </div>
+        </div>
+        <div style={{ display:"flex",flexDirection:"column",gap:12 }}>
+          {features.map((item) => <div key={item.id} style={{ border:"1px solid rgba(114,36,62,0.13)",borderRadius:16,padding:16,background:"#fff",boxShadow:"0 8px 22px rgba(0,0,0,0.04)" }}>
+            <div style={{ display:"flex",alignItems:"flex-start",justifyContent:"space-between",gap:12,flexWrap:"wrap" }}>
+              <div style={{ minWidth:260,flex:1 }}>
+                <div style={{ display:"flex",gap:7,flexWrap:"wrap",marginBottom:7 }}>
+                  <RoadmapStatusBadge color="pink">{item.fase}</RoadmapStatusBadge>
+                  <RoadmapStatusBadge color="info">{roadmapMonthLabel(item.fechaOrden)}</RoadmapStatusBadge>
+                  <RoadmapStatusBadge color={roadmapStatusColor(item.estado)}>{item.estado}</RoadmapStatusBadge>
+                  <RoadmapStatusBadge color={roadmapPriorityColor(item.prioridad)}>Prioridad {item.prioridad}</RoadmapStatusBadge>
+                </div>
+                <h3 style={{ margin:"0 0 4px",fontSize:18,color:"var(--color-text-primary)" }}>{item.nombre}</h3>
+                <p style={{ margin:0,fontSize:12,color:COLORS.pinkDark,fontWeight:800,textTransform:"uppercase",letterSpacing:"0.04em" }}>{item.modulo}</p>
+              </div>
+              <div style={{ display:"flex",flexDirection:"column",gap:8,alignItems:"flex-end" }}>
+                <div style={{ background:COLORS.pinkLight,color:COLORS.pinkDark,borderRadius:12,padding:"9px 11px",fontSize:12,fontWeight:800,maxWidth:300 }}>{item.valor}</div>
+                {canEdit && <Btn onClick={() => setEditing(item)} variant="secondary" size="sm">Editar</Btn>}
+              </div>
+            </div>
+            <p style={{ margin:"12px 0 8px",fontSize:14,lineHeight:1.55,color:"var(--color-text-primary)" }}>{item.detalle}</p>
+            <div style={{ display:"grid",gridTemplateColumns:"repeat(auto-fit, minmax(220px, 1fr))",gap:12,margin:"10px 0" }}>
+              <div style={{ background:"var(--color-background-secondary)",borderRadius:12,padding:10 }}><p style={{ margin:"0 0 4px",fontSize:11,fontWeight:800,color:"var(--color-text-secondary)",textTransform:"uppercase" }}>Impacto</p><p style={{ margin:0,fontSize:13,color:"var(--color-text-primary)",fontWeight:700 }}>{item.impacto}</p></div>
+              <div style={{ background:"var(--color-background-secondary)",borderRadius:12,padding:10 }}><p style={{ margin:"0 0 4px",fontSize:11,fontWeight:800,color:"var(--color-text-secondary)",textTransform:"uppercase" }}>Plan</p><RoadmapPlanBadge plan={item.monetizacion} showDetail /></div>
+              <div style={{ background:"var(--color-background-secondary)",borderRadius:12,padding:10 }}><p style={{ margin:"0 0 4px",fontSize:11,fontWeight:800,color:"var(--color-text-secondary)",textTransform:"uppercase" }}>Avance</p><div style={{ display:"flex",alignItems:"center",gap:8 }}><div style={{ flex:1,height:8,background:"rgba(120,120,120,0.14)",borderRadius:999,overflow:"hidden" }}><div style={{ width:`${Math.max(0, Math.min(100, Number(item.avance || 0)))}%`,height:"100%",background:item.estado === "Implementado" ? COLORS.success : COLORS.pink,borderRadius:999 }}/></div><strong style={{ fontSize:13 }}>{item.avance}%</strong></div></div>
+            </div>
+            <ul style={{ margin:"8px 0 0",paddingLeft:20,fontSize:13,lineHeight:1.6,color:"var(--color-text-secondary)" }}>
+              {(item.alcance || []).map((a, i) => <li key={i}>{a}</li>)}
+            </ul>
+            {item.dependencias && <p style={{ margin:"10px 0 0",fontSize:12,lineHeight:1.5,color:"var(--color-text-secondary)" }}><strong>Dependencias:</strong> {item.dependencias}</p>}
+            {item.notas && <p style={{ margin:"6px 0 0",fontSize:12,lineHeight:1.5,color:COLORS.pinkDark }}><strong>Notas internas:</strong> {item.notas}</p>}
+          </div>)}
+        </div>
+      </Card>
+
+      <Card style={{ background:COLORS.pinkLight,border:`1px solid ${COLORS.pink}55` }}>
+        <h2 style={{ margin:"0 0 8px",fontSize:18,color:COLORS.pinkDark }}>Criterio comercial sugerido</h2>
+        <p style={{ margin:0,fontSize:14,lineHeight:1.6,color:COLORS.pinkDark }}>La línea base puede sostener el plan actual. Los módulos de comunicación, asistencia avanzada, RRHH, auditorías, rewards, IA, stock, portal de clientas, cobranza y facturación pueden habilitar planes superiores o addons por local/franquicia. Las fechas deben revisarse mensualmente según adopción real, complejidad técnica y valor comercial.</p>
+      </Card>
+    </div>
+    {editing && <RoadmapEditModal item={editing} onClose={() => setEditing(null)} onSave={saveItem}/>} 
+  </div>;
+}
+
+function CentroAyuda({ user = null, onBack = null }) {
+  const [perfil, setPerfil] = useState(user?.rol === "casa_matriz" ? "casa_matriz" : user?.rol === "encargada" ? "encargada" : user?.rol === "manicura" ? "manicura" : "todos");
+  const [query, setQuery] = useState("");
+  const [selectedId, setSelectedId] = useState(null);
+  const q = query.trim().toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
+  const normalizar = (value) => String(value || "").toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
+  const topics = HELP_TOPICS.filter(topic => {
+    const byPerfil = perfil === "todos" || topic.profiles.includes(perfil);
+    const searchable = [topic.title, topic.summary, ...(topic.sections || []).flatMap(s => [s.heading, s.text, ...(s.bullets || [])])].map(normalizar).join(" ");
+    return byPerfil && (!q || searchable.includes(q));
+  });
+  const selected = HELP_TOPICS.find(t => t.id === selectedId);
+  const filtros = [
+    { id:"todos", label:"Todos" },
+    { id:"casa_matriz", label:"Casa matriz" },
+    { id:"encargada", label:"Encargadas" },
+    { id:"manicura", label:"Manicuras" },
+  ];
+
+  const backButton = onBack ? <Btn onClick={onBack} variant="secondary" size="sm">← Volver</Btn> : <a href="#inicio" style={{ textDecoration:"none" }}><Btn variant="secondary" size="sm">← Volver</Btn></a>;
+
+  if (selected) {
+    return <div style={{ minHeight:"100vh",background:"var(--color-background-tertiary)",padding:16 }}>
+      <div style={{ maxWidth:980,margin:"0 auto",display:"flex",flexDirection:"column",gap:14 }}>
+        <Card style={{ display:"flex",alignItems:"center",justifyContent:"space-between",gap:12,flexWrap:"wrap",background:"linear-gradient(135deg, #fff 0%, #f7edf0 100%)" }}>
+          <div style={{ display:"flex",alignItems:"center",gap:12,minWidth:0 }}>
+            <LogoMark size={48} variant="light"/>
+            <div>
+              <p style={{ margin:"0 0 3px",fontSize:12,color:COLORS.pinkDark,fontWeight:800,textTransform:"uppercase",letterSpacing:"0.06em" }}>Centro de ayuda</p>
+              <h1 style={{ margin:0,fontSize:24,color:"var(--color-text-primary)",lineHeight:1.15 }}>{selected.icon} {selected.title}</h1>
+            </div>
+          </div>
+          <div style={{ display:"flex",gap:8,flexWrap:"wrap" }}>
+            <Btn onClick={() => setSelectedId(null)} variant="secondary" size="sm">← Temas</Btn>
+            {backButton}
+          </div>
+        </Card>
+        <Card>
+          <div style={{ display:"flex",gap:6,flexWrap:"wrap",marginBottom:14 }}>
+            {selected.profiles.map(role => <HelpRoleBadge key={role} role={role}/>) }
+          </div>
+          <p style={{ margin:"0 0 18px",fontSize:15,lineHeight:1.55,color:"var(--color-text-secondary)" }}>{selected.summary}</p>
+          <div style={{ display:"flex",flexDirection:"column",gap:18 }}>
+            {selected.sections.map((section, idx) => <section key={idx} style={{ borderTop:idx===0?"none":"1px solid rgba(120,120,120,0.14)",paddingTop:idx===0?0:18 }}>
+              <h2 style={{ margin:"0 0 8px",fontSize:17,color:COLORS.pinkDark }}>{section.heading}</h2>
+              {section.text && <p style={{ margin:0,fontSize:14,lineHeight:1.65,color:"var(--color-text-primary)" }}>{section.text}</p>}
+              {section.bullets && <ul style={{ margin:"8px 0 0",paddingLeft:20,fontSize:14,lineHeight:1.65,color:"var(--color-text-primary)" }}>
+                {section.bullets.map((b, i) => <li key={i}>{b}</li>)}
+              </ul>}
+              {section.note && <div style={{ marginTop:10,background:COLORS.pinkLight,border:`1px solid ${COLORS.pink}55`,borderRadius:12,padding:"10px 12px",fontSize:13,lineHeight:1.5,color:COLORS.pinkDark }}><strong>Importante:</strong> {section.note}</div>}
+            </section>)}
+          </div>
+        </Card>
+      </div>
+    </div>;
+  }
+
+  return <div style={{ minHeight:"100vh",background:"var(--color-background-tertiary)",padding:16 }}>
+    <div style={{ maxWidth:1100,margin:"0 auto",display:"flex",flexDirection:"column",gap:16 }}>
+      <Card style={{ background:"linear-gradient(135deg, #fff 0%, #f7edf0 100%)",padding:"22px 22px" }}>
+        <div style={{ display:"flex",alignItems:"center",justifyContent:"space-between",gap:16,flexWrap:"wrap" }}>
+          <div style={{ display:"flex",alignItems:"center",gap:14,minWidth:0 }}>
+            <LogoMark size={58} variant="light"/>
+            <div>
+              <p style={{ margin:"0 0 5px",fontSize:12,color:COLORS.pinkDark,fontWeight:800,textTransform:"uppercase",letterSpacing:"0.06em" }}>NIKI OS</p>
+              <h1 style={{ margin:0,fontSize:28,lineHeight:1.1,color:"var(--color-text-primary)" }}>Centro de ayuda</h1>
+              <p style={{ margin:"7px 0 0",fontSize:14,color:"var(--color-text-secondary)",lineHeight:1.45 }}>Guías claras para usar el sistema según tu perfil.</p>
+            </div>
+          </div>
+          {backButton}
+        </div>
+      </Card>
+
+      <Card style={{ display:"flex",flexDirection:"column",gap:12 }}>
+        <Input value={query} onChange={setQuery} placeholder="Buscar ayuda por tema, pantalla o palabra clave"/>
+        <div style={{ display:"flex",gap:8,flexWrap:"wrap" }}>
+          {filtros.map(f => {
+            const active = perfil === f.id;
+            return <button key={f.id} type="button" onClick={() => setPerfil(f.id)} style={{ border:`1px solid ${active?COLORS.pink:"rgba(120,120,120,0.20)"}`,background:active?COLORS.pinkLight:"#fff",color:active?COLORS.pinkDark:"var(--color-text-primary)",borderRadius:999,padding:"8px 13px",fontSize:13,fontWeight:active?800:600,cursor:"pointer" }}>{f.label}</button>;
+          })}
+        </div>
+      </Card>
+
+      {["admin", "casa_matriz"].includes(user?.rol) && <Card style={{ background:"#fff",border:`1px solid ${COLORS.pink}55`,display:"flex",alignItems:"center",justifyContent:"space-between",gap:12,flexWrap:"wrap" }}>
+        <div>
+          <p style={{ margin:"0 0 4px",fontSize:12,color:COLORS.pinkDark,fontWeight:800,textTransform:"uppercase",letterSpacing:"0.06em" }}>Administrador edita · Casa matriz consulta</p>
+          <h2 style={{ margin:"0 0 4px",fontSize:19,color:"var(--color-text-primary)" }}>Roadmap de funcionalidades</h2>
+          <p style={{ margin:0,fontSize:13,lineHeight:1.45,color:"var(--color-text-secondary)" }}>Línea base actual, próximos módulos, estado, avance, fechas estimadas y línea de tiempo.</p>
+        </div>
+        <Btn onClick={() => { window.location.hash = "roadmap"; }} variant="primary" size="sm">Ver roadmap</Btn>
+      </Card>}
+
+      <div style={{ display:"grid",gridTemplateColumns:"repeat(auto-fit, minmax(250px, 1fr))",gap:14 }}>
+        {topics.map(topic => <button key={topic.id} onClick={() => setSelectedId(topic.id)} style={{ border:"1px solid rgba(114,36,62,0.12)",background:"#fff",borderRadius:18,padding:18,textAlign:"left",boxShadow:"0 10px 26px rgba(0,0,0,0.06)",cursor:"pointer",display:"flex",flexDirection:"column",gap:12,minHeight:172 }}>
+          <div style={{ display:"flex",alignItems:"center",justifyContent:"space-between",gap:10 }}>
+            <span style={{ width:42,height:42,borderRadius:15,background:COLORS.pinkLight,color:COLORS.pinkDark,display:"grid",placeItems:"center",fontSize:22,flexShrink:0 }}>{topic.icon}</span>
+            <span style={{ fontSize:12,color:COLORS.pinkDark,fontWeight:800 }}>Ver guía ›</span>
+          </div>
+          <div style={{ flex:1 }}>
+            <h2 style={{ margin:"0 0 6px",fontSize:17,color:"var(--color-text-primary)" }}>{topic.title}</h2>
+            <p style={{ margin:0,fontSize:13,lineHeight:1.45,color:"var(--color-text-secondary)" }}>{topic.summary}</p>
+          </div>
+          <div style={{ display:"flex",gap:6,flexWrap:"wrap" }}>
+            {topic.profiles.map(role => <HelpRoleBadge key={role} role={role}/>) }
+          </div>
+        </button>)}
+      </div>
+      {topics.length === 0 && <Card><p style={{ margin:0,fontSize:14,color:"var(--color-text-secondary)" }}>No encontramos temas con esos filtros.</p></Card>}
+    </div>
+  </div>;
+}
+
 // ── LOGIN ──────────────────────────────────────────────────────────
 function Login({ onLogin, reloadData }) {
   const [u, setU] = useState("");
@@ -1915,8 +3002,10 @@ function Login({ onLogin, reloadData }) {
 
   const handleLogin = async () => {
     setLoading(true); setErr("");
+    const minLoginSplash = new Promise(resolve => setTimeout(resolve, 650));
     try {
       const data = await api.login(u.trim(), p);
+      await minLoginSplash;
       const found = normalizeUser({ ...data.user, session_token: data.session_token });
       if (found?.activo) {
         const requiereEmail = !String(found.email || "").trim();
@@ -1936,7 +3025,10 @@ function Login({ onLogin, reloadData }) {
         }
       }
       else setErr("Usuario o contraseña incorrectos.");
-    } catch { setErr("Usuario o contraseña incorrectos."); }
+    } catch {
+      await minLoginSplash;
+      setErr("Usuario o contraseña incorrectos.");
+    }
     setLoading(false);
   };
 
@@ -2050,6 +3142,7 @@ function Login({ onLogin, reloadData }) {
 
   return (
     <div style={{ minHeight:"100vh",display:"flex",alignItems:"center",justifyContent:"center",padding:16,background:"var(--color-background-tertiary)" }}>
+      {loading && <NikiSplash text="" fullScreen={false} compact={false} />}
       <Card style={{ width:"100%",maxWidth:360 }}>
         <div style={{ textAlign:"center",marginBottom:24 }}>
           <div style={{ display:"flex",justifyContent:"center",marginBottom:14 }}><LogoMark size={104} variant="soft"/></div>
@@ -2062,6 +3155,7 @@ function Login({ onLogin, reloadData }) {
           {err && <p style={{ margin:0,fontSize:13,color:COLORS.danger }}>{err}</p>}
           <Btn onClick={handleLogin} disabled={loading} style={{ width:"100%",justifyContent:"center" }}>{loading?"Ingresando...":"Ingresar"}</Btn>
           <button onClick={()=>{ setVista("recuperar"); setMsg(""); setEmail(""); }} style={{ background:"none",border:"none",color:COLORS.pink,fontSize:13,cursor:"pointer",textAlign:"center",marginTop:4 }}>¿Olvidaste tu contraseña?</button>
+          <button onClick={()=>{ window.location.hash = "ayuda"; }} style={{ background:"#fff",border:`1px solid ${COLORS.pink}55`,color:COLORS.pinkDark,borderRadius:10,padding:"9px 12px",fontSize:13,cursor:"pointer",textAlign:"center",fontWeight:700 }}>¿Necesitás ayuda? Ver manual de uso</button>
         </div>}
         {vista==="seguridad" && <div style={{ display:"flex",flexDirection:"column",gap:12 }}>
           <div style={{ background:COLORS.infoLight,border:`1px solid ${COLORS.info}33`,borderRadius:12,padding:12 }}>
@@ -6514,18 +7608,18 @@ function BloqueoHorarios({ data, reloadData, user, savedState = null, onStateCha
 
 // ── APP PRINCIPAL ──────────────────────────────────────────────────
 function readSectionHash() {
-  const h = (window.location.hash || "").replace(/^#/, "").trim();
+  const h = (window.location.hash || "").replace(/^#\/?/, "").trim();
   return h || null;
 }
 function defaultSectionForRole(role) {
-  return role === "manicura" ? "horarios" : "asistencia";
+  return "inicio";
 }
 function sectionAllowedForRole(section, role) {
   const reportesOperativos = ["reportes","reportes_horas","reportes_cobertura","reportes_comisiones"];
-  const admin = ["inicio","asistencia","horarios","bloqueo_horarios",...reportesOperativos,"turnos","adelantos","garantias","informes","manicuras","encargadas","locales","cobertura_config","perfil"];
-  const casaMatriz = ["inicio","asistencia","horarios","bloqueo_horarios",...reportesOperativos,"adelantos","garantias","informes","manicuras","encargadas","locales","cobertura_config","perfil"];
-  const encargada = ["inicio","asistencia","horarios","bloqueo_horarios",...reportesOperativos,"adelantos","garantias","informes","manicuras","cobertura_config","perfil"];
-  const manicura = ["inicio","horarios","reportes","reportes_horas","reportes_comisiones","perfil"];
+  const admin = ["inicio","ayuda","roadmap","asistencia","horarios","bloqueo_horarios",...reportesOperativos,"turnos","adelantos","garantias","informes","manicuras","encargadas","locales","cobertura_config","perfil"];
+  const casaMatriz = ["inicio","ayuda","roadmap","asistencia","horarios","bloqueo_horarios",...reportesOperativos,"adelantos","garantias","informes","manicuras","encargadas","locales","cobertura_config","perfil"];
+  const encargada = ["inicio","ayuda","asistencia","horarios","bloqueo_horarios",...reportesOperativos,"adelantos","garantias","informes","manicuras","cobertura_config","perfil"];
+  const manicura = ["inicio","ayuda","horarios","reportes","reportes_horas","reportes_comisiones","perfil"];
   const allowed = role === "admin" ? admin : role === "casa_matriz" ? casaMatriz : role === "encargada" ? encargada : manicura;
   return allowed.includes(section);
 }
@@ -6537,6 +7631,7 @@ export default function App() {
     catch { return null; }
   });
   const [seccion, setSeccion] = useState(null);
+  const [publicHash, setPublicHash] = useState(() => readSectionHash());
   const [menuOpen, setMenuOpen] = useState(false);
   const [mobileMenuGroup, setMobileMenuGroup] = useState(null);
   const [desktopMenuGroupsOpen, setDesktopMenuGroupsOpen] = useState({});
@@ -6548,6 +7643,8 @@ export default function App() {
   const [toasts, setToasts] = useState([]);
   const [notificationHistory, setNotificationHistory] = useState([]);
   const [notificationOpen, setNotificationOpen] = useState(false);
+  const [screenTransition, setScreenTransition] = useState(false);
+  const previousSectionRef = useRef(null);
   const [screenState, setScreenState] = useState({
     horarios: null,
     bloqueoHorarios: null,
@@ -6557,6 +7654,17 @@ export default function App() {
   const saveScreenState = useCallback((key, value) => {
     setScreenState(prev => ({ ...prev, [key]: value }));
   }, []);
+
+  useEffect(() => {
+    if (!seccion) return;
+    if (previousSectionRef.current && previousSectionRef.current !== seccion) {
+      setScreenTransition(true);
+      const timer = window.setTimeout(() => setScreenTransition(false), 720);
+      previousSectionRef.current = seccion;
+      return () => window.clearTimeout(timer);
+    }
+    previousSectionRef.current = seccion;
+  }, [seccion]);
 
   const dismissToast = useCallback((id) => {
     setToasts(prev => prev.filter(t => t.id !== id));
@@ -6708,6 +7816,13 @@ export default function App() {
   }, []);
 
   useEffect(() => {
+    const syncPublicHash = () => setPublicHash(readSectionHash());
+    window.addEventListener("hashchange", syncPublicHash);
+    syncPublicHash();
+    return () => window.removeEventListener("hashchange", syncPublicHash);
+  }, []);
+
+  useEffect(() => {
     if (!user) return;
     const syncHash = () => {
       const target = readSectionHash();
@@ -6725,32 +7840,32 @@ export default function App() {
     if (!user) return;
     localStorage.setItem("niki_user", JSON.stringify(user));
     if (!seccion) {
-      const target = readSectionHash();
-      setSeccion(target && sectionAllowedForRole(target, user.rol) ? target : defaultSectionForRole(user.rol));
+      window.history.replaceState(null, "", "#inicio");
+      setSeccion(defaultSectionForRole(user.rol));
     }
   }, [user, seccion]);
 
-  if (loading) return <div style={{ minHeight:"100vh",display:"flex",alignItems:"center",justifyContent:"center" }}><p style={{ color:"var(--color-text-secondary)",fontSize:14 }}>Conectando con Supabase...</p></div>;
+  const currentPublicHash = publicHash;
+  if (!user && currentPublicHash === "ayuda") return <CentroAyuda onBack={() => { window.location.hash = ""; }}/>; 
+
+  if (loading) return <NikiSplash text="" />;
   if (!user) return <Login onLogin={u=>{
     localStorage.setItem("niki_user", JSON.stringify(u));
     setUser(u);
 
-    const isMobileOrPwa =
-      window.innerWidth < 768 ||
-      window.matchMedia?.("(display-mode: standalone)")?.matches ||
-      window.navigator.standalone === true;
-
-    if (isMobileOrPwa && sectionAllowedForRole("inicio", u.rol)) {
-      window.history.replaceState(null, "", "#inicio");
-      setSeccion("inicio");
-      return;
-    }
-
-    const target=readSectionHash();
-    setSeccion(target && sectionAllowedForRole(target,u.rol) ? target : defaultSectionForRole(u.rol));
+    window.history.replaceState(null, "", "#inicio");
+    setSeccion("inicio");
   }} reloadData={reloadData}/>;
 
   const menuGroupsBase = [
+    {
+      id: "inicio",
+      label: "Inicio",
+      icon: "⌂",
+      items: [
+        { id: "inicio", label: "Inicio", icon: "⌂" },
+      ],
+    },
     {
       id: "asistencia_horarios",
       label: "Asistencia y Horarios",
@@ -6787,6 +7902,15 @@ export default function App() {
       icon: "📝",
       items: [
         { id: "informes", label: "Informe diario", icon: "📝" },
+      ],
+    },
+    {
+      id: "ayuda",
+      label: "Ayuda",
+      icon: "❔",
+      items: [
+        { id: "ayuda", label: "Centro de ayuda", icon: "❔" },
+        { id: "roadmap", label: "Roadmap", icon: "🗺️" },
       ],
     },
     {
@@ -6875,6 +7999,7 @@ export default function App() {
           [{ id: "reportes_horas", label: "Mis horas", icon: "⏱️" }, "Horas y asistencia"],
           [{ id: "reportes_comisiones", label: "Mis comisiones", icon: "💰" }, "Resumen de comisiones"],
           [{ id: "perfil", label: "Mi perfil", icon: "👤" }, "Datos y contraseña"],
+          [{ id: "ayuda", label: "Ayuda", icon: "❔" }, "Manual de uso"],
         ]
       : [
           [{ id: "turnos", label: "Turnos", icon: "📅" }, "Agenda y reservas"],
@@ -6882,20 +8007,63 @@ export default function App() {
           [{ id: "bloqueo_horarios", label: "Bloqueos", icon: "🔐" }, "Habilitar edición mensual"],
           [{ id: "reportes_comisiones", label: "Comisiones", icon: "💰" }, "Reporte y cálculo"],
           [{ id: "informes", label: "Informe diario", icon: "📝" }, "Cierre operativo"],
+          [{ id: "ayuda", label: "Ayuda", icon: "❔" }, "Manual de uso"],
+          [{ id: "roadmap", label: "Roadmap", icon: "🗺️" }, "Evolución de producto"],
           [{ id: "mas", label: "Más opciones", icon: "☰" }, "Configuración y reportes"],
         ];
 
     const quick = quickBase.filter(([item]) => item.id === "mas" || sectionAllowedForRole(item.id, user.rol));
+    const userName = String(user?.nombre || user?.usuario || "").trim().split(" ")[0] || "NIKI";
+    const todayText = new Intl.DateTimeFormat("es-AR", { weekday:"long", day:"numeric", month:"long" }).format(new Date());
+    const novedades = [
+      { icon:"✨", title:"Novedades", text:"Próximamente este muro va a mostrar comunicados, publicaciones y avisos importantes para la red." },
+      { icon:"📌", title:"Publicaciones", text:"Acá vamos a poder destacar lanzamientos, recordatorios operativos, capacitaciones y mensajes de Casa Matriz." },
+      { icon:"💬", title:"Comunidad NIKI", text:"La idea es que este sea el punto de entrada al día de trabajo, no una pantalla técnica." },
+    ];
 
     return (
-      <div>
-        <div style={{ marginBottom: 18 }}>
-          <p style={{ margin: "0 0 6px", color: "var(--color-text-secondary)", fontSize: 13 }}>Hola, {user.nombre}</p>
-          <h2 style={{ margin: 0, fontSize: 24, fontWeight: 600, color: "var(--color-text-primary)" }}>¿Qué querés hacer?</h2>
-        </div>
-        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(145px, 1fr))", gap: 12 }}>
-          {quick.map(([item, subtitle]) => renderHomeCard(item, subtitle))}
-        </div>
+      <div style={{ display:"flex", flexDirection:"column", gap:18 }}>
+        <section style={{ position:"relative", overflow:"hidden", background:"linear-gradient(135deg, #fff 0%, #f7edf0 58%, #fff8fb 100%)", border:"1px solid rgba(114,36,62,0.10)", borderRadius:26, padding:isDesktopMenu?"42px 34px":"30px 22px", minHeight:isDesktopMenu?300:260, display:"flex", alignItems:"center", justifyContent:"center", textAlign:"center", boxShadow:"0 18px 44px rgba(114,36,62,0.08)" }}>
+          <div style={{ position:"absolute", width:240, height:240, borderRadius:"50%", background:"rgba(225,198,204,0.28)", right:-70, top:-80 }} />
+          <div style={{ position:"absolute", width:160, height:160, borderRadius:"50%", background:"rgba(255,255,255,0.72)", left:-54, bottom:-58 }} />
+          <div style={{ position:"relative", zIndex:1, maxWidth:760, display:"flex", flexDirection:"column", alignItems:"center" }}>
+            <div style={{ width:isDesktopMenu?150:126, height:isDesktopMenu?150:126, borderRadius:34, background:"#fff", display:"flex", alignItems:"center", justifyContent:"center", boxShadow:"0 16px 38px rgba(114,36,62,0.16)", marginBottom:18 }}>
+              <LogoMark size={isDesktopMenu?118:98} variant="light" />
+            </div>
+            <p style={{ margin:"0 0 8px", fontSize:12, letterSpacing:"0.12em", textTransform:"uppercase", color:COLORS.pinkDark, fontWeight:800 }}>{todayText}</p>
+            <h1 style={{ margin:"0 0 10px", fontSize:isDesktopMenu?34:26, lineHeight:1.08, fontWeight:700, color:COLORS.pinkDark }}>¡Hola, {userName}!</h1>
+            <p style={{ margin:0, fontSize:isDesktopMenu?16:14, lineHeight:1.6, color:"#65424f", maxWidth:620 }}>Este es el inicio de NIKI OS. Pronto vas a ver acá novedades, comunicados y publicaciones importantes para empezar el día con toda la información a mano.</p>
+          </div>
+        </section>
+
+        <section style={{ display:"grid", gridTemplateColumns:isDesktopMenu?"1.15fr 0.85fr":"1fr", gap:14, alignItems:"stretch" }}>
+          <Card style={{ padding:isDesktopMenu?22:18, borderRadius:22, background:"#fff" }}>
+            <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", gap:12, marginBottom:14 }}>
+              <div>
+                <p style={{ margin:"0 0 4px", color:COLORS.pinkDark, fontSize:12, fontWeight:800, letterSpacing:"0.08em", textTransform:"uppercase" }}>Muro NIKI</p>
+                <h2 style={{ margin:0, fontSize:20, fontWeight:700, color:"var(--color-text-primary)" }}>Espacio de novedades</h2>
+              </div>
+              <Badge color="pink">Próximamente</Badge>
+            </div>
+            <div style={{ display:"grid", gridTemplateColumns:isDesktopMenu?"repeat(3,1fr)":"1fr", gap:12 }}>
+              {novedades.map(n => (
+                <div key={n.title} style={{ border:"1px dashed rgba(114,36,62,0.22)", borderRadius:18, padding:16, background:"linear-gradient(180deg,#fff,#fff9fb)", minHeight:136 }}>
+                  <div style={{ width:38, height:38, borderRadius:14, background:COLORS.pinkLight, display:"grid", placeItems:"center", fontSize:19, marginBottom:10 }}>{n.icon}</div>
+                  <strong style={{ display:"block", fontSize:14, marginBottom:6, color:"var(--color-text-primary)" }}>{n.title}</strong>
+                  <p style={{ margin:0, fontSize:12, lineHeight:1.45, color:"var(--color-text-secondary)" }}>{n.text}</p>
+                </div>
+              ))}
+            </div>
+          </Card>
+
+          <Card style={{ padding:isDesktopMenu?22:18, borderRadius:22, background:"#fff" }}>
+            <p style={{ margin:"0 0 4px", color:COLORS.pinkDark, fontSize:12, fontWeight:800, letterSpacing:"0.08em", textTransform:"uppercase" }}>Accesos rápidos</p>
+            <h2 style={{ margin:"0 0 14px", fontSize:20, fontWeight:700, color:"var(--color-text-primary)" }}>¿Qué querés hacer?</h2>
+            <div style={{ display:"grid", gridTemplateColumns:"repeat(auto-fit, minmax(145px, 1fr))", gap:12 }}>
+              {quick.slice(0, isDesktopMenu ? 6 : quick.length).map(([item, subtitle]) => renderHomeCard(item, subtitle))}
+            </div>
+          </Card>
+        </section>
       </div>
     );
   };
@@ -7047,17 +8215,26 @@ export default function App() {
     if (seccion==="encargadas") return ["admin", "casa_matriz"].includes(user.rol) ? <ABMEncargadas data={data} reloadData={reloadData} user={user}/> : null;
     if (seccion==="cobertura_config") return <ConfiguracionCobertura data={data} reloadData={reloadData} user={user}/>;
     if (seccion==="perfil") return <MiPerfil data={data} reloadData={reloadData} user={user} setUser={setUser}/>;
+    if (seccion==="ayuda") return <CentroAyuda user={user} onBack={() => goToSection("inicio")}/>;
+    if (seccion==="roadmap") return ["admin", "casa_matriz"].includes(user.rol) ? <RoadmapPage user={user} onBack={() => goToSection("ayuda")}/> : null;
     return null;
   };
 
   return (
     <div style={{ minHeight:"100vh",background:"var(--color-background-tertiary)",display:"flex",flexDirection:"column",maxWidth:"100vw",overflowX:"hidden" }}>
       <ToastStack toasts={toasts} onDismiss={dismissToast} onAction={handleNotificationAction}/>
+      {screenTransition && <NikiSplash text="" fullScreen={false} compact />}
       <header style={{ background:"#e1c6cc",color:COLORS.pinkDark,padding:"0 16px",height:66,display:"flex",alignItems:"center",justifyContent:"space-between",position:"sticky",top:0,left:0,right:0,width:"100%",maxWidth:"100vw",boxSizing:"border-box",zIndex:1000,overflow:"visible",flexShrink:0 }}>
-        <div style={{ display:"flex",alignItems:"center",gap:10,minWidth:0 }}>
+        <button
+          type="button"
+          onClick={() => goToSection("inicio")}
+          title="Volver al inicio"
+          aria-label="Volver al inicio"
+          style={{ display:"flex",alignItems:"center",gap:10,minWidth:0,border:"none",background:"transparent",padding:0,margin:0,cursor:"pointer",color:"inherit",textAlign:"left" }}
+        >
           <LogoMark size={48} variant="light"/>
           <span style={{ fontWeight:600,fontSize:15,letterSpacing:"-0.02em",whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis" }}>Niki Beauty Bar</span>
-        </div>
+        </button>
         <div style={{ display:"flex",alignItems:"center",gap:8,flexShrink:0 }}>
           {isDesktopMenu && <span style={{ fontSize:13,opacity:0.9 }}>{user.nombre}</span>}
           <NotificationBell history={notificationHistory} open={notificationOpen} setOpen={setNotificationOpen} onClear={() => setNotificationHistory([])} onAction={handleNotificationAction}/>
@@ -7082,6 +8259,36 @@ export default function App() {
           }}>
             <div style={{ padding:"14px 10px 18px",display:"flex",flexDirection:"column",gap:14,minWidth:220 }}>
               {menuGroups.map(group => {
+                if (group.id === "inicio") {
+                  const activeInicio = seccion === "inicio";
+                  return (
+                    <a
+                      key="inicio"
+                      href="#inicio"
+                      onClick={e=>{ if(e.ctrlKey||e.metaKey||e.shiftKey||e.button===1) return; e.preventDefault(); goToSection("inicio"); }}
+                      style={{
+                        display:"flex",
+                        alignItems:"center",
+                        gap:9,
+                        padding:"11px 12px",
+                        border:"1px solid transparent",
+                        borderRadius:13,
+                        cursor:"pointer",
+                        fontSize:13,
+                        textAlign:"left",
+                        background:activeInicio?COLORS.pinkLight:"transparent",
+                        color:activeInicio?COLORS.pinkDark:"var(--color-text-primary)",
+                        fontWeight:activeInicio?700:600,
+                        width:"100%",
+                        textDecoration:"none",
+                        boxSizing:"border-box",
+                      }}
+                    >
+                      <span style={{ width:22,height:22,borderRadius:9,background:activeInicio?"#fff":COLORS.pinkLight,color:COLORS.pinkDark,display:"grid",placeItems:"center",fontSize:12,flexShrink:0 }}>⌂</span>
+                      <span style={{ whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis" }}>Inicio</span>
+                    </a>
+                  );
+                }
                 const activeGroup = group.items.some(item => item.id === seccion);
                 const isOpen = !!desktopMenuGroupsOpen[group.id] || activeGroup;
                 return (
