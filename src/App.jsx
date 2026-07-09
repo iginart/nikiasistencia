@@ -2310,6 +2310,7 @@ const ROADMAP_STATUS_OPTIONS = ["Idea", "Planificado", "En análisis", "En dise�
 const ROADMAP_PHASE_OPTIONS = ["Fase 1", "Fase 2", "Fase 3", "Fase 4", "Fase 5", "Contenido", "Backlog"];
 const ROADMAP_PRIORITY_OPTIONS = ["Alta", "Media", "Baja"];
 const ROADMAP_PLAN_OPTIONS = ["Plan Base", "Plan Pro", "Plan Premium"];
+const ROADMAP_DEFINITION_STATUS_OPTIONS = ["Idea inicial", "Definición preliminar", "Lista para analizar", "Lista para desarrollar", "En desarrollo", "Implementada"];
 const ROADMAP_PLAN_META = {
   "Plan Base": {
     color: "gray",
@@ -2522,6 +2523,69 @@ function roadmapPriorityColor(priority) {
   if (priority === "Media") return "amber";
   return "gray";
 }
+
+function normalizeRoadmapDefinition(value, item = {}) {
+  const raw = value && typeof value === "object" ? value : {};
+  const alcanceInicial = Array.isArray(raw.alcanceInicial) ? raw.alcanceInicial : Array.isArray(raw.alcance_inicial) ? raw.alcance_inicial : Array.isArray(item.alcance) ? item.alcance : [];
+  const fueraAlcance = Array.isArray(raw.fueraAlcance) ? raw.fueraAlcance : Array.isArray(raw.fuera_alcance) ? raw.fuera_alcance : [];
+  const reglas = Array.isArray(raw.reglas) ? raw.reglas : [];
+  const fasesFuturas = Array.isArray(raw.fasesFuturas) ? raw.fasesFuturas : Array.isArray(raw.fases_futuras) ? raw.fases_futuras : [];
+  return { resumen: raw.resumen || item.detalle || "", problema: raw.problema || item.valor || "", usuarios: raw.usuarios || "Administrador, Casa Matriz y perfiles involucrados según el módulo.", alcanceInicial, fueraAlcance, reglas, valorRed: raw.valorRed || raw.valor_red || item.valor || "", fasesFuturas };
+}
+function roadmapDefaultDefinition(item = {}) {
+  const base = normalizeRoadmapDefinition(item.definicion, item);
+  if (item.id === "cotizador-ia" && !item.definicion) {
+    return {
+      resumen: "Herramienta para cotizar diseños de nail art de forma consistente. La IA interpreta el pedido o la imagen de referencia, pero el precio final se basa en reglas comerciales cargadas por NIKI.",
+      problema: "El nail art puede cobrarse distinto según el local, la manicura o la interpretación del diseño. Esto genera dudas, discusiones con clientas y poca previsibilidad sobre duración y precio.",
+      usuarios: "Encargadas, manicuras, Casa Matriz y, a futuro, clientas desde el portal de turnos.",
+      alcanceInicial: ["Cotizador por reglas para seleccionar servicio base, cantidad de uñas con diseño, técnica y nivel de complejidad.", "Sugerencia de adicional, tiempo estimado y explicación del cálculo.", "Tabla editable por Admin/Casa Matriz con tipos de diseño, complejidad, adicionales y duración estimada."],
+      fueraAlcance: ["No dejar que la IA invente precios sin reglas comerciales.", "No automatizar cobro final sin revisión humana en la primera versión.", "No usar imagen como única fuente de verdad hasta validar precisión con casos reales."],
+      reglas: ["La IA asiste en la clasificación, pero el precio debe salir de reglas definidas por NIKI.", "La persona que toma el turno puede confirmar o corregir la sugerencia.", "El resultado debe poder impactar en duración, observación del turno y precio estimado."],
+      valorRed: "Estandariza criterios de cobro, mejora la experiencia con clientas, aumenta ticket promedio y reduce diferencias entre locales.",
+      fasesFuturas: ["Fase 1: cotizador manual por reglas.", "Fase 2: IA por texto para interpretar pedidos escritos.", "Fase 3: IA con imagen de referencia, historial y métricas de diseños pedidos."],
+    };
+  }
+  return { ...base, resumen: base.resumen || "Definición preliminar de la mejora para alinear objetivo, alcance y valor antes de avanzar al desarrollo.", problema: base.problema || "Pendiente de completar cuando se analice en detalle.", usuarios: base.usuarios || "Perfiles involucrados según el módulo.", alcanceInicial: base.alcanceInicial?.length ? base.alcanceInicial : ["Alcance inicial pendiente de cerrar."], fueraAlcance: base.fueraAlcance?.length ? base.fueraAlcance : ["Pendiente de definir."], reglas: base.reglas?.length ? base.reglas : ["Mantenerlo simple, medible y alineado al plan del producto."], valorRed: base.valorRed || item.valor || "Valor esperado pendiente de completar.", fasesFuturas: base.fasesFuturas?.length ? base.fasesFuturas : ["La especificación técnica se define cuando se decida avanzar."] };
+}
+function roadmapDefinitionStatusColor(status) { if (status === "Implementada") return "success"; if (status === "Lista para desarrollar") return "pink"; if (status === "Lista para analizar" || status === "En desarrollo") return "info"; if (status === "Definición preliminar") return "amber"; return "gray"; }
+function updateRoadmapDefinitionField(definition, field, value) { return { ...normalizeRoadmapDefinition(definition), [field]: value }; }
+function splitRoadmapLines(value) { return String(value || "").split("\n").map(x => x.trim()).filter(Boolean); }
+function joinRoadmapLines(value) { return Array.isArray(value) ? value.join("\n") : ""; }
+function slugRoadmapId(value) {
+  const base = String(value || "nueva-tarea")
+    .toLowerCase()
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 48);
+  return `${base || "nueva-tarea"}-${Date.now().toString(36)}`;
+}
+function createEmptyRoadmapItem() {
+  const fechaOrden = `${new Date().getFullYear()}-${String(new Date().getMonth() + 1).padStart(2, "0")}`;
+  return {
+    id: slugRoadmapId("nueva-tarea"),
+    isNew: true,
+    fase: "Backlog",
+    fechaOrden,
+    nombre: "",
+    modulo: "",
+    estado: "Idea",
+    avance: 0,
+    prioridad: "Media",
+    impacto: "Medio",
+    monetizacion: "Plan Base",
+    valor: "",
+    detalle: "",
+    alcance: [],
+    dependencias: "",
+    notas: "",
+    definicionEstado: "Idea inicial",
+    definicion: roadmapDefaultDefinition({ nombre:"Nueva tarea", valor:"" }),
+  };
+}
+
 function sortRoadmapItems(items) {
   const phaseRank = Object.fromEntries(ROADMAP_PHASE_OPTIONS.map((x, i) => [x, i]));
   return [...items].sort((a, b) => String(a.fechaOrden || "9999-99").localeCompare(String(b.fechaOrden || "9999-99")) || (phaseRank[a.fase] ?? 99) - (phaseRank[b.fase] ?? 99) || String(a.nombre || "").localeCompare(String(b.nombre || "")));
@@ -2543,6 +2607,8 @@ function normalizeRoadmapDbItem(row) {
     alcance: Array.isArray(row.alcance) ? row.alcance : [],
     dependencias: row.dependencias || "",
     notas: row.notas_internas || row.notas || "",
+    definicionEstado: row.definicion_estado || row.definicionEstado || "Idea inicial",
+    definicion: roadmapDefaultDefinition({ ...row, id: row.id, definicion: row.definicion, detalle: row.detalle || "", valor: row.valor || "", alcance: Array.isArray(row.alcance) ? row.alcance : [] }),
   };
 }
 function roadmapToDbPayload(item) {
@@ -2562,6 +2628,8 @@ function roadmapToDbPayload(item) {
     alcance: Array.isArray(item.alcance) ? item.alcance : [],
     dependencias: item.dependencias || "",
     notas_internas: item.notas || "",
+    definicion_estado: item.definicionEstado || "Idea inicial",
+    definicion: normalizeRoadmapDefinition(item.definicion, item),
     visible: true,
   };
 }
@@ -2573,43 +2641,106 @@ async function updateRoadmapItemInDb(item) {
   const payload = roadmapToDbPayload(item);
   return sb(`roadmap_items?id=eq.${encodeURIComponent(item.id)}`, { method:"PATCH", body:JSON.stringify(payload) });
 }
+async function createRoadmapItemInDb(item) {
+  const payload = roadmapToDbPayload(item);
+  return sb("roadmap_items", { method:"POST", body:JSON.stringify(payload) });
+}
+async function deleteRoadmapItemInDb(item) {
+  return sb(`roadmap_items?id=eq.${encodeURIComponent(item.id)}`, { method:"PATCH", body:JSON.stringify({ visible:false }) });
+}
 
 function RoadmapStatusBadge({ children, color = "gray" }) {
   return <Badge color={color}>{children}</Badge>;
 }
 
 function RoadmapEditModal({ item, onClose, onSave }) {
-  const [draft, setDraft] = useState(item);
-  const update = (field, value) => setDraft(d => ({ ...d, [field]: value }));
-  return <Modal title={`Editar roadmap · ${item.nombre}`} onClose={onClose} width={620}>
-    <div style={{ display:"grid",gridTemplateColumns:"repeat(auto-fit, minmax(180px, 1fr))",gap:12 }}>
+  const [draft, setDraft] = useState(() => ({ ...item, alcance:Array.isArray(item.alcance) ? item.alcance : [] }));
+  const update = (field, value) => setDraft(d => {
+    const next = { ...d, [field]: value };
+    if (field === "nombre" && d.isNew) next.id = slugRoadmapId(value);
+    if (["nombre", "valor", "detalle", "alcance"].includes(field)) {
+      next.definicion = roadmapDefaultDefinition({ ...next, definicion:next.definicion });
+    }
+    return next;
+  });
+  const fieldStyle = { width:"100%",border:"1px solid rgba(120,120,120,0.24)",borderRadius:10,padding:10,fontSize:13,resize:"vertical",boxSizing:"border-box",background:"#fff",color:"var(--color-text-primary)" };
+  const canSave = String(draft.nombre || "").trim().length > 0;
+  return <Modal title={item.isNew ? "Nueva tarea del roadmap" : `Editar roadmap · ${item.nombre}`} onClose={onClose} width={720}>
+    <div style={{ background:COLORS.pinkLight,border:`1px solid ${COLORS.pink}55`,borderRadius:12,padding:12,marginBottom:14 }}>
+      <p style={{ margin:0,fontSize:13,lineHeight:1.45,color:COLORS.pinkDark }}><strong>{item.isNew ? "Alta de tarea:" : "Edición:"}</strong> la tarea queda visible en el roadmap, se ordena por fecha estimada y puede tener su definición funcional asociada.</p>
+    </div>
+    <div style={{ display:"grid",gridTemplateColumns:"repeat(auto-fit, minmax(220px, 1fr))",gap:12 }}>
+      <div><label style={{ fontSize:12,fontWeight:700,color:"#555",display:"block",marginBottom:5 }}>Nombre de la tarea</label><Input value={draft.nombre || ""} onChange={v=>update("nombre", v)} placeholder="Ej: Cotizador IA de nail art"/></div>
+      <div><label style={{ fontSize:12,fontWeight:700,color:"#555",display:"block",marginBottom:5 }}>Módulo / área</label><Input value={draft.modulo || ""} onChange={v=>update("modulo", v)} placeholder="Ej: IA / Agenda / RRHH"/></div>
       <div><label style={{ fontSize:12,fontWeight:700,color:"#555",display:"block",marginBottom:5 }}>Fase</label><Select value={draft.fase} onChange={v=>update("fase", v)}>{ROADMAP_PHASE_OPTIONS.map(x=><option key={x} value={x}>{x}</option>)}</Select></div>
       <div><label style={{ fontSize:12,fontWeight:700,color:"#555",display:"block",marginBottom:5 }}>Fecha estimada</label><Input type="month" value={draft.fechaOrden || ""} onChange={v=>update("fechaOrden", v)}/></div>
       <div><label style={{ fontSize:12,fontWeight:700,color:"#555",display:"block",marginBottom:5 }}>Estado</label><Select value={draft.estado} onChange={v=>update("estado", v)}>{ROADMAP_STATUS_OPTIONS.map(x=><option key={x} value={x}>{x}</option>)}</Select></div>
       <div><label style={{ fontSize:12,fontWeight:700,color:"#555",display:"block",marginBottom:5 }}>Prioridad</label><Select value={draft.prioridad} onChange={v=>update("prioridad", v)}>{ROADMAP_PRIORITY_OPTIONS.map(x=><option key={x} value={x}>{x}</option>)}</Select></div>
+      <div><label style={{ fontSize:12,fontWeight:700,color:"#555",display:"block",marginBottom:5 }}>Impacto</label><Select value={draft.impacto || "Medio"} onChange={v=>update("impacto", v)}><option value="Bajo">Bajo</option><option value="Medio">Medio</option><option value="Alto">Alto</option></Select></div>
+      <div><label style={{ fontSize:12,fontWeight:700,color:"#555",display:"block",marginBottom:5 }}>Plan</label><Select value={normalizeRoadmapPlan(draft.monetizacion)} onChange={v=>update("monetizacion", v)}>{ROADMAP_PLAN_OPTIONS.map(x=><option key={x} value={x}>{x}</option>)}</Select></div>
+    </div>
+    <div style={{ marginTop:14 }}>
+      <label style={{ fontSize:12,fontWeight:700,color:"#555",display:"block",marginBottom:5 }}>Valor para NIKI</label>
+      <textarea value={draft.valor || ""} onChange={e=>update("valor", e.target.value)} rows={2} placeholder="Resumen corto del valor comercial u operativo" style={fieldStyle}/>
+    </div>
+    <div style={{ marginTop:14 }}>
+      <label style={{ fontSize:12,fontWeight:700,color:"#555",display:"block",marginBottom:5 }}>Detalle visible en el roadmap</label>
+      <textarea value={draft.detalle || ""} onChange={e=>update("detalle", e.target.value)} rows={3} placeholder="Descripción simple de la mejora" style={fieldStyle}/>
+    </div>
+    <div style={{ marginTop:14 }}>
+      <label style={{ fontSize:12,fontWeight:700,color:"#555",display:"block",marginBottom:5 }}>Alcance visible <span style={{ color:"var(--color-text-secondary)",fontWeight:600 }}>(una línea por punto)</span></label>
+      <textarea value={joinRoadmapLines(draft.alcance)} onChange={e=>update("alcance", splitRoadmapLines(e.target.value))} rows={4} placeholder={"Punto 1\nPunto 2\nPunto 3"} style={fieldStyle}/>
+    </div>
+    <div style={{ display:"grid",gridTemplateColumns:"repeat(auto-fit, minmax(240px, 1fr))",gap:12,marginTop:14 }}>
+      <div><label style={{ fontSize:12,fontWeight:700,color:"#555",display:"block",marginBottom:5 }}>Dependencias</label><textarea value={draft.dependencias || ""} onChange={e=>update("dependencias", e.target.value)} rows={3} style={fieldStyle}/></div>
+      <div><label style={{ fontSize:12,fontWeight:700,color:"#555",display:"block",marginBottom:5 }}>Notas internas</label><textarea value={draft.notas || ""} onChange={e=>update("notas", e.target.value)} rows={3} style={fieldStyle}/></div>
     </div>
     <div style={{ marginTop:14 }}>
       <label style={{ fontSize:12,fontWeight:700,color:"#555",display:"block",marginBottom:5 }}>Avance: {Number(draft.avance || 0)}%</label>
       <input type="range" min="0" max="100" step="5" value={Number(draft.avance || 0)} onChange={e=>update("avance", Number(e.target.value))} style={{ width:"100%" }}/>
-      <p style={{ margin:"6px 0 0",fontSize:11,lineHeight:1.35,color:"var(--color-text-secondary)" }}>Por ahora el avance se actualiza manualmente desde Admin. Más adelante se puede automatizar conectándolo con hitos, tareas o releases.</p>
+      <p style={{ margin:"6px 0 0",fontSize:11,lineHeight:1.35,color:"var(--color-text-secondary)" }}>Por ahora el avance se actualiza manualmente desde Admin.</p>
     </div>
-    <div style={{ marginTop:14 }}>
-      <label style={{ fontSize:12,fontWeight:700,color:"#555",display:"block",marginBottom:5 }}>Plan</label>
-      <Select value={normalizeRoadmapPlan(draft.monetizacion)} onChange={v=>update("monetizacion", v)}>
-        {ROADMAP_PLAN_OPTIONS.map(x=><option key={x} value={x}>{x}</option>)}
-      </Select>
-      <div style={{ marginTop:8,background:"var(--color-background-secondary)",borderRadius:10,padding:10 }}>
-        <RoadmapPlanBadge plan={draft.monetizacion} showDetail />
-      </div>
-    </div>
-    <div style={{ marginTop:14 }}>
-      <label style={{ fontSize:12,fontWeight:700,color:"#555",display:"block",marginBottom:5 }}>Notas internas</label>
-      <textarea value={draft.notas || ""} onChange={e=>update("notas", e.target.value)} rows={4} style={{ width:"100%",border:"1px solid rgba(120,120,120,0.24)",borderRadius:10,padding:10,fontSize:13,resize:"vertical",boxSizing:"border-box" }}/>
+    <div style={{ marginTop:14,background:"var(--color-background-secondary)",borderRadius:10,padding:10 }}>
+      <RoadmapPlanBadge plan={draft.monetizacion} showDetail />
     </div>
     <div style={{ display:"flex",justifyContent:"flex-end",gap:8,marginTop:16 }}>
       <Btn variant="secondary" onClick={onClose}>Cancelar</Btn>
-      <Btn variant="primary" onClick={() => onSave(draft)}>Guardar cambios</Btn>
+      <Btn variant="primary" disabled={!canSave} onClick={() => onSave({ ...draft, nombre:String(draft.nombre || "").trim(), id:draft.id || slugRoadmapId(draft.nombre), definicion:roadmapDefaultDefinition(draft) })}>{item.isNew ? "Crear tarea" : "Guardar cambios"}</Btn>
     </div>
+  </Modal>;
+}
+
+
+function RoadmapDefinitionModal({ item, canEdit = false, onClose, onSave }) {
+  const [draft, setDraft] = useState(() => ({ ...item, definicionEstado: item.definicionEstado || "Idea inicial", definicion: roadmapDefaultDefinition(item) }));
+  const def = normalizeRoadmapDefinition(draft.definicion, draft);
+  const updateDefinition = (field, value) => setDraft(d => ({ ...d, definicion:updateRoadmapDefinitionField(d.definicion, field, value) }));
+  const updateDefinitionList = (field, value) => updateDefinition(field, splitRoadmapLines(value));
+  const fieldStyle = { width:"100%",border:"1px solid rgba(120,120,120,0.24)",borderRadius:10,padding:10,fontSize:13,resize:"vertical",boxSizing:"border-box",background:canEdit?"#fff":"var(--color-background-secondary)",color:"var(--color-text-primary)" };
+  return <Modal title={`Definición · ${item.nombre}`} onClose={onClose} width={780}>
+    <div style={{ display:"flex",alignItems:"center",justifyContent:"space-between",gap:10,flexWrap:"wrap",marginBottom:12 }}>
+      <div style={{ display:"flex",gap:7,flexWrap:"wrap" }}>
+        <RoadmapStatusBadge color={roadmapDefinitionStatusColor(draft.definicionEstado)}>{draft.definicionEstado || "Idea inicial"}</RoadmapStatusBadge>
+        <RoadmapStatusBadge color="pink">{normalizeRoadmapPlan(draft.monetizacion)}</RoadmapStatusBadge>
+        <RoadmapStatusBadge color="info">{draft.modulo}</RoadmapStatusBadge>
+      </div>
+      {!canEdit && <RoadmapStatusBadge color="gray">Solo lectura</RoadmapStatusBadge>}
+    </div>
+    <div style={{ background:COLORS.pinkLight,border:`1px solid ${COLORS.pink}55`,borderRadius:12,padding:12,marginBottom:14 }}>
+      <p style={{ margin:0,fontSize:13,lineHeight:1.5,color:COLORS.pinkDark }}><strong>Objetivo:</strong> guardar una definición preliminar para que el roadmap tenga intención, alcance y valor. La especificación técnica completa se hace recién cuando se decida desarrollar la mejora.</p>
+    </div>
+    {canEdit && <div style={{ marginBottom:12 }}><label style={{ fontSize:12,fontWeight:800,color:"#555",display:"block",marginBottom:5 }}>Estado de definición</label><Select value={draft.definicionEstado || "Idea inicial"} onChange={v=>setDraft(d=>({...d, definicionEstado:v}))}>{ROADMAP_DEFINITION_STATUS_OPTIONS.map(x=><option key={x} value={x}>{x}</option>)}</Select></div>}
+    <div style={{ display:"grid",gridTemplateColumns:"repeat(auto-fit, minmax(260px, 1fr))",gap:12 }}>
+      <div><label style={{ fontSize:12,fontWeight:800,color:"#555",display:"block",marginBottom:5 }}>Resumen de la mejora</label><textarea disabled={!canEdit} rows={5} value={def.resumen} onChange={e=>updateDefinition("resumen", e.target.value)} style={fieldStyle}/></div>
+      <div><label style={{ fontSize:12,fontWeight:800,color:"#555",display:"block",marginBottom:5 }}>Problema que resuelve</label><textarea disabled={!canEdit} rows={5} value={def.problema} onChange={e=>updateDefinition("problema", e.target.value)} style={fieldStyle}/></div>
+      <div><label style={{ fontSize:12,fontWeight:800,color:"#555",display:"block",marginBottom:5 }}>Usuarios involucrados</label><textarea disabled={!canEdit} rows={3} value={def.usuarios} onChange={e=>updateDefinition("usuarios", e.target.value)} style={fieldStyle}/></div>
+      <div><label style={{ fontSize:12,fontWeight:800,color:"#555",display:"block",marginBottom:5 }}>Valor para la red</label><textarea disabled={!canEdit} rows={3} value={def.valorRed} onChange={e=>updateDefinition("valorRed", e.target.value)} style={fieldStyle}/></div>
+      <div><label style={{ fontSize:12,fontWeight:800,color:"#555",display:"block",marginBottom:5 }}>Alcance inicial <span style={{ color:"var(--color-text-secondary)",fontWeight:600 }}>(una línea por punto)</span></label><textarea disabled={!canEdit} rows={6} value={joinRoadmapLines(def.alcanceInicial)} onChange={e=>updateDefinitionList("alcanceInicial", e.target.value)} style={fieldStyle}/></div>
+      <div><label style={{ fontSize:12,fontWeight:800,color:"#555",display:"block",marginBottom:5 }}>Fuera de alcance por ahora <span style={{ color:"var(--color-text-secondary)",fontWeight:600 }}>(una línea por punto)</span></label><textarea disabled={!canEdit} rows={6} value={joinRoadmapLines(def.fueraAlcance)} onChange={e=>updateDefinitionList("fueraAlcance", e.target.value)} style={fieldStyle}/></div>
+      <div><label style={{ fontSize:12,fontWeight:800,color:"#555",display:"block",marginBottom:5 }}>Reglas importantes <span style={{ color:"var(--color-text-secondary)",fontWeight:600 }}>(una línea por punto)</span></label><textarea disabled={!canEdit} rows={6} value={joinRoadmapLines(def.reglas)} onChange={e=>updateDefinitionList("reglas", e.target.value)} style={fieldStyle}/></div>
+      <div><label style={{ fontSize:12,fontWeight:800,color:"#555",display:"block",marginBottom:5 }}>Fases futuras / ideas posteriores <span style={{ color:"var(--color-text-secondary)",fontWeight:600 }}>(una línea por punto)</span></label><textarea disabled={!canEdit} rows={6} value={joinRoadmapLines(def.fasesFuturas)} onChange={e=>updateDefinitionList("fasesFuturas", e.target.value)} style={fieldStyle}/></div>
+    </div>
+    <div style={{ display:"flex",justifyContent:"flex-end",gap:8,marginTop:16 }}><Btn variant="secondary" onClick={onClose}>Cerrar</Btn>{canEdit && <Btn variant="primary" onClick={() => onSave({ ...draft, definicion:normalizeRoadmapDefinition(draft.definicion, draft) })}>Guardar definición</Btn>}</div>
   </Modal>;
 }
 
@@ -2655,10 +2786,11 @@ function RoadmapPage({ user = null, onBack = null }) {
   const canEdit = user?.rol === "admin";
   const [fase, setFase] = useState("todas");
   const [estadoFiltro, setEstadoFiltro] = useState("todos");
-  const [items, setItems] = useState(() => sortRoadmapItems(ROADMAP_FEATURES_SEED));
+  const [items, setItems] = useState(() => sortRoadmapItems(ROADMAP_FEATURES_SEED.map(item => ({ ...item, definicionEstado:item.definicionEstado || "Definición preliminar", definicion:roadmapDefaultDefinition(item) }))));
   const [source, setSource] = useState("seed");
   const [msg, setMsg] = useState("");
   const [editing, setEditing] = useState(null);
+  const [definitionItem, setDefinitionItem] = useState(null);
 
   useEffect(() => {
     if (!canSee) return;
@@ -2667,7 +2799,7 @@ function RoadmapPage({ user = null, onBack = null }) {
       .then(rows => {
         if (cancelled) return;
         if (rows.length) {
-          setItems(sortRoadmapItems(rows));
+          setItems(sortRoadmapItems(rows.map(item => ({ ...item, definicionEstado:item.definicionEstado || "Idea inicial", definicion:roadmapDefaultDefinition(item) }))));
           setSource("db");
         }
       })
@@ -2689,19 +2821,37 @@ function RoadmapPage({ user = null, onBack = null }) {
   const backButton = onBack ? <Btn onClick={onBack} variant="secondary" size="sm">← Volver</Btn> : null;
 
   const saveItem = async (draft) => {
-    const normalized = { ...draft, avance:Math.max(0, Math.min(100, Number(draft.avance || 0))) };
-    setItems(prev => sortRoadmapItems(prev.map(x => x.id === normalized.id ? normalized : x)));
+    const isNew = !!draft.isNew;
+    const normalized = { ...draft, isNew:false, id:draft.id || slugRoadmapId(draft.nombre), avance:Math.max(0, Math.min(100, Number(draft.avance || 0))), monetizacion:normalizeRoadmapPlan(draft.monetizacion), alcance:Array.isArray(draft.alcance) ? draft.alcance : [], definicion:normalizeRoadmapDefinition(draft.definicion, draft), definicionEstado:draft.definicionEstado || "Idea inicial" };
+    setItems(prev => sortRoadmapItems(isNew ? [...prev, normalized] : prev.map(x => x.id === normalized.id ? normalized : x)));
     setEditing(null);
     if (source !== "db") {
-      setMsg("Cambio aplicado en esta vista. Para que quede compartido y permanente, hay que crear la tabla roadmap_items y cargar el seed inicial.");
+      setMsg(isNew ? "Tarea creada en esta vista. Para que quede compartida y permanente, hay que crear la tabla roadmap_items y guardar en Supabase." : "Cambio aplicado en esta vista. Para que quede compartido y permanente, hay que crear la tabla roadmap_items y cargar el seed inicial.");
+      return;
+    }
+    try {
+      if (isNew) await createRoadmapItemInDb(normalized);
+      else await updateRoadmapItemInDb(normalized);
+      setMsg(isNew ? "Nueva tarea agregada al roadmap." : "Roadmap actualizado.");
+    } catch (err) {
+      console.error(err);
+      setMsg(isNew ? "No se pudo crear la tarea en Supabase. Quedó aplicada solo en esta vista hasta recargar." : "No se pudo guardar en Supabase. El cambio quedó aplicado solo en esta vista hasta recargar.");
+    }
+  };
+  const saveDefinition = async (draft) => {
+    const normalized = { ...draft, definicionEstado:draft.definicionEstado || "Idea inicial", definicion:normalizeRoadmapDefinition(draft.definicion, draft), monetizacion:normalizeRoadmapPlan(draft.monetizacion) };
+    setItems(prev => sortRoadmapItems(prev.map(x => x.id === normalized.id ? normalized : x)));
+    setDefinitionItem(null);
+    if (source !== "db") {
+      setMsg("Definición aplicada en esta vista. Para guardarla de forma compartida, primero hay que crear o actualizar la tabla roadmap_items.");
       return;
     }
     try {
       await updateRoadmapItemInDb(normalized);
-      setMsg("Roadmap actualizado.");
+      setMsg("Definición del roadmap actualizada.");
     } catch (err) {
       console.error(err);
-      setMsg("No se pudo guardar en Supabase. El cambio quedó aplicado solo en esta vista hasta recargar.");
+      setMsg("No se pudo guardar la definición en Supabase. Revisá que la tabla tenga los campos definicion_estado y definicion.");
     }
   };
 
@@ -2722,6 +2872,31 @@ function RoadmapPage({ user = null, onBack = null }) {
     } catch (err) {
       console.error(err);
       setMsg("No se pudo guardar el cambio de mes en Supabase. El cambio quedó aplicado solo en esta vista hasta recargar.");
+    }
+  };
+
+  const createItem = () => {
+    if (!canEdit) return;
+    setEditing(createEmptyRoadmapItem());
+  };
+
+  const deleteItem = async (item) => {
+    if (!canEdit) return;
+    const ok = window.confirm(`¿Eliminar del roadmap la tarea "${item.nombre}"?
+
+No se borra información histórica: si está guardada en Supabase se marcará como no visible.`);
+    if (!ok) return;
+    setItems(prev => prev.filter(x => x.id !== item.id));
+    if (source !== "db") {
+      setMsg("Tarea eliminada de esta vista. Para que el cambio sea permanente, el roadmap debe estar guardado en Supabase.");
+      return;
+    }
+    try {
+      await deleteRoadmapItemInDb(item);
+      setMsg("Tarea eliminada del roadmap.");
+    } catch (err) {
+      console.error(err);
+      setMsg("No se pudo eliminar en Supabase. La tarea quedó oculta solo en esta vista hasta recargar.");
     }
   };
 
@@ -2799,9 +2974,10 @@ function RoadmapPage({ user = null, onBack = null }) {
         <div style={{ display:"flex",alignItems:"center",justifyContent:"space-between",gap:12,flexWrap:"wrap",marginBottom:14 }}>
           <div>
             <h2 style={{ margin:"0 0 4px",fontSize:20,color:COLORS.pinkDark }}>Próximas funcionalidades</h2>
-            <p style={{ margin:0,fontSize:13,color:"var(--color-text-secondary)",lineHeight:1.45 }}>Ordenadas cronológicamente por fecha estimada. Administración puede ajustar fase, fecha, estado y avance.</p>
+            <p style={{ margin:0,fontSize:13,color:"var(--color-text-secondary)",lineHeight:1.45 }}>Ordenadas cronológicamente por fecha estimada. Administración puede crear, editar, eliminar y reordenar tareas del roadmap.</p>
           </div>
-          <div style={{ display:"flex",gap:8,flexWrap:"wrap" }}>
+          <div style={{ display:"flex",gap:8,flexWrap:"wrap",alignItems:"center" }}>
+            {canEdit && <Btn onClick={createItem} variant="primary" size="sm">+ Nueva tarea</Btn>}
             {fases.map(f => <button key={f} type="button" onClick={() => setFase(f)} style={{ border:`1px solid ${fase===f?COLORS.pink:"rgba(120,120,120,0.22)"}`,background:fase===f?COLORS.pinkLight:"#fff",color:fase===f?COLORS.pinkDark:"var(--color-text-primary)",borderRadius:999,padding:"7px 12px",fontSize:12,fontWeight:800,cursor:"pointer" }}>{f === "todas" ? "Todas" : f}</button>)}
             {estados.map(e => <button key={e} type="button" onClick={() => setEstadoFiltro(e)} style={{ border:`1px solid ${estadoFiltro===e?COLORS.info:"rgba(120,120,120,0.22)"}`,background:estadoFiltro===e?COLORS.infoLight:"#fff",color:estadoFiltro===e?COLORS.info:"var(--color-text-primary)",borderRadius:999,padding:"7px 12px",fontSize:12,fontWeight:800,cursor:"pointer" }}>{e === "todos" ? "Todos los estados" : e}</button>)}
           </div>
@@ -2815,16 +2991,18 @@ function RoadmapPage({ user = null, onBack = null }) {
                   <RoadmapStatusBadge color="info">{roadmapMonthLabel(item.fechaOrden)}</RoadmapStatusBadge>
                   <RoadmapStatusBadge color={roadmapStatusColor(item.estado)}>{item.estado}</RoadmapStatusBadge>
                   <RoadmapStatusBadge color={roadmapPriorityColor(item.prioridad)}>Prioridad {item.prioridad}</RoadmapStatusBadge>
+                  <RoadmapStatusBadge color={roadmapDefinitionStatusColor(item.definicionEstado)}>{item.definicionEstado || "Idea inicial"}</RoadmapStatusBadge>
                 </div>
                 <h3 style={{ margin:"0 0 4px",fontSize:18,color:"var(--color-text-primary)" }}>{item.nombre}</h3>
                 <p style={{ margin:0,fontSize:12,color:COLORS.pinkDark,fontWeight:800,textTransform:"uppercase",letterSpacing:"0.04em" }}>{item.modulo}</p>
               </div>
               <div style={{ display:"flex",flexDirection:"column",gap:8,alignItems:"flex-end" }}>
                 <div style={{ background:COLORS.pinkLight,color:COLORS.pinkDark,borderRadius:12,padding:"9px 11px",fontSize:12,fontWeight:800,maxWidth:300 }}>{item.valor}</div>
-                {canEdit && <Btn onClick={() => setEditing(item)} variant="secondary" size="sm">Editar</Btn>}
+                <div style={{ display:"flex",gap:8,flexWrap:"wrap",justifyContent:"flex-end" }}><Btn onClick={() => setDefinitionItem(item)} variant="secondary" size="sm">Ver definición</Btn>{canEdit && <Btn onClick={() => setEditing(item)} variant="secondary" size="sm">Editar</Btn>}{canEdit && <Btn onClick={() => deleteItem(item)} variant="danger" size="sm">Eliminar</Btn>}</div>
               </div>
             </div>
             <p style={{ margin:"12px 0 8px",fontSize:14,lineHeight:1.55,color:"var(--color-text-primary)" }}>{item.detalle}</p>
+            <div style={{ border:"1px solid rgba(120,120,120,0.12)",borderRadius:12,padding:10,background:"#fffafc",margin:"8px 0 10px" }}><p style={{ margin:"0 0 4px",fontSize:11,fontWeight:800,color:COLORS.pinkDark,textTransform:"uppercase" }}>Definición funcional</p><p style={{ margin:0,fontSize:13,lineHeight:1.45,color:"var(--color-text-secondary)" }}>{normalizeRoadmapDefinition(item.definicion, item).resumen || "Pendiente de definir."}</p></div>
             <div style={{ display:"grid",gridTemplateColumns:"repeat(auto-fit, minmax(220px, 1fr))",gap:12,margin:"10px 0" }}>
               <div style={{ background:"var(--color-background-secondary)",borderRadius:12,padding:10 }}><p style={{ margin:"0 0 4px",fontSize:11,fontWeight:800,color:"var(--color-text-secondary)",textTransform:"uppercase" }}>Impacto</p><p style={{ margin:0,fontSize:13,color:"var(--color-text-primary)",fontWeight:700 }}>{item.impacto}</p></div>
               <div style={{ background:"var(--color-background-secondary)",borderRadius:12,padding:10 }}><p style={{ margin:"0 0 4px",fontSize:11,fontWeight:800,color:"var(--color-text-secondary)",textTransform:"uppercase" }}>Plan</p><RoadmapPlanBadge plan={item.monetizacion} showDetail /></div>
@@ -2844,7 +3022,8 @@ function RoadmapPage({ user = null, onBack = null }) {
         <p style={{ margin:0,fontSize:14,lineHeight:1.6,color:COLORS.pinkDark }}>La línea base puede sostener el plan actual. Los módulos de comunicación, asistencia avanzada, RRHH, auditorías, rewards, IA, stock, portal de clientas, cobranza y facturación pueden habilitar planes superiores o addons por local/franquicia. Las fechas deben revisarse mensualmente según adopción real, complejidad técnica y valor comercial.</p>
       </Card>
     </div>
-    {editing && <RoadmapEditModal item={editing} onClose={() => setEditing(null)} onSave={saveItem}/>} 
+    {editing && <RoadmapEditModal item={editing} onClose={() => setEditing(null)} onSave={saveItem}/>}
+    {definitionItem && <RoadmapDefinitionModal item={definitionItem} canEdit={canEdit} onClose={() => setDefinitionItem(null)} onSave={saveDefinition}/>} 
   </div>;
 }
 
