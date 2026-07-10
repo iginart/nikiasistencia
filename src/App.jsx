@@ -392,6 +392,28 @@ function normalizeUsuarioLocal(x) { return { userId:x.user_id, localId:x.local_i
 function isValidEmail(email) {
   return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(email || "").trim());
 }
+function normalizeEmailValue(email) {
+  return String(email || "").trim().toLowerCase();
+}
+function normalizeUsuarioValue(usuario) {
+  return String(usuario || "").trim().toLowerCase();
+}
+function emailEnUso(users, email, currentUserId = null) {
+  const value = normalizeEmailValue(email);
+  if (!value) return false;
+  return (users || []).some(u => {
+    const sameUser = currentUserId != null && parseInt(u.id) === parseInt(currentUserId);
+    return !sameUser && normalizeEmailValue(u.email) === value;
+  });
+}
+function usuarioEnUso(users, usuario, currentUserId = null) {
+  const value = normalizeUsuarioValue(usuario);
+  if (!value) return false;
+  return (users || []).some(u => {
+    const sameUser = currentUserId != null && parseInt(u.id) === parseInt(currentUserId);
+    return !sameUser && normalizeUsuarioValue(u.usuario) === value;
+  });
+}
 function passwordSeguraBasica(password) {
   const p = String(password || "");
   if (p.length < 8) return "La contraseña debe tener al menos 8 caracteres.";
@@ -3224,6 +3246,12 @@ function Login({ onLogin, reloadData }) {
     }
     setLoading(true);
     try {
+      const usersActuales = (await api.getUsers()).map(normalizeUser);
+      if (emailEnUso(usersActuales, emailLimpio, securityUser.id)) {
+        setMsg("Ese email ya está asignado a otro usuario. Usá otro correo o pedí a administración que corrija el usuario existente.");
+        setLoading(false);
+        return;
+      }
       if (requiereVerificarEmail) {
         await api.solicitarVerificacionEmail({
           actor_id:securityUser.id,
@@ -3406,7 +3434,11 @@ function ABMManicuras({ data, reloadData, user }) {
   const save = async () => {
     setFormErr("");
     if (!form.nombre.trim()||!form.usuario.trim()) { setFormErr("Nombre y usuario son obligatorios."); return; }
-    if (!isValidEmail(form.email)) { setFormErr("El email es obligatorio y debe ser válido."); return; }
+    const usuarioLimpio = normalizeUsuarioValue(form.usuario);
+    const emailLimpio = normalizeEmailValue(form.email);
+    if (!isValidEmail(emailLimpio)) { setFormErr("El email es obligatorio y debe ser válido."); return; }
+    if (usuarioEnUso(data.users, usuarioLimpio, form.id)) { setFormErr("Ese usuario ya existe. Elegí otro nombre de usuario."); return; }
+    if (emailEnUso(data.users, emailLimpio, form.id)) { setFormErr("Ese email ya está asignado a otro usuario. No se pueden repetir correos."); return; }
     if (!localesPermitidos.some(l => l.id === parseInt(form.localId))) { setFormErr("No podés asignar manicuras a ese local."); return; }
     if (modal==="new") {
       if (!form.password) { setFormErr("Ingresá una contraseña."); return; }
@@ -3418,7 +3450,7 @@ function ABMManicuras({ data, reloadData, user }) {
     try {
       if (modal==="new") {
         const ahora = new Date().toISOString();
-        const created = await api.createUser({ nombre:form.nombre.trim(),usuario:form.usuario.trim(),email:form.email.trim().toLowerCase(),email_actualizado_en:ahora,codigo_externo:(form.codigoExterno||"").trim()||null,password:form.password,password_actualizado_en:form.password==="niki123"?null:ahora,rol:"manicura",local_id:parseInt(form.localId)||null,activo:true });
+        const created = await api.createUser({ nombre:form.nombre.trim(),usuario:usuarioLimpio,email:emailLimpio,email_actualizado_en:ahora,codigo_externo:(form.codigoExterno||"").trim()||null,password:form.password,password_actualizado_en:form.password==="niki123"?null:ahora,rol:"manicura",local_id:parseInt(form.localId)||null,activo:true });
         const nuevoId = created?.[0]?.id;
         if (nuevoId) {
           try {
@@ -3429,7 +3461,7 @@ function ABMManicuras({ data, reloadData, user }) {
           }
         }
       } else {
-        const upd = { nombre:form.nombre.trim(),usuario:form.usuario.trim(),email:form.email.trim().toLowerCase(),email_actualizado_en:new Date().toISOString(),codigo_externo:(form.codigoExterno||"").trim()||null,local_id:parseInt(form.localId)||null };
+        const upd = { nombre:form.nombre.trim(),usuario:usuarioLimpio,email:emailLimpio,email_actualizado_en:new Date().toISOString(),codigo_externo:(form.codigoExterno||"").trim()||null,local_id:parseInt(form.localId)||null };
         await api.updateUser(form.id, upd);
         if (form.password) {
           await api.changePassword({ mode:"admin_set", actor_id:user.id, session_token:user.sessionToken, target_user_id:form.id, new_password:form.password });
@@ -5706,7 +5738,11 @@ function ABMEncargadas({ data, reloadData, user }) {
       }
     }
     if (!form.nombre?.trim() || !form.usuario?.trim()) { setFormErr("Nombre y usuario son obligatorios."); return; }
-    if (!isValidEmail(form.email)) { setFormErr("El email es obligatorio y debe ser válido."); return; }
+    const usuarioLimpio = normalizeUsuarioValue(form.usuario);
+    const emailLimpio = normalizeEmailValue(form.email);
+    if (!isValidEmail(emailLimpio)) { setFormErr("El email es obligatorio y debe ser válido."); return; }
+    if (usuarioEnUso(data.users, usuarioLimpio, form.id)) { setFormErr("Ese usuario ya existe. Elegí otro nombre de usuario."); return; }
+    if (emailEnUso(data.users, emailLimpio, form.id)) { setFormErr("Ese email ya está asignado a otro usuario. No se pueden repetir correos."); return; }
     if (rolDestino === "encargada" && !(form.localIds||[]).length) { setFormErr("Asigná al menos un local para una encargada."); return; }
     if (modal === "new") {
       if (!form.password) { setFormErr("Ingresá una contraseña."); return; }
@@ -5720,8 +5756,8 @@ function ABMEncargadas({ data, reloadData, user }) {
         const ahora = new Date().toISOString();
         const created = await api.createUser({
           nombre:form.nombre.trim(),
-          usuario:form.usuario.trim(),
-          email:form.email.trim().toLowerCase(),
+          usuario:usuarioLimpio,
+          email:emailLimpio,
           email_actualizado_en:ahora,
           password:form.password,
           password_actualizado_en:form.password==="niki123"?null:ahora,
@@ -5741,8 +5777,8 @@ function ABMEncargadas({ data, reloadData, user }) {
       } else {
         const upd = {
           nombre:form.nombre.trim(),
-          usuario:form.usuario.trim(),
-          email:form.email.trim().toLowerCase(),
+          usuario:usuarioLimpio,
+          email:emailLimpio,
           email_actualizado_en:new Date().toISOString(),
           rol:rolDestino,
           local_id:null
