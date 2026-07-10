@@ -1957,15 +1957,19 @@ const HELP_TOPICS = [
     title: "Primer ingreso y contraseña",
     icon: "🔐",
     profiles: ["casa_matriz", "encargada", "manicura"],
-    summary: "Cómo entrar por primera vez, validar email y cambiar la contraseña temporal.",
+    summary: "Cómo entrar por primera vez, validar email, usar login por email y cambiar la contraseña temporal.",
     sections: [
       {
         heading: "Qué necesitás para ingresar",
-        text: "Para entrar a NIKI OS tenés que usar tu usuario o tu email, junto con tu contraseña. El usuario o email no distingue mayúsculas y minúsculas. La contraseña sí las distingue, por eso hay que escribirla exactamente como corresponde.",
+        text: "Para entrar a NIKI OS podés usar tu usuario o tu email, junto con tu contraseña. El usuario y el email no distinguen mayúsculas y minúsculas. La contraseña sí las distingue, por eso hay que escribirla exactamente como corresponde.",
       },
       {
         heading: "Primer ingreso",
-        text: "Si es tu primer ingreso, el sistema puede pedirte que cargues un email y cambies la contraseña temporal. El email se valida con un código que llega a tu casilla. Esto confirma que el correo existe y que tenés acceso.",
+        text: "Si es tu primer ingreso, el sistema puede pedirte que cargues un email y cambies la contraseña temporal. El email se valida con un código que llega a tu casilla. Esto confirma que el correo existe, que tenés acceso y que el usuario queda preparado para recuperar contraseña más adelante.",
+      },
+      {
+        heading: "Email único por usuario",
+        text: "Cada email debe quedar asignado a una sola persona. Si el sistema informa que el correo ya está en uso, administración debe revisar los usuarios existentes antes de continuar.",
       },
       {
         heading: "Si no recibís el código",
@@ -2033,6 +2037,31 @@ const HELP_TOPICS = [
           "Puede aparecer una pequeña marca del navegador en el ícono, sobre todo si se instaló desde Edge. Eso es normal.",
         ],
         note: "Aunque esté instalada como app, NIKI OS necesita conexión a internet para operar con datos actualizados.",
+      },
+    ],
+  },
+  {
+    id: "inicio",
+    title: "Inicio y navegación",
+    icon: "🏠",
+    profiles: ["casa_matriz", "encargada", "manicura"],
+    summary: "Cómo usar el muro de inicio, el logo y el menú lateral para moverte dentro de NIKI OS.",
+    sections: [
+      {
+        heading: "Qué aparece al ingresar",
+        text: "Después de iniciar sesión, NIKI OS abre en Inicio. Esta pantalla funciona como muro de bienvenida y punto de partida para entrar rápidamente a los módulos principales.",
+      },
+      {
+        heading: "Volver a Inicio",
+        bullets: [
+          "Podés volver desde la opción Inicio del menú lateral.",
+          "También podés tocar el logo de NIKI ubicado arriba a la izquierda.",
+          "Al volver a Inicio no se borran datos guardados; solo cambiás de pantalla.",
+        ],
+      },
+      {
+        heading: "Cambios de pantalla",
+        text: "Al entrar, cambiar de sección o iniciar sesión, puede aparecer brevemente el logo de NIKI OS como transición. Es normal y ayuda a indicar que el sistema está cargando la próxima pantalla.",
       },
     ],
   },
@@ -2148,7 +2177,7 @@ const HELP_TOPICS = [
     title: "Comisiones",
     icon: "💰",
     profiles: ["casa_matriz", "encargada", "manicura"],
-    summary: "Reporte, actualización nocturna, adelantos, garantías y análisis del detalle.",
+    summary: "Reporte, actualización nocturna, adelantos, garantías, detalle y pago de comisiones.",
     sections: [
       {
         heading: "Para qué sirve",
@@ -2165,6 +2194,7 @@ const HELP_TOPICS = [
           "Adelantos cargados para la manicura.",
           "Garantías aplicadas sobre servicios que debieron corregirse.",
           "Totales y detalles del período consultado.",
+          "Vista resumida de pago para saber rápidamente cuánto se debe abonar.",
         ],
       },
       {
@@ -2190,6 +2220,55 @@ const HELP_TOPICS = [
           "Controlá que no haya filtros activos que oculten parte de la información.",
         ],
         note: "Si después de revisar estos puntos la diferencia continúa, avisá a tu encargada o a administración con el período y el caso que estás revisando.",
+      },
+    ],
+  },
+  {
+    id: "pago-comisiones",
+    title: "Pago de comisiones",
+    icon: "💳",
+    profiles: ["casa_matriz", "encargada"],
+    summary: "Reporte interactivo para ver rápidamente cuánto se debe pagar por local, manicura y semana.",
+    sections: [
+      {
+        heading: "Quién puede verlo",
+        bullets: [
+          "Admin y Casa Matriz lo ven siempre.",
+          "Las encargadas lo ven solamente cuando tienen más de un local asignado.",
+          "Las manicuras no ven este reporte porque el objetivo es revisar pagos consolidados.",
+        ],
+      },
+      {
+        heading: "Filtros disponibles",
+        bullets: [
+          "Tipo de local: todos, propios o franquicias.",
+          "Locales: uno, varios o todos.",
+          "Año, mes y semana.",
+          "Cuando se elige una semana que cruza de mes, el reporte toma la semana completa, aunque incluya días del mes anterior o siguiente.",
+        ],
+      },
+      {
+        heading: "Qué cuadros muestra",
+        bullets: [
+          "Neto a pagar.",
+          "Comisiones brutas.",
+          "Garantías descontadas.",
+          "Adelantos descontados.",
+        ],
+      },
+      {
+        heading: "Cómo usar los gráficos",
+        bullets: [
+          "Al hacer click sobre un local, manicura, semana o tipo de local, se muestra el detalle que compone ese importe.",
+          "En el gráfico por local podés seleccionar uno o varios locales antes de aplicar el filtro.",
+          "Mientras la selección está pendiente, los elementos elegidos quedan resaltados y aparece una opción flotante para Aplicar o Limpiar al lado del elemento clickeado.",
+          "También se mantienen los botones superiores para aplicar o limpiar la selección.",
+          "Al aplicar la selección, los locales no incluidos dejan de verse y el reporte queda filtrado por los locales elegidos.",
+        ],
+      },
+      {
+        heading: "Detalle del reporte",
+        text: "La tabla inferior muestra los movimientos que componen la selección actual: comisiones, garantías y adelantos. Sirve para explicar rápidamente por qué el neto a pagar tiene ese importe.",
       },
     ],
   },
@@ -2264,19 +2343,61 @@ const HELP_TOPICS = [
     title: "Usuarios, manicuras y locales",
     icon: "👥",
     profiles: ["casa_matriz"],
-    summary: "Alta de usuarios, invitaciones, roles, locales propios y franquicias.",
+    summary: "Alta de usuarios, invitaciones, roles, locales propios, franquicias y datos de acceso.",
     sections: [
       {
         heading: "Usuarios y roles",
         text: "Cada usuario tiene un perfil que define qué puede ver y usar. Casa matriz tiene acceso administrativo, las encargadas gestionan la operación de sus locales y las manicuras acceden principalmente a sus horarios, horas, comisiones y perfil.",
       },
       {
-        heading: "Email e invitaciones",
-        text: "El email es importante porque permite enviar invitaciones y recuperar contraseñas. Para usuarios nuevos, la invitación por email ayuda a confirmar que la persona tiene acceso a esa casilla.",
+        heading: "Usuario y email únicos",
+        bullets: [
+          "No debería haber dos usuarios activos con el mismo usuario.",
+          "No debería haber dos usuarios activos con el mismo email.",
+          "El sistema valida duplicados al crear o editar usuarios para evitar problemas de login, recupero de contraseña y verificación de email.",
+        ],
+      },
+      {
+        heading: "Email, invitaciones y verificación",
+        text: "El email permite enviar invitaciones, recuperar contraseñas y validar el primer ingreso mediante código. Las invitaciones y los códigos de verificación usan el remitente transaccional configurado para NIKI OS.",
       },
       {
         heading: "Locales",
         text: "La gestión de locales permite administrar locales propios y franquicias, asignaciones y datos operativos. Estos datos se usan para filtrar información y limitar accesos según corresponda.",
+      },
+    ],
+  },
+  {
+    id: "roadmap",
+    title: "Roadmap de funcionalidades",
+    icon: "🧭",
+    profiles: ["casa_matriz"],
+    summary: "Cómo consultar próximas funcionalidades, planes, definiciones y avance del producto.",
+    sections: [
+      {
+        heading: "Quién puede verlo y editarlo",
+        bullets: [
+          "Admin puede crear, editar, eliminar y mover tareas del roadmap.",
+          "Casa Matriz puede consultar el roadmap, pero no editarlo.",
+          "Encargadas y manicuras no ven esta sección.",
+        ],
+      },
+      {
+        heading: "Qué información tiene cada tarea",
+        bullets: [
+          "Nombre, módulo, fase, fecha estimada, estado, prioridad e impacto.",
+          "Plan: Base, Pro o Premium.",
+          "Avance y valor esperado para la red.",
+          "Definición funcional con problema, alcance, reglas y fases futuras.",
+        ],
+      },
+      {
+        heading: "Línea de tiempo",
+        text: "La línea de tiempo ordena las tareas por mes. Administración puede mover una tarea de un mes a otro con arrastrar y soltar; al hacerlo se actualiza la fecha estimada y el orden del roadmap.",
+      },
+      {
+        heading: "Definiciones funcionales",
+        text: "El botón Ver definición permite abrir el detalle de cada funcionalidad. Sirve para dejar claro qué problema resuelve, qué incluye inicialmente, qué queda fuera de alcance y qué reglas hay que respetar.",
       },
     ],
   },
