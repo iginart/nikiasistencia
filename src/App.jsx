@@ -7841,6 +7841,331 @@ function BloqueoHorarios({ data, reloadData, user, savedState = null, onStateCha
   </div>;
 }
 
+
+function puedeVerReportePagoComisiones(data, user) {
+  if (!user) return false;
+  if (user.rol === "admin" || user.rol === "casa_matriz") return true;
+  if (user.rol === "encargada") return getAssignedLocalIds(data || { locales:[], encargadoLocales:[] }, user).length > 1;
+  return false;
+}
+
+function MiniKpi({ label, value, sub = "", tone = "default" }) {
+  const toneMap = {
+    default: ["#fff", "var(--color-text-primary)"],
+    success: [COLORS.successLight, COLORS.success],
+    danger: [COLORS.dangerLight, COLORS.danger],
+    amber: [COLORS.amberLight, COLORS.amber],
+    info: [COLORS.infoLight, COLORS.info],
+  };
+  const [bg, fg] = toneMap[tone] || toneMap.default;
+  return <Card style={{ padding:"14px 15px",background:bg }}>
+    <p style={{ margin:"0 0 5px",fontSize:11,fontWeight:700,color:"var(--color-text-secondary)",textTransform:"uppercase",letterSpacing:"0.04em" }}>{label}</p>
+    <p style={{ margin:0,fontSize:22,fontWeight:800,color:fg,lineHeight:1.15 }}>{value}</p>
+    {sub && <p style={{ margin:"5px 0 0",fontSize:11,color:"var(--color-text-secondary)",lineHeight:1.35 }}>{sub}</p>}
+  </Card>;
+}
+
+function InteractiveBarChart({ title, subtitle = "", items = [], valueLabel = fmtMoney, selectedIds = [], pendingIds = [], onToggle, onInspect, emptyText = "Sin datos para mostrar.", actionItemId = null, renderAction = null }) {
+  const maxValue = Math.max(1, ...items.map(x => Math.abs(Number(x.value || 0))));
+  const hasPending = pendingIds.length > 0;
+  const pendingSet = new Set(pendingIds.map(String));
+  const selectedSet = new Set(selectedIds.map(String));
+  return <Card style={{ padding:16,overflow:"visible" }}>
+    <div style={{ display:"flex",alignItems:"baseline",justifyContent:"space-between",gap:10,marginBottom:12 }}>
+      <div>
+        <h3 style={{ margin:0,fontSize:15,fontWeight:800,color:"var(--color-text-primary)" }}>{title}</h3>
+        {subtitle && <p style={{ margin:"4px 0 0",fontSize:12,color:"var(--color-text-secondary)" }}>{subtitle}</p>}
+      </div>
+    </div>
+    <div style={{ display:"flex",flexDirection:"column",gap:8 }}>
+      {items.length === 0 && <p style={{ margin:0,padding:"18px 8px",textAlign:"center",fontSize:13,color:"var(--color-text-secondary)" }}>{emptyText}</p>}
+      {items.map(item => {
+        const id = String(item.id);
+        const isPending = pendingSet.has(id);
+        const isApplied = selectedSet.has(id);
+        const muted = hasPending && !isPending;
+        const width = Math.max(4, Math.round((Math.abs(Number(item.value || 0)) / maxValue) * 100));
+        const showAction = renderAction && String(actionItemId || "") === id;
+        return <div key={id} onClick={() => { onToggle?.(item); onInspect?.(item); }} style={{ position:"relative",border:`1px solid ${isPending ? COLORS.pink : isApplied ? COLORS.success : "rgba(120,120,120,0.14)"}`,background:isPending?COLORS.pinkLight:"#fff",borderRadius:12,padding:"9px 10px",cursor:"pointer",opacity:muted?0.42:1,textAlign:"left",transition:"opacity 160ms ease, border 160ms ease, background 160ms ease" }}>
+          <div style={{ display:"flex",alignItems:"center",justifyContent:"space-between",gap:10,marginBottom:6 }}>
+            <span style={{ fontSize:12,fontWeight:750,color:"var(--color-text-primary)",whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis" }}>{item.label}</span>
+            <span style={{ fontSize:12,fontWeight:800,color:Number(item.value || 0) < 0 ? COLORS.danger : COLORS.pinkDark,whiteSpace:"nowrap" }}>{valueLabel(item.value)}</span>
+          </div>
+          <div style={{ height:10,borderRadius:999,background:"rgba(120,120,120,0.12)",overflow:"hidden" }}>
+            <div style={{ height:"100%",width:`${width}%`,borderRadius:999,background:isPending?COLORS.pink:isApplied?COLORS.success:COLORS.pinkDark }} />
+          </div>
+          {item.sub && <p style={{ margin:"5px 0 0",fontSize:11,color:"var(--color-text-secondary)" }}>{item.sub}</p>}
+          {showAction && <div onClick={e=>e.stopPropagation()} style={{ position:"absolute",right:8,top:"50%",transform:"translateY(-50%)",display:"flex",gap:6,alignItems:"center",background:"#fff",border:"1px solid rgba(120,120,120,0.16)",borderRadius:999,padding:"5px 6px",boxShadow:"0 10px 26px rgba(0,0,0,0.16)",zIndex:5 }}>
+            {renderAction(item)}
+          </div>}
+        </div>;
+      })}
+    </div>
+  </Card>;
+}
+
+function DetalleComisionesPago({ rows = [], title = "Detalle" }) {
+  const visibles = rows.slice(0, 80);
+  return <Card style={{ padding:0,overflow:"hidden" }}>
+    <div style={{ padding:"13px 15px",borderBottom:"1px solid rgba(120,120,120,0.14)",display:"flex",alignItems:"center",justifyContent:"space-between",gap:10 }}>
+      <div>
+        <h3 style={{ margin:0,fontSize:15,fontWeight:800 }}>{title}</h3>
+        <p style={{ margin:"3px 0 0",fontSize:12,color:"var(--color-text-secondary)" }}>{rows.length} movimiento{rows.length === 1 ? "" : "s"}</p>
+      </div>
+      <strong style={{ color:COLORS.pinkDark }}>{fmtMoney(rows.reduce((acc,r)=>acc+Number(r.importe || 0),0))}</strong>
+    </div>
+    <div style={{ overflowX:"auto" }}>
+      <table style={{ width:"100%",borderCollapse:"collapse",fontSize:12,minWidth:760 }}>
+        <thead>
+          <tr style={{ background:"var(--color-background-secondary)",color:"var(--color-text-secondary)",textAlign:"left" }}>
+            <th style={{ padding:"9px 10px" }}>Fecha</th>
+            <th style={{ padding:"9px 10px" }}>Local</th>
+            <th style={{ padding:"9px 10px" }}>Manicura</th>
+            <th style={{ padding:"9px 10px" }}>Concepto</th>
+            <th style={{ padding:"9px 10px",textAlign:"right" }}>Importe</th>
+          </tr>
+        </thead>
+        <tbody>
+          {visibles.map((r, idx) => <tr key={`${r.tipo}-${r.id}-${idx}`} style={{ borderTop:"1px solid rgba(120,120,120,0.10)" }}>
+            <td style={{ padding:"8px 10px",whiteSpace:"nowrap" }}>{r.fecha ? String(r.fecha).split("-").reverse().join("/") : "—"}</td>
+            <td style={{ padding:"8px 10px" }}>{r.localNombre || "Sin local"}</td>
+            <td style={{ padding:"8px 10px" }}>{r.manicuraNombre || "—"}</td>
+            <td style={{ padding:"8px 10px" }}><Badge color={r.tipo === "comision" ? "success" : r.tipo === "garantia" ? "danger" : "amber"}>{r.concepto}</Badge></td>
+            <td style={{ padding:"8px 10px",textAlign:"right",fontWeight:800,color:Number(r.importe || 0) < 0 ? COLORS.danger : COLORS.success }}>{fmtMoney(r.importe)}</td>
+          </tr>)}
+          {!visibles.length && <tr><td colSpan={5} style={{ padding:22,textAlign:"center",color:"var(--color-text-secondary)" }}>No hay movimientos para la selección actual.</td></tr>}
+        </tbody>
+      </table>
+    </div>
+    {rows.length > visibles.length && <p style={{ margin:0,padding:"10px 14px",fontSize:12,color:"var(--color-text-secondary)",borderTop:"1px solid rgba(120,120,120,0.10)" }}>Se muestran los primeros {visibles.length} movimientos.</p>}
+  </Card>;
+}
+
+function ReportePagoComisiones({ data, user }) {
+  if (!puedeVerReportePagoComisiones(data, user)) {
+    return <Card><h2 style={{ marginTop:0 }}>Reporte de pago de comisiones</h2><p style={{ margin:0,color:"var(--color-text-secondary)" }}>Este reporte está disponible para Admin, Casa Matriz y encargadas con más de un local asignado.</p></Card>;
+  }
+
+  const hoy = new Date();
+  const allowedIds = getAssignedLocalIds(data, user).map(Number);
+  const localesPermitidos = (data.locales || []).filter(l => user.rol === "admin" || allowedIds.includes(Number(l.id)));
+  const aniosDisponibles = Array.from(new Set([hoy.getFullYear(), ...((data.comisiones || []).map(c => Number(String(c.periodo || c.fechaPago || "").slice(0,4))).filter(Boolean))])).sort((a,b)=>b-a);
+  const [tipoLocal, setTipoLocal] = useState("todos");
+  const [anio, setAnio] = useState(String(aniosDisponibles[0] || hoy.getFullYear()));
+  const [mes, setMes] = useState(String(hoy.getMonth() + 1));
+  const [semana, setSemana] = useState("todas");
+  const [localesAplicados, setLocalesAplicados] = useState([]);
+  const [localesPendientes, setLocalesPendientes] = useState([]);
+  const [detalle, setDetalle] = useState({ tipo:"general", id:null, label:"Detalle del reporte" });
+  const [localAccionId, setLocalAccionId] = useState(null);
+
+  const semanas = useMemo(() => getCommissionWeeksForMonth(Number(anio), Number(mes) - 1), [anio, mes]);
+  useEffect(() => { setSemana("todas"); }, [anio, mes]);
+
+  const localById = useMemo(() => new Map((data.locales || []).map(l => [Number(l.id), l])), [data.locales]);
+  const userById = useMemo(() => new Map((data.users || []).map(u => [Number(u.id), u])), [data.users]);
+  const localNombre = useCallback((id, fallback="") => localById.get(Number(id))?.nombre || fallback || "Sin local", [localById]);
+  const localTipo = useCallback((id) => (localById.get(Number(id))?.tipoLocal || localById.get(Number(id))?.tipo_local || "propio"), [localById]);
+  const periodo = `${anio}-${String(mes).padStart(2,"0")}`;
+  const semanaSeleccionada = semana === "todas" ? null : semanas.find(w => String(w.numero) === String(semana));
+  const localBaseIds = localesPermitidos
+    .filter(l => tipoLocal === "todos" || (l.tipoLocal || l.tipo_local || "propio") === tipoLocal)
+    .map(l => Number(l.id));
+  const localBaseSet = new Set(localBaseIds);
+  const filtroLocalIds = localesAplicados.length ? localesAplicados.map(Number).filter(id => localBaseSet.has(id)) : localBaseIds;
+  const filtroLocalSet = new Set(filtroLocalIds.map(Number));
+
+  const fechaPasaPeriodo = useCallback((fecha) => {
+    const f = String(fecha || "").slice(0,10);
+    if (!f) return false;
+    if (semanaSeleccionada) return isDateInRangeKey(f, semanaSeleccionada.desdeKey, semanaSeleccionada.hastaKey);
+    return f.startsWith(periodo);
+  }, [periodo, semanaSeleccionada]);
+
+  const rowsBase = useMemo(() => {
+    const rows = [];
+    (data.comisiones || []).forEach(c => {
+      const lid = Number(c.localId || 0);
+      if (!localBaseSet.has(lid)) return;
+      if (!fechaPasaPeriodo(c.fechaPago || c.periodo)) return;
+      rows.push({
+        id:c.id,
+        tipo:"comision",
+        fecha:c.fechaPago,
+        localId:lid,
+        localNombre:localNombre(lid, c.nombreLocal),
+        tipoLocal:localTipo(lid),
+        userId:Number(c.userId || 0),
+        manicuraNombre:c.nombreManicura || userById.get(Number(c.userId))?.nombre || "Sin manicura",
+        concepto:c.servicio || "Comisión",
+        importe:Number(c.comision || 0),
+      });
+    });
+    (data.garantias || []).forEach(g => {
+      const lid = Number(g.localId || 0);
+      if (!localBaseSet.has(lid)) return;
+      if (!fechaPasaPeriodo(g.fechaReparacion)) return;
+      rows.push({
+        id:g.id,
+        tipo:"garantia",
+        fecha:g.fechaReparacion,
+        localId:lid,
+        localNombre:localNombre(lid),
+        tipoLocal:localTipo(lid),
+        userId:Number(g.manicuraReparacionId || g.manicuraOriginalId || 0),
+        manicuraNombre:g.nombreManicuraReparacion || g.nombreManicuraOriginal || userById.get(Number(g.manicuraReparacionId || g.manicuraOriginalId))?.nombre || "Sin manicura",
+        concepto:"Garantía",
+        importe:-Math.abs(Number(g.importeComision || 0)),
+      });
+    });
+    (data.adelantos || []).forEach(a => {
+      const lid = Number(a.localId || 0);
+      if (!localBaseSet.has(lid)) return;
+      if (!fechaPasaPeriodo(a.fechaDescuento || a.fecha)) return;
+      rows.push({
+        id:a.id,
+        tipo:"adelanto",
+        fecha:a.fechaDescuento || a.fecha,
+        localId:lid,
+        localNombre:localNombre(lid),
+        tipoLocal:localTipo(lid),
+        userId:Number(a.userId || 0),
+        manicuraNombre:userById.get(Number(a.userId))?.nombre || "Sin manicura",
+        concepto:a.concepto || "Adelanto",
+        importe:-Math.abs(Number(a.importe || 0)),
+      });
+    });
+    return rows.sort((a,b)=>String(b.fecha||"").localeCompare(String(a.fecha||"")) || String(a.localNombre).localeCompare(String(b.localNombre)));
+  }, [data.comisiones, data.garantias, data.adelantos, localBaseSet, fechaPasaPeriodo, localNombre, localTipo, userById]);
+
+  const rowsFiltradas = useMemo(() => rowsBase.filter(r => filtroLocalSet.has(Number(r.localId))), [rowsBase, filtroLocalSet]);
+
+  const agrupar = (rows, getKey, getLabel) => {
+    const map = new Map();
+    rows.forEach(r => {
+      const id = String(getKey(r));
+      const prev = map.get(id) || { id, label:getLabel(r), value:0, count:0, rows:[] };
+      prev.value += Number(r.importe || 0);
+      prev.count += 1;
+      prev.rows.push(r);
+      map.set(id, prev);
+    });
+    return Array.from(map.values()).sort((a,b)=>Math.abs(b.value)-Math.abs(a.value));
+  };
+
+  const porLocalBase = useMemo(() => agrupar(rowsBase, r=>r.localId, r=>r.localNombre).map(x => ({ ...x, sub:`${x.count} movimientos` })), [rowsBase]);
+  const porLocalFiltrado = useMemo(() => agrupar(rowsFiltradas, r=>r.localId, r=>r.localNombre).map(x => ({ ...x, sub:`${x.count} movimientos` })), [rowsFiltradas]);
+  const porLocalVisible = localesAplicados.length ? porLocalFiltrado : porLocalBase;
+  const porManicura = useMemo(() => agrupar(rowsFiltradas, r=>r.userId || r.manicuraNombre, r=>r.manicuraNombre).map(x => ({ ...x, sub:`${x.count} movimientos` })).slice(0,12), [rowsFiltradas]);
+  const porSemana = useMemo(() => agrupar(rowsFiltradas, r=>weekOfMonthValue(r.fecha) || "0", r=>commissionWeekLabel(r.fecha)).map(x => ({ ...x, sub:`${x.count} movimientos` })), [rowsFiltradas]);
+  const porTipo = useMemo(() => agrupar(rowsFiltradas, r=>r.tipoLocal, r=>r.tipoLocal === "franquicia" ? "Franquicias" : "Propios").map(x => ({ ...x, sub:`${x.count} movimientos` })), [rowsFiltradas]);
+
+  const totalBruto = rowsFiltradas.filter(r=>r.tipo === "comision").reduce((a,r)=>a+Number(r.importe||0),0);
+  const totalGarantias = rowsFiltradas.filter(r=>r.tipo === "garantia").reduce((a,r)=>a+Number(r.importe||0),0);
+  const totalAdelantos = rowsFiltradas.filter(r=>r.tipo === "adelanto").reduce((a,r)=>a+Number(r.importe||0),0);
+  const totalNeto = rowsFiltradas.reduce((a,r)=>a+Number(r.importe||0),0);
+  const manicurasCantidad = new Set(rowsFiltradas.map(r=>r.userId || r.manicuraNombre).filter(Boolean)).size;
+  const serviciosCantidad = rowsFiltradas.filter(r=>r.tipo === "comision").length;
+
+  const detalleRows = useMemo(() => {
+    if (detalle?.tipo === "local") return rowsBase.filter(r => String(r.localId) === String(detalle.id));
+    if (detalle?.tipo === "manicura") return rowsFiltradas.filter(r => String(r.userId || r.manicuraNombre) === String(detalle.id));
+    if (detalle?.tipo === "semana") return rowsFiltradas.filter(r => String(weekOfMonthValue(r.fecha) || "0") === String(detalle.id));
+    if (detalle?.tipo === "tipoLocal") return rowsFiltradas.filter(r => String(r.tipoLocal) === String(detalle.id));
+    return rowsFiltradas;
+  }, [detalle, rowsBase, rowsFiltradas]);
+
+  const toggleLocalPendiente = (item) => {
+    const id = Number(item.id);
+    setLocalesPendientes(prev => prev.some(x => Number(x) === id) ? prev.filter(x => Number(x) !== id) : [...prev, id]);
+    setLocalAccionId(id);
+    setDetalle({ tipo:"local", id, label:`Detalle de ${item.label}` });
+  };
+  const toggleLocalCheckbox = (id) => {
+    const n = Number(id);
+    setLocalesPendientes(prev => prev.some(x => Number(x) === n) ? prev.filter(x => Number(x) !== n) : [...prev, n]);
+    setLocalAccionId(n);
+  };
+  const aplicarSeleccionLocal = () => {
+    setLocalesAplicados(localesPendientes.map(Number));
+    setLocalAccionId(null);
+    setDetalle({ tipo:"general", id:null, label:"Detalle filtrado" });
+  };
+  const limpiarSeleccionLocal = () => {
+    setLocalesPendientes([]);
+    setLocalesAplicados([]);
+    setLocalAccionId(null);
+    setDetalle({ tipo:"general", id:null, label:"Detalle del reporte" });
+  };
+  const localesChipsVisibles = localesPermitidos
+    .filter(l => tipoLocal === "todos" || (l.tipoLocal || l.tipo_local || "propio") === tipoLocal)
+    .filter(l => !localesAplicados.length || localesAplicados.some(id => Number(id) === Number(l.id)));
+
+  return <div style={{ display:"flex",flexDirection:"column",gap:16 }}>
+    <div style={{ display:"flex",alignItems:"flex-start",justifyContent:"space-between",gap:12,flexWrap:"wrap" }}>
+      <div>
+        <h2 style={{ margin:"0 0 4px",fontSize:22,fontWeight:850,color:"var(--color-text-primary)" }}>Reporte de pago de comisiones</h2>
+        <p style={{ margin:0,fontSize:13,color:"var(--color-text-secondary)",lineHeight:1.45 }}>Vista rápida de comisiones, garantías y adelantos para estimar el neto a pagar.</p>
+      </div>
+      {(localesPendientes.length > 0 || localesAplicados.length > 0) && <div style={{ display:"flex",gap:8,alignItems:"center",flexWrap:"wrap",background:"#fff",border:"1px solid rgba(120,120,120,0.16)",borderRadius:14,padding:"8px 10px" }}>
+        <span style={{ fontSize:12,fontWeight:700,color:COLORS.pinkDark }}>{localesPendientes.length || localesAplicados.length} local{(localesPendientes.length || localesAplicados.length) === 1 ? "" : "es"} seleccionado{(localesPendientes.length || localesAplicados.length) === 1 ? "" : "s"}</span>
+        <Btn size="sm" onClick={aplicarSeleccionLocal} disabled={!localesPendientes.length}>Aplicar filtro</Btn>
+        <Btn size="sm" variant="ghost" onClick={limpiarSeleccionLocal}>Limpiar</Btn>
+      </div>}
+    </div>
+
+    <Card style={{ padding:14 }}>
+      <div style={{ display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(160px,1fr))",gap:10 }}>
+        <div><label style={{ fontSize:12,fontWeight:700,color:"var(--color-text-secondary)",display:"block",marginBottom:5 }}>Tipo de local</label><Select value={tipoLocal} onChange={(v)=>{ setTipoLocal(v); setLocalesPendientes([]); setLocalesAplicados([]); }}><option value="todos">Todos</option><option value="propio">Propios</option><option value="franquicia">Franquicias</option></Select></div>
+        <div><label style={{ fontSize:12,fontWeight:700,color:"var(--color-text-secondary)",display:"block",marginBottom:5 }}>Año</label><Select value={anio} onChange={setAnio}>{aniosDisponibles.map(y=><option key={y} value={y}>{y}</option>)}</Select></div>
+        <div><label style={{ fontSize:12,fontWeight:700,color:"var(--color-text-secondary)",display:"block",marginBottom:5 }}>Mes</label><Select value={mes} onChange={setMes}>{MESES.map((m,i)=><option key={m} value={i+1}>{m}</option>)}</Select></div>
+        <div><label style={{ fontSize:12,fontWeight:700,color:"var(--color-text-secondary)",display:"block",marginBottom:5 }}>Semana</label><Select value={semana} onChange={setSemana}><option value="todas">Todas</option>{semanas.map(w=><option key={w.numero} value={w.numero}>{w.label}</option>)}</Select></div>
+      </div>
+      <div style={{ marginTop:12,borderTop:"1px solid rgba(120,120,120,0.12)",paddingTop:10 }}>
+        <p style={{ margin:"0 0 8px",fontSize:12,fontWeight:800,color:"var(--color-text-secondary)",textTransform:"uppercase",letterSpacing:"0.04em" }}>Locales</p>
+        <div style={{ display:"flex",gap:8,flexWrap:"wrap" }}>
+          {localesChipsVisibles.map(l => {
+            const pending = localesPendientes.some(id => Number(id) === Number(l.id));
+            const applied = localesAplicados.some(id => Number(id) === Number(l.id));
+            return <button key={l.id} type="button" onClick={()=>toggleLocalCheckbox(l.id)} style={{ border:`1px solid ${pending ? COLORS.pink : applied ? COLORS.success : "rgba(120,120,120,0.18)"}`,background:pending?COLORS.pinkLight:"#fff",borderRadius:999,padding:"7px 10px",fontSize:12,fontWeight:700,cursor:"pointer",color:pending?COLORS.pinkDark:"var(--color-text-primary)" }}>{pending ? "✓ " : applied ? "● " : ""}{l.nombre}</button>;
+          })}
+        </div>
+      </div>
+    </Card>
+
+    <div style={{ display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(180px,1fr))",gap:12 }}>
+      <MiniKpi label="Neto a pagar" value={fmtMoney(totalNeto)} sub={`${filtroLocalIds.length} local(es) · ${manicurasCantidad} manicura(s)`} tone="success" />
+      <MiniKpi label="Comisiones brutas" value={fmtMoney(totalBruto)} sub={`${serviciosCantidad} servicios comisionados`} tone="info" />
+      <MiniKpi label="Garantías" value={fmtMoney(totalGarantias)} sub="Descuentos por reparaciones" tone="danger" />
+      <MiniKpi label="Adelantos" value={fmtMoney(totalAdelantos)} sub="Descuentos cargados" tone="amber" />
+    </div>
+
+    <div style={{ display:"grid",gridTemplateColumns:"minmax(0,1.1fr) minmax(0,0.9fr)",gap:14 }}>
+      <InteractiveBarChart
+        title="Comisiones por local"
+        subtitle={localesAplicados.length ? "Filtro aplicado. Para volver a ver todos los locales, usá Limpiar." : "Hacé click para seleccionar uno o varios locales. Luego aplicá el filtro."}
+        items={porLocalVisible}
+        selectedIds={localesAplicados}
+        pendingIds={localesPendientes}
+        actionItemId={localAccionId}
+        onToggle={toggleLocalPendiente}
+        renderAction={() => <>
+          <Btn size="sm" onClick={aplicarSeleccionLocal} disabled={!localesPendientes.length}>Aplicar</Btn>
+          <Btn size="sm" variant="ghost" onClick={limpiarSeleccionLocal}>Limpiar</Btn>
+        </>}
+      />
+      <InteractiveBarChart title="Comisiones por manicura" subtitle="Click para ver el detalle que compone el importe." items={porManicura} onInspect={(item)=>setDetalle({ tipo:"manicura", id:item.id, label:`Detalle de ${item.label}` })} />
+    </div>
+
+    <div style={{ display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(280px,1fr))",gap:14 }}>
+      <InteractiveBarChart title="Distribución por semana" items={porSemana} onInspect={(item)=>setDetalle({ tipo:"semana", id:item.id, label:`Detalle de ${item.label}` })} />
+      <InteractiveBarChart title="Propios vs franquicias" items={porTipo} onInspect={(item)=>setDetalle({ tipo:"tipoLocal", id:item.id, label:`Detalle de ${item.label}` })} />
+    </div>
+
+    <DetalleComisionesPago rows={detalleRows} title={detalle?.label || "Detalle del reporte"} />
+  </div>;
+}
+
 // ── APP PRINCIPAL ──────────────────────────────────────────────────
 function readSectionHash() {
   const h = (window.location.hash || "").replace(/^#\/?/, "").trim();
@@ -7850,7 +8175,7 @@ function defaultSectionForRole(role) {
   return "inicio";
 }
 function sectionAllowedForRole(section, role) {
-  const reportesOperativos = ["reportes","reportes_horas","reportes_cobertura","reportes_comisiones"];
+  const reportesOperativos = ["reportes","reportes_horas","reportes_cobertura","reportes_comisiones","reporte_pago_comisiones"];
   const admin = ["inicio","ayuda","roadmap","asistencia","horarios","bloqueo_horarios",...reportesOperativos,"turnos","adelantos","garantias","informes","manicuras","encargadas","locales","cobertura_config","perfil"];
   const casaMatriz = ["inicio","ayuda","roadmap","asistencia","horarios","bloqueo_horarios",...reportesOperativos,"adelantos","garantias","informes","manicuras","encargadas","locales","cobertura_config","perfil"];
   const encargada = ["inicio","ayuda","asistencia","horarios","bloqueo_horarios",...reportesOperativos,"adelantos","garantias","informes","manicuras","cobertura_config","perfil"];
@@ -8127,6 +8452,7 @@ export default function App() {
       icon: "💰",
       items: [
         { id: "reportes_comisiones", label: "Reporte de comisiones", icon: "📊" },
+        { id: "reporte_pago_comisiones", label: "Pago de comisiones", icon: "💳" },
         { id: "garantias", label: "Garantías", icon: "🛠️" },
         { id: "adelantos", label: "Adelantos", icon: "💸" },
       ],
@@ -8165,7 +8491,7 @@ export default function App() {
   const menuGroups = menuGroupsBase
     .map(group => ({
       ...group,
-      items: group.items.filter(item => sectionAllowedForRole(item.id, user.rol)),
+      items: group.items.filter(item => sectionAllowedForRole(item.id, user.rol) && (item.id !== "reporte_pago_comisiones" || puedeVerReportePagoComisiones(data, user))),
     }))
     .filter(group => group.items.length > 0);
 
@@ -8441,6 +8767,7 @@ export default function App() {
     if (seccion==="reportes_horas") return renderReportes("horas", "reportes_horas");
     if (seccion==="reportes_cobertura") return user.rol!=="manicura" ? renderReportes("cobertura", "reportes_cobertura") : null;
     if (seccion==="reportes_comisiones") return renderReportes("comisiones", "reportes_comisiones");
+    if (seccion==="reporte_pago_comisiones") return <ReportePagoComisiones data={data} user={user}/>;
     if (seccion==="reportes") return renderReportes("horas", "reportes");
     if (seccion==="adelantos") return user.rol!=="manicura" ? <AdelantosManicuras data={data} reloadData={reloadData} user={user}/> : null;
     if (seccion==="garantias") return user.rol!=="manicura" ? <GarantiasServicios data={data} reloadData={reloadData} user={user}/> : null;
