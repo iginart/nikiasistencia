@@ -3253,14 +3253,34 @@ function Login({ onLogin, reloadData }) {
         return;
       }
       if (requiereVerificarEmail) {
-        await api.solicitarVerificacionEmail({
-          actor_id:securityUser.id,
-          session_token:securityUser.sessionToken,
-          email:emailLimpio,
-        });
-        setSecurityStep("verify_email");
-        setSecurityCode("");
-        setMsg(`Te enviamos un código de verificación a ${emailLimpio}. Ingresalo para continuar.`);
+        try {
+          await api.solicitarVerificacionEmail({
+            actor_id:securityUser.id,
+            session_token:securityUser.sessionToken,
+            email:emailLimpio,
+          });
+          setSecurityStep("verify_email");
+          setSecurityCode("");
+          setMsg(`Te enviamos un código de verificación a ${emailLimpio}. Ingresalo para continuar.`);
+        } catch (emailError) {
+          const msgError = String(emailError?.message || emailError || "");
+          const faltaProveedorEmail = msgError.includes("RESEND_API_KEY") || msgError.toLowerCase().includes("falta configurar");
+          if (!faltaProveedorEmail) throw emailError;
+
+          // Modo de contingencia: producción ya usa Brevo para invitaciones,
+          // pero la función de verificación sigue esperando Resend.
+          // Para no bloquear el primer ingreso, se guarda email + nueva contraseña
+          // sin código hasta unificar login-niki con Brevo.
+          const ahora = new Date().toISOString();
+          await api.updateUser(securityUser.id, { email: emailLimpio, email_actualizado_en: ahora });
+          if (securityUser.passwordTemporal) {
+            await api.changePassword({ mode:"self", actor_id:securityUser.id, session_token:securityUser.sessionToken, target_user_id:securityUser.id, new_password:securityPassword });
+            await api.updateUser(securityUser.id, { password_actualizado_en: ahora });
+          }
+          await reloadData();
+          notifyToast("Datos de seguridad actualizados.", "success", { title:"Seguridad actualizada" });
+          onLogin({ ...securityUser, email: emailLimpio });
+        }
       } else {
         const ahora = new Date().toISOString();
         await api.updateUser(securityUser.id, { email: emailLimpio, email_actualizado_en: ahora });
