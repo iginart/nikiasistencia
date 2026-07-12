@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo, useCallback, useRef } from "react";
+import { useState, useEffect, useLayoutEffect, useMemo, useCallback, useRef } from "react";
 import { createClient } from "@supabase/supabase-js";
 
 // Fuente Montserrat en toda la app, incluyendo controles nativos y botones
@@ -8096,6 +8096,62 @@ function ReportePagoComisiones({ data, user }) {
   const filtroLocalIds = localesAplicados.length ? localesAplicados.map(Number).filter(id => localBaseSet.has(id)) : localBaseIds;
   const filtroLocalSet = new Set(filtroLocalIds.map(Number));
 
+  const configGeneralPagoComisiones = (data.comisionesConfiguracion || []).find(c => c.activo) || { id:1, porcentajeBase:40, porcentajeReducido:35, horasObjetivoDefault:36, maxLlegadasTarde:0, maxFaltasNoJustificadas:0, contarFaltasJustificadas:false, toleranciaLlegadaTardeMinutos:0 };
+  const configManicuraPagoMap = useMemo(() => new Map((data.comisionesManicuraConfig || []).filter(c => c.activo).map(c => [`${c.userId}|${c.localId || 0}`, c])), [data.comisionesManicuraConfig]);
+  const getConfigManicuraPago = useCallback((uid, localIdValue=null) => configManicuraPagoMap.get(`${uid}|${localIdValue || 0}`) || configManicuraPagoMap.get(`${uid}|0`) || null, [configManicuraPagoMap]);
+  const reglaPagoComision = useCallback((uid, localIdValue=null) => {
+    const cfg = getConfigManicuraPago(uid, localIdValue);
+    return {
+      horasObjetivo: Number(cfg?.horasObjetivoSemanales || configGeneralPagoComisiones.horasObjetivoDefault || 36),
+      porcentajeBase: Number(cfg?.porcentajeBase || configGeneralPagoComisiones.porcentajeBase || 40),
+      porcentajeReducido: Number(cfg?.porcentajeReducido || configGeneralPagoComisiones.porcentajeReducido || 35),
+      maxLlegadasTarde: Number(cfg?.maxLlegadasTarde ?? configGeneralPagoComisiones.maxLlegadasTarde ?? 0),
+      maxFaltasNoJustificadas: Number(cfg?.maxFaltasNoJustificadas ?? configGeneralPagoComisiones.maxFaltasNoJustificadas ?? 0),
+      contarFaltasJustificadas: cfg?.contarFaltasJustificadas ?? configGeneralPagoComisiones.contarFaltasJustificadas ?? false,
+    };
+  }, [configGeneralPagoComisiones, getConfigManicuraPago]);
+  const minutosPagoComision = (hhmm) => {
+    const [h,m] = String(hhmm || "").slice(0,5).split(":").map(Number);
+    return (Number.isFinite(h) ? h : 0) * 60 + (Number.isFinite(m) ? m : 0);
+  };
+  const semanaKeysPagoComision = (periodoValue, semanaValue) => {
+    const [yy, mm] = String(periodoValue || "").split("-").map(Number);
+    if (!yy || !mm || !semanaValue) return [];
+    const week = getCommissionWeeksForMonth(yy, mm - 1).find(w => String(w.numero) === String(semanaValue));
+    if (!week) return [];
+    const keys = [];
+    for (let d = new Date(week.desde); d <= week.hasta; d.setDate(d.getDate() + 1)) keys.push(dateKey(d));
+    return keys;
+  };
+  const horasTeoricasPagoSemana = useCallback((uid, periodoValue, semanaValue) => semanaKeysPagoComision(periodoValue, semanaValue).reduce((acc, f) => {
+    const h = (data.horarios || []).find(x => Number(x.userId) === Number(uid) && x.fecha === f && x.trabaja && x.entrada && x.salida);
+    if (!h) return acc;
+    return acc + Math.max(0, minutosPagoComision(h.salida) - minutosPagoComision(h.entrada)) / 60;
+  }, 0), [data.horarios]);
+  const asistenciasPagoSemana = useCallback((uid, periodoValue, semanaValue) => semanaKeysPagoComision(periodoValue, semanaValue).flatMap(f => (data.asistencias || []).filter(a => Number(a.userId) === Number(uid) && a.fecha === f)), [data.asistencias]);
+  const criterioPagoComision = useCallback((uid, periodoValue, semanaValue, localIdValue=null) => {
+    if (!uid || !periodoValue || !semanaValue) return { porcentaje: Number(configGeneralPagoComisiones.porcentajeBase || 40), regla: reglaPagoComision(uid, localIdValue) };
+    const regla = reglaPagoComision(uid, localIdValue);
+    const guardado = (data.comisionesCriterios || []).find(c => c.periodo === periodoValue && String(c.semana) === String(semanaValue) && Number(c.userId) === Number(uid) && Number(c.localId || 0) === Number(localIdValue || 0))
+      || (data.comisionesCriterios || []).find(c => c.periodo === periodoValue && String(c.semana) === String(semanaValue) && Number(c.userId) === Number(uid) && !c.localId);
+    const horas = horasTeoricasPagoSemana(uid, periodoValue, semanaValue);
+    const asistencias = asistenciasPagoSemana(uid, periodoValue, semanaValue);
+    const faltas = asistencias.filter(a => a.estado === "ausente" && (regla.contarFaltasJustificadas || !a.certificado)).length;
+    const llegadasTarde = asistencias.filter(a => a.estado === "tarde").length;
+    const automatico = (faltas > regla.maxFaltasNoJustificadas || horas < regla.horasObjetivo || llegadasTarde > regla.maxLlegadasTarde) ? regla.porcentajeReducido : regla.porcentajeBase;
+    return { porcentaje: Number(guardado?.porcentaje || automatico), regla, guardado: !!guardado, automatico, horas, faltas, llegadasTarde };
+  }, [asistenciasPagoSemana, configGeneralPagoComisiones, data.comisionesCriterios, horasTeoricasPagoSemana, reglaPagoComision]);
+  const comisionConPorcentajePago = (comisionBase, porcentaje, porcentajeBase=40) => Number(comisionBase || 0) * (Number(porcentaje || porcentajeBase) / Math.max(1, Number(porcentajeBase || 40)));
+  const comisionAplicadaPago = useCallback((c) => {
+    const valor = Number(c?.comision || 0);
+    if (!c) return 0;
+    if (c.tipoRegistro === "garantia") return valor;
+    const periodoRegistro = c.periodo || String(c.fechaPago || "").slice(0,7);
+    const semanaRegistro = weekOfMonthValue(c.fechaPago);
+    const info = criterioPagoComision(c.userId, periodoRegistro, semanaRegistro, c.localId);
+    return comisionConPorcentajePago(valor, info.porcentaje, info.regla?.porcentajeBase || configGeneralPagoComisiones.porcentajeBase || 40);
+  }, [criterioPagoComision, configGeneralPagoComisiones]);
+
   const fechaPasaPeriodo = useCallback((fecha) => {
     const f = String(fecha || "").slice(0,10);
     if (!f) return false;
@@ -8119,24 +8175,40 @@ function ReportePagoComisiones({ data, user }) {
         userId:Number(c.userId || 0),
         manicuraNombre:c.nombreManicura || userById.get(Number(c.userId))?.nombre || "Sin manicura",
         concepto:c.servicio || "Comisión",
-        importe:Number(c.comision || 0),
+        importe:comisionAplicadaPago(c),
       });
     });
     (data.garantias || []).forEach(g => {
       const lid = Number(g.localId || 0);
       if (!localBaseSet.has(lid)) return;
       if (!fechaPasaPeriodo(g.fechaReparacion)) return;
-      rows.push({
-        id:g.id,
+      const importeGarantia = Math.abs(Number(g.importeComision || 0));
+      if (!importeGarantia) return;
+      const originalId = Number(g.manicuraOriginalId || 0);
+      const reparacionId = Number(g.manicuraReparacionId || 0);
+      if (originalId) rows.push({
+        id:`garantia-desc-${g.id}`,
         tipo:"garantia",
         fecha:g.fechaReparacion,
         localId:lid,
         localNombre:localNombre(lid),
         tipoLocal:localTipo(lid),
-        userId:Number(g.manicuraReparacionId || g.manicuraOriginalId || 0),
-        manicuraNombre:g.nombreManicuraReparacion || g.nombreManicuraOriginal || userById.get(Number(g.manicuraReparacionId || g.manicuraOriginalId))?.nombre || "Sin manicura",
-        concepto:"Garantía",
-        importe:-Math.abs(Number(g.importeComision || 0)),
+        userId:originalId,
+        manicuraNombre:g.nombreManicuraOriginal || userById.get(originalId)?.nombre || "Manicura original",
+        concepto:`Desc. garantía - ${g.servicio || "Servicio"}`,
+        importe:-importeGarantia,
+      });
+      if (reparacionId) rows.push({
+        id:`garantia-add-${g.id}`,
+        tipo:"garantia",
+        fecha:g.fechaReparacion,
+        localId:lid,
+        localNombre:localNombre(lid),
+        tipoLocal:localTipo(lid),
+        userId:reparacionId,
+        manicuraNombre:g.nombreManicuraReparacion || userById.get(reparacionId)?.nombre || "Reparación",
+        concepto:`Rep. garantía - ${g.servicio || "Servicio"}`,
+        importe:importeGarantia,
       });
     });
     (data.adelantos || []).forEach(a => {
@@ -8157,7 +8229,7 @@ function ReportePagoComisiones({ data, user }) {
       });
     });
     return rows.sort((a,b)=>String(b.fecha||"").localeCompare(String(a.fecha||"")) || String(a.localNombre).localeCompare(String(b.localNombre)));
-  }, [data.comisiones, data.garantias, data.adelantos, localBaseSet, fechaPasaPeriodo, localNombre, localTipo, userById]);
+  }, [data.comisiones, data.garantias, data.adelantos, localBaseSet, fechaPasaPeriodo, localNombre, localTipo, userById, comisionAplicadaPago]);
 
   const rowsFiltradas = useMemo(() => rowsBase.filter(r => filtroLocalSet.has(Number(r.localId))), [rowsBase, filtroLocalSet]);
 
@@ -8336,7 +8408,7 @@ export default function App() {
     setScreenState(prev => ({ ...prev, [key]: value }));
   }, []);
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     if (!seccion) return;
     if (previousSectionRef.current && previousSectionRef.current !== seccion) {
       setScreenTransition(true);
@@ -8619,6 +8691,7 @@ export default function App() {
   const allMenuItems = menuGroups.flatMap(group => group.items);
   const currentMenuItem = allMenuItems.find(item => item.id === seccion);
   const currentGroup = menuGroups.find(group => group.items.some(item => item.id === seccion));
+  const desktopOpenGroupId = Object.keys(desktopMenuGroupsOpen || {}).find(groupId => desktopMenuGroupsOpen[groupId]);
 
   const goToSection = (id) => {
     if (!id) return;
@@ -8630,13 +8703,15 @@ export default function App() {
     if (!sectionAllowedForRole(id, user.rol)) return;
     window.history.replaceState(null, "", `#${id}`);
     setSeccion(id);
+    const targetGroup = menuGroups.find(group => group.items.some(item => item.id === id));
+    setDesktopMenuGroupsOpen(targetGroup && targetGroup.id !== "inicio" ? { [targetGroup.id]: true } : {});
     if (id !== "horarios") setAgendaRequest(null);
     setMenuOpen(false);
     setMobileMenuGroup(null);
   };
 
   const toggleDesktopMenuGroup = (groupId) => {
-    setDesktopMenuGroupsOpen(prev => ({ ...prev, [groupId]: !prev[groupId] }));
+    setDesktopMenuGroupsOpen(prev => prev?.[groupId] ? {} : { [groupId]: true });
   };
 
   const mobileBottomItems = [
@@ -8907,7 +8982,7 @@ export default function App() {
     <div style={{ minHeight:"100vh",background:"var(--color-background-tertiary)",display:"flex",flexDirection:"column",maxWidth:"100vw",overflowX:"hidden" }}>
       <ToastStack toasts={toasts} onDismiss={dismissToast} onAction={handleNotificationAction}/>
       {screenTransition && <NikiSplash text="" fullScreen={false} compact />}
-      <header style={{ background:"#e1c6cc",color:COLORS.pinkDark,padding:"0 16px",height:66,display:"flex",alignItems:"center",justifyContent:"space-between",position:"sticky",top:0,left:0,right:0,width:"100%",maxWidth:"100vw",boxSizing:"border-box",zIndex:1000,overflow:"visible",flexShrink:0 }}>
+      <header style={{ background:"#e1c6cc",color:COLORS.pinkDark,padding:"0 16px",height:66,display:"flex",alignItems:"center",justifyContent:"space-between",position:isDesktopMenu?"fixed":"sticky",top:0,left:0,right:0,width:"100%",maxWidth:"100vw",boxSizing:"border-box",zIndex:1200,overflow:"visible",flexShrink:0,boxShadow:isDesktopMenu?"0 6px 18px rgba(0,0,0,0.06)":"none" }}>
         <button
           type="button"
           onClick={() => goToSection("inicio")}
@@ -8925,7 +9000,7 @@ export default function App() {
         </div>
       </header>
 
-      <div style={{ display:"flex",flex:1,position:"relative",minWidth:0,maxWidth:"100vw",overflowX:"hidden" }}>
+      <div style={{ display:"flex",flex:1,position:"relative",minWidth:0,maxWidth:"100vw",overflowX:"hidden",marginTop:isDesktopMenu?66:0,paddingLeft:isDesktopMenu?244:0,boxSizing:"border-box" }}>
         {isDesktopMenu && (
           <nav style={{
             width:244,
@@ -8933,12 +9008,14 @@ export default function App() {
             borderRight:"0.5px solid rgba(120,120,120,0.18)",
             overflowX:"hidden",
             flexShrink:0,
-            position:"sticky",
+            position:"fixed",
             top:66,
-            zIndex:1,
-            alignSelf:"flex-start",
-            maxHeight:"calc(100vh - 66px)",
+            left:0,
+            bottom:0,
+            zIndex:1050,
+            height:"calc(100vh - 66px)",
             overflowY:"auto",
+            boxShadow:"6px 0 18px rgba(0,0,0,0.03)",
           }}>
             <div style={{ padding:"14px 10px 18px",display:"flex",flexDirection:"column",gap:14,minWidth:220 }}>
               {menuGroups.map(group => {
@@ -8973,7 +9050,7 @@ export default function App() {
                   );
                 }
                 const activeGroup = group.items.some(item => item.id === seccion);
-                const isOpen = !!desktopMenuGroupsOpen[group.id] || activeGroup;
+                const isOpen = desktopOpenGroupId ? desktopOpenGroupId === group.id : activeGroup;
                 return (
                   <div key={group.id} style={{ borderRadius:14, overflow:"hidden" }}>
                     <button
