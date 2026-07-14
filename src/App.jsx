@@ -3879,10 +3879,28 @@ function ABMManicuras({ data, reloadData, user }) {
   const [form, setForm] = useState({});
   const [formErr, setFormErr] = useState("");
   const [saving, setSaving] = useState(false);
+  const [filtroLocal, setFiltroLocal] = useState("todos");
+  const [filtroEstado, setFiltroEstado] = useState("activas");
+  const [agrupacion, setAgrupacion] = useState("local");
   const esAdmin = isAdminLikeRole(user.rol);
   const allowedLocalIds = getAssignedLocalIds(data, user);
   const localesPermitidos = esAdmin ? data.locales : data.locales.filter(l => allowedLocalIds.includes(l.id));
   const manicuras = data.users.filter(u => u.rol === "manicura" && (esAdmin || allowedLocalIds.includes(u.localId)));
+  const manicurasFiltradas = useMemo(() => manicuras
+    .filter(m => filtroLocal === "todos" || String(m.localId || "") === String(filtroLocal))
+    .filter(m => filtroEstado === "todas" || (filtroEstado === "activas" ? m.activo : !m.activo))
+    .sort((a,b) => (a.nombre || "").localeCompare(b.nombre || "")), [manicuras, filtroLocal, filtroEstado]);
+  const gruposManicuras = useMemo(() => {
+    if (agrupacion !== "local") return [{ key:"todas", label:"Todas las manicuras", items:manicurasFiltradas }];
+    const grupos = new Map();
+    manicurasFiltradas.forEach(m => {
+      const local = data.locales.find(l => l.id === m.localId);
+      const key = String(m.localId || "sin-local");
+      if (!grupos.has(key)) grupos.set(key, { key, label:local?.nombre || "Sin local asignado", items:[] });
+      grupos.get(key).items.push(m);
+    });
+    return Array.from(grupos.values()).sort((a,b) => a.label.localeCompare(b.label));
+  }, [manicurasFiltradas, agrupacion, data.locales]);
   const openNew = () => { setForm({ nombre:"",usuario:"",email:"",codigoExterno:"",password:"",password2:"",localId:localesPermitidos[0]?.id||"",activo:true }); setFormErr(""); setModal("new"); };
   const openEdit = u => { setForm({...u,password:"",password2:""}); setFormErr(""); setModal("edit"); };
 
@@ -3943,21 +3961,59 @@ function ABMManicuras({ data, reloadData, user }) {
         <h2 style={{ margin:0,fontSize:18,fontWeight:500 }}>Manicuras</h2>
         <Btn onClick={openNew} size="sm">+ Nueva</Btn>
       </div>
-      <div style={{ display:"flex",flexDirection:"column",gap:8 }}>
-        {manicuras.map(m => {
-          const local = data.locales.find(l=>l.id===m.localId);
-          return <Card key={m.id} style={{ display:"flex",alignItems:"center",gap:12,flexWrap:"wrap" }}>
-            <Avatar nombre={m.nombre}/>
-            <div style={{ flex:1,minWidth:0 }}>
-              <p style={{ margin:0,fontWeight:500,fontSize:14 }}>{m.nombre}</p>
-              <p style={{ margin:0,fontSize:12,color:"var(--color-text-secondary)" }}>{m.usuario} · {m.email||"Sin mail"} · {local?.nombre||"Sin local"}{m.codigoExterno?` · AgendaPro: ${m.codigoExterno}`:""}</p>
-            </div>
-            <Badge color={m.activo?"success":"gray"}>{m.activo?"Activa":"Inactiva"}</Badge>
-            <Btn onClick={()=>openEdit(m)} variant="ghost" size="sm">Editar</Btn>
-            <Btn onClick={()=>reenviarInvitacion(m)} variant="ghost" size="sm" disabled={!m.email}>Invitar</Btn>
-            <Btn onClick={()=>toggle(m)} variant="ghost" size="sm" style={{ color:m.activo?COLORS.danger:COLORS.success }}>{m.activo?"Desactivar":"Activar"}</Btn>
-          </Card>;
-        })}
+      <Card style={{ marginBottom:14,padding:"12px 14px" }}>
+        <div style={{ display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(190px,1fr))",gap:10,alignItems:"end" }}>
+          <div>
+            <label style={{ display:"block",fontSize:11,fontWeight:600,color:"var(--color-text-secondary)",marginBottom:5,textTransform:"uppercase",letterSpacing:"0.04em" }}>Sucursal asignada</label>
+            <Select value={filtroLocal} onChange={setFiltroLocal}>
+              <option value="todos">Todas las sucursales</option>
+              {localesPermitidos.slice().sort((a,b)=>(a.nombre||"").localeCompare(b.nombre||"")).map(l=><option key={l.id} value={l.id}>{l.nombre}</option>)}
+              <option value="">Sin local asignado</option>
+            </Select>
+          </div>
+          <div>
+            <label style={{ display:"block",fontSize:11,fontWeight:600,color:"var(--color-text-secondary)",marginBottom:5,textTransform:"uppercase",letterSpacing:"0.04em" }}>Estado</label>
+            <Select value={filtroEstado} onChange={setFiltroEstado}>
+              <option value="activas">Activas</option>
+              <option value="inactivas">Inactivas</option>
+              <option value="todas">Todas</option>
+            </Select>
+          </div>
+          <div>
+            <label style={{ display:"block",fontSize:11,fontWeight:600,color:"var(--color-text-secondary)",marginBottom:5,textTransform:"uppercase",letterSpacing:"0.04em" }}>Agrupar</label>
+            <Select value={agrupacion} onChange={setAgrupacion}>
+              <option value="local">Por sucursal</option>
+              <option value="ninguna">Sin agrupar</option>
+            </Select>
+          </div>
+          <div style={{ fontSize:12,color:"var(--color-text-secondary)",paddingBottom:8 }}>
+            {manicurasFiltradas.length} manicura{manicurasFiltradas.length===1?"":"s"}
+          </div>
+        </div>
+      </Card>
+      <div style={{ display:"flex",flexDirection:"column",gap:14 }}>
+        {gruposManicuras.length === 0 ? <Card><p style={{ margin:0,textAlign:"center",fontSize:13,color:"var(--color-text-secondary)" }}>No hay manicuras para los filtros seleccionados.</p></Card> : gruposManicuras.map(grupo => <div key={grupo.key}>
+          {agrupacion === "local" && <div style={{ display:"flex",alignItems:"center",gap:8,margin:"0 0 7px 4px" }}>
+            <h3 style={{ margin:0,fontSize:14,fontWeight:700 }}>{grupo.label}</h3>
+            <Badge color="info">{grupo.items.length}</Badge>
+          </div>}
+          <div style={{ display:"flex",flexDirection:"column",gap:8 }}>
+            {grupo.items.map(m => {
+              const local = data.locales.find(l=>l.id===m.localId);
+              return <Card key={m.id} style={{ display:"flex",alignItems:"center",gap:12,flexWrap:"wrap" }}>
+                <Avatar nombre={m.nombre}/>
+                <div style={{ flex:1,minWidth:0 }}>
+                  <p style={{ margin:0,fontWeight:500,fontSize:14 }}>{m.nombre}</p>
+                  <p style={{ margin:0,fontSize:12,color:"var(--color-text-secondary)" }}>{m.usuario} · {m.email||"Sin mail"} · {local?.nombre||"Sin local"}{m.codigoExterno?` · AgendaPro: ${m.codigoExterno}`:""}</p>
+                </div>
+                <Badge color={m.activo?"success":"gray"}>{m.activo?"Activa":"Inactiva"}</Badge>
+                <Btn onClick={()=>openEdit(m)} variant="ghost" size="sm">Editar</Btn>
+                <Btn onClick={()=>reenviarInvitacion(m)} variant="ghost" size="sm" disabled={!m.email}>Invitar</Btn>
+                <Btn onClick={()=>toggle(m)} variant="ghost" size="sm" style={{ color:m.activo?COLORS.danger:COLORS.success }}>{m.activo?"Desactivar":"Activar"}</Btn>
+              </Card>;
+            })}
+          </div>
+        </div>)}
       </div>
       {modal && <Modal title={modal==="new"?"Nueva manicura":"Editar manicura"} onClose={()=>setModal(null)}>
         <div style={{ display:"flex",flexDirection:"column",gap:14 }}>
@@ -6142,6 +6198,10 @@ function ABMEncargadas({ data, reloadData, user }) {
   const [form, setForm] = useState({});
   const [formErr, setFormErr] = useState("");
   const [saving, setSaving] = useState(false);
+  const [filtroRol, setFiltroRol] = useState("todos");
+  const [filtroLocal, setFiltroLocal] = useState("todos");
+  const [filtroEstado, setFiltroEstado] = useState("activas");
+  const [agrupacion, setAgrupacion] = useState("rol");
   const actorEsAdmin = user.rol === "admin";
   const actorEsCasaMatriz = user.rol === "casa_matriz";
   const rolesGestionables = actorEsAdmin
@@ -6157,6 +6217,47 @@ function ABMEncargadas({ data, reloadData, user }) {
   const franquiciasDeCasaMatriz = (uid) => (data.usuarioLocales||[]).filter(x=>x.userId===uid).map(x=>x.localId);
   const localesGestionables = user.rol === "admin" ? (data.locales || []) : (data.locales || []).filter(l => getAssignedLocalIds(data, user).includes(l.id));
   const franquiciasDisponibles = (data.locales || []).filter(l => (l.tipoLocal || l.tipo_local || "propio") === "franquicia");
+  const localesEfectivosUsuario = useCallback((u) => {
+    if (u.rol === "admin") return (data.locales || []).map(l => l.id);
+    if (u.rol === "casa_matriz") {
+      const propios = (data.locales || []).filter(l => (l.tipoLocal || l.tipo_local || "propio") === "propio").map(l => l.id);
+      return Array.from(new Set([...propios, ...franquiciasDeCasaMatriz(u.id)]));
+    }
+    if (u.rol === "encargada") return localesDeEncargada(u.id);
+    return [];
+  }, [data.locales, data.usuarioLocales, data.encargadoLocales]);
+  const usuariosFiltrados = useMemo(() => usuariosInternos.filter(u => {
+    if (filtroRol !== "todos" && u.rol !== filtroRol) return false;
+    if (filtroLocal !== "todos" && !localesEfectivosUsuario(u).some(id => String(id) === String(filtroLocal))) return false;
+    if (filtroEstado !== "todas" && (filtroEstado === "activas" ? !u.activo : u.activo)) return false;
+    return true;
+  }), [usuariosInternos, filtroRol, filtroLocal, filtroEstado, localesEfectivosUsuario]);
+  const gruposUsuarios = useMemo(() => {
+    if (agrupacion === "ninguna") return [{ key:"todos", label:"Todos los usuarios", items:usuariosFiltrados }];
+    const grupos = new Map();
+    usuariosFiltrados.forEach(u => {
+      if (agrupacion === "rol") {
+        const key = u.rol || "sin-rol";
+        if (!grupos.has(key)) grupos.set(key, { key, label:roleLabel(u.rol) || "Sin tipo", items:[] });
+        grupos.get(key).items.push(u);
+        return;
+      }
+      const ids = localesEfectivosUsuario(u);
+      if (!ids.length) {
+        if (!grupos.has("sin-local")) grupos.set("sin-local", { key:"sin-local", label:"Sin sucursal asignada", items:[] });
+        grupos.get("sin-local").items.push(u);
+        return;
+      }
+      ids.forEach(id => {
+        const local = data.locales.find(l => l.id === id);
+        const key = String(id);
+        if (!grupos.has(key)) grupos.set(key, { key, label:local?.nombre || "Sucursal sin nombre", items:[] });
+        grupos.get(key).items.push(u);
+      });
+    });
+    const roleOrder = { admin:1, casa_matriz:2, encargada:3 };
+    return Array.from(grupos.values()).sort((a,b) => agrupacion === "rol" ? (roleOrder[a.key]||99)-(roleOrder[b.key]||99) : a.label.localeCompare(b.label));
+  }, [usuariosFiltrados, agrupacion, localesEfectivosUsuario, data.locales]);
 
   const openNew = () => {
     const rolInicial = actorEsAdmin ? "encargada" : "encargada";
@@ -6277,28 +6378,72 @@ function ABMEncargadas({ data, reloadData, user }) {
     <p style={{ margin:"-8px 0 14px",fontSize:13,color:"var(--color-text-secondary)" }}>
       Admin puede gestionar todos los perfiles. Casa Matriz puede gestionar usuarios internos, excepto usuarios Admin.
     </p>
-    <div style={{ display:"flex",flexDirection:"column",gap:8 }}>
-      {usuariosInternos.map(e=>{
-        const locs=e.rol === "encargada"
-          ? localesDeEncargada(e.id).map(id=>data.locales.find(l=>l.id===id)?.nombre).filter(Boolean).join(", ")
-          : e.rol === "casa_matriz"
-            ? franquiciasDeCasaMatriz(e.id).map(id=>data.locales.find(l=>l.id===id)?.nombre).filter(Boolean).join(", ")
-            : "";
-        const bloqueado = !canManageUserRole(user, e.rol);
-        return <Card key={e.id} style={{ display:"flex",alignItems:"center",gap:12,flexWrap:"wrap" }}>
-          <Avatar nombre={e.nombre}/>
-          <div style={{ flex:1,minWidth:0 }}>
-            <p style={{ margin:0,fontWeight:500,fontSize:14 }}>{e.nombre}</p>
-            <p style={{ margin:0,fontSize:12,color:"var(--color-text-secondary)" }}>
-              {e.usuario} · {e.email||"Sin mail"} · {roleLabel(e.rol)}{locs?` · ${locs}`:""}
-            </p>
-          </div>
-          <Badge color={e.activo?"success":"gray"}>{e.activo?"Activa":"Inactiva"}</Badge>
-          <Btn onClick={()=>openEdit(e)} variant="ghost" size="sm" disabled={bloqueado}>Editar</Btn>
-          <Btn onClick={()=>reenviarInvitacion(e)} variant="ghost" size="sm" disabled={!e.email || bloqueado}>Invitar</Btn>
-          <Btn onClick={()=>toggle(e)} variant="ghost" size="sm" disabled={bloqueado} style={{ color:e.activo?COLORS.danger:COLORS.success }}>{e.activo?"Desactivar":"Activar"}</Btn>
-        </Card>;
-      })}
+    <Card style={{ marginBottom:14,padding:"12px 14px" }}>
+      <div style={{ display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(190px,1fr))",gap:10,alignItems:"end" }}>
+        <div>
+          <label style={{ display:"block",fontSize:11,fontWeight:600,color:"var(--color-text-secondary)",marginBottom:5,textTransform:"uppercase",letterSpacing:"0.04em" }}>Tipo de usuario</label>
+          <Select value={filtroRol} onChange={setFiltroRol}>
+            <option value="todos">Todos los tipos</option>
+            {actorEsAdmin && <option value="admin">Admin</option>}
+            <option value="casa_matriz">Casa Matriz</option>
+            <option value="encargada">Encargada</option>
+          </Select>
+        </div>
+        <div>
+          <label style={{ display:"block",fontSize:11,fontWeight:600,color:"var(--color-text-secondary)",marginBottom:5,textTransform:"uppercase",letterSpacing:"0.04em" }}>Sucursal asignada</label>
+          <Select value={filtroLocal} onChange={setFiltroLocal}>
+            <option value="todos">Todas las sucursales</option>
+            {localesGestionables.slice().sort((a,b)=>(a.nombre||"").localeCompare(b.nombre||"")).map(l=><option key={l.id} value={l.id}>{l.nombre}</option>)}
+          </Select>
+        </div>
+        <div>
+          <label style={{ display:"block",fontSize:11,fontWeight:600,color:"var(--color-text-secondary)",marginBottom:5,textTransform:"uppercase",letterSpacing:"0.04em" }}>Estado</label>
+          <Select value={filtroEstado} onChange={setFiltroEstado}>
+            <option value="activas">Activas</option>
+            <option value="inactivas">Inactivas</option>
+            <option value="todas">Todas</option>
+          </Select>
+        </div>
+        <div>
+          <label style={{ display:"block",fontSize:11,fontWeight:600,color:"var(--color-text-secondary)",marginBottom:5,textTransform:"uppercase",letterSpacing:"0.04em" }}>Agrupar</label>
+          <Select value={agrupacion} onChange={setAgrupacion}>
+            <option value="rol">Por tipo</option>
+            <option value="local">Por sucursal</option>
+            <option value="ninguna">Sin agrupar</option>
+          </Select>
+        </div>
+        <div style={{ fontSize:12,color:"var(--color-text-secondary)",paddingBottom:8 }}>
+          {usuariosFiltrados.length} usuario{usuariosFiltrados.length===1?"":"s"}
+        </div>
+      </div>
+    </Card>
+    <div style={{ display:"flex",flexDirection:"column",gap:14 }}>
+      {gruposUsuarios.length === 0 ? <Card><p style={{ margin:0,textAlign:"center",fontSize:13,color:"var(--color-text-secondary)" }}>No hay usuarios para los filtros seleccionados.</p></Card> : gruposUsuarios.map(grupo => <div key={grupo.key}>
+        {agrupacion !== "ninguna" && <div style={{ display:"flex",alignItems:"center",gap:8,margin:"0 0 7px 4px" }}>
+          <h3 style={{ margin:0,fontSize:14,fontWeight:700 }}>{grupo.label}</h3>
+          <Badge color={agrupacion === "rol" ? "pink" : "info"}>{grupo.items.length}</Badge>
+        </div>}
+        <div style={{ display:"flex",flexDirection:"column",gap:8 }}>
+          {grupo.items.map(e=>{
+            const ids = localesEfectivosUsuario(e);
+            const locs = ids.map(id=>data.locales.find(l=>l.id===id)?.nombre).filter(Boolean).join(", ");
+            const bloqueado = !canManageUserRole(user, e.rol);
+            return <Card key={`${grupo.key}-${e.id}`} style={{ display:"flex",alignItems:"center",gap:12,flexWrap:"wrap" }}>
+              <Avatar nombre={e.nombre}/>
+              <div style={{ flex:1,minWidth:0 }}>
+                <p style={{ margin:0,fontWeight:500,fontSize:14 }}>{e.nombre}</p>
+                <p style={{ margin:0,fontSize:12,color:"var(--color-text-secondary)" }}>
+                  {e.usuario} · {e.email||"Sin mail"} · {roleLabel(e.rol)}{locs?` · ${locs}`:" · Sin sucursal asignada"}
+                </p>
+              </div>
+              <Badge color={e.activo?"success":"gray"}>{e.activo?"Activa":"Inactiva"}</Badge>
+              <Btn onClick={()=>openEdit(e)} variant="ghost" size="sm" disabled={bloqueado}>Editar</Btn>
+              <Btn onClick={()=>reenviarInvitacion(e)} variant="ghost" size="sm" disabled={!e.email || bloqueado}>Invitar</Btn>
+              <Btn onClick={()=>toggle(e)} variant="ghost" size="sm" disabled={bloqueado} style={{ color:e.activo?COLORS.danger:COLORS.success }}>{e.activo?"Desactivar":"Activar"}</Btn>
+            </Card>;
+          })}
+        </div>
+      </div>)}
     </div>
     {modal && <Modal title={modal==="new"?"Nuevo usuario interno":"Editar usuario interno"} onClose={()=>setModal(null)}>
       <div style={{ display:"flex",flexDirection:"column",gap:14 }}>
