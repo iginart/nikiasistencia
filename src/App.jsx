@@ -233,6 +233,10 @@ const api = {
   updateLocal: (id, d) => sb(`locales?id=eq.${id}`, { method: "PATCH", body: JSON.stringify(d) }),
   deleteLocal: (id) => sb(`locales?id=eq.${id}`, { method: "DELETE", prefer: "" }),
   getUsuarioLocales: () => sb("usuario_locales?select=*"),
+  getManicuraHistorialLocales: () => sb("manicura_historial_locales?select=*&order=user_id,fecha_inicio.desc,id.desc"),
+  createManicuraHistorialLocal: (d) => sb("manicura_historial_locales", { method:"POST", body:JSON.stringify(d) }),
+  updateManicuraHistorialLocal: (id, d) => sb(`manicura_historial_locales?id=eq.${id}`, { method:"PATCH", body:JSON.stringify(d) }),
+  deleteManicuraHistorialLocal: (id) => sb(`manicura_historial_locales?id=eq.${id}`, { method:"DELETE", prefer:"" }),
   setUsuarioLocales: async (userId, localIds) => {
     await sb(`usuario_locales?user_id=eq.${userId}`, { method:"DELETE", prefer:"" });
     if (!localIds?.length) return [];
@@ -389,6 +393,7 @@ function normalizeLocal(l) {
   };
 }
 function normalizeUsuarioLocal(x) { return { userId:x.user_id, localId:x.local_id }; }
+function normalizeManicuraHistorialLocal(x) { return { id:x.id, userId:x.user_id, localId:x.local_id, fechaInicio:x.fecha_inicio || "", fechaFin:x.fecha_fin || "", motivoFin:x.motivo_fin || "", observacion:x.observacion || "", creadoEn:x.creado_en || "", actualizadoEn:x.actualizado_en || "" }; }
 function isValidEmail(email) {
   return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(email || "").trim());
 }
@@ -2482,49 +2487,173 @@ const HELP_TOPICS = [
     title: "Comisiones",
     icon: "💰",
     profiles: ["casa_matriz", "encargada", "manicura"],
-    summary: "Reporte, actualización nocturna, adelantos, garantías, detalle y pago de comisiones.",
+    summary: "Cómo se calculan, revisan y pagan las comisiones, incluyendo adelantos, garantías y ajustes manuales.",
     sections: [
       {
-        heading: "Para qué sirve",
-        text: "El reporte de comisiones permite consultar el detalle de los servicios realizados y cómo se compone el total a cobrar. La manicura puede revisar su información y las encargadas o casa matriz pueden analizar los datos según sus permisos.",
-      },
-      {
-        heading: "Cuándo se actualiza",
-        text: "El reporte de comisiones se actualiza automáticamente por la noche, una vez por día. Si hoy se cargaron nuevos datos, es posible que se vean reflejados recién al día siguiente.",
-      },
-      {
-        heading: "Qué contempla",
+        heading: "Para qué sirve el reporte",
+        text: "El Reporte de comisiones reúne la venta realizada por cada manicura, la comisión calculada, los adelantos, los ajustes por garantías y el importe neto a pagar. La información puede consultarse por local, manicura, año, mes y semana.",
         bullets: [
-          "Servicios realizados e importes de comisión.",
-          "Adelantos cargados para la manicura.",
-          "Garantías aplicadas sobre servicios que debieron corregirse.",
-          "Totales y detalles del período consultado.",
-          "Vista resumida de pago para saber rápidamente cuánto se debe abonar.",
+          "Venta total: suma de los servicios incluidos en la selección.",
+          "Comisión definitiva: importe que corresponde según el porcentaje aplicado.",
+          "Adelantos: importes que deben descontarse en la semana seleccionada.",
+          "Neto a pagar: comisión definitiva menos adelantos, más o menos ajustes por garantías.",
+          "Servicios y clientes: cantidad de atenciones y clientes diferentes incluidos.",
+        ],
+        image: "/ayuda/comisiones-reporte-general.png",
+        imageAlt: "Vista general del reporte de comisiones",
+        imageCaption: "La parte superior resume venta, comisión, adelantos, garantías, servicios, clientes y neto a pagar.",
+      },
+      {
+        heading: "Actualización de la información",
+        text: "Los servicios y comisiones se importan automáticamente una vez por día. La fecha y hora de la última importación aparecen en la parte superior del reporte.",
+        bullets: [
+          "Los movimientos cargados durante el día pueden verse reflejados recién después de la próxima importación.",
+          "Antes de revisar una diferencia, verificá la fecha de actualización.",
+          "Los adelantos y las garantías se incorporan según la semana de descuento o reparación correspondiente.",
         ],
       },
       {
-        heading: "Cómo se calculan las garantías",
-        text: "Cuando se registra una garantía, se toma como referencia la comisión del servicio original. El sistema deja relacionado el servicio, la cliente, la manicura original, el motivo y la reparación realizada. Ese importe puede impactar en el cálculo del período correspondiente.",
+        heading: "Cómo funcionan los adelantos",
+        text: "Un adelanto es dinero entregado antes del pago habitual de comisiones. El sistema no lo descuenta necesariamente todo junto: puede registrarse para una fecha determinada o dividirse en cuotas.",
+        bullets: [
+          "Cada cuota tiene una fecha de descuento.",
+          "El reporte toma solamente las cuotas cuya fecha cae dentro de la semana seleccionada.",
+          "El importe aparece como negativo en la columna Adelantos.",
+          "El adelanto reduce el Neto a pagar, pero no modifica la venta ni la comisión generada por los servicios.",
+          "Si una manicura no generó suficiente comisión, el neto puede quedar negativo.",
+          "Los descuentos futuros no afectan la semana actual hasta que llegue su fecha.",
+        ],
+        note: "Para entender una diferencia, revisá el plan completo del adelanto: importe total, cuotas descontadas, saldo pendiente y próxima fecha de descuento.",
       },
       {
-        heading: "Cómo usar el detalle de comisiones",
+        heading: "Cómo se descuentan las garantías",
+        text: "Cuando un servicio debe rehacerse como garantía, el sistema relaciona el servicio original con la reparación y genera los ajustes correspondientes.",
         bullets: [
-          "Ordená columnas para revisar primero fechas, locales, servicios o importes.",
-          "Agrupá columnas para ver subtotales por manicura, local, servicio o período.",
-          "Usá filtros para buscar una cliente, servicio o caso puntual.",
-          "Revisá el detalle antes de consultar una diferencia, porque el total puede incluir adelantos o garantías.",
+          "La manicura que realizó el servicio original recibe un descuento equivalente a la comisión de ese servicio.",
+          "La manicura que realiza la reparación puede recibir el crédito de esa misma comisión.",
+          "En el resumen, los descuentos aparecen en rojo y los créditos en verde.",
+          "En el detalle, la fila Desc. garantía representa el débito aplicado a la manicura original.",
+          "La fila Rep. garantía representa el crédito asignado a quien realizó la reparación.",
+          "Estos ajustes modifican el Neto a pagar, pero no aumentan la venta del período.",
+        ],
+        image: "/ayuda/comisiones-garantias-detalle.png",
+        imageAlt: "Filas de descuento y reparación de garantías",
+        imageCaption: "El detalle identifica por separado el descuento de la garantía y el crédito por la reparación.",
+      },
+      {
+        heading: "Cómo se calcula el día de pago",
+        text: "El sistema utiliza la agenda teórica del sábado de control para estimar la fecha de pago. La fecha definitiva se confirma cuando finaliza ese sábado.",
+        bullets: [
+          "Si la manicura trabaja el sábado, el pago se estima según la regla configurada para quienes trabajan ese día.",
+          "Si no trabaja el sábado, se utiliza la regla correspondiente a quienes no tienen jornada ese día.",
+          "Mientras la semana no esté cerrada, la fecha aparece como estimada.",
+          "La agenda teórica se toma de los horarios cargados, no de una modificación manual del reporte.",
+          "Al pasar el sábado de control, la fecha deja de ser estimada y se confirma.",
+        ],
+        note: "Para que la fecha sea correcta, los horarios del sábado deben estar cargados y revisados antes del cierre.",
+      },
+      {
+        heading: "Configuración automática del cálculo",
+        text: "El botón Configurar cálculo permite definir las reglas generales utilizadas para decidir si corresponde aplicar el porcentaje normal o el reducido.",
+        bullets: [
+          "% normal: porcentaje habitual cuando se cumplen los objetivos.",
+          "% reducido: porcentaje aplicado cuando no se cumplen las condiciones configuradas.",
+          "Horas objetivo default: cantidad mínima de horas reales requeridas por semana.",
+          "Llegadas tarde permitidas: máximo de tardanzas admitidas.",
+          "Faltas no justificadas permitidas: máximo de ausencias sin justificar.",
+          "Contar faltas justificadas: determina si las ausencias certificadas también afectan el cálculo.",
+          "La tabla inferior permite definir valores particulares para una manicura.",
+          "La configuración individual reemplaza a la general para esa persona.",
+        ],
+        image: "/ayuda/comisiones-configuracion.png",
+        imageAlt: "Configuración general e individual de comisiones",
+        imageCaption: "La configuración general define los valores predeterminados y la tabla permite excepciones por manicura.",
+      },
+      {
+        heading: "Cómo se decide entre 35 % y 40 %",
+        text: "El sistema compara los datos de asistencia de cada manicura con su configuración semanal. Según el resultado aplica automáticamente el porcentaje normal o el reducido.",
+        bullets: [
+          "Se comparan las horas reales trabajadas con las horas objetivo.",
+          "Se controla la cantidad de llegadas tarde.",
+          "Se revisan las faltas no justificadas y, si está configurado, también las justificadas.",
+          "Si cumple las condiciones, se aplica el porcentaje normal.",
+          "Si incumple alguna condición, se aplica el porcentaje reducido.",
+          "Los valores individuales tienen prioridad sobre los valores generales.",
+        ],
+        note: "El cálculo depende de que los horarios y la asistencia estén correctamente registrados.",
+      },
+      {
+        heading: "Resumen por manicura",
+        text: "El resumen permite ver cómo se compone el pago de cada persona sin recorrer todos los servicios.",
+        bullets: [
+          "Venta: suma de los servicios de la semana.",
+          "% base: comisión calculada con el porcentaje normal.",
+          "% reducido: comisión calculada con el porcentaje reducido.",
+          "Aplicar: porcentaje seleccionado para la semana.",
+          "Definitiva: comisión que finalmente se toma para el pago.",
+          "Garantías: créditos o débitos generados por reparaciones.",
+          "Adelantos: cuotas que se descuentan en la semana.",
+          "Neto: importe final después de todos los ajustes.",
+          "Debajo del nombre se muestran servicios, horas reales contra objetivo, faltas, tardanzas y garantías.",
+        ],
+        image: "/ayuda/comisiones-resumen-manicuras.png",
+        imageAlt: "Resumen semanal de comisiones por manicura",
+        imageCaption: "Cada fila muestra el cálculo base, el porcentaje aplicado y los ajustes que forman el neto.",
+      },
+      {
+        heading: "Cambiar manualmente el porcentaje",
+        text: "La columna Aplicar permite reemplazar la selección automática cuando existe un motivo autorizado.",
+        bullets: [
+          "Abrí la lista de la manicura correspondiente.",
+          "Elegí el porcentaje normal o el reducido.",
+          "La comisión definitiva y el neto se recalculan con la nueva selección.",
+          "El cambio afecta solamente a esa manicura y a esa semana.",
+          "Antes de cambiarlo, revisá horas, tardanzas, faltas y cualquier excepción acordada.",
+        ],
+        image: "/ayuda/comisiones-porcentaje-manual.png",
+        imageAlt: "Selector manual del porcentaje de comisión",
+        imageCaption: "La lista permite elegir manualmente entre el porcentaje normal y el reducido.",
+        note: "El cambio manual debe utilizarse como excepción y con una justificación operativa clara.",
+      },
+      {
+        heading: "Comparativo y tendencia",
+        text: "El comparativo muestra la comisión y los servicios contra la semana anterior, utilizando el mismo día de corte. La tendencia semanal permite observar la evolución de las últimas semanas.",
+        bullets: [
+          "El comparativo evita comparar una semana incompleta con una semana completa.",
+          "La tendencia se recalcula con el local y la manicura seleccionados.",
+          "Estos gráficos sirven para detectar variaciones, pero no reemplazan la revisión del detalle.",
         ],
       },
       {
-        heading: "Si ves una diferencia",
+        heading: "Detalle de comisiones",
+        text: "La grilla inferior contiene cada servicio y cada ajuste que forma los totales. Es una tabla interactiva que permite ordenar, agrupar y reorganizar la información.",
         bullets: [
-          "Confirmá que el reporte ya se actualizó durante la noche.",
-          "Revisá si hay adelantos cargados.",
-          "Revisá si hay garantías aplicadas.",
-          "Verificá que estés mirando el período correcto.",
-          "Controlá que no haya filtros activos que oculten parte de la información.",
+          "Hacé clic en un título para ordenar de forma ascendente o descendente.",
+          "Arrastrá los títulos para cambiar el orden de las columnas.",
+          "Arrastrá el borde derecho de un título para modificar su ancho.",
+          "Podés agrupar por fecha, semana, local, manicura, servicio o cliente.",
+          "Es posible agregar más de un nivel de agrupación.",
+          "Cada grupo muestra subtotales de precio y comisión.",
+          "Podés colapsar o expandir un nivel, todos los grupos o desagrupar la tabla.",
+          "La cantidad total de registros aparece en la parte superior derecha.",
         ],
-        note: "Si después de revisar estos puntos la diferencia continúa, avisá a tu encargada o a administración con el período y el caso que estás revisando.",
+        image: "/ayuda/comisiones-detalle-agrupado.png",
+        imageAlt: "Detalle de comisiones agrupado por manicura",
+        imageCaption: "El menú de cada columna permite ordenar, agrupar, expandir, colapsar o desagrupar.",
+      },
+      {
+        heading: "Cómo revisar una diferencia",
+        bullets: [
+          "Confirmá el local, la manicura, el año, el mes y la semana.",
+          "Verificá la fecha de la última importación.",
+          "Revisá qué porcentaje se aplicó y si fue automático o manual.",
+          "Controlá las horas, tardanzas y faltas utilizadas para el cálculo.",
+          "Revisá los adelantos descontados en esa semana.",
+          "Buscá filas Desc. garantía y Rep. garantía.",
+          "Compará el resumen con los subtotales del detalle.",
+          "Comprobá que no haya agrupaciones o filtros que oculten información.",
+        ],
+        note: "El Neto a pagar se explica siempre a partir de cuatro componentes: comisión definitiva, adelantos, descuentos de garantías y créditos por reparaciones.",
       },
     ],
   },
@@ -3879,6 +4008,8 @@ function ABMManicuras({ data, reloadData, user }) {
   const [form, setForm] = useState({});
   const [formErr, setFormErr] = useState("");
   const [saving, setSaving] = useState(false);
+  const [modalTab, setModalTab] = useState("general");
+  const [historialDraft, setHistorialDraft] = useState([]);
   const [filtroLocal, setFiltroLocal] = useState("todos");
   const [filtroEstado, setFiltroEstado] = useState("activas");
   const [agrupacion, setAgrupacion] = useState("local");
@@ -3886,6 +4017,9 @@ function ABMManicuras({ data, reloadData, user }) {
   const allowedLocalIds = getAssignedLocalIds(data, user);
   const localesPermitidos = esAdmin ? data.locales : data.locales.filter(l => allowedLocalIds.includes(l.id));
   const manicuras = data.users.filter(u => u.rol === "manicura" && (esAdmin || allowedLocalIds.includes(u.localId)));
+  const hoy = dateKey(new Date());
+  const motivosFin = ["Renuncia", "Despido", "Cambio de local", "Otro"];
+
   const manicurasFiltradas = useMemo(() => manicuras
     .filter(m => filtroLocal === "todos" || String(m.localId || "") === String(filtroLocal))
     .filter(m => filtroEstado === "todas" || (filtroEstado === "activas" ? m.activo : !m.activo))
@@ -3901,146 +4035,99 @@ function ABMManicuras({ data, reloadData, user }) {
     });
     return Array.from(grupos.values()).sort((a,b) => a.label.localeCompare(b.label));
   }, [manicurasFiltradas, agrupacion, data.locales]);
-  const openNew = () => { setForm({ nombre:"",usuario:"",email:"",codigoExterno:"",password:"",password2:"",localId:localesPermitidos[0]?.id||"",activo:true }); setFormErr(""); setModal("new"); };
-  const openEdit = u => { setForm({...u,password:"",password2:""}); setFormErr(""); setModal("edit"); };
+
+  const sortHistorial = rows => [...rows].sort((a,b)=>(b.fechaInicio||"").localeCompare(a.fechaInicio||"") || Number(b.id||0)-Number(a.id||0));
+  const openNew = () => {
+    const localId = localesPermitidos[0]?.id || "";
+    setForm({ nombre:"",usuario:"",email:"",codigoExterno:"",password:"",password2:"",localId,activo:true });
+    setHistorialDraft([{ tempId:`new-${Date.now()}`, localId, fechaInicio:hoy, fechaFin:"", motivoFin:"", observacion:"", isNew:true }]);
+    setFormErr(""); setModalTab("general"); setModal("new");
+  };
+  const openEdit = (u, tab="general") => {
+    setForm({...u,password:"",password2:""});
+    setHistorialDraft(sortHistorial((data.manicuraHistorialLocales||[]).filter(x=>x.userId===u.id).map(x=>({...x}))));
+    setFormErr(""); setModalTab(tab); setModal("edit");
+  };
+  const addHistorial = () => setHistorialDraft(rows => [{ tempId:`new-${Date.now()}`, localId:form.localId||localesPermitidos[0]?.id||"", fechaInicio:hoy, fechaFin:"", motivoFin:"", observacion:"", isNew:true }, ...rows]);
+  const updateHistorialDraft = (key, field, value) => setHistorialDraft(rows=>rows.map(r=>(r.id||r.tempId)===key?{...r,[field]:value}:r));
+  const removeHistorialDraft = key => setHistorialDraft(rows=>rows.filter(r=>(r.id||r.tempId)!==key));
+
+  const validarHistorial = rows => {
+    if (!rows.length) return "La manicura debe tener al menos un período de antigüedad.";
+    const normalized = rows.map(r=>({...r, localId:parseInt(r.localId)||null, fechaInicio:r.fechaInicio||"", fechaFin:r.fechaFin||""}));
+    for (const r of normalized) {
+      if (!r.localId || !r.fechaInicio) return "Todos los períodos deben tener local y fecha de inicio.";
+      if (!localesPermitidos.some(l=>l.id===r.localId)) return "Hay un local que no está dentro de tu alcance.";
+      if (r.fechaFin && r.fechaFin < r.fechaInicio) return "La fecha de fin no puede ser anterior a la fecha de inicio.";
+      if (r.fechaFin && !r.motivoFin) return "Indicá el motivo de finalización de cada período cerrado.";
+      if (!r.fechaFin && r.motivoFin) return "Un período abierto no debe tener motivo de finalización.";
+    }
+    if (normalized.filter(r=>!r.fechaFin).length > 1) return "No puede haber más de un período activo sin fecha de fin.";
+    const ordered=[...normalized].sort((a,b)=>a.fechaInicio.localeCompare(b.fechaInicio));
+    for (let i=0;i<ordered.length;i++) for (let j=i+1;j<ordered.length;j++) {
+      const a=ordered[i], b=ordered[j];
+      const aFin=a.fechaFin||"9999-12-31", bFin=b.fechaFin||"9999-12-31";
+      if (a.fechaInicio<=bFin && b.fechaInicio<=aFin) return "Los períodos de antigüedad no pueden superponerse.";
+    }
+    return "";
+  };
 
   const save = async () => {
     setFormErr("");
-    if (!form.nombre.trim()||!form.usuario.trim()) { setFormErr("Nombre y usuario son obligatorios."); return; }
+    if (!String(form.nombre||"").trim()||!String(form.usuario||"").trim()) { setFormErr("Nombre y usuario son obligatorios."); return; }
     const usuarioLimpio = normalizeUsuarioValue(form.usuario);
     const emailLimpio = normalizeEmailValue(form.email);
     if (!isValidEmail(emailLimpio)) { setFormErr("El email es obligatorio y debe ser válido."); return; }
     if (usuarioEnUso(data.users, usuarioLimpio, form.id)) { setFormErr("Ese usuario ya existe. Elegí otro nombre de usuario."); return; }
     if (emailEnUso(data.users, emailLimpio, form.id)) { setFormErr("Ese email ya está asignado a otro usuario. No se pueden repetir correos."); return; }
-    if (!localesPermitidos.some(l => l.id === parseInt(form.localId))) { setFormErr("No podés asignar manicuras a ese local."); return; }
-    if (modal==="new") {
-      if (!form.password) { setFormErr("Ingresá una contraseña."); return; }
-      if (form.password!==form.password2) { setFormErr("Las contraseñas no coinciden."); return; }
-    } else {
-      if (form.password&&form.password!==form.password2) { setFormErr("Las contraseñas no coinciden."); return; }
-    }
+    if (modal==="new" && !form.password) { setFormErr("Ingresá una contraseña."); return; }
+    if (form.password && form.password!==form.password2) { setFormErr("Las contraseñas no coinciden."); return; }
+    const histErr=validarHistorial(historialDraft); if(histErr){setFormErr(histErr);setModalTab("antiguedad");return;}
     setSaving(true);
     try {
+      let targetId=form.id;
       if (modal==="new") {
-        const ahora = new Date().toISOString();
-        const created = await api.createUser({ nombre:form.nombre.trim(),usuario:usuarioLimpio,email:emailLimpio,email_actualizado_en:ahora,codigo_externo:(form.codigoExterno||"").trim()||null,password:form.password,password_actualizado_en:form.password==="niki123"?null:ahora,rol:"manicura",local_id:parseInt(form.localId)||null,activo:true });
-        const nuevoId = created?.[0]?.id;
-        if (nuevoId) {
-          try {
-            await api.enviarInvitacionUsuario({ actor_id:user.id, session_token:user.sessionToken, target_user_id:nuevoId });
-            notifyToast("Manicura creada e invitación enviada por email.", "success", { title:"Invitación enviada" });
-          } catch(invErr) {
-            notifyToast("La manicura se creó, pero no se pudo enviar la invitación: " + (invErr.message || invErr), "warning", { title:"Invitación pendiente" });
-          }
-        }
+        const ahora=new Date().toISOString();
+        const abierto=historialDraft.find(r=>!r.fechaFin);
+        const created=await api.createUser({ nombre:form.nombre.trim(),usuario:usuarioLimpio,email:emailLimpio,email_actualizado_en:ahora,codigo_externo:(form.codigoExterno||"").trim()||null,password:form.password,password_actualizado_en:form.password==="niki123"?null:ahora,rol:"manicura",local_id:abierto?parseInt(abierto.localId):null,activo:!!abierto });
+        targetId=created?.[0]?.id;
       } else {
-        const upd = { nombre:form.nombre.trim(),usuario:usuarioLimpio,email:emailLimpio,email_actualizado_en:new Date().toISOString(),codigo_externo:(form.codigoExterno||"").trim()||null,local_id:parseInt(form.localId)||null };
-        await api.updateUser(form.id, upd);
-        if (form.password) {
-          await api.changePassword({ mode:"admin_set", actor_id:user.id, session_token:user.sessionToken, target_user_id:form.id, new_password:form.password });
-          await api.updateUser(form.id, { password_actualizado_en: form.password==="niki123" ? null : new Date().toISOString() });
-        }
+        const abierto=historialDraft.find(r=>!r.fechaFin);
+        await api.updateUser(targetId,{ nombre:form.nombre.trim(),usuario:usuarioLimpio,email:emailLimpio,email_actualizado_en:new Date().toISOString(),codigo_externo:(form.codigoExterno||"").trim()||null,local_id:abierto?parseInt(abierto.localId):null,activo:!!abierto });
+        if(form.password){await api.changePassword({mode:"admin_set",actor_id:user.id,session_token:user.sessionToken,target_user_id:targetId,new_password:form.password});}
       }
-      await reloadData(); setModal(null);
+      const originales=(data.manicuraHistorialLocales||[]).filter(x=>x.userId===targetId);
+      const idsDraft=new Set(historialDraft.filter(r=>r.id).map(r=>r.id));
+      for(const old of originales) if(!idsDraft.has(old.id)) await api.deleteManicuraHistorialLocal(old.id);
+      for(const r of historialDraft){
+        const payload={user_id:targetId,local_id:parseInt(r.localId),fecha_inicio:r.fechaInicio,fecha_fin:r.fechaFin||null,motivo_fin:r.fechaFin?(r.motivoFin||null):null,observacion:(r.observacion||"").trim()||null};
+        if(r.id) await api.updateManicuraHistorialLocal(r.id,payload); else await api.createManicuraHistorialLocal(payload);
+      }
+      if(modal==="new"&&targetId){try{await api.enviarInvitacionUsuario({actor_id:user.id,session_token:user.sessionToken,target_user_id:targetId});}catch(e){notifyToast("La manicura se creó, pero la invitación quedó pendiente.","warning");}}
+      await reloadData(); setModal(null); notifyToast("Datos e historial guardados correctamente.","success");
     } catch(e) { setFormErr("Error al guardar: "+e.message); }
     setSaving(false);
   };
-  const toggle = async (u) => { await api.updateUser(u.id,{activo:!u.activo}); await reloadData(); };
-  const reenviarInvitacion = async (u) => {
-    if (!u?.email) { notifyToast("La manicura no tiene email cargado.", "warning"); return; }
-    try {
-      await api.enviarInvitacionUsuario({ actor_id:user.id, session_token:user.sessionToken, target_user_id:u.id });
-      notifyToast(`Invitación enviada a ${u.email}.`, "success", { title:"Invitación enviada" });
-    } catch(e) {
-      notifyToast("No se pudo enviar la invitación: " + (e.message || e), "error");
-    }
-  };
-  return (
-    <div>
-      <div style={{ display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:16 }}>
-        <h2 style={{ margin:0,fontSize:18,fontWeight:500 }}>Manicuras</h2>
-        <Btn onClick={openNew} size="sm">+ Nueva</Btn>
-      </div>
-      <Card style={{ marginBottom:14,padding:"12px 14px" }}>
-        <div style={{ display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(190px,1fr))",gap:10,alignItems:"end" }}>
-          <div>
-            <label style={{ display:"block",fontSize:11,fontWeight:600,color:"var(--color-text-secondary)",marginBottom:5,textTransform:"uppercase",letterSpacing:"0.04em" }}>Sucursal asignada</label>
-            <Select value={filtroLocal} onChange={setFiltroLocal}>
-              <option value="todos">Todas las sucursales</option>
-              {localesPermitidos.slice().sort((a,b)=>(a.nombre||"").localeCompare(b.nombre||"")).map(l=><option key={l.id} value={l.id}>{l.nombre}</option>)}
-              <option value="">Sin local asignado</option>
-            </Select>
-          </div>
-          <div>
-            <label style={{ display:"block",fontSize:11,fontWeight:600,color:"var(--color-text-secondary)",marginBottom:5,textTransform:"uppercase",letterSpacing:"0.04em" }}>Estado</label>
-            <Select value={filtroEstado} onChange={setFiltroEstado}>
-              <option value="activas">Activas</option>
-              <option value="inactivas">Inactivas</option>
-              <option value="todas">Todas</option>
-            </Select>
-          </div>
-          <div>
-            <label style={{ display:"block",fontSize:11,fontWeight:600,color:"var(--color-text-secondary)",marginBottom:5,textTransform:"uppercase",letterSpacing:"0.04em" }}>Agrupar</label>
-            <Select value={agrupacion} onChange={setAgrupacion}>
-              <option value="local">Por sucursal</option>
-              <option value="ninguna">Sin agrupar</option>
-            </Select>
-          </div>
-          <div style={{ fontSize:12,color:"var(--color-text-secondary)",paddingBottom:8 }}>
-            {manicurasFiltradas.length} manicura{manicurasFiltradas.length===1?"":"s"}
-          </div>
-        </div>
-      </Card>
-      <div style={{ display:"flex",flexDirection:"column",gap:14 }}>
-        {gruposManicuras.length === 0 ? <Card><p style={{ margin:0,textAlign:"center",fontSize:13,color:"var(--color-text-secondary)" }}>No hay manicuras para los filtros seleccionados.</p></Card> : gruposManicuras.map(grupo => <div key={grupo.key}>
-          {agrupacion === "local" && <div style={{ display:"flex",alignItems:"center",gap:8,margin:"0 0 7px 4px" }}>
-            <h3 style={{ margin:0,fontSize:14,fontWeight:700 }}>{grupo.label}</h3>
-            <Badge color="info">{grupo.items.length}</Badge>
-          </div>}
-          <div style={{ display:"flex",flexDirection:"column",gap:8 }}>
-            {grupo.items.map(m => {
-              const local = data.locales.find(l=>l.id===m.localId);
-              return <Card key={m.id} style={{ display:"flex",alignItems:"center",gap:12,flexWrap:"wrap" }}>
-                <Avatar nombre={m.nombre}/>
-                <div style={{ flex:1,minWidth:0 }}>
-                  <p style={{ margin:0,fontWeight:500,fontSize:14 }}>{m.nombre}</p>
-                  <p style={{ margin:0,fontSize:12,color:"var(--color-text-secondary)" }}>{m.usuario} · {m.email||"Sin mail"} · {local?.nombre||"Sin local"}{m.codigoExterno?` · AgendaPro: ${m.codigoExterno}`:""}</p>
-                </div>
-                <Badge color={m.activo?"success":"gray"}>{m.activo?"Activa":"Inactiva"}</Badge>
-                <Btn onClick={()=>openEdit(m)} variant="ghost" size="sm">Editar</Btn>
-                <Btn onClick={()=>reenviarInvitacion(m)} variant="ghost" size="sm" disabled={!m.email}>Invitar</Btn>
-                <Btn onClick={()=>toggle(m)} variant="ghost" size="sm" style={{ color:m.activo?COLORS.danger:COLORS.success }}>{m.activo?"Desactivar":"Activar"}</Btn>
-              </Card>;
-            })}
-          </div>
-        </div>)}
-      </div>
-      {modal && <Modal title={modal==="new"?"Nueva manicura":"Editar manicura"} onClose={()=>setModal(null)}>
-        <div style={{ display:"flex",flexDirection:"column",gap:14 }}>
-          <ModalInput label="Nombre completo" value={form.nombre||""} onChange={v=>setForm(f=>({...f,nombre:v}))}/>
-          <ModalInput label="Usuario" value={form.usuario||""} onChange={v=>setForm(f=>({...f,usuario:v}))}/>
-          <ModalInput label="Email" type="email" value={form.email||""} onChange={v=>setForm(f=>({...f,email:v}))}/>
-          <ModalInputWithHelp label="Código externo AgendaPro" value={form.codigoExterno||""} onChange={v=>setForm(f=>({...f,codigoExterno:v}))} help="Debe respetar exactamente el nombre o código con el que esta manicura figura en AgendaPro/Qlik. Sirve para vincular las comisiones importadas con la manicura correcta, especialmente si hay nombres repetidos en diferentes locales."/>
-          <div style={{ borderTop:"1px dashed #eee",paddingTop:14 }}>
-            <p style={{ margin:"0 0 10px",fontSize:13,color:"#888" }}>{modal==="edit"?"Dejá en blanco para no cambiar la contraseña":"Contraseña"}</p>
-            <div style={{ display:"flex",flexDirection:"column",gap:14 }}>
-              <ModalInput label={modal==="edit"?"Nueva contraseña":"Contraseña"} type="password" value={form.password||""} onChange={v=>setForm(f=>({...f,password:v}))}/>
-              <ModalInput label="Repetir contraseña" type="password" value={form.password2||""} onChange={v=>setForm(f=>({...f,password2:v}))}/>
-            </div>
-          </div>
-          <ModalSelect label="Local" value={form.localId||""} onChange={v=>setForm(f=>({...f,localId:v}))}>
-            <option value="">Sin local</option>
-            {localesPermitidos.map(l=><option key={l.id} value={l.id}>{l.nombre}</option>)}
-          </ModalSelect>
-          {formErr && <p style={{ margin:0,fontSize:13,color:COLORS.danger,background:COLORS.dangerLight,padding:"8px 12px",borderRadius:8 }}>{formErr}</p>}
-          <div style={{ display:"flex",gap:8,marginTop:4 }}>
-            <Btn onClick={save} disabled={saving} style={{ flex:1,justifyContent:"center" }}>{saving?"Guardando...":"Guardar"}</Btn>
-            <Btn onClick={()=>setModal(null)} variant="secondary" style={{ flex:1,justifyContent:"center" }}>Cancelar</Btn>
-          </div>
-        </div>
-      </Modal>}
-    </div>
-  );
+
+  const reenviarInvitacion = async u => { try { await api.enviarInvitacionUsuario({ actor_id:user.id, session_token:user.sessionToken, target_user_id:u.id }); notifyToast(`Invitación enviada a ${u.email}.`,"success"); } catch(e){notifyToast("No se pudo enviar la invitación: "+(e.message||e),"error");} };
+  const tabStyle = active => ({ border:"none",borderRadius:8,padding:"8px 14px",fontSize:13,fontWeight:600,cursor:"pointer",background:active?COLORS.pink:COLORS.pinkLight,color:active?"#fff":COLORS.pinkDark });
+
+  return <div>
+    <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:16}}><h2 style={{margin:0,fontSize:18,fontWeight:500}}>Manicuras</h2><Btn onClick={openNew} size="sm">+ Nueva</Btn></div>
+    <Card style={{marginBottom:14,padding:"12px 14px"}}><div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(190px,1fr))",gap:10,alignItems:"end"}}>
+      <div><label style={{display:"block",fontSize:11,fontWeight:600,color:"var(--color-text-secondary)",marginBottom:5,textTransform:"uppercase"}}>Sucursal asignada</label><Select value={filtroLocal} onChange={setFiltroLocal}><option value="todos">Todas las sucursales</option>{localesPermitidos.map(l=><option key={l.id} value={l.id}>{l.nombre}</option>)}<option value="">Sin local asignado</option></Select></div>
+      <div><label style={{display:"block",fontSize:11,fontWeight:600,color:"var(--color-text-secondary)",marginBottom:5,textTransform:"uppercase"}}>Estado</label><Select value={filtroEstado} onChange={setFiltroEstado}><option value="activas">Activas</option><option value="inactivas">Inactivas</option><option value="todas">Todas</option></Select></div>
+      <div><label style={{display:"block",fontSize:11,fontWeight:600,color:"var(--color-text-secondary)",marginBottom:5,textTransform:"uppercase"}}>Agrupar</label><Select value={agrupacion} onChange={setAgrupacion}><option value="local">Por sucursal</option><option value="ninguna">Sin agrupar</option></Select></div>
+      <div style={{fontSize:12,color:"var(--color-text-secondary)",paddingBottom:8}}>{manicurasFiltradas.length} manicura{manicurasFiltradas.length===1?"":"s"}</div>
+    </div></Card>
+    <div style={{display:"flex",flexDirection:"column",gap:14}}>{gruposManicuras.length===0?<Card><p style={{margin:0,textAlign:"center",fontSize:13,color:"var(--color-text-secondary)"}}>No hay manicuras para los filtros seleccionados.</p></Card>:gruposManicuras.map(grupo=><div key={grupo.key}>{agrupacion==="local"&&<div style={{display:"flex",alignItems:"center",gap:8,margin:"0 0 7px 4px"}}><h3 style={{margin:0,fontSize:14,fontWeight:700}}>{grupo.label}</h3><Badge color="info">{grupo.items.length}</Badge></div>}<div style={{display:"flex",flexDirection:"column",gap:8}}>{grupo.items.map(m=>{const local=data.locales.find(l=>l.id===m.localId);return <Card key={m.id} style={{display:"flex",alignItems:"center",gap:12,flexWrap:"wrap"}}><Avatar nombre={m.nombre}/><div style={{flex:1,minWidth:0}}><p style={{margin:0,fontWeight:500,fontSize:14}}>{m.nombre}</p><p style={{margin:0,fontSize:12,color:"var(--color-text-secondary)"}}>{m.usuario} · {m.email||"Sin mail"} · {local?.nombre||"Sin local"}</p></div><Badge color={m.activo?"success":"gray"}>{m.activo?"Activa":"Inactiva"}</Badge><Btn onClick={()=>openEdit(m)} variant="ghost" size="sm">Editar</Btn><Btn onClick={()=>reenviarInvitacion(m)} variant="ghost" size="sm" disabled={!m.email}>Invitar</Btn><Btn onClick={()=>openEdit(m,"antiguedad")} variant="ghost" size="sm">Antigüedad</Btn></Card>})}</div></div>)}</div>
+    {modal&&<Modal title={modal==="new"?"Nueva manicura":"Editar manicura"} onClose={()=>setModal(null)} width={780}>
+      <div style={{display:"flex",gap:6,marginBottom:18,borderBottom:"1px solid #eee",paddingBottom:10}}><button style={tabStyle(modalTab==="general")} onClick={()=>setModalTab("general")}>Datos generales</button><button style={tabStyle(modalTab==="antiguedad")} onClick={()=>setModalTab("antiguedad")}>Antigüedad y locales</button></div>
+      {modalTab==="general"?<div style={{display:"flex",flexDirection:"column",gap:14}}><ModalInput label="Nombre completo" value={form.nombre||""} onChange={v=>setForm(f=>({...f,nombre:v}))}/><ModalInput label="Usuario" value={form.usuario||""} onChange={v=>setForm(f=>({...f,usuario:v}))}/><ModalInput label="Email" type="email" value={form.email||""} onChange={v=>setForm(f=>({...f,email:v}))}/><ModalInputWithHelp label="Código externo AgendaPro" value={form.codigoExterno||""} onChange={v=>setForm(f=>({...f,codigoExterno:v}))} help="Vincula la manicura con AgendaPro/Qlik."/><div style={{borderTop:"1px dashed #eee",paddingTop:14}}><p style={{margin:"0 0 10px",fontSize:13,color:"#888"}}>{modal==="edit"?"Dejá en blanco para no cambiar la contraseña":"Contraseña"}</p><div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12}}><ModalInput label={modal==="edit"?"Nueva contraseña":"Contraseña"} type="password" value={form.password||""} onChange={v=>setForm(f=>({...f,password:v}))}/><ModalInput label="Repetir contraseña" type="password" value={form.password2||""} onChange={v=>setForm(f=>({...f,password2:v}))}/></div></div><div style={{background:COLORS.infoLight,color:COLORS.info,borderRadius:10,padding:"10px 12px",fontSize:12}}>El local y el estado actual se determinan desde la solapa <strong>Antigüedad y locales</strong>.</div></div>:
+      <div><div style={{display:"flex",justifyContent:"space-between",alignItems:"center",gap:12,marginBottom:12}}><div><h3 style={{margin:0,fontSize:15}}>Historial por local</h3><p style={{margin:"3px 0 0",fontSize:12,color:"var(--color-text-secondary)"}}>Debe existir un único período abierto para que la manicura quede activa.</p></div><Btn onClick={addHistorial} size="sm">+ Agregar período</Btn></div><div style={{overflowX:"auto",border:"1px solid rgba(120,120,120,0.16)",borderRadius:12}}><div style={{minWidth:760}}><div style={{display:"grid",gridTemplateColumns:"1.25fr 130px 130px 150px 1.2fr 44px",gap:8,padding:"9px 10px",background:"var(--color-background-secondary)",fontSize:11,fontWeight:700,textTransform:"uppercase"}}><span>Local</span><span>Fecha inicio</span><span>Fecha fin</span><span>Motivo</span><span>Observación</span><span></span></div>{historialDraft.length===0?<p style={{padding:16,textAlign:"center",fontSize:13,color:"var(--color-text-secondary)"}}>Sin períodos cargados.</p>:historialDraft.map(r=>{const key=r.id||r.tempId;return <div key={key} style={{display:"grid",gridTemplateColumns:"1.25fr 130px 130px 150px 1.2fr 44px",gap:8,padding:"9px 10px",borderTop:"1px solid rgba(120,120,120,0.12)",alignItems:"center",background:!r.fechaFin?COLORS.successLight:"#fff"}}><select value={r.localId||""} onChange={e=>updateHistorialDraft(key,"localId",e.target.value)} style={{border:"1px solid #ddd",borderRadius:7,padding:"7px 8px",fontSize:12}}>{localesPermitidos.map(l=><option key={l.id} value={l.id}>{l.nombre}</option>)}</select><input type="date" value={r.fechaInicio||""} onChange={e=>updateHistorialDraft(key,"fechaInicio",e.target.value)} style={{border:"1px solid #ddd",borderRadius:7,padding:"7px 8px",fontSize:12}}/><input type="date" value={r.fechaFin||""} onChange={e=>{updateHistorialDraft(key,"fechaFin",e.target.value);if(!e.target.value)updateHistorialDraft(key,"motivoFin","");}} style={{border:"1px solid #ddd",borderRadius:7,padding:"7px 8px",fontSize:12}}/><select value={r.motivoFin||""} disabled={!r.fechaFin} onChange={e=>updateHistorialDraft(key,"motivoFin",e.target.value)} style={{border:"1px solid #ddd",borderRadius:7,padding:"7px 8px",fontSize:12,background:!r.fechaFin?"#f4f4f4":"#fff"}}><option value="">{r.fechaFin?"Seleccionar":"Período activo"}</option>{motivosFin.map(x=><option key={x}>{x}</option>)}</select><input value={r.observacion||""} onChange={e=>updateHistorialDraft(key,"observacion",e.target.value)} placeholder="Opcional" style={{border:"1px solid #ddd",borderRadius:7,padding:"7px 8px",fontSize:12}}/><button onClick={()=>removeHistorialDraft(key)} title="Eliminar período" style={{border:"none",background:COLORS.dangerLight,color:COLORS.danger,borderRadius:7,width:34,height:34,cursor:"pointer"}}>×</button></div>})}</div></div></div>}
+      {formErr&&<p style={{margin:"14px 0 0",fontSize:13,color:COLORS.danger,background:COLORS.dangerLight,padding:"8px 12px",borderRadius:8}}>{formErr}</p>}<div style={{display:"flex",gap:8,marginTop:18}}><Btn onClick={save} disabled={saving} style={{flex:1,justifyContent:"center"}}>{saving?"Guardando...":"Guardar"}</Btn><Btn onClick={()=>setModal(null)} variant="secondary" style={{flex:1,justifyContent:"center"}}>Cancelar</Btn></div>
+    </Modal>}
+  </div>;
 }
 
 // ── ABM LOCALES ────────────────────────────────────────────────────
@@ -4455,6 +4542,7 @@ function Reportes({ data, user, onOpenAgenda, reportRestore, reloadData, savedSt
   const [fechaDesde, setFechaDesde] = useState(savedState?.fechaDesde || dateKey(new Date(hoy.getFullYear(),hoy.getMonth(),1)));
   const [fechaHasta, setFechaHasta] = useState(savedState?.fechaHasta || dateKey(hoy));
   const [expandidos, setExpandidos] = useState(savedState?.expandidos || {});
+  const [expandidosLocales, setExpandidosLocales] = useState(savedState?.expandidosLocales || {});
   const [localCobertura, setLocalCobertura] = useState(reportRestore?.localId || savedState?.localCobertura || localesVisibles[0]?.id || "");
   const periodoComisionesInicial = fmtPeriodo(hoy);
   const semanasComisionesIniciales = getCommissionWeeksForMonth(hoy.getFullYear(), hoy.getMonth());
@@ -4493,6 +4581,7 @@ function Reportes({ data, user, onOpenAgenda, reportRestore, reloadData, savedSt
       fechaDesde,
       fechaHasta,
       expandidos,
+      expandidosLocales,
       localCobertura,
       periodoComisiones,
       localComisiones,
@@ -4502,7 +4591,7 @@ function Reportes({ data, user, onOpenAgenda, reportRestore, reloadData, savedSt
       collapsedComisiones,
       sortComisiones,
     });
-  }, [tab, filtroTipo, filtroId, mes, anio, filtroSemana, filtroEstado, fechaDesde, fechaHasta, expandidos, localCobertura, periodoComisiones, localComisiones, manicuraComisiones, semanaComisiones, gruposComisiones, collapsedComisiones, sortComisiones]);
+  }, [tab, filtroTipo, filtroId, mes, anio, filtroSemana, filtroEstado, fechaDesde, fechaHasta, expandidos, expandidosLocales, localCobertura, periodoComisiones, localComisiones, manicuraComisiones, semanaComisiones, gruposComisiones, collapsedComisiones, sortComisiones]);
 
   const manicuras = data.users.filter(u=>u.rol==="manicura"&&u.activo&&(esAdmin || allowedLocalIds.includes(u.localId)));
   const semanasDelMes = useMemo(()=>getSemanas(getDiasDelMes(anio,mes)),[anio,mes]);
@@ -4538,6 +4627,22 @@ function Reportes({ data, user, onOpenAgenda, reportRestore, reloadData, savedSt
     const semFilt=filtroSemana==="todas"?semanasData:semanasData.filter(s=>s.semana===parseInt(filtroSemana));
     return {...m,semanasData:semFilt,totalMesTeo:semFilt.reduce((a,s)=>a+s.totalTeo,0),totalMesReal:semFilt.reduce((a,s)=>a+s.totalReal,0),diasTrabajo:semFilt.flatMap(s=>s.dias).filter(d=>d.trabaja).length};
   };
+  const horasReportes = mF.map(m => buildHorasReport(m));
+  const horasPorLocal = useMemo(() => {
+    const map = new Map();
+    horasReportes.forEach(r => {
+      const key = String(r.localId || "sin-local");
+      const local = data.locales.find(l=>l.id===r.localId);
+      if (!map.has(key)) map.set(key,{ key, localId:r.localId, nombre:local?.nombre||"Sin local", items:[], totalTeo:0, totalReal:0 });
+      const g=map.get(key); g.items.push(r); g.totalTeo+=r.totalMesTeo; g.totalReal+=r.totalMesReal;
+    });
+    return Array.from(map.values()).sort((a,b)=>a.nombre.localeCompare(b.nombre));
+  }, [mF, mes, anio, filtroSemana, filtroEstado, data.horarios, data.asistencias, data.locales]);
+  const diferenciaHoras = (real,teo) => real-teo;
+  const diferenciaPct = (real,teo) => teo>0 ? ((real-teo)/teo)*100 : null;
+  const fmtDiff = (real,teo) => { const d=diferenciaHoras(real,teo), p=diferenciaPct(real,teo); return `${d>0?"+":""}${d.toFixed(1)}h${p===null?"":` · ${p>0?"+":""}${p.toFixed(1)}%`}`; };
+  const diffColor = (real,teo) => real<teo?COLORS.danger:real>teo?COLORS.success:"var(--color-text-secondary)";
+
   const buildAsistenciaReport = m => {
     let asist=data.asistencias.filter(a=>a.userId===m.id&&a.fecha>=fechaDesde&&a.fecha<=fechaHasta).sort((a,b)=>a.fecha.localeCompare(b.fecha));
     if(filtroSemana!=="todas"){const semDias=(semanasDelMes[parseInt(filtroSemana)-1]||[]).map(d=>dateKey(d));asist=asist.filter(a=>semDias.includes(a.fecha));}
@@ -5472,8 +5577,17 @@ function Reportes({ data, user, onOpenAgenda, reportRestore, reloadData, savedSt
       {tab==="cobertura"&&puedeVerCobertura&&renderCobertura()}
       {tab==="comisiones"&&renderComisiones()}
       {tab==="horas"&&<>
-        <div style={{ display:"flex",gap:8,marginBottom:16,flexWrap:"wrap" }}><Select value={mes} onChange={v=>{setMes(parseInt(v));setExpandidos({});}} style={{ width:130 }}>{MESES.map((m,i)=><option key={i} value={i}>{m}</option>)}</Select><Select value={anio} onChange={v=>{setAnio(parseInt(v));setExpandidos({});}} style={{ width:90 }}>{[hoy.getFullYear()-1,hoy.getFullYear(),hoy.getFullYear()+1].map(a=><option key={a} value={a}>{a}</option>)}</Select></div>
-        <div style={{ display:"flex",flexDirection:"column",gap:10 }}>{mF.map(m=>{ const r=buildHorasReport(m),exp=expandidos[m.id]; return <Card key={m.id} style={{ padding:"0.875rem 1.25rem" }}><div style={{ display:"flex",alignItems:"center",gap:12,flexWrap:"wrap" }}><Avatar nombre={r.nombre}/><div style={{ flex:1 }}><p style={{ margin:0,fontWeight:500,fontSize:14 }}>{r.nombre}</p><p style={{ margin:0,fontSize:12,color:"var(--color-text-secondary)" }}>{data.locales.find(l=>l.id===r.localId)?.nombre||"Sin local"} · {r.diasTrabajo} días</p></div><div style={{ display:"flex",gap:16,marginRight:8,flexWrap:"wrap",justifyContent:"flex-end" }}><div style={{ textAlign:"right" }}><p style={{ margin:0,fontSize:18,fontWeight:500 }}>{r.totalMesTeo.toFixed(1)}h</p><p style={{ margin:0,fontSize:11,color:"var(--color-text-secondary)" }}>teóricas</p></div><div style={{ textAlign:"right" }}><p style={{ margin:0,fontSize:18,fontWeight:500,color:r.totalMesReal<r.totalMesTeo?COLORS.danger:COLORS.success }}>{r.totalMesReal.toFixed(1)}h</p><p style={{ margin:0,fontSize:11,color:"var(--color-text-secondary)" }}>reales</p></div></div><button onClick={()=>toggleExp(m.id)} style={{ background:COLORS.pinkLight,color:COLORS.pinkDark,border:"none",borderRadius:8,padding:"6px 12px",fontSize:12,fontWeight:500,cursor:"pointer",whiteSpace:"nowrap" }}>{exp?"▲ Ocultar":"▼ Ver detalle"}</button></div>{exp&&<div style={{ marginTop:14,borderTop:"0.5px solid rgba(120,120,120,0.18)",paddingTop:14 }}>{r.semanasData.map(sem=><div key={sem.semana} style={{ marginBottom:14 }}><div style={{ display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:8 }}><span style={{ fontSize:12,fontWeight:500,color:"var(--color-text-secondary)",textTransform:"uppercase",letterSpacing:"0.04em" }}>Semana {sem.semana}</span><span style={{ fontSize:12,color:"var(--color-text-secondary)" }}>Teo: <strong>{sem.totalTeo.toFixed(1)}h</strong> · Real: <strong>{sem.totalReal.toFixed(1)}h</strong></span></div><div style={{ display:"flex",flexDirection:"column",gap:4 }}>{sem.dias.map(d=><div key={d.fecha} style={{ display:"grid",gridTemplateColumns:"60px 1fr 50px 50px 70px",gap:8,alignItems:"center",padding:"5px 8px",borderRadius:6,background:d.trabaja?"var(--color-background-secondary)":"transparent",opacity:d.trabaja?1:0.45 }}><span style={{ fontSize:13,fontWeight:500,color:"var(--color-text-secondary)" }}>{d.label}</span><span style={{ fontSize:12,color:"var(--color-text-primary)" }}>{d.trabaja?`${d.entrada} – ${d.salida}`:"—"}</span><span style={{ fontSize:12,color:"var(--color-text-secondary)",textAlign:"right" }}>{d.trabaja?`${d.horasTeo.toFixed(1)}h`:""}</span><span style={{ fontSize:12,textAlign:"right",color:d.trabaja?(d.horasReal<d.horasTeo?COLORS.danger:COLORS.success):"var(--color-text-secondary)" }}>{d.trabaja?(d.asistencia?`${d.horasReal.toFixed(1)}h`:"—"):""}</span>{d.trabaja?(d.asistencia?<Badge color={estadoColor[d.asistencia.estado]}>{d.asistencia.estado==="presente"?"✓":d.asistencia.estado==="tarde"?"Tarde":"Ausente"}</Badge>:<Badge color="gray">Sin reg.</Badge>):<Badge color="gray">Libre</Badge>}</div>)}</div></div>)}</div>}</Card>;})}{mF.length===0&&<Card><p style={{ margin:0,textAlign:"center",color:"var(--color-text-secondary)" }}>Sin datos para los filtros seleccionados.</p></Card>}</div>
+        <div style={{ display:"flex",gap:8,marginBottom:16,flexWrap:"wrap" }}><Select value={mes} onChange={v=>{setMes(parseInt(v));setExpandidos({});setExpandidosLocales({});}} style={{ width:130 }}>{MESES.map((m,i)=><option key={i} value={i}>{m}</option>)}</Select><Select value={anio} onChange={v=>{setAnio(parseInt(v));setExpandidos({});setExpandidosLocales({});}} style={{ width:90 }}>{[hoy.getFullYear()-1,hoy.getFullYear(),hoy.getFullYear()+1].map(a=><option key={a} value={a}>{a}</option>)}</Select></div>
+        <div style={{display:"flex",flexDirection:"column",gap:12}}>{horasPorLocal.map(grupo=>{const abierto=!!expandidosLocales[grupo.key];const diff=grupo.totalReal-grupo.totalTeo;return <Card key={grupo.key} style={{padding:0,overflow:"hidden",border:`1px solid ${diff<0?COLORS.danger+"33":COLORS.success+"33"}`}}>
+          <button onClick={()=>setExpandidosLocales(e=>({...e,[grupo.key]:!e[grupo.key]}))} style={{width:"100%",border:"none",background:"linear-gradient(90deg, var(--color-background-primary), var(--color-background-secondary))",padding:"14px 16px",cursor:"pointer",display:"grid",gridTemplateColumns:"minmax(220px,1fr) repeat(3,minmax(110px,auto)) 110px",gap:14,alignItems:"center",textAlign:"left"}}>
+            <div style={{display:"flex",alignItems:"center",gap:10,minWidth:0}}><div style={{width:36,height:36,borderRadius:10,background:COLORS.pinkLight,color:COLORS.pinkDark,display:"flex",alignItems:"center",justifyContent:"center",fontSize:17}}>🏠</div><div><p style={{margin:0,fontSize:15,fontWeight:700}}>{grupo.nombre}</p><p style={{margin:"2px 0 0",fontSize:11,color:"var(--color-text-secondary)"}}>{grupo.items.length} manicura{grupo.items.length===1?"":"s"} · horas disponibles del período</p></div></div>
+            <div style={{textAlign:"right"}}><p style={{margin:0,fontSize:18,fontWeight:600}}>{grupo.totalTeo.toFixed(1)}h</p><p style={{margin:0,fontSize:10,color:"var(--color-text-secondary)",textTransform:"uppercase"}}>Teóricas</p></div>
+            <div style={{textAlign:"right"}}><p style={{margin:0,fontSize:18,fontWeight:600,color:grupo.totalReal<grupo.totalTeo?COLORS.danger:COLORS.success}}>{grupo.totalReal.toFixed(1)}h</p><p style={{margin:0,fontSize:10,color:"var(--color-text-secondary)",textTransform:"uppercase"}}>Reales</p></div>
+            <div style={{textAlign:"right"}}><p style={{margin:0,fontSize:16,fontWeight:700,color:diffColor(grupo.totalReal,grupo.totalTeo)}}>{fmtDiff(grupo.totalReal,grupo.totalTeo)}</p><p style={{margin:0,fontSize:10,color:"var(--color-text-secondary)",textTransform:"uppercase"}}>Diferencia</p></div>
+            <span style={{justifySelf:"end",background:COLORS.pinkLight,color:COLORS.pinkDark,borderRadius:8,padding:"6px 10px",fontSize:12,fontWeight:600}}>{abierto?"▲ Ocultar":"▼ Desplegar"}</span>
+          </button>
+          {abierto&&<div style={{padding:"10px 12px 12px",background:"var(--color-background-primary)"}}>{grupo.items.map(r=>{const exp=expandidos[r.id];return <div key={r.id} style={{border:"1px solid rgba(120,120,120,0.14)",borderRadius:10,marginBottom:8,overflow:"hidden"}}><div style={{display:"flex",alignItems:"center",gap:12,padding:"10px 12px",flexWrap:"wrap"}}><Avatar nombre={r.nombre} size={32}/><div style={{flex:1,minWidth:170}}><p style={{margin:0,fontWeight:600,fontSize:13}}>{r.nombre}</p><p style={{margin:0,fontSize:11,color:"var(--color-text-secondary)"}}>{r.diasTrabajo} días</p></div><div style={{display:"flex",gap:16,alignItems:"center",flexWrap:"wrap"}}><span style={{fontSize:13}}><strong>{r.totalMesTeo.toFixed(1)}h</strong> teo.</span><span style={{fontSize:13,color:r.totalMesReal<r.totalMesTeo?COLORS.danger:COLORS.success}}><strong>{r.totalMesReal.toFixed(1)}h</strong> real.</span><span style={{fontSize:13,fontWeight:700,color:diffColor(r.totalMesReal,r.totalMesTeo),minWidth:110,textAlign:"right"}}>{fmtDiff(r.totalMesReal,r.totalMesTeo)}</span></div><button onClick={()=>toggleExp(r.id)} style={{background:COLORS.pinkLight,color:COLORS.pinkDark,border:"none",borderRadius:8,padding:"6px 10px",fontSize:11,fontWeight:600,cursor:"pointer"}}>{exp?"▲ Ocultar":"▼ Ver detalle"}</button></div>{exp&&<div style={{padding:"0 12px 12px",borderTop:"1px solid #eee"}}>{r.semanasData.map(sem=><div key={sem.semana} style={{marginTop:10}}><div style={{display:"flex",justifyContent:"space-between",gap:10,marginBottom:6,fontSize:11,color:"var(--color-text-secondary)"}}><strong>SEMANA {sem.semana}</strong><span>Teo. {sem.totalTeo.toFixed(1)}h · Real {sem.totalReal.toFixed(1)}h · <strong style={{color:diffColor(sem.totalReal,sem.totalTeo)}}>{fmtDiff(sem.totalReal,sem.totalTeo)}</strong></span></div>{sem.dias.map(d=><div key={d.fecha} style={{display:"grid",gridTemplateColumns:"60px 1fr 54px 54px 80px",gap:8,padding:"5px 8px",borderRadius:6,background:d.trabaja?"var(--color-background-secondary)":"transparent",opacity:d.trabaja?1:.45,fontSize:12}}><span>{d.label}</span><span>{d.trabaja?`${d.entrada} – ${d.salida}`:"—"}</span><span style={{textAlign:"right"}}>{d.trabaja?`${d.horasTeo.toFixed(1)}h`:""}</span><span style={{textAlign:"right",color:d.horasReal<d.horasTeo?COLORS.danger:COLORS.success}}>{d.trabaja?(d.asistencia?`${d.horasReal.toFixed(1)}h`:"—"):""}</span>{d.trabaja?(d.asistencia?<Badge color={estadoColor[d.asistencia.estado]}>{d.asistencia.estado==="presente"?"✓":d.asistencia.estado==="tarde"?"Tarde":"Ausente"}</Badge>:<Badge color="gray">Sin reg.</Badge>):<Badge color="gray">Libre</Badge>}</div>)}</div>)}</div>}</div>})}<div style={{display:"grid",gridTemplateColumns:"1fr repeat(3,minmax(110px,auto))",gap:14,alignItems:"center",padding:"12px 14px",marginTop:10,borderRadius:10,background:COLORS.pinkLight,border:`1px solid ${COLORS.pink}55`}}><strong style={{fontSize:13}}>Total {grupo.nombre}</strong><strong style={{textAlign:"right"}}>{grupo.totalTeo.toFixed(1)}h</strong><strong style={{textAlign:"right",color:grupo.totalReal<grupo.totalTeo?COLORS.danger:COLORS.success}}>{grupo.totalReal.toFixed(1)}h</strong><strong style={{textAlign:"right",color:diffColor(grupo.totalReal,grupo.totalTeo)}}>{fmtDiff(grupo.totalReal,grupo.totalTeo)}</strong></div></div>}
+        </Card>})}{horasPorLocal.length===0&&<Card><p style={{margin:0,textAlign:"center",color:"var(--color-text-secondary)"}}>Sin datos para los filtros seleccionados.</p></Card>}</div>
       </>}
       {tab==="asistencia"&&<>
         <div style={{ display:"flex",gap:8,marginBottom:16,flexWrap:"wrap",alignItems:"center" }}><span style={{ fontSize:13,color:"var(--color-text-secondary)" }}>Desde</span><input type="date" value={fechaDesde} onChange={e=>{setFechaDesde(e.target.value);setExpandidos({});}} style={{ border:"0.5px solid rgba(120,120,120,0.24)",borderRadius:8,padding:"7px 12px",fontSize:13,background:"var(--color-background-primary)",color:"var(--color-text-primary)" }}/><span style={{ fontSize:13,color:"var(--color-text-secondary)" }}>hasta</span><input type="date" value={fechaHasta} onChange={e=>{setFechaHasta(e.target.value);setExpandidos({});}} style={{ border:"0.5px solid rgba(120,120,120,0.24)",borderRadius:8,padding:"7px 12px",fontSize:13,background:"var(--color-background-primary)",color:"var(--color-text-primary)" }}/></div>
@@ -8924,8 +9038,8 @@ export default function App() {
   }, [dismissToast, user?.rol]);
 
   const reloadData = useCallback(async () => {
-    const [users, locales, horarios, asistencias, periodos, feriados, reglasCobertura, configCobertura, encargadoLocales, usuarioLocales, comisiones, comisionesImportaciones, comisionesCriterios, comisionesConfiguracion, comisionesManicuraConfig, adelantos, garantias, informesDiarios, agendaServicios, agendaManicuraServicios, agendaListasPrecios, agendaLocalListas, agendaPreciosServicios, agendaClientes, agendaTurnos, agendaTurnosPagos, agendaTurnoServicios, agendaBloqueos] = await Promise.all([
-      api.getUsers(), api.getLocales(), api.getHorarios(), api.getAsistencias(), api.getPeriodos(), api.getFeriados(), api.getReglasCobertura(), api.getConfigCobertura(), api.getEncargadoLocales(), api.getUsuarioLocales(), api.getComisiones(), api.getComisionesImportaciones(), api.getComisionesCriterios(), api.getComisionesConfiguracion(), api.getComisionesManicuraConfig(), api.getAdelantos(), api.getGarantias(), api.getInformesDiarios(), api.getAgendaServicios(), api.getAgendaManicuraServicios(), api.getAgendaListasPrecios(), api.getAgendaLocalListas(), api.getAgendaPreciosServicios(), api.getAgendaClientes(), api.getAgendaTurnos(), api.getAgendaTurnosPagos(), api.getAgendaTurnoServicios(), api.getAgendaBloqueos()
+    const [users, locales, horarios, asistencias, periodos, feriados, reglasCobertura, configCobertura, encargadoLocales, usuarioLocales, manicuraHistorialLocales, comisiones, comisionesImportaciones, comisionesCriterios, comisionesConfiguracion, comisionesManicuraConfig, adelantos, garantias, informesDiarios, agendaServicios, agendaManicuraServicios, agendaListasPrecios, agendaLocalListas, agendaPreciosServicios, agendaClientes, agendaTurnos, agendaTurnosPagos, agendaTurnoServicios, agendaBloqueos] = await Promise.all([
+      api.getUsers(), api.getLocales(), api.getHorarios(), api.getAsistencias(), api.getPeriodos(), api.getFeriados(), api.getReglasCobertura(), api.getConfigCobertura(), api.getEncargadoLocales(), api.getUsuarioLocales(), api.getManicuraHistorialLocales(), api.getComisiones(), api.getComisionesImportaciones(), api.getComisionesCriterios(), api.getComisionesConfiguracion(), api.getComisionesManicuraConfig(), api.getAdelantos(), api.getGarantias(), api.getInformesDiarios(), api.getAgendaServicios(), api.getAgendaManicuraServicios(), api.getAgendaListasPrecios(), api.getAgendaLocalListas(), api.getAgendaPreciosServicios(), api.getAgendaClientes(), api.getAgendaTurnos(), api.getAgendaTurnosPagos(), api.getAgendaTurnoServicios(), api.getAgendaBloqueos()
     ]);
     const nextData = {
       users: users.map(normalizeUser),
@@ -8938,6 +9052,7 @@ export default function App() {
       configCobertura: (configCobertura||[]).map(normalizeConfigCobertura),
       encargadoLocales: (encargadoLocales||[]).map(normalizeEncargadoLocal),
       usuarioLocales: (usuarioLocales||[]).map(normalizeUsuarioLocal),
+      manicuraHistorialLocales: (manicuraHistorialLocales||[]).map(normalizeManicuraHistorialLocal),
       comisiones: (comisiones||[]).map(normalizeComision),
       comisionesImportaciones: (comisionesImportaciones||[]).map(normalizeComisionImportacion),
       comisionesCriterios: (comisionesCriterios||[]).map(normalizeComisionCriterio),
