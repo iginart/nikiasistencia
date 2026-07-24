@@ -3856,8 +3856,11 @@ function Login({ onLogin, reloadData }) {
           setMsg("");
           setVista("seguridad");
         } else {
-          await reloadData();
           onLogin(found);
+          reloadData(found).catch((err) => {
+            console.error("No se pudieron cargar todos los datos después del ingreso", err);
+            notifyToast("Ingresaste correctamente, pero algunos datos no pudieron actualizarse. Volvé a intentar en unos segundos.", "warning", { title:"Carga parcial" });
+          });
         }
       }
       else setErr("Usuario o contraseña incorrectos.");
@@ -3912,9 +3915,10 @@ function Login({ onLogin, reloadData }) {
             await api.changePassword({ mode:"self", actor_id:securityUser.id, session_token:securityUser.sessionToken, target_user_id:securityUser.id, new_password:securityPassword });
             await api.updateUser(securityUser.id, { password_actualizado_en: ahora });
           }
-          await reloadData();
+          const authenticatedUser = { ...securityUser, email: emailLimpio };
+          onLogin(authenticatedUser);
+          reloadData(authenticatedUser).catch(err => console.error("No se pudieron recargar los datos después de actualizar la seguridad", err));
           notifyToast("Datos de seguridad actualizados.", "success", { title:"Seguridad actualizada" });
-          onLogin({ ...securityUser, email: emailLimpio });
         }
       } else {
         const ahora = new Date().toISOString();
@@ -3923,9 +3927,10 @@ function Login({ onLogin, reloadData }) {
           await api.changePassword({ mode:"self", actor_id:securityUser.id, session_token:securityUser.sessionToken, target_user_id:securityUser.id, new_password:securityPassword });
           await api.updateUser(securityUser.id, { password_actualizado_en: ahora });
         }
-        await reloadData();
+        const authenticatedUser = { ...securityUser, email: emailLimpio };
+        onLogin(authenticatedUser);
+        reloadData(authenticatedUser).catch(err => console.error("No se pudieron recargar los datos después de actualizar la seguridad", err));
         notifyToast("Datos de seguridad actualizados.", "success", { title:"Seguridad actualizada" });
-        onLogin({ ...securityUser, email: emailLimpio });
       }
     } catch(e) {
       setMsg("No se pudieron guardar los datos: " + (e.message || e));
@@ -3953,9 +3958,10 @@ function Login({ onLogin, reloadData }) {
         await api.changePassword({ mode:"self", actor_id:securityUser.id, session_token:securityUser.sessionToken, target_user_id:securityUser.id, new_password:securityPassword });
         await api.updateUser(securityUser.id, { password_actualizado_en: ahora });
       }
-      await reloadData();
+      const authenticatedUser = { ...securityUser, email: emailLimpio };
+      onLogin(authenticatedUser);
+      reloadData(authenticatedUser).catch(err => console.error("No se pudieron recargar los datos después de verificar el email", err));
       notifyToast("Email verificado y datos de seguridad actualizados.", "success", { title:"Seguridad actualizada" });
-      onLogin({ ...securityUser, email: emailLimpio });
     } catch(e) {
       setMsg("No se pudo validar el email: " + (e.message || e));
     }
@@ -8809,6 +8815,10 @@ export default function App() {
     try { return JSON.parse(localStorage.getItem("niki_user") || "null"); }
     catch { return null; }
   });
+  const userRef = useRef(user);
+  useEffect(() => {
+    userRef.current = user;
+  }, [user]);
   const [seccion, setSeccion] = useState(null);
   const [publicHash, setPublicHash] = useState(() => readSectionHash());
   const [menuOpen, setMenuOpen] = useState(false);
@@ -8890,12 +8900,24 @@ export default function App() {
     }
   }, [dismissToast, user?.rol]);
 
-  const reloadData = useCallback(async () => {
+  const reloadData = useCallback(async (actorOverride = null) => {
     const [users, locales, horarios, asistencias, periodos, feriados, reglasCobertura, configCobertura, encargadoLocales, usuarioLocales, manicuraHistorialLocales, usuarioHistorialLaboral, personaDocumentos, comisiones, comisionesImportaciones, comisionesCriterios, comisionesConfiguracion, comisionesManicuraConfig, adelantos, garantias, informesDiarios, agendaServicios, agendaManicuraServicios, agendaListasPrecios, agendaLocalListas, agendaPreciosServicios, agendaClientes, agendaTurnos, agendaTurnosPagos, agendaTurnoServicios, agendaBloqueos] = await Promise.all([
       api.getUsers(), api.getLocales(), api.getHorarios(), api.getAsistencias(), api.getPeriodos(), api.getFeriados(), api.getReglasCobertura(), api.getConfigCobertura(), api.getEncargadoLocales(), api.getUsuarioLocales(), api.getManicuraHistorialLocales(), api.getUsuarioHistorialLaboral(), api.getPersonaDocumentos(), api.getComisiones(), api.getComisionesImportaciones(), api.getComisionesCriterios(), api.getComisionesConfiguracion(), api.getComisionesManicuraConfig(), api.getAdelantos(), api.getGarantias(), api.getInformesDiarios(), api.getAgendaServicios(), api.getAgendaManicuraServicios(), api.getAgendaListasPrecios(), api.getAgendaLocalListas(), api.getAgendaPreciosServicios(), api.getAgendaClientes(), api.getAgendaTurnos(), api.getAgendaTurnosPagos(), api.getAgendaTurnoServicios(), api.getAgendaBloqueos()
     ]);
     const nextData = {
-      users: await Promise.all(users.map(async raw => { const u=normalizeUser(raw); if(u.fotoPerfilPath) u.fotoPerfilUrl=await api.signPersonaArchivo(user,u.id,u.fotoPerfilPath,3600); return u; })), 
+      users: await Promise.all((users || []).map(async raw => {
+        const u = normalizeUser(raw);
+        const actor = actorOverride || userRef.current;
+        if (u.fotoPerfilPath && actor?.id && actor?.sessionToken) {
+          try {
+            u.fotoPerfilUrl = await api.signPersonaArchivo(actor, u.id, u.fotoPerfilPath, 3600);
+          } catch (err) {
+            console.warn(`No se pudo cargar la foto de perfil de ${u.nombre || u.id}`, err);
+            u.fotoPerfilUrl = "";
+          }
+        }
+        return u;
+      })),
       locales: (locales||[]).map(normalizeLocal),
       horarios: horarios.map(normalizeHorario),
       asistencias: asistencias.map(normalizeAsistencia),
