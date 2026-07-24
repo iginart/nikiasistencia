@@ -50,6 +50,34 @@ document.body.style.fontFamily = "'Montserrat', sans-serif";
 
 const MAX_GARANTIA_FOTOS = 3;
 const MAX_GARANTIA_FOTO_BYTES = 200 * 1024;
+const MAX_FOTO_PERFIL_BYTES = 500 * 1024;
+const MAX_DOCUMENTO_IMAGEN_BYTES = 1024 * 1024;
+const MAX_DOCUMENTO_PDF_BYTES = 2 * 1024 * 1024;
+const MAX_DOCUMENTOS_PERSONA = 5;
+const PERSONAS_BUCKET = "legajos-personal";
+
+function onlyDigits(value) { return String(value || "").replace(/\D/g, ""); }
+function validarTelefonoArgentino(codigoArea, numero) {
+  const area = onlyDigits(codigoArea);
+  const tel = onlyDigits(numero);
+  if (!area && !tel) return "";
+  if (area.length < 2 || area.length > 4) return "El código de área debe tener entre 2 y 4 dígitos.";
+  const expected = 10 - area.length;
+  if (tel.length !== expected) return `El número debe tener ${expected} dígitos para ese código de área.`;
+  if (area.startsWith("0")) return "Ingresá el código de área sin 0 inicial.";
+  if (tel.startsWith("15")) return "Ingresá el número sin 15.";
+  return "";
+}
+function validarDatoBancario(value) {
+  const raw = String(value || "").trim();
+  if (!raw) return "";
+  const compact = raw.replace(/\s+/g, "");
+  if (/^\d+$/.test(compact)) return compact.length === 22 ? "" : "El CBU debe tener exactamente 22 dígitos.";
+  return /^[a-zA-Z0-9._-]{6,20}$/.test(compact) ? "" : "El alias debe tener entre 6 y 20 caracteres y usar letras, números, punto, guion o guion bajo.";
+}
+function safeStorageName(name) {
+  return String(name || "archivo").normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/[^a-zA-Z0-9._-]/g, "_");
+}
 
 async function compressImageToMaxSize(file, maxBytes = MAX_GARANTIA_FOTO_BYTES) {
   if (!file || !String(file.type || "").startsWith("image/")) {
@@ -159,7 +187,7 @@ const patchOrPost = async (table, matchQuery, data) => {
 };
 
 const api = {
-  getUsers: () => sb("users?select=id,nombre,usuario,email,rol,local_id,activo,codigo_externo,telefono&order=id"),
+  getUsers: () => sb("users?select=id,nombre,usuario,email,rol,local_id,activo,codigo_externo,telefono,telefono_codigo_area,telefono_numero,dato_bancario,tipo_relacion,foto_perfil_path&order=id"),
   login: async (usuario, password) => {
     const res = await fetch(`${SUPABASE_URL}/functions/v1/login-niki`, {
       method: "POST",
@@ -237,6 +265,41 @@ const api = {
   createManicuraHistorialLocal: (d) => sb("manicura_historial_locales", { method:"POST", body:JSON.stringify(d) }),
   updateManicuraHistorialLocal: (id, d) => sb(`manicura_historial_locales?id=eq.${id}`, { method:"PATCH", body:JSON.stringify(d) }),
   deleteManicuraHistorialLocal: (id) => sb(`manicura_historial_locales?id=eq.${id}`, { method:"DELETE", prefer:"" }),
+  getUsuarioHistorialLaboral: () => sb("usuario_historial_laboral?select=*&order=user_id,fecha_inicio.desc,id.desc"),
+  createUsuarioHistorialLaboral: (d) => sb("usuario_historial_laboral", { method:"POST", body:JSON.stringify(d) }),
+  updateUsuarioHistorialLaboral: (id, d) => sb(`usuario_historial_laboral?id=eq.${id}`, { method:"PATCH", body:JSON.stringify(d) }),
+  deleteUsuarioHistorialLaboral: (id) => sb(`usuario_historial_laboral?id=eq.${id}`, { method:"DELETE", prefer:"" }),
+  getPersonaDocumentos: () => sb("persona_documentos?select=*&order=user_id,creado_en.desc,id.desc"),
+  createPersonaDocumento: (d) => sb("persona_documentos", { method:"POST", body:JSON.stringify(d) }),
+  deletePersonaDocumento: (id) => sb(`persona_documentos?id=eq.${id}`, { method:"DELETE", prefer:"" }),
+  personaStorageRequest: async ({ action, actor, targetUserId, file = null, path = "", expiresIn = 600 }) => {
+    const fd = new FormData();
+    fd.append("action", action);
+    fd.append("actor_id", String(actor?.id || ""));
+    fd.append("session_token", String(actor?.sessionToken || ""));
+    fd.append("target_user_id", String(targetUserId || ""));
+    if (path) fd.append("path", path);
+    if (expiresIn) fd.append("expires_in", String(expiresIn));
+    if (file) fd.append("file", file, file.name);
+    const res = await fetch(`${SUPABASE_URL}/functions/v1/legajos-personal-niki`, { method:"POST", headers:{ apikey:SUPABASE_KEY, Authorization:`Bearer ${SUPABASE_KEY}` }, body:fd });
+    const txt = await res.text();
+    const data = txt ? JSON.parse(txt) : {};
+    if(!res.ok || data?.ok===false) throw new Error(data?.error || txt || "Error al gestionar el archivo");
+    return data;
+  },
+  uploadPersonaArchivo: async (actor, userId, folder, file) => {
+    const data = await api.personaStorageRequest({ action:"upload", actor, targetUserId:userId, file, path:folder });
+    return data.path;
+  },
+  deletePersonaArchivo: async (actor, userId, path) => {
+    if(!path) return;
+    await api.personaStorageRequest({ action:"delete", actor, targetUserId:userId, path });
+  },
+  signPersonaArchivo: async (actor, userId, path, expiresIn = 600) => {
+    if(!path) return "";
+    const data = await api.personaStorageRequest({ action:"sign", actor, targetUserId:userId, path, expiresIn });
+    return data.url || "";
+  },
   setUsuarioLocales: async (userId, localIds) => {
     await sb(`usuario_locales?user_id=eq.${userId}`, { method:"DELETE", prefer:"" });
     if (!localIds?.length) return [];
@@ -368,7 +431,7 @@ const api = {
   setEncargadoLocales: async (userId, localIds) => { await sb(`encargado_locales?user_id=eq.${userId}`, { method:"DELETE", prefer:"" }); if (!localIds?.length) return []; return sb("encargado_locales", { method:"POST", body:JSON.stringify(localIds.map(local_id=>({ user_id:userId, local_id:parseInt(local_id) }))) }); },
 };
 
-function normalizeUser(u) { return { id: u.id, nombre: u.nombre, usuario: u.usuario, email: u.email || "", rol: u.rol, localId: u.local_id, activo: u.activo, codigoExterno: u.codigo_externo || "", telefono: u.telefono || "", sessionToken: u.session_token || u.sessionToken || "" }; }
+function normalizeUser(u) { return { id:u.id,nombre:u.nombre,usuario:u.usuario,email:u.email||"",rol:u.rol,localId:u.local_id,activo:u.activo,codigoExterno:u.codigo_externo||"",telefono:u.telefono||"",telefonoCodigoArea:u.telefono_codigo_area||"",telefonoNumero:u.telefono_numero||"",datoBancario:u.dato_bancario||"",tipoRelacion:u.tipo_relacion||"a_resolver",fotoPerfilPath:u.foto_perfil_path||"",fotoPerfilUrl:u.foto_perfil_url||"",sessionToken:u.session_token||u.sessionToken||"" }; }
 function normalizeLocal(l) {
   const tipoLocal = l.tipo_local || l.tipoLocal || "propio";
   const zona = l.zona || "estandar";
@@ -394,6 +457,8 @@ function normalizeLocal(l) {
 }
 function normalizeUsuarioLocal(x) { return { userId:x.user_id, localId:x.local_id }; }
 function normalizeManicuraHistorialLocal(x) { return { id:x.id, userId:x.user_id, localId:x.local_id, fechaInicio:x.fecha_inicio || "", fechaFin:x.fecha_fin || "", motivoFin:x.motivo_fin || "", observacion:x.observacion || "", creadoEn:x.creado_en || "", actualizadoEn:x.actualizado_en || "" }; }
+function normalizeUsuarioHistorialLaboral(x) { return { id:x.id,userId:x.user_id,fechaInicio:x.fecha_inicio||"",fechaFin:x.fecha_fin||"",motivoFin:x.motivo_fin||"",observacion:x.observacion||"",creadoEn:x.creado_en||"",actualizadoEn:x.actualizado_en||"" }; }
+function normalizePersonaDocumento(x) { return { id:x.id,userId:x.user_id,tipo:x.tipo||"otro",descripcion:x.descripcion||"",nombreArchivo:x.nombre_archivo||"",mimeType:x.mime_type||"",tamanoBytes:Number(x.tamano_bytes||0),storagePath:x.storage_path||"",creadoEn:x.creado_en||"",url:"" }; }
 function isValidEmail(email) {
   return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(email || "").trim());
 }
@@ -786,7 +851,13 @@ function getConfigForLocal(data, localId) {
   return (data.configCobertura || []).find(c => c.localId === parseInt(localId)) || { localId:parseInt(localId), horaApertura:"10:00", horaCierre:"20:00", minutosApertura:60, minutosCierre:60 };
 }
 
-function Avatar({ nombre, size = 36 }) { const i = nombre.split(" ").map(p => p[0]).slice(0,2).join("").toUpperCase(); return <div style={{ width:size,height:size,borderRadius:"50%",background:COLORS.pinkLight,color:COLORS.pinkDark,display:"flex",alignItems:"center",justifyContent:"center",fontWeight:500,fontSize:size*0.35,flexShrink:0 }}>{i}</div>; }
+function Avatar({ nombre, size = 36, photoUrl = "", userId = null }) {
+  const registry = window.__nikiUsers || [];
+  const matched = registry.find(u => (userId && parseInt(u.id)===parseInt(userId)) || (!userId && String(u.nombre||"").trim().toLowerCase()===String(nombre||"").trim().toLowerCase()));
+  const src = photoUrl || matched?.fotoPerfilUrl || "";
+  const i = String(nombre||"?").split(" ").filter(Boolean).map(p=>p[0]).slice(0,2).join("").toUpperCase();
+  return src ? <img src={src} alt={nombre||"Foto de perfil"} style={{width:size,height:size,borderRadius:"50%",objectFit:"cover",border:"2px solid #fff",boxShadow:"0 1px 5px rgba(0,0,0,.12)",flexShrink:0}}/> : <div style={{width:size,height:size,borderRadius:"50%",background:COLORS.pinkLight,color:COLORS.pinkDark,display:"flex",alignItems:"center",justifyContent:"center",fontWeight:500,fontSize:size*.35,flexShrink:0}}>{i}</div>;
+}
 function Badge({ children, color = "pink" }) { const map = { pink:[COLORS.pinkLight,COLORS.pinkDark],success:[COLORS.successLight,COLORS.success],danger:[COLORS.dangerLight,COLORS.danger],amber:[COLORS.amberLight,COLORS.amber],info:[COLORS.infoLight,COLORS.info],gray:[COLORS.grayLight,"#444"] }; const [bg,fg] = map[color]||map.pink; return <span style={{ background:bg,color:fg,fontSize:11,fontWeight:500,padding:"2px 8px",borderRadius:20,whiteSpace:"nowrap" }}>{children}</span>; }
 function Card({ children, style }) { return <div style={{ background:"var(--color-background-primary)",border:"0.5px solid rgba(120,120,120,0.18)",borderRadius:12,padding:"1rem 1.25rem",...style }}>{children}</div>; }
 function Btn({ children, onClick, variant="primary", size="md", disabled, style }) {
@@ -4002,6 +4073,53 @@ function Login({ onLogin, reloadData }) {
   );
 }
 
+
+function LegajoDocumentosPanel({ actor, userId, documentos = [], onReload, onPhotoChanged, currentPhotoUrl = "" }) {
+  const [tipo,setTipo]=useState("cv");
+  const [descripcion,setDescripcion]=useState("");
+  const [busy,setBusy]=useState(false);
+  const docInput=useRef(null), photoInput=useRef(null);
+  const docs=documentos.filter(d=>parseInt(d.userId)===parseInt(userId));
+  const uploadPhoto=async file=>{
+    if(!file||!String(file.type||"").startsWith("image/")) return notifyToast("Elegí una imagen JPG, PNG o WebP.","warning");
+    setBusy(true);
+    try{
+      const compressed=await compressImageToMaxSize(file,MAX_FOTO_PERFIL_BYTES);
+      const path=await api.uploadPersonaArchivo(actor,userId,"perfil",compressed);
+      await api.updateUser(userId,{foto_perfil_path:path});
+      await onReload(); onPhotoChanged?.(); notifyToast("Foto de perfil actualizada.","success");
+    }catch(e){notifyToast("No se pudo subir la foto: "+e.message,"error");}
+    setBusy(false);
+  };
+  const uploadDoc=async file=>{
+    if(!file)return;
+    if(docs.length>=MAX_DOCUMENTOS_PERSONA)return notifyToast("Ya se alcanzó el máximo de 5 documentos.","warning");
+    const isPdf=file.type==="application/pdf"||file.name.toLowerCase().endsWith(".pdf");
+    const isImg=String(file.type||"").startsWith("image/");
+    if(!isPdf&&!isImg)return notifyToast("Solo se permiten imágenes o PDF.","warning");
+    setBusy(true);
+    try{
+      let finalFile=file;
+      if(isImg) finalFile=await compressImageToMaxSize(file,MAX_DOCUMENTO_IMAGEN_BYTES);
+      if(isPdf&&file.size>MAX_DOCUMENTO_PDF_BYTES) throw new Error("El PDF supera el máximo de 2 MB.");
+      const path=await api.uploadPersonaArchivo(actor,userId,"documentos",finalFile);
+      await api.createPersonaDocumento({user_id:parseInt(userId),tipo,descripcion:descripcion.trim()||null,nombre_archivo:finalFile.name,mime_type:finalFile.type,tamano_bytes:finalFile.size,storage_path:path});
+      setDescripcion(""); await onReload(); notifyToast("Documento adjuntado.","success");
+    }catch(e){notifyToast("No se pudo adjuntar: "+e.message,"error");}
+    setBusy(false);
+  };
+  const openDoc=async d=>{const url=d.url||await api.signPersonaArchivo(actor,userId,d.storagePath,600);if(url)window.open(url,"_blank","noopener,noreferrer");else notifyToast("No se pudo abrir el documento.","error");};
+  const removeDoc=async d=>{if(!window.confirm(`¿Eliminar ${d.nombreArchivo}?`))return;setBusy(true);try{await api.deletePersonaArchivo(actor,userId,d.storagePath);await api.deletePersonaDocumento(d.id);await onReload();}catch(e){notifyToast("No se pudo eliminar: "+e.message,"error");}setBusy(false);};
+  if(!userId)return <div style={{padding:16,background:COLORS.infoLight,borderRadius:10,fontSize:13,color:COLORS.info}}>Guardá primero la persona para poder cargar la foto y documentación.</div>;
+  return <div style={{display:"flex",flexDirection:"column",gap:16}}>
+    <Card style={{padding:14}}><div style={{display:"flex",alignItems:"center",gap:14,flexWrap:"wrap"}}><Avatar nombre="Perfil" size={72} photoUrl={currentPhotoUrl}/><div style={{flex:1}}><h3 style={{margin:"0 0 4px",fontSize:14}}>Foto de perfil</h3><p style={{margin:0,fontSize:12,color:"var(--color-text-secondary)"}}>Se comprime automáticamente hasta 500 KB y se muestra en asistencia, turnos, reportes y encabezado.</p></div><input ref={photoInput} type="file" accept="image/jpeg,image/png,image/webp" hidden onChange={e=>uploadPhoto(e.target.files?.[0])}/><Btn size="sm" disabled={busy} onClick={()=>photoInput.current?.click()}>Subir o reemplazar</Btn></div></Card>
+    <Card style={{padding:14}}><div style={{display:"flex",justifyContent:"space-between",gap:10,alignItems:"center",marginBottom:12,flexWrap:"wrap"}}><div><h3 style={{margin:0,fontSize:14}}>Documentación</h3><p style={{margin:"3px 0 0",fontSize:12,color:"var(--color-text-secondary)"}}>Documentos cargados: {docs.length} de {MAX_DOCUMENTOS_PERSONA}</p></div></div>
+      <div style={{display:"grid",gridTemplateColumns:"150px 1fr auto",gap:8,marginBottom:12}}><Select value={tipo} onChange={setTipo}><option value="cv">CV</option><option value="dni">DNI</option><option value="otro">Otro</option></Select><Input value={descripcion} onChange={setDescripcion} placeholder="Descripción opcional"/><input ref={docInput} type="file" accept="image/jpeg,image/png,image/webp,application/pdf" hidden onChange={e=>uploadDoc(e.target.files?.[0])}/><Btn size="sm" disabled={busy||docs.length>=MAX_DOCUMENTOS_PERSONA} onClick={()=>docInput.current?.click()}>Adjuntar</Btn></div>
+      {docs.length===0?<p style={{fontSize:13,color:"var(--color-text-secondary)",margin:0}}>No hay documentos cargados.</p>:<div style={{display:"flex",flexDirection:"column",gap:7}}>{docs.map(d=><div key={d.id} style={{display:"flex",alignItems:"center",gap:10,padding:"9px 10px",border:"1px solid #eee",borderRadius:9,flexWrap:"wrap"}}><Badge color="info">{d.tipo==="cv"?"CV":d.tipo==="dni"?"DNI":"Otro"}</Badge><div style={{flex:1,minWidth:180}}><p style={{margin:0,fontSize:12,fontWeight:600}}>{d.nombreArchivo}</p><p style={{margin:0,fontSize:11,color:"var(--color-text-secondary)"}}>{d.descripcion||"Sin descripción"} · {(d.tamanoBytes/1024).toFixed(0)} KB</p></div><Btn size="sm" variant="ghost" onClick={()=>openDoc(d)}>Ver</Btn><Btn size="sm" variant="ghost" style={{color:COLORS.danger}} onClick={()=>removeDoc(d)}>Eliminar</Btn></div>)}</div>}
+    </Card>
+  </div>;
+}
+
 // ── ABM MANICURAS ──────────────────────────────────────────────────
 function ABMManicuras({ data, reloadData, user }) {
   const [modal, setModal] = useState(null);
@@ -4010,6 +4128,7 @@ function ABMManicuras({ data, reloadData, user }) {
   const [saving, setSaving] = useState(false);
   const [modalTab, setModalTab] = useState("general");
   const [historialDraft, setHistorialDraft] = useState([]);
+  const documentosPersona=(data.personaDocumentos||[]);
   const [filtroLocal, setFiltroLocal] = useState("todos");
   const [filtroEstado, setFiltroEstado] = useState("activas");
   const [agrupacion, setAgrupacion] = useState("local");
@@ -4039,7 +4158,7 @@ function ABMManicuras({ data, reloadData, user }) {
   const sortHistorial = rows => [...rows].sort((a,b)=>(b.fechaInicio||"").localeCompare(a.fechaInicio||"") || Number(b.id||0)-Number(a.id||0));
   const openNew = () => {
     const localId = localesPermitidos[0]?.id || "";
-    setForm({ nombre:"",usuario:"",email:"",codigoExterno:"",password:"",password2:"",localId,activo:true });
+    setForm({ nombre:"",usuario:"",email:"",codigoExterno:"",telefonoCodigoArea:"",telefonoNumero:"",datoBancario:"",tipoRelacion:"a_resolver",password:"",password2:"",localId,activo:true });
     setHistorialDraft([{ tempId:`new-${Date.now()}`, localId, fechaInicio:hoy, fechaFin:"", motivoFin:"", observacion:"", isNew:true }]);
     setFormErr(""); setModalTab("general"); setModal("new");
   };
@@ -4082,6 +4201,8 @@ function ABMManicuras({ data, reloadData, user }) {
     if (emailEnUso(data.users, emailLimpio, form.id)) { setFormErr("Ese email ya está asignado a otro usuario. No se pueden repetir correos."); return; }
     if (modal==="new" && !form.password) { setFormErr("Ingresá una contraseña."); return; }
     if (form.password && form.password!==form.password2) { setFormErr("Las contraseñas no coinciden."); return; }
+    const telErr=validarTelefonoArgentino(form.telefonoCodigoArea,form.telefonoNumero); if(telErr){setFormErr(telErr);setModalTab("general");return;}
+    const bancoErr=validarDatoBancario(form.datoBancario); if(bancoErr){setFormErr(bancoErr);setModalTab("laboral");return;}
     const histErr=validarHistorial(historialDraft); if(histErr){setFormErr(histErr);setModalTab("antiguedad");return;}
     setSaving(true);
     try {
@@ -4089,11 +4210,11 @@ function ABMManicuras({ data, reloadData, user }) {
       if (modal==="new") {
         const ahora=new Date().toISOString();
         const abierto=historialDraft.find(r=>!r.fechaFin);
-        const created=await api.createUser({ nombre:form.nombre.trim(),usuario:usuarioLimpio,email:emailLimpio,email_actualizado_en:ahora,codigo_externo:(form.codigoExterno||"").trim()||null,password:form.password,password_actualizado_en:form.password==="niki123"?null:ahora,rol:"manicura",local_id:abierto?parseInt(abierto.localId):null,activo:!!abierto });
+        const created=await api.createUser({ nombre:form.nombre.trim(),usuario:usuarioLimpio,email:emailLimpio,email_actualizado_en:ahora,codigo_externo:(form.codigoExterno||"").trim()||null,telefono_codigo_area:onlyDigits(form.telefonoCodigoArea)||null,telefono_numero:onlyDigits(form.telefonoNumero)||null,telefono:[onlyDigits(form.telefonoCodigoArea),onlyDigits(form.telefonoNumero)].filter(Boolean).join("")||null,dato_bancario:String(form.datoBancario||"").trim()||null,tipo_relacion:form.tipoRelacion||"a_resolver",password:form.password,password_actualizado_en:form.password==="niki123"?null:ahora,rol:"manicura",local_id:abierto?parseInt(abierto.localId):null,activo:!!abierto });
         targetId=created?.[0]?.id;
       } else {
         const abierto=historialDraft.find(r=>!r.fechaFin);
-        await api.updateUser(targetId,{ nombre:form.nombre.trim(),usuario:usuarioLimpio,email:emailLimpio,email_actualizado_en:new Date().toISOString(),codigo_externo:(form.codigoExterno||"").trim()||null,local_id:abierto?parseInt(abierto.localId):null,activo:!!abierto });
+        await api.updateUser(targetId,{ nombre:form.nombre.trim(),usuario:usuarioLimpio,email:emailLimpio,email_actualizado_en:new Date().toISOString(),codigo_externo:(form.codigoExterno||"").trim()||null,telefono_codigo_area:onlyDigits(form.telefonoCodigoArea)||null,telefono_numero:onlyDigits(form.telefonoNumero)||null,telefono:[onlyDigits(form.telefonoCodigoArea),onlyDigits(form.telefonoNumero)].filter(Boolean).join("")||null,dato_bancario:String(form.datoBancario||"").trim()||null,tipo_relacion:form.tipoRelacion||"a_resolver",local_id:abierto?parseInt(abierto.localId):null,activo:!!abierto });
         if(form.password){await api.changePassword({mode:"admin_set",actor_id:user.id,session_token:user.sessionToken,target_user_id:targetId,new_password:form.password});}
       }
       const originales=(data.manicuraHistorialLocales||[]).filter(x=>x.userId===targetId);
@@ -4120,11 +4241,11 @@ function ABMManicuras({ data, reloadData, user }) {
       <div><label style={{display:"block",fontSize:11,fontWeight:600,color:"var(--color-text-secondary)",marginBottom:5,textTransform:"uppercase"}}>Agrupar</label><Select value={agrupacion} onChange={setAgrupacion}><option value="local">Por sucursal</option><option value="ninguna">Sin agrupar</option></Select></div>
       <div style={{fontSize:12,color:"var(--color-text-secondary)",paddingBottom:8}}>{manicurasFiltradas.length} manicura{manicurasFiltradas.length===1?"":"s"}</div>
     </div></Card>
-    <div style={{display:"flex",flexDirection:"column",gap:14}}>{gruposManicuras.length===0?<Card><p style={{margin:0,textAlign:"center",fontSize:13,color:"var(--color-text-secondary)"}}>No hay manicuras para los filtros seleccionados.</p></Card>:gruposManicuras.map(grupo=><div key={grupo.key}>{agrupacion==="local"&&<div style={{display:"flex",alignItems:"center",gap:8,margin:"0 0 7px 4px"}}><h3 style={{margin:0,fontSize:14,fontWeight:700}}>{grupo.label}</h3><Badge color="info">{grupo.items.length}</Badge></div>}<div style={{display:"flex",flexDirection:"column",gap:8}}>{grupo.items.map(m=>{const local=data.locales.find(l=>l.id===m.localId);return <Card key={m.id} style={{display:"flex",alignItems:"center",gap:12,flexWrap:"wrap"}}><Avatar nombre={m.nombre}/><div style={{flex:1,minWidth:0}}><p style={{margin:0,fontWeight:500,fontSize:14}}>{m.nombre}</p><p style={{margin:0,fontSize:12,color:"var(--color-text-secondary)"}}>{m.usuario} · {m.email||"Sin mail"} · {local?.nombre||"Sin local"}</p></div><Badge color={m.activo?"success":"gray"}>{m.activo?"Activa":"Inactiva"}</Badge><Btn onClick={()=>openEdit(m)} variant="ghost" size="sm">Editar</Btn><Btn onClick={()=>reenviarInvitacion(m)} variant="ghost" size="sm" disabled={!m.email}>Invitar</Btn><Btn onClick={()=>openEdit(m,"antiguedad")} variant="ghost" size="sm">Antigüedad</Btn></Card>})}</div></div>)}</div>
+    <div style={{display:"flex",flexDirection:"column",gap:14}}>{gruposManicuras.length===0?<Card><p style={{margin:0,textAlign:"center",fontSize:13,color:"var(--color-text-secondary)"}}>No hay manicuras para los filtros seleccionados.</p></Card>:gruposManicuras.map(grupo=><div key={grupo.key}>{agrupacion==="local"&&<div style={{display:"flex",alignItems:"center",gap:8,margin:"0 0 7px 4px"}}><h3 style={{margin:0,fontSize:14,fontWeight:700}}>{grupo.label}</h3><Badge color="info">{grupo.items.length}</Badge></div>}<div style={{display:"flex",flexDirection:"column",gap:8}}>{grupo.items.map(m=>{const local=data.locales.find(l=>l.id===m.localId);return <Card key={m.id} style={{display:"flex",alignItems:"center",gap:12,flexWrap:"wrap"}}><Avatar nombre={m.nombre} userId={m.id} photoUrl={m.fotoPerfilUrl}/><div style={{flex:1,minWidth:0}}><p style={{margin:0,fontWeight:500,fontSize:14}}>{m.nombre}</p><p style={{margin:0,fontSize:12,color:"var(--color-text-secondary)"}}>{m.usuario} · {m.email||"Sin mail"} · {local?.nombre||"Sin local"}</p></div><Badge color={m.activo?"success":"gray"}>{m.activo?"Activa":"Inactiva"}</Badge><Btn onClick={()=>openEdit(m)} variant="ghost" size="sm">Editar</Btn><Btn onClick={()=>reenviarInvitacion(m)} variant="ghost" size="sm" disabled={!m.email}>Invitar</Btn><Btn onClick={()=>openEdit(m,"antiguedad")} variant="ghost" size="sm">Antigüedad</Btn></Card>})}</div></div>)}</div>
     {modal&&<Modal title={modal==="new"?"Nueva manicura":"Editar manicura"} onClose={()=>setModal(null)} width={780}>
-      <div style={{display:"flex",gap:6,marginBottom:18,borderBottom:"1px solid #eee",paddingBottom:10}}><button style={tabStyle(modalTab==="general")} onClick={()=>setModalTab("general")}>Datos generales</button><button style={tabStyle(modalTab==="antiguedad")} onClick={()=>setModalTab("antiguedad")}>Antigüedad y locales</button></div>
-      {modalTab==="general"?<div style={{display:"flex",flexDirection:"column",gap:14}}><ModalInput label="Nombre completo" value={form.nombre||""} onChange={v=>setForm(f=>({...f,nombre:v}))}/><ModalInput label="Usuario" value={form.usuario||""} onChange={v=>setForm(f=>({...f,usuario:v}))}/><ModalInput label="Email" type="email" value={form.email||""} onChange={v=>setForm(f=>({...f,email:v}))}/><ModalInputWithHelp label="Código externo AgendaPro" value={form.codigoExterno||""} onChange={v=>setForm(f=>({...f,codigoExterno:v}))} help="Vincula la manicura con AgendaPro/Qlik."/><div style={{borderTop:"1px dashed #eee",paddingTop:14}}><p style={{margin:"0 0 10px",fontSize:13,color:"#888"}}>{modal==="edit"?"Dejá en blanco para no cambiar la contraseña":"Contraseña"}</p><div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12}}><ModalInput label={modal==="edit"?"Nueva contraseña":"Contraseña"} type="password" value={form.password||""} onChange={v=>setForm(f=>({...f,password:v}))}/><ModalInput label="Repetir contraseña" type="password" value={form.password2||""} onChange={v=>setForm(f=>({...f,password2:v}))}/></div></div><div style={{background:COLORS.infoLight,color:COLORS.info,borderRadius:10,padding:"10px 12px",fontSize:12}}>El local y el estado actual se determinan desde la solapa <strong>Antigüedad y locales</strong>.</div></div>:
-      <div><div style={{display:"flex",justifyContent:"space-between",alignItems:"center",gap:12,marginBottom:12}}><div><h3 style={{margin:0,fontSize:15}}>Historial por local</h3><p style={{margin:"3px 0 0",fontSize:12,color:"var(--color-text-secondary)"}}>Debe existir un único período abierto para que la manicura quede activa.</p></div><Btn onClick={addHistorial} size="sm">+ Agregar período</Btn></div><div style={{overflowX:"auto",border:"1px solid rgba(120,120,120,0.16)",borderRadius:12}}><div style={{minWidth:760}}><div style={{display:"grid",gridTemplateColumns:"1.25fr 130px 130px 150px 1.2fr 44px",gap:8,padding:"9px 10px",background:"var(--color-background-secondary)",fontSize:11,fontWeight:700,textTransform:"uppercase"}}><span>Local</span><span>Fecha inicio</span><span>Fecha fin</span><span>Motivo</span><span>Observación</span><span></span></div>{historialDraft.length===0?<p style={{padding:16,textAlign:"center",fontSize:13,color:"var(--color-text-secondary)"}}>Sin períodos cargados.</p>:historialDraft.map(r=>{const key=r.id||r.tempId;return <div key={key} style={{display:"grid",gridTemplateColumns:"1.25fr 130px 130px 150px 1.2fr 44px",gap:8,padding:"9px 10px",borderTop:"1px solid rgba(120,120,120,0.12)",alignItems:"center",background:!r.fechaFin?COLORS.successLight:"#fff"}}><select value={r.localId||""} onChange={e=>updateHistorialDraft(key,"localId",e.target.value)} style={{border:"1px solid #ddd",borderRadius:7,padding:"7px 8px",fontSize:12}}>{localesPermitidos.map(l=><option key={l.id} value={l.id}>{l.nombre}</option>)}</select><input type="date" value={r.fechaInicio||""} onChange={e=>updateHistorialDraft(key,"fechaInicio",e.target.value)} style={{border:"1px solid #ddd",borderRadius:7,padding:"7px 8px",fontSize:12}}/><input type="date" value={r.fechaFin||""} onChange={e=>{updateHistorialDraft(key,"fechaFin",e.target.value);if(!e.target.value)updateHistorialDraft(key,"motivoFin","");}} style={{border:"1px solid #ddd",borderRadius:7,padding:"7px 8px",fontSize:12}}/><select value={r.motivoFin||""} disabled={!r.fechaFin} onChange={e=>updateHistorialDraft(key,"motivoFin",e.target.value)} style={{border:"1px solid #ddd",borderRadius:7,padding:"7px 8px",fontSize:12,background:!r.fechaFin?"#f4f4f4":"#fff"}}><option value="">{r.fechaFin?"Seleccionar":"Período activo"}</option>{motivosFin.map(x=><option key={x}>{x}</option>)}</select><input value={r.observacion||""} onChange={e=>updateHistorialDraft(key,"observacion",e.target.value)} placeholder="Opcional" style={{border:"1px solid #ddd",borderRadius:7,padding:"7px 8px",fontSize:12}}/><button onClick={()=>removeHistorialDraft(key)} title="Eliminar período" style={{border:"none",background:COLORS.dangerLight,color:COLORS.danger,borderRadius:7,width:34,height:34,cursor:"pointer"}}>×</button></div>})}</div></div></div>}
+      <div style={{display:"flex",gap:6,marginBottom:18,borderBottom:"1px solid #eee",paddingBottom:10}}><button style={tabStyle(modalTab==="general")} onClick={()=>setModalTab("general")}>Datos generales</button><button style={tabStyle(modalTab==="antiguedad")} onClick={()=>setModalTab("antiguedad")}>Antigüedad y locales</button><button style={tabStyle(modalTab==="laboral")} onClick={()=>setModalTab("laboral")}>Datos laborales y bancarios</button><button style={tabStyle(modalTab==="documentacion")} onClick={()=>setModalTab("documentacion")}>Documentación</button></div>
+      {modalTab==="general"?<div style={{display:"flex",flexDirection:"column",gap:14}}><ModalInput label="Nombre completo" value={form.nombre||""} onChange={v=>setForm(f=>({...f,nombre:v}))}/><ModalInput label="Usuario" value={form.usuario||""} onChange={v=>setForm(f=>({...f,usuario:v}))}/><ModalInput label="Email" type="email" value={form.email||""} onChange={v=>setForm(f=>({...f,email:v}))}/><div style={{display:"grid",gridTemplateColumns:"minmax(120px,.45fr) 1fr",gap:12}}><ModalInput label="Código de área" value={form.telefonoCodigoArea||""} onChange={v=>setForm(f=>({...f,telefonoCodigoArea:onlyDigits(v).slice(0,4)}))}/><ModalInput label="Número de teléfono" value={form.telefonoNumero||""} onChange={v=>setForm(f=>({...f,telefonoNumero:onlyDigits(v).slice(0,8)}))}/></div><ModalInputWithHelp label="Código externo AgendaPro" value={form.codigoExterno||""} onChange={v=>setForm(f=>({...f,codigoExterno:v}))} help="Vincula la manicura con AgendaPro/Qlik."/><div style={{borderTop:"1px dashed #eee",paddingTop:14}}><p style={{margin:"0 0 10px",fontSize:13,color:"#888"}}>{modal==="edit"?"Dejá en blanco para no cambiar la contraseña":"Contraseña"}</p><div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12}}><ModalInput label={modal==="edit"?"Nueva contraseña":"Contraseña"} type="password" value={form.password||""} onChange={v=>setForm(f=>({...f,password:v}))}/><ModalInput label="Repetir contraseña" type="password" value={form.password2||""} onChange={v=>setForm(f=>({...f,password2:v}))}/></div></div><div style={{background:COLORS.infoLight,color:COLORS.info,borderRadius:10,padding:"10px 12px",fontSize:12}}>El local y el estado actual se determinan desde la solapa <strong>Antigüedad y locales</strong>.</div></div>:modalTab==="antiguedad"?
+      <div><div style={{display:"flex",justifyContent:"space-between",alignItems:"center",gap:12,marginBottom:12}}><div><h3 style={{margin:0,fontSize:15}}>Historial por local</h3><p style={{margin:"3px 0 0",fontSize:12,color:"var(--color-text-secondary)"}}>Debe existir un único período abierto para que la manicura quede activa.</p></div><Btn onClick={addHistorial} size="sm">+ Agregar período</Btn></div><div style={{overflowX:"auto",border:"1px solid rgba(120,120,120,0.16)",borderRadius:12}}><div style={{minWidth:760}}><div style={{display:"grid",gridTemplateColumns:"1.25fr 130px 130px 150px 1.2fr 44px",gap:8,padding:"9px 10px",background:"var(--color-background-secondary)",fontSize:11,fontWeight:700,textTransform:"uppercase"}}><span>Local</span><span>Fecha inicio</span><span>Fecha fin</span><span>Motivo</span><span>Observación</span><span></span></div>{historialDraft.length===0?<p style={{padding:16,textAlign:"center",fontSize:13,color:"var(--color-text-secondary)"}}>Sin períodos cargados.</p>:historialDraft.map(r=>{const key=r.id||r.tempId;return <div key={key} style={{display:"grid",gridTemplateColumns:"1.25fr 130px 130px 150px 1.2fr 44px",gap:8,padding:"9px 10px",borderTop:"1px solid rgba(120,120,120,0.12)",alignItems:"center",background:!r.fechaFin?COLORS.successLight:"#fff"}}><select value={r.localId||""} onChange={e=>updateHistorialDraft(key,"localId",e.target.value)} style={{border:"1px solid #ddd",borderRadius:7,padding:"7px 8px",fontSize:12}}>{localesPermitidos.map(l=><option key={l.id} value={l.id}>{l.nombre}</option>)}</select><input type="date" value={r.fechaInicio||""} onChange={e=>updateHistorialDraft(key,"fechaInicio",e.target.value)} style={{border:"1px solid #ddd",borderRadius:7,padding:"7px 8px",fontSize:12}}/><input type="date" value={r.fechaFin||""} onChange={e=>{updateHistorialDraft(key,"fechaFin",e.target.value);if(!e.target.value)updateHistorialDraft(key,"motivoFin","");}} style={{border:"1px solid #ddd",borderRadius:7,padding:"7px 8px",fontSize:12}}/><select value={r.motivoFin||""} disabled={!r.fechaFin} onChange={e=>updateHistorialDraft(key,"motivoFin",e.target.value)} style={{border:"1px solid #ddd",borderRadius:7,padding:"7px 8px",fontSize:12,background:!r.fechaFin?"#f4f4f4":"#fff"}}><option value="">{r.fechaFin?"Seleccionar":"Período activo"}</option>{motivosFin.map(x=><option key={x}>{x}</option>)}</select><input value={r.observacion||""} onChange={e=>updateHistorialDraft(key,"observacion",e.target.value)} placeholder="Opcional" style={{border:"1px solid #ddd",borderRadius:7,padding:"7px 8px",fontSize:12}}/><button onClick={()=>removeHistorialDraft(key)} title="Eliminar período" style={{border:"none",background:COLORS.dangerLight,color:COLORS.danger,borderRadius:7,width:34,height:34,cursor:"pointer"}}>×</button></div>})}</div></div></div>:modalTab==="laboral"?<div style={{display:"flex",flexDirection:"column",gap:14}}><ModalInput label="Alias o CBU bancario" value={form.datoBancario||""} onChange={v=>setForm(f=>({...f,datoBancario:v}))}/><ModalSelect label="Tipo de relación" value={form.tipoRelacion||"a_resolver"} onChange={v=>setForm(f=>({...f,tipoRelacion:v}))}><option value="monotributista">Monotributista</option><option value="dependencia">Relación de Dependencia</option><option value="a_resolver">A resolver</option></ModalSelect></div>:<LegajoDocumentosPanel actor={user} userId={form.id} documentos={documentosPersona} onReload={reloadData} currentPhotoUrl={form.fotoPerfilUrl||""}/>}
       {formErr&&<p style={{margin:"14px 0 0",fontSize:13,color:COLORS.danger,background:COLORS.dangerLight,padding:"8px 12px",borderRadius:8}}>{formErr}</p>}<div style={{display:"flex",gap:8,marginTop:18}}><Btn onClick={save} disabled={saving} style={{flex:1,justifyContent:"center"}}>{saving?"Guardando...":"Guardar"}</Btn><Btn onClick={()=>setModal(null)} variant="secondary" style={{flex:1,justifyContent:"center"}}>Cancelar</Btn></div>
     </Modal>}
   </div>;
@@ -6308,295 +6429,27 @@ function AdelantosManicuras({ data, reloadData, user }) {
 
 // ── ABM ENCARGADAS ────────────────────────────────────────────────
 function ABMEncargadas({ data, reloadData, user }) {
-  const [modal, setModal] = useState(null);
-  const [form, setForm] = useState({});
-  const [formErr, setFormErr] = useState("");
-  const [saving, setSaving] = useState(false);
-  const [filtroRol, setFiltroRol] = useState("todos");
-  const [filtroLocal, setFiltroLocal] = useState("todos");
-  const [filtroEstado, setFiltroEstado] = useState("activas");
-  const [agrupacion, setAgrupacion] = useState("rol");
-  const actorEsAdmin = user.rol === "admin";
-  const actorEsCasaMatriz = user.rol === "casa_matriz";
-  const rolesGestionables = actorEsAdmin
-    ? ["admin", "casa_matriz", "encargada"]
-    : ["casa_matriz", "encargada"];
-
-  const usuariosInternos = data.users
-    .filter(u => ["admin", "casa_matriz", "encargada"].includes(u.rol))
-    .filter(u => actorEsAdmin || u.rol !== "admin")
-    .sort((a,b) => (roleLabel(a.rol) + a.nombre).localeCompare(roleLabel(b.rol) + b.nombre));
-
-  const localesDeEncargada = (uid) => (data.encargadoLocales||[]).filter(x=>x.userId===uid).map(x=>x.localId);
-  const franquiciasDeCasaMatriz = (uid) => (data.usuarioLocales||[]).filter(x=>x.userId===uid).map(x=>x.localId);
-  const localesGestionables = user.rol === "admin" ? (data.locales || []) : (data.locales || []).filter(l => getAssignedLocalIds(data, user).includes(l.id));
-  const franquiciasDisponibles = (data.locales || []).filter(l => (l.tipoLocal || l.tipo_local || "propio") === "franquicia");
-  const localesEfectivosUsuario = useCallback((u) => {
-    if (u.rol === "admin") return (data.locales || []).map(l => l.id);
-    if (u.rol === "casa_matriz") {
-      const propios = (data.locales || []).filter(l => (l.tipoLocal || l.tipo_local || "propio") === "propio").map(l => l.id);
-      return Array.from(new Set([...propios, ...franquiciasDeCasaMatriz(u.id)]));
-    }
-    if (u.rol === "encargada") return localesDeEncargada(u.id);
-    return [];
-  }, [data.locales, data.usuarioLocales, data.encargadoLocales]);
-  const usuariosFiltrados = useMemo(() => usuariosInternos.filter(u => {
-    if (filtroRol !== "todos" && u.rol !== filtroRol) return false;
-    if (filtroLocal !== "todos" && !localesEfectivosUsuario(u).some(id => String(id) === String(filtroLocal))) return false;
-    if (filtroEstado !== "todas" && (filtroEstado === "activas" ? !u.activo : u.activo)) return false;
-    return true;
-  }), [usuariosInternos, filtroRol, filtroLocal, filtroEstado, localesEfectivosUsuario]);
-  const gruposUsuarios = useMemo(() => {
-    if (agrupacion === "ninguna") return [{ key:"todos", label:"Todos los usuarios", items:usuariosFiltrados }];
-    const grupos = new Map();
-    usuariosFiltrados.forEach(u => {
-      if (agrupacion === "rol") {
-        const key = u.rol || "sin-rol";
-        if (!grupos.has(key)) grupos.set(key, { key, label:roleLabel(u.rol) || "Sin tipo", items:[] });
-        grupos.get(key).items.push(u);
-        return;
-      }
-      const ids = localesEfectivosUsuario(u);
-      if (!ids.length) {
-        if (!grupos.has("sin-local")) grupos.set("sin-local", { key:"sin-local", label:"Sin sucursal asignada", items:[] });
-        grupos.get("sin-local").items.push(u);
-        return;
-      }
-      ids.forEach(id => {
-        const local = data.locales.find(l => l.id === id);
-        const key = String(id);
-        if (!grupos.has(key)) grupos.set(key, { key, label:local?.nombre || "Sucursal sin nombre", items:[] });
-        grupos.get(key).items.push(u);
-      });
-    });
-    const roleOrder = { admin:1, casa_matriz:2, encargada:3 };
-    return Array.from(grupos.values()).sort((a,b) => agrupacion === "rol" ? (roleOrder[a.key]||99)-(roleOrder[b.key]||99) : a.label.localeCompare(b.label));
-  }, [usuariosFiltrados, agrupacion, localesEfectivosUsuario, data.locales]);
-
-  const openNew = () => {
-    const rolInicial = actorEsAdmin ? "encargada" : "encargada";
-    setForm({ nombre:"",usuario:"",email:"",password:"",password2:"",rol:rolInicial,localIds:[] });
-    setFormErr("");
-    setModal("new");
-  };
-
-  const openEdit = u => {
-    if (!canManageUserRole(user, u.rol)) {
-      notifyToast("No tenés permiso para modificar este tipo de usuario.", "warning");
-      return;
-    }
-    setForm({...u,password:"",password2:"",localIds:u.rol === "encargada" ? localesDeEncargada(u.id) : u.rol === "casa_matriz" ? franquiciasDeCasaMatriz(u.id) : []});
-    setFormErr("");
-    setModal("edit");
-  };
-
-  const toggleLocal = (id) => setForm(f => ({ ...f, localIds:(f.localIds||[]).includes(id) ? (f.localIds||[]).filter(x=>x!==id) : [...(f.localIds||[]), id] }));
-
-  const save = async () => {
-    setFormErr("");
-    const rolDestino = form.rol || "encargada";
-
-    if (!rolesGestionables.includes(rolDestino)) {
-      setFormErr(actorEsAdmin ? "Seleccioná un rol válido." : "No podés crear o asignar ese tipo de usuario.");
-      return;
-    }
-    if (modal === "edit") {
-      const original = data.users.find(u => u.id === form.id);
-      if (original && !canManageUserRole(user, original.rol)) {
-        setFormErr("No tenés permiso para modificar este usuario.");
-        return;
-      }
-    }
-    if (!form.nombre?.trim() || !form.usuario?.trim()) { setFormErr("Nombre y usuario son obligatorios."); return; }
-    const usuarioLimpio = normalizeUsuarioValue(form.usuario);
-    const emailLimpio = normalizeEmailValue(form.email);
-    if (!isValidEmail(emailLimpio)) { setFormErr("El email es obligatorio y debe ser válido."); return; }
-    if (usuarioEnUso(data.users, usuarioLimpio, form.id)) { setFormErr("Ese usuario ya existe. Elegí otro nombre de usuario."); return; }
-    if (emailEnUso(data.users, emailLimpio, form.id)) { setFormErr("Ese email ya está asignado a otro usuario. No se pueden repetir correos."); return; }
-    if (rolDestino === "encargada" && !(form.localIds||[]).length) { setFormErr("Asigná al menos un local para una encargada."); return; }
-    if (modal === "new") {
-      if (!form.password) { setFormErr("Ingresá una contraseña."); return; }
-      if (form.password !== form.password2) { setFormErr("Las contraseñas no coinciden."); return; }
-    } else if (form.password && form.password !== form.password2) { setFormErr("Las contraseñas no coinciden."); return; }
-
-    setSaving(true);
-    try {
-      let userId = form.id;
-      if (modal === "new") {
-        const ahora = new Date().toISOString();
-        const created = await api.createUser({
-          nombre:form.nombre.trim(),
-          usuario:usuarioLimpio,
-          email:emailLimpio,
-          email_actualizado_en:ahora,
-          password:form.password,
-          password_actualizado_en:form.password==="niki123"?null:ahora,
-          rol:rolDestino,
-          local_id:null,
-          activo:true
-        });
-        userId = created?.[0]?.id;
-        if (userId) {
-          try {
-            await api.enviarInvitacionUsuario({ actor_id:user.id, session_token:user.sessionToken, target_user_id:userId });
-            notifyToast("Usuario creado e invitación enviada por email.", "success", { title:"Invitación enviada" });
-          } catch(invErr) {
-            notifyToast("El usuario se creó, pero no se pudo enviar la invitación: " + (invErr.message || invErr), "warning", { title:"Invitación pendiente" });
-          }
-        }
-      } else {
-        const upd = {
-          nombre:form.nombre.trim(),
-          usuario:usuarioLimpio,
-          email:emailLimpio,
-          email_actualizado_en:new Date().toISOString(),
-          rol:rolDestino,
-          local_id:null
-        };
-        await api.updateUser(form.id, upd);
-        if (form.password) {
-          await api.changePassword({ mode:"admin_set", actor_id:user.id, session_token:user.sessionToken, target_user_id:form.id, new_password:form.password });
-          await api.updateUser(form.id, { password_actualizado_en: form.password==="niki123" ? null : new Date().toISOString() });
-        }
-      }
-
-      await api.setEncargadoLocales(userId, rolDestino === "encargada" ? (form.localIds || []) : []);
-      await api.setUsuarioLocales(userId, rolDestino === "casa_matriz" ? (form.localIds || []) : []);
-      await reloadData(); setModal(null);
-    } catch(e) { setFormErr("Error al guardar: "+e.message); }
-    setSaving(false);
-  };
-
-  const toggle = async (u) => {
-    if (!canManageUserRole(user, u.rol)) { notifyToast("No tenés permiso para modificar este usuario.", "warning"); return; }
-    await api.updateUser(u.id,{activo:!u.activo});
-    await reloadData();
-  };
-
-  const reenviarInvitacion = async (u) => {
-    if (!canManageUserRole(user, u.rol)) { notifyToast("No tenés permiso para invitar este usuario.", "warning"); return; }
-    if (!u?.email) { notifyToast("El usuario no tiene email cargado.", "warning"); return; }
-    try {
-      await api.enviarInvitacionUsuario({ actor_id:user.id, session_token:user.sessionToken, target_user_id:u.id });
-      notifyToast(`Invitación enviada a ${u.email}.`, "success", { title:"Invitación enviada" });
-    } catch(e) {
-      notifyToast("No se pudo enviar la invitación: " + (e.message || e), "error");
-    }
-  };
-
-  return <div>
-    <div style={{ display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:16 }}>
-      <h2 style={{ margin:0,fontSize:18,fontWeight:500 }}>Usuarios internos</h2>
-      <Btn onClick={openNew} size="sm">+ Nuevo</Btn>
-    </div>
-    <p style={{ margin:"-8px 0 14px",fontSize:13,color:"var(--color-text-secondary)" }}>
-      Admin puede gestionar todos los perfiles. Casa Matriz puede gestionar usuarios internos, excepto usuarios Admin.
-    </p>
-    <Card style={{ marginBottom:14,padding:"12px 14px" }}>
-      <div style={{ display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(190px,1fr))",gap:10,alignItems:"end" }}>
-        <div>
-          <label style={{ display:"block",fontSize:11,fontWeight:600,color:"var(--color-text-secondary)",marginBottom:5,textTransform:"uppercase",letterSpacing:"0.04em" }}>Tipo de usuario</label>
-          <Select value={filtroRol} onChange={setFiltroRol}>
-            <option value="todos">Todos los tipos</option>
-            {actorEsAdmin && <option value="admin">Admin</option>}
-            <option value="casa_matriz">Casa Matriz</option>
-            <option value="encargada">Encargada</option>
-          </Select>
-        </div>
-        <div>
-          <label style={{ display:"block",fontSize:11,fontWeight:600,color:"var(--color-text-secondary)",marginBottom:5,textTransform:"uppercase",letterSpacing:"0.04em" }}>Sucursal asignada</label>
-          <Select value={filtroLocal} onChange={setFiltroLocal}>
-            <option value="todos">Todas las sucursales</option>
-            {localesGestionables.slice().sort((a,b)=>(a.nombre||"").localeCompare(b.nombre||"")).map(l=><option key={l.id} value={l.id}>{l.nombre}</option>)}
-          </Select>
-        </div>
-        <div>
-          <label style={{ display:"block",fontSize:11,fontWeight:600,color:"var(--color-text-secondary)",marginBottom:5,textTransform:"uppercase",letterSpacing:"0.04em" }}>Estado</label>
-          <Select value={filtroEstado} onChange={setFiltroEstado}>
-            <option value="activas">Activas</option>
-            <option value="inactivas">Inactivas</option>
-            <option value="todas">Todas</option>
-          </Select>
-        </div>
-        <div>
-          <label style={{ display:"block",fontSize:11,fontWeight:600,color:"var(--color-text-secondary)",marginBottom:5,textTransform:"uppercase",letterSpacing:"0.04em" }}>Agrupar</label>
-          <Select value={agrupacion} onChange={setAgrupacion}>
-            <option value="rol">Por tipo</option>
-            <option value="local">Por sucursal</option>
-            <option value="ninguna">Sin agrupar</option>
-          </Select>
-        </div>
-        <div style={{ fontSize:12,color:"var(--color-text-secondary)",paddingBottom:8 }}>
-          {usuariosFiltrados.length} usuario{usuariosFiltrados.length===1?"":"s"}
-        </div>
-      </div>
-    </Card>
-    <div style={{ display:"flex",flexDirection:"column",gap:14 }}>
-      {gruposUsuarios.length === 0 ? <Card><p style={{ margin:0,textAlign:"center",fontSize:13,color:"var(--color-text-secondary)" }}>No hay usuarios para los filtros seleccionados.</p></Card> : gruposUsuarios.map(grupo => <div key={grupo.key}>
-        {agrupacion !== "ninguna" && <div style={{ display:"flex",alignItems:"center",gap:8,margin:"0 0 7px 4px" }}>
-          <h3 style={{ margin:0,fontSize:14,fontWeight:700 }}>{grupo.label}</h3>
-          <Badge color={agrupacion === "rol" ? "pink" : "info"}>{grupo.items.length}</Badge>
-        </div>}
-        <div style={{ display:"flex",flexDirection:"column",gap:8 }}>
-          {grupo.items.map(e=>{
-            const ids = localesEfectivosUsuario(e);
-            const locs = ids.map(id=>data.locales.find(l=>l.id===id)?.nombre).filter(Boolean).join(", ");
-            const bloqueado = !canManageUserRole(user, e.rol);
-            return <Card key={`${grupo.key}-${e.id}`} style={{ display:"flex",alignItems:"center",gap:12,flexWrap:"wrap" }}>
-              <Avatar nombre={e.nombre}/>
-              <div style={{ flex:1,minWidth:0 }}>
-                <p style={{ margin:0,fontWeight:500,fontSize:14 }}>{e.nombre}</p>
-                <p style={{ margin:0,fontSize:12,color:"var(--color-text-secondary)" }}>
-                  {e.usuario} · {e.email||"Sin mail"} · {roleLabel(e.rol)}{locs?` · ${locs}`:" · Sin sucursal asignada"}
-                </p>
-              </div>
-              <Badge color={e.activo?"success":"gray"}>{e.activo?"Activa":"Inactiva"}</Badge>
-              <Btn onClick={()=>openEdit(e)} variant="ghost" size="sm" disabled={bloqueado}>Editar</Btn>
-              <Btn onClick={()=>reenviarInvitacion(e)} variant="ghost" size="sm" disabled={!e.email || bloqueado}>Invitar</Btn>
-              <Btn onClick={()=>toggle(e)} variant="ghost" size="sm" disabled={bloqueado} style={{ color:e.activo?COLORS.danger:COLORS.success }}>{e.activo?"Desactivar":"Activar"}</Btn>
-            </Card>;
-          })}
-        </div>
-      </div>)}
-    </div>
-    {modal && <Modal title={modal==="new"?"Nuevo usuario interno":"Editar usuario interno"} onClose={()=>setModal(null)}>
-      <div style={{ display:"flex",flexDirection:"column",gap:14 }}>
-        <ModalInput label="Nombre completo" value={form.nombre||""} onChange={v=>setForm(f=>({...f,nombre:v}))}/>
-        <ModalInput label="Usuario" value={form.usuario||""} onChange={v=>setForm(f=>({...f,usuario:v}))}/>
-        <ModalInput label="Email" type="email" value={form.email||""} onChange={v=>setForm(f=>({...f,email:v}))}/>
-        <ModalSelect label="Tipo de usuario" value={form.rol||"encargada"} onChange={v=>setForm(f=>({...f,rol:v,localIds:["encargada","casa_matriz"].includes(v)?(f.localIds||[]):[]}))}>
-          {rolesGestionables.map(r => <option key={r} value={r}>{roleLabel(r)}</option>)}
-        </ModalSelect>
-        <div style={{ borderTop:"1px dashed #eee",paddingTop:14 }}>
-          <p style={{ margin:"0 0 10px",fontSize:13,color:"#888" }}>{modal==="edit"?"Dejá en blanco para no cambiar la contraseña":"Contraseña"}</p>
-          <div style={{ display:"flex",flexDirection:"column",gap:14 }}>
-            <ModalInput label={modal==="edit"?"Nueva contraseña":"Contraseña"} type="password" value={form.password||""} onChange={v=>setForm(f=>({...f,password:v}))}/>
-            <ModalInput label="Repetir contraseña" type="password" value={form.password2||""} onChange={v=>setForm(f=>({...f,password2:v}))}/>
-          </div>
-        </div>
-        {(form.rol||"encargada") === "encargada" && <div>
-          <label style={{ fontSize:13,fontWeight:500,color:"#555",display:"block",marginBottom:6 }}>Locales asignados</label>
-          <div style={{ display:"flex",flexDirection:"column",gap:6,maxHeight:150,overflowY:"auto",border:"1px solid #eee",borderRadius:8,padding:8 }}>
-            {localesGestionables.map(l=><label key={l.id} style={{ display:"flex",gap:8,alignItems:"center",fontSize:14 }}><input type="checkbox" checked={(form.localIds||[]).includes(l.id)} onChange={()=>toggleLocal(l.id)}/>{l.nombre}</label>)}
-          </div>
-        </div>}
-        {(form.rol||"encargada") === "casa_matriz" && <div>
-          <label style={{ fontSize:13,fontWeight:500,color:"#555",display:"block",marginBottom:6 }}>Franquicias habilitadas</label>
-          <p style={{ margin:"0 0 8px",fontSize:12,color:"var(--color-text-secondary)" }}>Los locales propios se incluyen automáticamente. Marcá solo las franquicias que este usuario puede ver y editar.</p>
-          <div style={{ display:"flex",flexDirection:"column",gap:6,maxHeight:150,overflowY:"auto",border:"1px solid #eee",borderRadius:8,padding:8 }}>
-            {franquiciasDisponibles.length ? franquiciasDisponibles.map(l=><label key={l.id} style={{ display:"flex",gap:8,alignItems:"center",fontSize:14 }}><input type="checkbox" checked={(form.localIds||[]).includes(l.id)} onChange={()=>toggleLocal(l.id)}/>{l.nombre}</label>) : <span style={{ fontSize:13,color:"var(--color-text-secondary)" }}>No hay franquicias cargadas.</span>}
-          </div>
-        </div>}
-        {formErr && <p style={{ margin:0,fontSize:13,color:COLORS.danger,background:COLORS.dangerLight,padding:"8px 12px",borderRadius:8 }}>{formErr}</p>}
-        <div style={{ display:"flex",gap:8,marginTop:4 }}>
-          <Btn onClick={save} disabled={saving} style={{ flex:1,justifyContent:"center" }}>{saving?"Guardando...":"Guardar"}</Btn>
-          <Btn onClick={()=>setModal(null)} variant="secondary" style={{ flex:1,justifyContent:"center" }}>Cancelar</Btn>
-        </div>
-      </div>
-    </Modal>}
-  </div>;
+  const [modal,setModal]=useState(null),[form,setForm]=useState({}),[formErr,setFormErr]=useState(""),[saving,setSaving]=useState(false),[modalTab,setModalTab]=useState("general"),[historialDraft,setHistorialDraft]=useState([]);
+  const [filtroRol,setFiltroRol]=useState("todos"),[filtroLocal,setFiltroLocal]=useState("todos"),[filtroEstado,setFiltroEstado]=useState("activas"),[agrupacion,setAgrupacion]=useState("rol");
+  const actorEsAdmin=user.rol==="admin"; const rolesGestionables=actorEsAdmin?["admin","casa_matriz","encargada"]:["casa_matriz","encargada"];
+  const localesDeEncargada=uid=>(data.encargadoLocales||[]).filter(x=>x.userId===uid).map(x=>x.localId);
+  const franquiciasDeCasaMatriz=uid=>(data.usuarioLocales||[]).filter(x=>x.userId===uid).map(x=>x.localId);
+  const localesGestionables=actorEsAdmin?(data.locales||[]):(data.locales||[]).filter(l=>getAssignedLocalIds(data,user).includes(l.id));
+  const franquiciasDisponibles=(data.locales||[]).filter(l=>(l.tipoLocal||l.tipo_local||"propio")==="franquicia");
+  const localesEfectivosUsuario=useCallback(u=>u.rol==="admin"?(data.locales||[]).map(l=>l.id):u.rol==="casa_matriz"?Array.from(new Set([...(data.locales||[]).filter(l=>(l.tipoLocal||l.tipo_local||"propio")==="propio").map(l=>l.id),...franquiciasDeCasaMatriz(u.id)])):localesDeEncargada(u.id),[data.locales,data.usuarioLocales,data.encargadoLocales]);
+  const usuarios=(data.users||[]).filter(u=>["admin","casa_matriz","encargada"].includes(u.rol)).filter(u=>actorEsAdmin||u.rol!=="admin");
+  const filtrados=usuarios.filter(u=>(filtroRol==="todos"||u.rol===filtroRol)&&(filtroEstado==="todas"||(filtroEstado==="activas"?u.activo:!u.activo))&&(filtroLocal==="todos"||localesEfectivosUsuario(u).some(id=>String(id)===String(filtroLocal))));
+  const grupos=useMemo(()=>{if(agrupacion==="ninguna")return[{key:"todos",label:"Todos",items:filtrados}];const map=new Map();filtrados.forEach(u=>{const keys=agrupacion==="rol"?[u.rol]:(localesEfectivosUsuario(u).length?localesEfectivosUsuario(u):["sin-local"]);keys.forEach(k=>{const label=agrupacion==="rol"?roleLabel(k):(data.locales.find(l=>l.id===k)?.nombre||"Sin sucursal asignada");if(!map.has(String(k)))map.set(String(k),{key:String(k),label,items:[]});map.get(String(k)).items.push(u);});});return Array.from(map.values()).sort((a,b)=>a.label.localeCompare(b.label));},[filtrados,agrupacion,data.locales,localesEfectivosUsuario]);
+  const hoy=dateKey(new Date()), motivos=["Renuncia","Despido","Otro"];
+  const openNew=()=>{setForm({nombre:"",usuario:"",email:"",telefonoCodigoArea:"",telefonoNumero:"",datoBancario:"",tipoRelacion:"a_resolver",password:"",password2:"",rol:"encargada",localIds:[]});setHistorialDraft([{tempId:`n-${Date.now()}`,fechaInicio:hoy,fechaFin:"",motivoFin:"",observacion:""}]);setModalTab("general");setFormErr("");setModal("new");};
+  const openEdit=u=>{if(!canManageUserRole(user,u.rol))return notifyToast("No tenés permiso para modificar este usuario.","warning");setForm({...u,password:"",password2:"",localIds:u.rol==="encargada"?localesDeEncargada(u.id):u.rol==="casa_matriz"?franquiciasDeCasaMatriz(u.id):[]});setHistorialDraft((data.usuarioHistorialLaboral||[]).filter(x=>x.userId===u.id).map(x=>({...x})));setModalTab("general");setFormErr("");setModal("edit");};
+  const toggleLocal=id=>setForm(f=>({...f,localIds:(f.localIds||[]).includes(id)?f.localIds.filter(x=>x!==id):[...(f.localIds||[]),id]}));
+  const updHist=(key,field,value)=>setHistorialDraft(rows=>rows.map(r=>(r.id||r.tempId)===key?{...r,[field]:value}:r));
+  const validateHist=()=>{if(!historialDraft.length)return "Debe existir al menos un período laboral.";for(const r of historialDraft){if(!r.fechaInicio)return "Todos los períodos deben tener fecha de inicio.";if(r.fechaFin&&r.fechaFin<r.fechaInicio)return "La fecha de fin no puede ser anterior al inicio.";if(r.fechaFin&&!r.motivoFin)return "Indicá el motivo del período cerrado.";}if(historialDraft.filter(r=>!r.fechaFin).length>1)return "No puede haber más de un período abierto.";const a=[...historialDraft].sort((x,y)=>x.fechaInicio.localeCompare(y.fechaInicio));for(let i=0;i<a.length;i++)for(let j=i+1;j<a.length;j++){if(a[i].fechaInicio<=(a[j].fechaFin||"9999-12-31")&&a[j].fechaInicio<=(a[i].fechaFin||"9999-12-31"))return "Los períodos no pueden superponerse.";}return "";};
+  const save=async()=>{setFormErr("");const usuario=normalizeUsuarioValue(form.usuario),email=normalizeEmailValue(form.email);if(!form.nombre?.trim()||!usuario)return setFormErr("Nombre y usuario son obligatorios.");if(!isValidEmail(email))return setFormErr("El email es obligatorio y debe ser válido.");if(usuarioEnUso(data.users,usuario,form.id)||emailEnUso(data.users,email,form.id))return setFormErr("El usuario o el email ya están en uso.");if(modal==="new"&&!form.password)return setFormErr("Ingresá una contraseña.");if(form.password&&form.password!==form.password2)return setFormErr("Las contraseñas no coinciden.");const te=validarTelefonoArgentino(form.telefonoCodigoArea,form.telefonoNumero);if(te){setModalTab("general");return setFormErr(te);}const be=validarDatoBancario(form.datoBancario);if(be){setModalTab("laboral");return setFormErr(be);}const he=validateHist();if(he){setModalTab("antiguedad");return setFormErr(he);}setSaving(true);try{const abierto=historialDraft.find(r=>!r.fechaFin),payload={nombre:form.nombre.trim(),usuario,email,rol:form.rol,activo:!!abierto,telefono_codigo_area:onlyDigits(form.telefonoCodigoArea)||null,telefono_numero:onlyDigits(form.telefonoNumero)||null,telefono:[onlyDigits(form.telefonoCodigoArea),onlyDigits(form.telefonoNumero)].join("")||null,dato_bancario:String(form.datoBancario||"").trim()||null,tipo_relacion:form.tipoRelacion||"a_resolver"};let uid=form.id;if(modal==="new"){const c=await api.createUser({...payload,password:form.password});uid=c?.[0]?.id;}else{await api.updateUser(uid,payload);if(form.password)await api.changePassword({mode:"admin_set",actor_id:user.id,session_token:user.sessionToken,target_user_id:uid,new_password:form.password});}await api.setEncargadoLocales(uid,form.rol==="encargada"?(form.localIds||[]):[]);await api.setUsuarioLocales(uid,form.rol==="casa_matriz"?(form.localIds||[]):[]);const old=(data.usuarioHistorialLaboral||[]).filter(x=>x.userId===uid),ids=new Set(historialDraft.filter(x=>x.id).map(x=>x.id));for(const x of old)if(!ids.has(x.id))await api.deleteUsuarioHistorialLaboral(x.id);for(const r of historialDraft){const p={user_id:uid,fecha_inicio:r.fechaInicio,fecha_fin:r.fechaFin||null,motivo_fin:r.fechaFin?r.motivoFin||null:null,observacion:r.observacion?.trim()||null};if(r.id)await api.updateUsuarioHistorialLaboral(r.id,p);else await api.createUsuarioHistorialLaboral(p);}await reloadData();setModal(null);notifyToast("Usuario guardado correctamente.","success");}catch(e){setFormErr("Error al guardar: "+e.message);}setSaving(false);};
+  const tabStyle=a=>({border:"none",borderRadius:8,padding:"8px 12px",fontSize:12,fontWeight:600,cursor:"pointer",background:a?COLORS.pink:COLORS.pinkLight,color:a?"#fff":COLORS.pinkDark});
+  return <div><div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:16}}><h2 style={{margin:0,fontSize:18}}>Usuarios internos</h2><Btn size="sm" onClick={openNew}>+ Nuevo</Btn></div><Card style={{marginBottom:14}}><div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(180px,1fr))",gap:10}}><Select value={filtroRol} onChange={setFiltroRol}><option value="todos">Todos los tipos</option>{actorEsAdmin&&<option value="admin">Admin</option>}<option value="casa_matriz">Casa Matriz</option><option value="encargada">Encargada</option></Select><Select value={filtroLocal} onChange={setFiltroLocal}><option value="todos">Todas las sucursales</option>{localesGestionables.map(l=><option key={l.id} value={l.id}>{l.nombre}</option>)}</Select><Select value={filtroEstado} onChange={setFiltroEstado}><option value="activas">Activas</option><option value="inactivas">Inactivas</option><option value="todas">Todas</option></Select><Select value={agrupacion} onChange={setAgrupacion}><option value="rol">Agrupar por tipo</option><option value="local">Agrupar por sucursal</option><option value="ninguna">Sin agrupar</option></Select></div></Card><div style={{display:"flex",flexDirection:"column",gap:14}}>{grupos.map(g=><div key={g.key}>{agrupacion!=="ninguna"&&<h3 style={{fontSize:14,margin:"0 0 7px 4px"}}>{g.label} <Badge color="info">{g.items.length}</Badge></h3>}{g.items.map(e=><Card key={`${g.key}-${e.id}`} style={{display:"flex",alignItems:"center",gap:12,marginBottom:8,flexWrap:"wrap"}}><Avatar nombre={e.nombre} userId={e.id} photoUrl={e.fotoPerfilUrl}/><div style={{flex:1}}><p style={{margin:0,fontWeight:600}}>{e.nombre}</p><p style={{margin:0,fontSize:12,color:"var(--color-text-secondary)"}}>{e.usuario} · {e.email} · {roleLabel(e.rol)}</p></div><Badge color={e.activo?"success":"gray"}>{e.activo?"Activa":"Inactiva"}</Badge><Btn size="sm" variant="ghost" onClick={()=>openEdit(e)}>Editar</Btn></Card>)}</div>)}</div>{modal&&<Modal title={modal==="new"?"Nuevo usuario":"Editar usuario"} width={800} onClose={()=>setModal(null)}><div style={{display:"flex",gap:5,marginBottom:16,flexWrap:"wrap"}}>{[["general","Datos generales"],["antiguedad","Antigüedad"],["laboral","Datos laborales y bancarios"],["documentacion","Documentación"]].map(([k,l])=><button key={k} style={tabStyle(modalTab===k)} onClick={()=>setModalTab(k)}>{l}</button>)}</div>{modalTab==="general"?<div style={{display:"flex",flexDirection:"column",gap:12}}><ModalInput label="Nombre completo" value={form.nombre||""} onChange={v=>setForm(f=>({...f,nombre:v}))}/><ModalInput label="Usuario" value={form.usuario||""} onChange={v=>setForm(f=>({...f,usuario:v}))}/><ModalInput label="Email" value={form.email||""} onChange={v=>setForm(f=>({...f,email:v}))}/><div style={{display:"grid",gridTemplateColumns:".45fr 1fr",gap:12}}><ModalInput label="Código de área" value={form.telefonoCodigoArea||""} onChange={v=>setForm(f=>({...f,telefonoCodigoArea:onlyDigits(v).slice(0,4)}))}/><ModalInput label="Número de teléfono" value={form.telefonoNumero||""} onChange={v=>setForm(f=>({...f,telefonoNumero:onlyDigits(v).slice(0,8)}))}/></div><ModalSelect label="Tipo de usuario" value={form.rol||"encargada"} onChange={v=>setForm(f=>({...f,rol:v}))}>{rolesGestionables.map(r=><option key={r} value={r}>{roleLabel(r)}</option>)}</ModalSelect>{form.rol==="encargada"&&<div>{localesGestionables.map(l=><label key={l.id} style={{display:"block",fontSize:13}}><input type="checkbox" checked={(form.localIds||[]).includes(l.id)} onChange={()=>toggleLocal(l.id)}/> {l.nombre}</label>)}</div>}{form.rol==="casa_matriz"&&<div>{franquiciasDisponibles.map(l=><label key={l.id} style={{display:"block",fontSize:13}}><input type="checkbox" checked={(form.localIds||[]).includes(l.id)} onChange={()=>toggleLocal(l.id)}/> {l.nombre}</label>)}</div>}<ModalInput label={modal==="new"?"Contraseña":"Nueva contraseña (opcional)"} type="password" value={form.password||""} onChange={v=>setForm(f=>({...f,password:v}))}/><ModalInput label="Repetir contraseña" type="password" value={form.password2||""} onChange={v=>setForm(f=>({...f,password2:v}))}/></div>:modalTab==="antiguedad"?<div><div style={{display:"flex",justifyContent:"space-between",marginBottom:10}}><p style={{fontSize:12,color:"var(--color-text-secondary)"}}>Sin local: registra la relación laboral general.</p><Btn size="sm" onClick={()=>setHistorialDraft(r=>[{tempId:`n-${Date.now()}`,fechaInicio:hoy,fechaFin:"",motivoFin:"",observacion:""},...r])}>+ Período</Btn></div>{historialDraft.map(r=>{const k=r.id||r.tempId;return <div key={k} style={{display:"grid",gridTemplateColumns:"130px 130px 150px 1fr 36px",gap:8,marginBottom:8}}><input type="date" value={r.fechaInicio||""} onChange={e=>updHist(k,"fechaInicio",e.target.value)}/><input type="date" value={r.fechaFin||""} onChange={e=>updHist(k,"fechaFin",e.target.value)}/><select disabled={!r.fechaFin} value={r.motivoFin||""} onChange={e=>updHist(k,"motivoFin",e.target.value)}><option value="">{r.fechaFin?"Motivo":"Activo"}</option>{motivos.map(x=><option key={x}>{x}</option>)}</select><input value={r.observacion||""} placeholder="Observación" onChange={e=>updHist(k,"observacion",e.target.value)}/><button onClick={()=>setHistorialDraft(a=>a.filter(x=>(x.id||x.tempId)!==k))}>×</button></div>})}</div>:modalTab==="laboral"?<div style={{display:"flex",flexDirection:"column",gap:12}}><ModalInput label="Alias o CBU bancario" value={form.datoBancario||""} onChange={v=>setForm(f=>({...f,datoBancario:v}))}/><ModalSelect label="Tipo de relación" value={form.tipoRelacion||"a_resolver"} onChange={v=>setForm(f=>({...f,tipoRelacion:v}))}><option value="monotributista">Monotributista</option><option value="dependencia">Relación de Dependencia</option><option value="a_resolver">A resolver</option></ModalSelect></div>:<LegajoDocumentosPanel actor={user} userId={form.id} documentos={data.personaDocumentos||[]} onReload={reloadData} currentPhotoUrl={form.fotoPerfilUrl||""}/>} {formErr&&<p style={{color:COLORS.danger,background:COLORS.dangerLight,padding:8,borderRadius:8}}>{formErr}</p>}<div style={{display:"flex",gap:8,marginTop:16}}><Btn onClick={save} disabled={saving} style={{flex:1,justifyContent:"center"}}>{saving?"Guardando...":"Guardar"}</Btn><Btn variant="secondary" onClick={()=>setModal(null)} style={{flex:1,justifyContent:"center"}}>Cancelar</Btn></div></Modal>}</div>;
 }
-
 
 // ── INFORME DIARIO ─────────────────────────────────────────────────
 function InformeDiario({ data, reloadData, user }) {
@@ -9038,11 +8891,11 @@ export default function App() {
   }, [dismissToast, user?.rol]);
 
   const reloadData = useCallback(async () => {
-    const [users, locales, horarios, asistencias, periodos, feriados, reglasCobertura, configCobertura, encargadoLocales, usuarioLocales, manicuraHistorialLocales, comisiones, comisionesImportaciones, comisionesCriterios, comisionesConfiguracion, comisionesManicuraConfig, adelantos, garantias, informesDiarios, agendaServicios, agendaManicuraServicios, agendaListasPrecios, agendaLocalListas, agendaPreciosServicios, agendaClientes, agendaTurnos, agendaTurnosPagos, agendaTurnoServicios, agendaBloqueos] = await Promise.all([
-      api.getUsers(), api.getLocales(), api.getHorarios(), api.getAsistencias(), api.getPeriodos(), api.getFeriados(), api.getReglasCobertura(), api.getConfigCobertura(), api.getEncargadoLocales(), api.getUsuarioLocales(), api.getManicuraHistorialLocales(), api.getComisiones(), api.getComisionesImportaciones(), api.getComisionesCriterios(), api.getComisionesConfiguracion(), api.getComisionesManicuraConfig(), api.getAdelantos(), api.getGarantias(), api.getInformesDiarios(), api.getAgendaServicios(), api.getAgendaManicuraServicios(), api.getAgendaListasPrecios(), api.getAgendaLocalListas(), api.getAgendaPreciosServicios(), api.getAgendaClientes(), api.getAgendaTurnos(), api.getAgendaTurnosPagos(), api.getAgendaTurnoServicios(), api.getAgendaBloqueos()
+    const [users, locales, horarios, asistencias, periodos, feriados, reglasCobertura, configCobertura, encargadoLocales, usuarioLocales, manicuraHistorialLocales, usuarioHistorialLaboral, personaDocumentos, comisiones, comisionesImportaciones, comisionesCriterios, comisionesConfiguracion, comisionesManicuraConfig, adelantos, garantias, informesDiarios, agendaServicios, agendaManicuraServicios, agendaListasPrecios, agendaLocalListas, agendaPreciosServicios, agendaClientes, agendaTurnos, agendaTurnosPagos, agendaTurnoServicios, agendaBloqueos] = await Promise.all([
+      api.getUsers(), api.getLocales(), api.getHorarios(), api.getAsistencias(), api.getPeriodos(), api.getFeriados(), api.getReglasCobertura(), api.getConfigCobertura(), api.getEncargadoLocales(), api.getUsuarioLocales(), api.getManicuraHistorialLocales(), api.getUsuarioHistorialLaboral(), api.getPersonaDocumentos(), api.getComisiones(), api.getComisionesImportaciones(), api.getComisionesCriterios(), api.getComisionesConfiguracion(), api.getComisionesManicuraConfig(), api.getAdelantos(), api.getGarantias(), api.getInformesDiarios(), api.getAgendaServicios(), api.getAgendaManicuraServicios(), api.getAgendaListasPrecios(), api.getAgendaLocalListas(), api.getAgendaPreciosServicios(), api.getAgendaClientes(), api.getAgendaTurnos(), api.getAgendaTurnosPagos(), api.getAgendaTurnoServicios(), api.getAgendaBloqueos()
     ]);
     const nextData = {
-      users: users.map(normalizeUser),
+      users: await Promise.all(users.map(async raw => { const u=normalizeUser(raw); if(u.fotoPerfilPath) u.fotoPerfilUrl=await api.signPersonaArchivo(user,u.id,u.fotoPerfilPath,3600); return u; })), 
       locales: (locales||[]).map(normalizeLocal),
       horarios: horarios.map(normalizeHorario),
       asistencias: asistencias.map(normalizeAsistencia),
@@ -9053,6 +8906,8 @@ export default function App() {
       encargadoLocales: (encargadoLocales||[]).map(normalizeEncargadoLocal),
       usuarioLocales: (usuarioLocales||[]).map(normalizeUsuarioLocal),
       manicuraHistorialLocales: (manicuraHistorialLocales||[]).map(normalizeManicuraHistorialLocal),
+      usuarioHistorialLaboral: (usuarioHistorialLaboral||[]).map(normalizeUsuarioHistorialLaboral),
+      personaDocumentos: (personaDocumentos||[]).map(normalizePersonaDocumento),
       comisiones: (comisiones||[]).map(normalizeComision),
       comisionesImportaciones: (comisionesImportaciones||[]).map(normalizeComisionImportacion),
       comisionesCriterios: (comisionesCriterios||[]).map(normalizeComisionCriterio),
@@ -9072,6 +8927,7 @@ export default function App() {
       agendaTurnoServicios: (agendaTurnoServicios||[]).map(normalizeAgendaTurnoServicio),
       agendaBloqueos: (agendaBloqueos||[]).map(normalizeAgendaBloqueo),
     };
+    window.__nikiUsers = nextData.users;
     setData(nextData);
     return nextData;
   }, []);
@@ -9568,7 +9424,7 @@ export default function App() {
           <span style={{ fontWeight:600,fontSize:15,letterSpacing:"-0.02em",whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis" }}>Niki Beauty Bar</span>
         </button>
         <div style={{ display:"flex",alignItems:"center",gap:8,flexShrink:0 }}>
-          {isDesktopMenu && <span style={{ fontSize:13,opacity:0.9 }}>{user.nombre}</span>}
+          {isDesktopMenu && <><Avatar nombre={user.nombre} userId={user.id} photoUrl={(data.users||[]).find(u=>u.id===user.id)?.fotoPerfilUrl||user.fotoPerfilUrl} size={34}/><span style={{ fontSize:13,opacity:0.9 }}>{user.nombre}</span></>}
           <NotificationBell history={notificationHistory} open={notificationOpen} setOpen={setNotificationOpen} onClear={() => setNotificationHistory([])} onAction={handleNotificationAction}/>
           <button onClick={()=>{ localStorage.removeItem("niki_user"); setUser(null); setMenuOpen(false); setMobileMenuGroup(null); }} style={{ background:"rgba(114,36,62,0.12)",border:"none",color:COLORS.pinkDark,borderRadius:6,padding:"4px 10px",fontSize:12,cursor:"pointer" }}>Salir</button>
         </div>
