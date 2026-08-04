@@ -1248,7 +1248,7 @@ function BloqueCalendario({ fecha, bloque, onChange, onCommit, onDelete, bloquea
   );
 }
 
-function CalendarioHorarios({ data, reloadData, user, agendaRequest, onBackToReport, savedState = null, onStateChange = null }) {
+function CalendarioHorarios({ data, setData, reloadData, user, agendaRequest, onBackToReport, savedState = null, onStateChange = null }) {
   const hoy = new Date();
   const esAdmin = isAdminLikeRole(user.rol);
   const esEncargada = user.rol === "encargada";
@@ -1494,9 +1494,10 @@ function CalendarioHorarios({ data, reloadData, user, agendaRequest, onBackToRep
     const s = calFromSlot(bl.startSlot), e = calFromSlot(bl.endSlot);
     const anterior = (data.horarios || []).find(h => parseInt(h.userId) === parseInt(uid) && h.fecha === f) || null;
     const nuevo = { user_id:parseInt(uid), fecha:f, entrada:calFmt(s.h,s.m), salida:calFmt(e.h,e.m), trabaja:true };
-    await api.upsertHorario(nuevo);
-    await auditarHorario({ accion: anterior ? "HORARIO_MODIFICADO" : "HORARIO_CREADO", uid:parseInt(uid), fecha:f, anterior, nuevo });
-    await reloadData();
+    const savedRows = await api.upsertHorario(nuevo);
+    const saved = normalizeHorario(Array.isArray(savedRows) ? savedRows[0] : savedRows || nuevo);
+    setData(prev => ({ ...prev, horarios:[...(prev?.horarios || []).filter(h => !(parseInt(h.userId) === parseInt(uid) && h.fecha === f)), saved] }));
+    void auditarHorario({ accion: anterior ? "HORARIO_MODIFICADO" : "HORARIO_CREADO", uid:parseInt(uid), fecha:f, anterior, nuevo });
     if (parseInt(uid) === parseInt(manicuraId)) setLocalH(p => { const n={...p}; delete n[f]; return n; });
     setLocalHAll(p => { const n={...p}; delete n[key]; return n; });
     return true;
@@ -1515,10 +1516,11 @@ function CalendarioHorarios({ data, reloadData, user, agendaRequest, onBackToRep
     const s = calFromSlot(b.startSlot), e = calFromSlot(b.endSlot);
     const anterior = (data.horarios || []).find(h => parseInt(h.userId) === parseInt(uid) && h.fecha === f) || null;
     const nuevo = { user_id:parseInt(uid), fecha:f, entrada:calFmt(s.h,s.m), salida:calFmt(e.h,e.m), trabaja:true };
-    await api.upsertHorario(nuevo);
-    await auditarHorario({ accion: anterior ? "HORARIO_MODIFICADO" : "HORARIO_CREADO", uid:parseInt(uid), fecha:f, anterior, nuevo });
+    const savedRows = await api.upsertHorario(nuevo);
+    const saved = normalizeHorario(Array.isArray(savedRows) ? savedRows[0] : savedRows || nuevo);
+    setData(prev => ({ ...prev, horarios:[...(prev?.horarios || []).filter(h => !(parseInt(h.userId) === parseInt(uid) && h.fecha === f)), saved] }));
+    void auditarHorario({ accion: anterior ? "HORARIO_MODIFICADO" : "HORARIO_CREADO", uid:parseInt(uid), fecha:f, anterior, nuevo });
     if (!alreadyPersisted) silentEditOnce.current.add(key);
-    await reloadData();
     if (parseInt(uid) === parseInt(manicuraId)) setLocalH(p => { const n={...p}; delete n[f]; return n; });
     setLocalHAll(p => { const n={...p}; delete n[key]; return n; });
     return true;
@@ -1531,10 +1533,16 @@ function CalendarioHorarios({ data, reloadData, user, agendaRequest, onBackToRep
     if (!(await validarEdicionHorarioActual(uid, f))) return false;
     if (!(await confirmarCambioHorario(uid, f, "eliminarlo"))) return false;
     const anterior = (data.horarios || []).find(h => parseInt(h.userId) === parseInt(uid) && h.fecha === f) || null;
-    await api.deleteHorario(parseInt(uid), f);
-    await auditarHorario({ accion:"HORARIO_ELIMINADO", uid:parseInt(uid), fecha:f, anterior, nuevo:null });
-    await reloadData();
-    return true;
+    setData(prev => ({ ...prev, horarios:(prev?.horarios || []).filter(h => !(parseInt(h.userId) === parseInt(uid) && h.fecha === f)) }));
+    try {
+      await api.deleteHorario(parseInt(uid), f);
+      void auditarHorario({ accion:"HORARIO_ELIMINADO", uid:parseInt(uid), fecha:f, anterior, nuevo:null });
+      return true;
+    } catch (err) {
+      if (anterior) setData(prev => ({ ...prev, horarios:[...(prev?.horarios || []).filter(h => !(parseInt(h.userId) === parseInt(uid) && h.fecha === f)), anterior] }));
+      notifyToast("No se pudo eliminar el horario. Se restauró el dato anterior.", "error");
+      throw err;
+    }
   }, [reloadData, getAsistenciaFor, confirmarCambioHorario, validarEdicionHorarioActual, data.horarios, auditarHorario]);
 
   const onDeleteB = useCallback(async (f) => onDeleteBFor(parseInt(manicuraId), f), [manicuraId, onDeleteBFor]);
@@ -1549,9 +1557,17 @@ function CalendarioHorarios({ data, reloadData, user, agendaRequest, onBackToRep
   const toggleBloqueo = useCallback(async () => {
     const uid = parseInt(manicuraId);
     if (!uid) return;
-    if (periodoBloqueadoParaManicura(periodoActivoKey, uid)) await api.deletePeriodo(periodoActivoKey, uid);
-    else await api.createPeriodo(periodoActivoKey, uid);
-    await reloadData();
+    const existing = (data.periodosBloqueados || []).find(p => p.periodo === periodoActivoKey && parseInt(p.userId) === uid);
+    if (existing) {
+      setData(prev => ({ ...prev, periodosBloqueados:(prev?.periodosBloqueados || []).filter(p => !(p.periodo === periodoActivoKey && parseInt(p.userId) === uid)) }));
+      try { await api.deletePeriodo(periodoActivoKey, uid); }
+      catch (err) { setData(prev => ({ ...prev, periodosBloqueados:[...(prev?.periodosBloqueados || []), existing] })); throw err; }
+    } else {
+      const localId = getLocalIdForManicura(uid);
+      const rows = await api.createPeriodo(periodoActivoKey, uid, localId, user.id);
+      const created = normalizePeriodo(Array.isArray(rows) ? rows[0] : rows);
+      setData(prev => ({ ...prev, periodosBloqueados:[...(prev?.periodosBloqueados || []).filter(p => !(p.periodo === periodoActivoKey && parseInt(p.userId) === uid)), created] }));
+    }
   }, [periodoActivoKey, manicuraId, periodoBloqueadoParaManicura, reloadData]);
 
   const todasBloqueadas = useMemo(() => manicuras.length > 0 && manicuras.every(m => periodoBloqueadoParaManicura(periodoActivoKey, m.id)), [manicuras, periodoActivoKey, periodoBloqueadoParaManicura]);
@@ -4584,7 +4600,7 @@ function MiPerfil({ data, reloadData, user, setUser }) {
 }
 
 // ── ASISTENCIA DIARIA ──────────────────────────────────────────────
-function AsistenciaDiaria({ data, reloadData, user }) {
+function AsistenciaDiaria({ data, setData, reloadData, user }) {
   const hoy = new Date();
   const [fecha, setFecha] = useState(dateKey(hoy));
   const [modal, setModal] = useState(null);
@@ -4639,18 +4655,31 @@ function AsistenciaDiaria({ data, reloadData, user }) {
   }, { presentes:0, tardes:0, ausentes:0, pendientes:0 });
 
   const setA = async (uid, datos) => {
-    await api.upsertAsistencia({user_id:uid,fecha,estado:datos.estado,entrada_real:datos.entradaReal||null,salida_real:datos.salidaReal||null,motivo:datos.motivo||null,certificado:datos.certificado||false,tipo_doc:datos.tipoDoc||null});
+    const payload = {user_id:uid,fecha,estado:datos.estado,entrada_real:datos.entradaReal||null,salida_real:datos.salidaReal||null,motivo:datos.motivo||null,certificado:datos.certificado||false,tipo_doc:datos.tipoDoc||null};
+    const rows = await api.upsertAsistencia(payload);
+    const saved = normalizeAsistencia(Array.isArray(rows) ? rows[0] : rows || payload);
+    setData(prev => ({ ...prev, asistencias:[...(prev?.asistencias || []).filter(a => !(parseInt(a.userId) === parseInt(uid) && a.fecha === fecha)), saved] }));
     if (datos.estado === "ausente") {
       const manicura = data.users.find(u=>u.id===uid);
       const h = data.horarios.find(x=>x.userId===uid&&x.fecha===fecha&&x.trabaja&&x.entrada&&x.salida);
       const yaBloqueado = (data.agendaBloqueos||[]).some(b=>b.userId===uid&&b.fecha===fecha&&b.tipo==="agenda_bloqueada");
       if (h && manicura && !yaBloqueado && window.confirm("¿Querés bloquear también la agenda de esta manicura para este día?")) {
-        await api.createAgendaBloqueo({ fecha, local_id:manicura.localId, user_id:uid, inicio:h.entrada, fin:h.salida, tipo:"agenda_bloqueada", motivo:"Agenda bloqueada por inasistencia", creado_por_user_id:null });
+        const blockRows = await api.createAgendaBloqueo({ fecha, local_id:manicura.localId, user_id:uid, inicio:h.entrada, fin:h.salida, tipo:"agenda_bloqueada", motivo:"Agenda bloqueada por inasistencia", creado_por_user_id:null });
+        const block = normalizeAgendaBloqueo(Array.isArray(blockRows) ? blockRows[0] : blockRows);
+        setData(prev => ({ ...prev, agendaBloqueos:[...(prev?.agendaBloqueos || []).filter(b => !(parseInt(b.userId) === parseInt(uid) && b.fecha === fecha && b.tipo === "agenda_bloqueada")), block] }));
       }
     }
-    await reloadData();
   };
-  const limpiar = async (uid) => { await api.deleteAsistencia(uid,fecha); await reloadData(); };
+  const limpiar = async (uid) => {
+    const anterior = (data.asistencias || []).find(a => parseInt(a.userId) === parseInt(uid) && a.fecha === fecha);
+    setData(prev => ({ ...prev, asistencias:(prev?.asistencias || []).filter(a => !(parseInt(a.userId) === parseInt(uid) && a.fecha === fecha)) }));
+    try { await api.deleteAsistencia(uid,fecha); }
+    catch (err) {
+      if (anterior) setData(prev => ({ ...prev, asistencias:[...(prev?.asistencias || []), anterior] }));
+      notifyToast("No se pudo limpiar la asistencia. Se restauró el dato anterior.", "error");
+      throw err;
+    }
+  };
 
   const renderManicura = (m) => {
     const h=data.horarios.find(hh=>hh.userId===m.id&&hh.fecha===fecha);
@@ -8416,7 +8445,7 @@ function buildTurnoToastPayload(appData, rawTurno, eventType, currentUser) {
 }
 
 
-function BloqueoHorarios({ data, reloadData, user, savedState = null, onStateChange = null }) {
+function BloqueoHorarios({ data, setData, reloadData, user, savedState = null, onStateChange = null }) {
   const esAdmin = isAdminLikeRole(user.rol);
   const puedeGestionar = esAdmin || user.rol === "encargada";
   const allowedLocalIds = getAssignedLocalIds(data, user);
@@ -8482,9 +8511,10 @@ function BloqueoHorarios({ data, reloadData, user, savedState = null, onStateCha
     const existente = getBloqueo(manicura.id);
     if (existente) return;
     const nuevo = { periodo, user_id: parseInt(manicura.id), local_id: parseInt(localId), creado_por_user_id: parseInt(user.id) };
-    await api.createPeriodo(periodo, manicura.id, localId, user.id);
-    await auditar({ accion:"BLOQUEO_HORARIOS_CREADO", manicura, datosNuevos:nuevo });
-    await reloadData();
+    const rows = await api.createPeriodo(periodo, manicura.id, localId, user.id);
+    const created = normalizePeriodo(Array.isArray(rows) ? rows[0] : rows);
+    setData(prev => ({ ...prev, periodosBloqueados:[...(prev?.periodosBloqueados || []).filter(p => !(p.periodo === periodo && parseInt(p.userId) === parseInt(manicura.id))), created] }));
+    void auditar({ accion:"BLOQUEO_HORARIOS_CREADO", manicura, datosNuevos:nuevo });
     notifyToast(`Se bloqueó la edición de horarios de ${manicura.nombre} para ${periodoLabel(periodo)}.`, "success");
   }, [puedeGestionar, localId, periodo, user.id, getBloqueo, auditar, reloadData]);
 
@@ -8497,8 +8527,8 @@ function BloqueoHorarios({ data, reloadData, user, savedState = null, onStateCha
     } else {
       await api.deletePeriodo(periodo, manicura.id, localId);
     }
-    await auditar({ accion:"BLOQUEO_HORARIOS_ELIMINADO", manicura, bloqueo:existente, datosAnteriores:existente });
-    await reloadData();
+    setData(prev => ({ ...prev, periodosBloqueados:(prev?.periodosBloqueados || []).filter(p => !(p.periodo === periodo && parseInt(p.userId) === parseInt(manicura.id))) }));
+    void auditar({ accion:"BLOQUEO_HORARIOS_ELIMINADO", manicura, bloqueo:existente, datosAnteriores:existente });
     notifyToast(`Se habilitó la edición de horarios de ${manicura.nombre} para ${periodoLabel(periodo)}.`, "success");
   }, [puedeGestionar, localId, periodo, getBloqueo, auditar, reloadData]);
 
@@ -9129,6 +9159,20 @@ export default function App() {
     return nextData;
   }, []);
 
+  const applyPeriodoRealtime = useCallback((payload) => {
+    const raw = payload.eventType === "DELETE" ? payload.old : payload.new;
+    if (!raw) return;
+    const normalized = normalizePeriodo(raw);
+    setData(prev => {
+      if (!prev) return prev;
+      const without = (prev.periodosBloqueados || []).filter(p => {
+        if (normalized.id != null && p.id != null) return parseInt(p.id) !== parseInt(normalized.id);
+        return !(p.periodo === normalized.periodo && parseInt(p.userId) === parseInt(normalized.userId));
+      });
+      return { ...prev, periodosBloqueados:payload.eventType === "DELETE" ? without : [...without, normalized] };
+    });
+  }, []);
+
   useEffect(() => {
     if (!user) return undefined;
 
@@ -9170,13 +9214,8 @@ export default function App() {
           schema: "public",
           table: "periodos_bloqueados",
         },
-        () => {
-          clearTimeout(refreshTimer);
-          refreshTimer = setTimeout(() => {
-            reloadData().catch((err) => {
-              console.error("No se pudo actualizar el bloqueo de horarios en tiempo real", err);
-            });
-          }, 300);
+        (payload) => {
+          applyPeriodoRealtime(payload);
         }
       )
       .subscribe();
@@ -9185,7 +9224,7 @@ export default function App() {
       clearTimeout(refreshTimer);
       supabaseRealtime.removeChannel(channel);
     };
-  }, [user, reloadData]);
+  }, [user, reloadData, applyPeriodoRealtime]);
 
   useEffect(()=>{ reloadData().then(()=>setLoading(false)).catch(()=>setLoading(false)); },[]);
 
@@ -9583,10 +9622,10 @@ export default function App() {
 
   const renderSeccion = () => {
     if (seccion==="inicio") return renderMobileHome();
-    if (seccion==="asistencia") return <AsistenciaDiaria data={data} reloadData={reloadData} user={user}/>;
+    if (seccion==="asistencia") return <AsistenciaDiaria data={data} setData={setData} reloadData={reloadData} user={user}/>;
     if (seccion==="turnos") return user.rol==="admin" ? <AgendaTurnos data={data} reloadData={reloadData} user={user} agendaOpenRequest={agendaOpenRequest} onAgendaOpenRequestDone={() => setAgendaOpenRequest(null)}/> : null;
-    if (seccion==="horarios") return <CalendarioHorarios data={data} reloadData={reloadData} user={user} agendaRequest={agendaRequest} savedState={screenState.horarios} onStateChange={(state)=>saveScreenState("horarios", state)} onBackToReport={()=>{ setSeccion("reportes_cobertura"); setMenuOpen(false); setMobileMenuGroup(null); }}/>;
-    if (seccion==="bloqueo_horarios") return <BloqueoHorarios data={data} reloadData={reloadData} user={user} savedState={screenState.bloqueoHorarios} onStateChange={(state)=>saveScreenState("bloqueoHorarios", state)}/>;
+    if (seccion==="horarios") return <CalendarioHorarios data={data} setData={setData} reloadData={reloadData} user={user} agendaRequest={agendaRequest} savedState={screenState.horarios} onStateChange={(state)=>saveScreenState("horarios", state)} onBackToReport={()=>{ setSeccion("reportes_cobertura"); setMenuOpen(false); setMobileMenuGroup(null); }}/>;
+    if (seccion==="bloqueo_horarios") return <BloqueoHorarios data={data} setData={setData} reloadData={reloadData} user={user} savedState={screenState.bloqueoHorarios} onStateChange={(state)=>saveScreenState("bloqueoHorarios", state)}/>;
     if (seccion==="reportes_horas") return renderReportes("horas", "reportes_horas");
     if (seccion==="reportes_cobertura") return user.rol!=="manicura" ? renderReportes("cobertura", "reportes_cobertura") : null;
     if (seccion==="reportes_comisiones") return renderReportes("comisiones", "reportes_comisiones");
