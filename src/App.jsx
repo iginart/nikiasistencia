@@ -229,8 +229,14 @@ const patchOrPost = async (table, matchQuery, data) => {
     body: JSON.stringify(data),
   });
   const patchText = await patchRes.text();
+  if (!patchRes.ok) {
+    throw new Error(patchText || `No se pudo actualizar ${table}.`);
+  }
   const patchResult = patchText ? JSON.parse(patchText) : [];
-  if (!patchResult || patchResult.length === 0) return sb(table, { method: "POST", body: JSON.stringify(data) });
+  if (!Array.isArray(patchResult)) {
+    throw new Error(`Respuesta inesperada al actualizar ${table}.`);
+  }
+  if (patchResult.length === 0) return sb(table, { method: "POST", body: JSON.stringify(data) });
   return patchResult;
 };
 
@@ -353,10 +359,10 @@ const api = {
     if (!localIds?.length) return [];
     return sb("usuario_locales", { method:"POST", body:JSON.stringify(localIds.map(local_id=>({ user_id:userId, local_id:parseInt(local_id) }))) });
   },
-  getHorarios: () => sb("horarios?select=*"),
+  getHorarios: () => sbAll("horarios?select=*&order=id"),
   upsertHorario: (d) => patchOrPost("horarios", `user_id=eq.${d.user_id}&fecha=eq.${d.fecha}`, d),
   deleteHorario: (userId, fecha) => sb(`horarios?user_id=eq.${userId}&fecha=eq.${fecha}`, { method: "DELETE", prefer: "" }),
-  getAsistencias: () => sb("asistencias?select=*"),
+  getAsistencias: () => sbAll("asistencias?select=*&order=id"),
   upsertAsistencia: (d) => patchOrPost("asistencias", `user_id=eq.${d.user_id}&fecha=eq.${d.fecha}`, d),
   deleteAsistencia: (userId, fecha) => sb(`asistencias?user_id=eq.${userId}&fecha=eq.${fecha}`, { method: "DELETE", prefer: "" }),
   getPeriodos: () => sb("periodos_bloqueados?select=*"),
@@ -1494,13 +1500,25 @@ function CalendarioHorarios({ data, setData, reloadData, user, agendaRequest, on
     const s = calFromSlot(bl.startSlot), e = calFromSlot(bl.endSlot);
     const anterior = (data.horarios || []).find(h => parseInt(h.userId) === parseInt(uid) && h.fecha === f) || null;
     const nuevo = { user_id:parseInt(uid), fecha:f, entrada:calFmt(s.h,s.m), salida:calFmt(e.h,e.m), trabaja:true };
-    const savedRows = await api.upsertHorario(nuevo);
-    const saved = normalizeHorario(Array.isArray(savedRows) ? savedRows[0] : savedRows || nuevo);
-    setData(prev => ({ ...prev, horarios:[...(prev?.horarios || []).filter(h => !(parseInt(h.userId) === parseInt(uid) && h.fecha === f)), saved] }));
-    void auditarHorario({ accion: anterior ? "HORARIO_MODIFICADO" : "HORARIO_CREADO", uid:parseInt(uid), fecha:f, anterior, nuevo });
-    if (parseInt(uid) === parseInt(manicuraId)) setLocalH(p => { const n={...p}; delete n[f]; return n; });
-    setLocalHAll(p => { const n={...p}; delete n[key]; return n; });
-    return true;
+    try {
+      const savedRows = await api.upsertHorario(nuevo);
+      const rawSaved = Array.isArray(savedRows) ? savedRows[0] : savedRows;
+      if (!rawSaved?.id || parseInt(rawSaved.user_id) !== parseInt(uid) || rawSaved.fecha !== f) {
+        throw new Error("Supabase no confirmó el horario guardado.");
+      }
+      const saved = normalizeHorario(rawSaved);
+      setData(prev => ({ ...prev, horarios:[...(prev?.horarios || []).filter(h => !(parseInt(h.userId) === parseInt(uid) && h.fecha === f)), saved] }));
+      void auditarHorario({ accion: anterior ? "HORARIO_MODIFICADO" : "HORARIO_CREADO", uid:parseInt(uid), fecha:f, anterior, nuevo });
+      if (parseInt(uid) === parseInt(manicuraId)) setLocalH(p => { const n={...p}; delete n[f]; return n; });
+      setLocalHAll(p => { const n={...p}; delete n[key]; return n; });
+      return true;
+    } catch (err) {
+      if (parseInt(uid) === parseInt(manicuraId)) setLocalH(p => { const n={...p}; delete n[f]; return n; });
+      setLocalHAll(p => { const n={...p}; delete n[key]; return n; });
+      notifyToast(`No se pudo guardar el horario. ${err?.message || "Reintentá en unos segundos."}`, "error", { title:"Horario no guardado" });
+      console.error("Error al guardar horario", err);
+      return false;
+    }
   }, [manicuraId, localH, localHAll, bloques, getBloqueFor, getAsistenciaFor, reloadData, confirmarCambioHorario, horarioKey, validarEdicionHorarioActual, data.horarios, auditarHorario]);
 
   const saveBloque = useCallback(async (f, b) => saveBloqueFor(parseInt(manicuraId), f, b), [manicuraId, saveBloqueFor]);
@@ -1516,14 +1534,26 @@ function CalendarioHorarios({ data, setData, reloadData, user, agendaRequest, on
     const s = calFromSlot(b.startSlot), e = calFromSlot(b.endSlot);
     const anterior = (data.horarios || []).find(h => parseInt(h.userId) === parseInt(uid) && h.fecha === f) || null;
     const nuevo = { user_id:parseInt(uid), fecha:f, entrada:calFmt(s.h,s.m), salida:calFmt(e.h,e.m), trabaja:true };
-    const savedRows = await api.upsertHorario(nuevo);
-    const saved = normalizeHorario(Array.isArray(savedRows) ? savedRows[0] : savedRows || nuevo);
-    setData(prev => ({ ...prev, horarios:[...(prev?.horarios || []).filter(h => !(parseInt(h.userId) === parseInt(uid) && h.fecha === f)), saved] }));
-    void auditarHorario({ accion: anterior ? "HORARIO_MODIFICADO" : "HORARIO_CREADO", uid:parseInt(uid), fecha:f, anterior, nuevo });
-    if (!alreadyPersisted) silentEditOnce.current.add(key);
-    if (parseInt(uid) === parseInt(manicuraId)) setLocalH(p => { const n={...p}; delete n[f]; return n; });
-    setLocalHAll(p => { const n={...p}; delete n[key]; return n; });
-    return true;
+    try {
+      const savedRows = await api.upsertHorario(nuevo);
+      const rawSaved = Array.isArray(savedRows) ? savedRows[0] : savedRows;
+      if (!rawSaved?.id || parseInt(rawSaved.user_id) !== parseInt(uid) || rawSaved.fecha !== f) {
+        throw new Error("Supabase no confirmó el horario guardado.");
+      }
+      const saved = normalizeHorario(rawSaved);
+      setData(prev => ({ ...prev, horarios:[...(prev?.horarios || []).filter(h => !(parseInt(h.userId) === parseInt(uid) && h.fecha === f)), saved] }));
+      void auditarHorario({ accion: anterior ? "HORARIO_MODIFICADO" : "HORARIO_CREADO", uid:parseInt(uid), fecha:f, anterior, nuevo });
+      if (!alreadyPersisted) silentEditOnce.current.add(key);
+      if (parseInt(uid) === parseInt(manicuraId)) setLocalH(p => { const n={...p}; delete n[f]; return n; });
+      setLocalHAll(p => { const n={...p}; delete n[key]; return n; });
+      return true;
+    } catch (err) {
+      if (parseInt(uid) === parseInt(manicuraId)) setLocalH(p => { const n={...p}; delete n[f]; return n; });
+      setLocalHAll(p => { const n={...p}; delete n[key]; return n; });
+      notifyToast(`No se pudo guardar el horario. ${err?.message || "Reintentá en unos segundos."}`, "error", { title:"Horario no guardado" });
+      console.error("Error al guardar horario", err);
+      return false;
+    }
   }, [manicuraId, reloadData, getAsistenciaFor, confirmarCambioHorario, hasHorarioPersistidoFor, horarioKey, validarEdicionHorarioActual, data.horarios, auditarHorario]);
 
   const onAddB = useCallback(async (f, b) => onAddBFor(parseInt(manicuraId), f, b), [manicuraId, onAddBFor]);
