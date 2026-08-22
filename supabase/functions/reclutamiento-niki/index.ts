@@ -332,7 +332,7 @@ Deno.serve(async (req) => {
         const { data:c } = await admin.from("reclutamiento_circuitos").select("id").eq("puesto",p.puesto).eq("activo",true).order("id").limit(1).maybeSingle();
         circuitoId = c?.id || null;
       }
-      const payload = { nombre:String(p.nombre).trim(),email:p.email||null,telefono:p.telefono||null,puesto:p.puesto,circuito_id:circuitoId,origen:p.origen||null,disponibilidad_desde:p.disponibilidad_desde||null,disponibilidad_horaria:p.disponibilidad_horaria||null,observaciones:p.observaciones||null,actualizado_por_user_id:actor.id };
+      const payload = { nombre:String(p.nombre).trim(),email:p.email||null,telefono:p.telefono||null,puesto:p.puesto,circuito_id:circuitoId,origen:p.origen||null,disponibilidad_desde:p.disponibilidad_desde||null,disponibilidad_tipo:p.disponibilidad_tipo||"full",disponibilidad_turno:p.disponibilidad_turno||null,trabaja_feriados:p.trabaja_feriados===true,dias_franco:p.dias_franco||null,observaciones:p.observaciones||null,actualizado_por_user_id:actor.id };
       if (id) {
         const { error } = await admin.from("reclutamiento_candidatas").update(payload).eq("id",id); if (error) throw error;
       } else {
@@ -369,6 +369,14 @@ Deno.serve(async (req) => {
       if (String(p.estado||"") === "realizada") {
         const completion=await stageCompletion(Number(inst.candidata_id),Number(inst.orden||0));
         if(!completion.ok) return json({ok:false,error:completion.reason},409);
+        if (!String(p.recomendacion||"").trim()) return json({ok:false,error:"La recomendación es obligatoria para marcar la etapa como realizada."},409);
+        if (!String(p.resultado||"").trim()) return json({ok:false,error:"El resultado / sugerencia es obligatorio para marcar la etapa como realizada."},409);
+        if (inst.tipo === "prueba_tecnica") {
+          const {data:testRows,error:testError}=await admin.from("reclutamiento_prueba_servicios").select("id,resultado").eq("instancia_id",id);
+          if(testError) throw testError;
+          if(!(testRows||[]).length) return json({ok:false,error:"La prueba técnica debe tener al menos un servicio evaluado."},409);
+          if((testRows||[]).some((x:any)=>!String(x.resultado||"").trim())) return json({ok:false,error:"Todos los servicios de la prueba técnica deben tener un resultado."},409);
+        }
       }
       const { data:updated,error }=await admin.from("reclutamiento_instancias").update({fecha_hora:p.fecha_hora||null,local_id:p.local_id||null,modalidad:p.modalidad||null,comentarios:p.comentarios||null,recomendacion:p.recomendacion||null,resultado:p.resultado||null,estado:p.estado||"pendiente",realizada_en:p.realizada_en||null,actualizado_por_user_id:actor.id}).eq("id",id).select("*").single(); if(error)throw error;
       await admin.from("reclutamiento_instancia_evaluadores").delete().eq("instancia_id",id);
@@ -410,7 +418,7 @@ Deno.serve(async (req) => {
     }
 
     if (action === "file_add" || action === "file_delete") {
-      if(action==="file_add"){const p=body.file||{};const{error}=await admin.from("reclutamiento_archivos").insert({...p,creado_por_user_id:actor.id});if(error)throw error;await audit(Number(p.candidata_id),"ARCHIVO_SUBIDO",String(p.nombre_archivo||"archivo"));}
+      if(action==="file_add"){const p=body.file||{};const{data:created,error}=await admin.from("reclutamiento_archivos").insert({...p,creado_por_user_id:actor.id}).select("*").single();if(error)throw error;await audit(Number(p.candidata_id),"ARCHIVO_SUBIDO",String(p.nombre_archivo||"archivo"));return json({ok:true,file:created});}
       else{const id=Number(body.id||0);const{data:r}=await admin.from("reclutamiento_archivos").select("candidata_id,nombre_archivo").eq("id",id).maybeSingle();const{error}=await admin.from("reclutamiento_archivos").delete().eq("id",id);if(error)throw error;if(r)await audit(r.candidata_id,"ARCHIVO_ELIMINADO",r.nombre_archivo);}
       return json({ok:true});
     }

@@ -556,8 +556,10 @@ function normalizeLocal(l) {
     zona,
     fechaApertura: l.fecha_apertura || l.fechaApertura || "",
     fecha_apertura: l.fecha_apertura || l.fechaApertura || "",
+    activo: l.activo !== false,
   };
 }
+function localActivo(l) { return l?.activo !== false; }
 function normalizeUsuarioLocal(x) { return { userId:x.user_id, localId:x.local_id }; }
 function normalizeManicuraHistorialLocal(x) { return { id:x.id, userId:x.user_id, localId:x.local_id, fechaInicio:x.fecha_inicio || "", fechaFin:x.fecha_fin || "", motivoFin:x.motivo_fin || "", observacion:x.observacion || "", creadoEn:x.creado_en || "", actualizadoEn:x.actualizado_en || "" }; }
 function normalizeUsuarioHistorialLaboral(x) { return { id:x.id,userId:x.user_id,fechaInicio:x.fecha_inicio||"",fechaFin:x.fecha_fin||"",motivoFin:x.motivo_fin||"",observacion:x.observacion||"",creadoEn:x.creado_en||"",actualizadoEn:x.actualizado_en||"" }; }
@@ -1309,8 +1311,9 @@ function CalendarioHorarios({ data, setData, reloadData, user, agendaRequest, on
   const esEncargada = user.rol === "encargada";
   const puedeGestionar = esAdmin || esEncargada;
   const allowedLocalIds = getAssignedLocalIds(data, user);
+  const localesHorarios = (data.locales || []).filter(l => localActivo(l) && (esAdmin || allowedLocalIds.includes(l.id)));
   const isMobile = window.innerWidth < 640;
-  const defaultManicuraId = puedeGestionar ? (data.users.filter(u=>u.rol==="manicura"&&u.activo&&(esAdmin||allowedLocalIds.includes(u.localId)))[0]?.id||null) : user.id;
+  const defaultManicuraId = puedeGestionar ? (data.users.filter(u=>u.rol==="manicura"&&u.activo&&localesHorarios.some(l=>l.id===u.localId))[0]?.id||null) : user.id;
   const parseSavedDate = (value, fallback) => {
     if (!value) return fallback;
     const d = new Date(String(value) + "T12:00:00");
@@ -1324,6 +1327,7 @@ function CalendarioHorarios({ data, setData, reloadData, user, agendaRequest, on
   const [anio, setAnio] = useState(Number.isInteger(savedState?.anio) ? savedState.anio : (hoy.getMonth() === 11 ? hoy.getFullYear() + 1 : hoy.getFullYear()));
   const [miniCursor, setMiniCursor] = useState(() => parseSavedDate(savedState?.miniCursor, new Date(hoy.getFullYear(), hoy.getMonth(), 1)));
   const [manicuraId, setManicuraId] = useState(savedState?.manicuraId ?? defaultManicuraId);
+  const [manicuraPickerOpen, setManicuraPickerOpen] = useState(false);
   const [navVisible, setNavVisible] = useState(savedState?.navVisible ?? !isMobile);
   const calendarShellHeight = vista === "mes" ? (isMobile ? 560 : 560) : (isMobile ? "calc(100vh - 154px)" : 640);
   const weeklyMinWidth = isMobile ? 520 : (navVisible ? 620 : 720);
@@ -1430,7 +1434,12 @@ function CalendarioHorarios({ data, setData, reloadData, user, agendaRequest, on
 
   const bloqueado = (periodoBloqueadoParaManicura(periodoActivoKey, manicuraId) && !esAdmin) || !puedeEditarManicura(manicuraId);
   const feriados = new Set((data.feriados||[]).map(f=>f.fecha));
-  const manicuras = data.users.filter(u=>u.rol==="manicura"&&u.activo&&(esAdmin || allowedLocalIds.includes(u.localId)));
+  const manicuras = data.users.filter(u=>u.rol==="manicura"&&u.activo&&localesHorarios.some(l=>l.id===u.localId)).sort((a,b)=>{
+    const la=localesHorarios.find(l=>l.id===a.localId)?.nombre||"ZZZ";
+    const lb=localesHorarios.find(l=>l.id===b.localId)?.nombre||"ZZZ";
+    return la.localeCompare(lb) || (a.nombre||"").localeCompare(b.nombre||"");
+  });
+  const manicurasPorLocal = useMemo(()=>localesHorarios.map(local=>({local,manicuras:manicuras.filter(m=>m.localId===local.id)})).filter(g=>g.manicuras.length),[localesHorarios,manicuras]);
   const selectedManicura = data.users.find(u=>u.id===parseInt(manicuraId));
   const getAsistencia = useCallback((f) => (data.asistencias||[]).find(a=>a.userId===parseInt(manicuraId)&&a.fecha===f), [data.asistencias, manicuraId]);
   const getAsistenciaFor = useCallback((uid, f) => (data.asistencias||[]).find(a=>a.userId===parseInt(uid)&&a.fecha===f), [data.asistencias]);
@@ -1819,6 +1828,7 @@ function CalendarioHorarios({ data, setData, reloadData, user, agendaRequest, on
     }
     if (v === "dia") {
       const base = vista === "semana" ? weekStart : vista === "mes" ? new Date(anio, mes, 1) : new Date(diaVista + "T12:00:00");
+      if (!localDiaId) setLocalDiaId(String(selectedManicura?.localId || localesHorarios[0]?.id || ""));
       setDiaVista(dateKey(base));
       setMes(base.getMonth());
       setAnio(base.getFullYear());
@@ -1901,7 +1911,8 @@ function CalendarioHorarios({ data, setData, reloadData, user, agendaRequest, on
   // ── DÍA / TODAS LAS MANICURAS ───────────────────────────────────
   const renderDiarioTodos = () => {
     const baseCols = puedeGestionar ? manicuras : manicuras.filter(m => m.id === user.id);
-    const cols = localDiaId ? baseCols.filter(m => m.localId === parseInt(localDiaId)) : baseCols;
+    const selectedLocalForDay = parseInt(localDiaId) || selectedManicura?.localId || localesHorarios[0]?.id || null;
+    const cols = selectedLocalForDay ? baseCols.filter(m => m.localId === parseInt(selectedLocalForDay)) : [];
     const totalDia = cols.reduce((a,m)=>a+calHoras(getBloqueFor(m.id, diaVista)),0);
     const minColW = isMobile ? 118 : 0;
     const innerMinWidth = isMobile ? Math.max(cols.length * minColW, 1) : "100%";
@@ -1912,9 +1923,8 @@ function CalendarioHorarios({ data, setData, reloadData, user, agendaRequest, on
     return <div style={{ display:"flex",flex:1,overflow:"hidden",flexDirection:"column" }}>
       {puedeGestionar && <div style={{ display:"flex",alignItems:"center",gap:8,padding:"8px 10px",borderBottom:"0.5px solid rgba(120,120,120,0.18)",background:"var(--color-background-primary)" }}>
         <span style={{ fontSize:12,color:"var(--color-text-secondary)",fontWeight:500 }}>Local</span>
-        <select value={localDiaId} onChange={e=>setLocalDiaId(e.target.value)} style={{ border:"0.5px solid rgba(120,120,120,0.24)",borderRadius:6,padding:"5px 8px",fontSize:12,background:"var(--color-background-primary)",color:"var(--color-text-primary)" }}>
-          <option value="">Todos los locales visibles</option>
-          {data.locales.filter(l=>esAdmin || allowedLocalIds.includes(l.id)).map(l=><option key={l.id} value={l.id}>{l.nombre}</option>)}
+        <select value={selectedLocalForDay||""} onChange={e=>setLocalDiaId(e.target.value)} style={{ border:"0.5px solid rgba(120,120,120,0.24)",borderRadius:6,padding:"5px 8px",fontSize:12,background:"var(--color-background-primary)",color:"var(--color-text-primary)" }}>
+          {localesHorarios.map(l=><option key={l.id} value={l.id}>{l.nombre}</option>)}
         </select>
       </div>}
       <div style={{ display:"flex",flex:1,overflow:"hidden" }}>
@@ -2100,17 +2110,22 @@ function CalendarioHorarios({ data, setData, reloadData, user, agendaRequest, on
       </div>
       <div style={{ display:"flex",height:calendarShellHeight,border:"0.5px solid rgba(120,120,120,0.18)",borderRadius:12,overflow:"hidden",background:"var(--color-background-primary)",maxWidth:"100%",minWidth:0 }}>
         {/* Panel lateral */}
-        {navVisible && <div style={{ width:isMobile?200:190,flexShrink:0,borderRight:"0.5px solid rgba(120,120,120,0.18)",display:"flex",flexDirection:"column",background:"var(--color-background-secondary)",overflowY:"auto",overflowX:"hidden",minHeight:0,paddingBottom:12 }}>
+        {navVisible && <div style={{ width:isMobile?215:210,flexShrink:0,borderRight:"0.5px solid rgba(120,120,120,0.18)",display:"flex",flexDirection:"column",background:"var(--color-background-secondary)",overflowY:"auto",overflowX:"hidden",height:"fit-content",maxHeight:"calc(100vh - 125px)",alignSelf:"flex-start",paddingBottom:12 }}>
           {puedeGestionar && <div style={{ padding:"10px 10px 6px" }}>
             <p style={{ margin:"0 0 6px",fontSize:11,fontWeight:500,color:"var(--color-text-secondary)",textTransform:"uppercase",letterSpacing:"0.05em" }}>Manicura</p>
-            <select value={manicuraId||""} onChange={e=>setManicuraId(e.target.value)} style={{ width:"100%",border:"0.5px solid rgba(120,120,120,0.24)",borderRadius:6,padding:"6px 8px",fontSize:12,background:"var(--color-background-primary)",color:"var(--color-text-primary)" }}>
-              {manicuras.map(m=><option key={m.id} value={m.id}>{m.nombre}</option>)}
-            </select>
+            <div style={{position:"relative"}}>
+              <button type="button" onClick={()=>setManicuraPickerOpen(v=>!v)} style={{width:"100%",border:"0.5px solid rgba(120,120,120,0.24)",borderRadius:8,padding:"7px 8px",background:"var(--color-background-primary)",cursor:"pointer",textAlign:"left",display:"flex",alignItems:"center",justifyContent:"space-between",gap:6}}>
+                <span style={{minWidth:0}}><strong style={{display:"block",fontSize:11,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{selectedManicura?.nombre||"Seleccionar manicura"}</strong><span style={{display:"block",fontSize:9,color:"var(--color-text-secondary)",marginTop:2}}>{localesHorarios.find(l=>l.id===selectedManicura?.localId)?.nombre||"Sin local"}</span></span><span>⌄</span>
+              </button>
+              {manicuraPickerOpen&&<><div onClick={()=>setManicuraPickerOpen(false)} style={{position:"fixed",inset:0,zIndex:1090}}/><div style={{position:"absolute",left:0,right:0,top:"calc(100% + 5px)",zIndex:1100,background:"#fff",border:"1px solid #ddd",borderRadius:10,boxShadow:"0 10px 26px rgba(0,0,0,.16)",maxHeight:360,overflowY:"auto",padding:6}}>
+                {manicurasPorLocal.map(g=><div key={g.local.id} style={{marginBottom:6}}><div style={{fontSize:9,fontWeight:800,textTransform:"uppercase",letterSpacing:".05em",color:COLORS.pinkDark,background:COLORS.pinkLight,borderRadius:6,padding:"5px 7px",position:"sticky",top:0}}>{g.local.nombre}</div>{g.manicuras.map(m=><button key={m.id} type="button" onClick={()=>{setManicuraId(m.id);setManicuraPickerOpen(false);if(vista==="dia")setLocalDiaId(String(m.localId));}} style={{width:"100%",border:"none",background:parseInt(manicuraId)===m.id?"#f7f3f4":"#fff",padding:"7px 8px",textAlign:"left",cursor:"pointer",fontSize:11,borderRadius:6}}>{m.nombre}</button>)}</div>)}
+              </div></>}
+            </div>
           </div>}
           <div style={{ padding:"10px 10px 6px",borderTop:puedeGestionar?"0.5px solid rgba(120,120,120,0.18)":"none" }}>
             <p style={{ margin:"0 0 6px",fontSize:11,fontWeight:500,color:"var(--color-text-secondary)",textTransform:"uppercase",letterSpacing:"0.05em" }}>Vista</p>
             <div style={{ display:"flex",flexDirection:"column",gap:3 }}>
-              {["semana",...(puedeGestionar?["dia"]:[]),"mes"].map(v=><button key={v} onClick={()=>cambiarVistaHorarios(v)} style={{ textAlign:"left",padding:"6px 8px",border:"none",borderRadius:6,cursor:"pointer",fontSize:12,fontWeight:500,background:vista===v?COLORS.pinkLight:"transparent",color:vista===v?COLORS.pinkDark:"var(--color-text-primary)" }}>{v==="semana"?"📅 Semana":v==="dia"?"👥 Día / todas":"🗓️ Mes"}</button>)}
+              {["semana",...(puedeGestionar?["dia"]:[]),"mes"].map(v=><button key={v} onClick={()=>cambiarVistaHorarios(v)} style={{ textAlign:"left",padding:"6px 8px",border:"none",borderRadius:6,cursor:"pointer",fontSize:12,fontWeight:500,background:vista===v?COLORS.pinkLight:"transparent",color:vista===v?COLORS.pinkDark:"var(--color-text-primary)" }}>{v==="semana"?"📅 Semana":v==="dia"?"👥 Día / local":"🗓️ Mes"}</button>)}
             </div>
           </div>
           <div style={{ padding:"8px 10px",borderTop:"0.5px solid rgba(120,120,120,0.18)" }}>
@@ -4391,7 +4406,7 @@ function ABMManicuras({ data, setData, reloadData, user }) {
   }, []);
   const esAdmin = isAdminLikeRole(user.rol);
   const allowedLocalIds = getAssignedLocalIds(data, user);
-  const localesPermitidos = esAdmin ? data.locales : data.locales.filter(l => allowedLocalIds.includes(l.id));
+  const localesPermitidos = esAdmin ? data.locales.filter(localActivo) : data.locales.filter(l => localActivo(l) && allowedLocalIds.includes(l.id));
   const manicuras = data.users.filter(u => u.rol === "manicura" && (esAdmin || allowedLocalIds.includes(u.localId) || !u.localId));
   const encargadasEquipo = data.users.filter(u => u.rol === "encargada" && u.activo);
   const normalizeSearch = value => String(value || "").toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
@@ -4632,7 +4647,7 @@ function ABMManicuras({ data, setData, reloadData, user }) {
 }
 
 // ── ABM LOCALES ────────────────────────────────────────────────────
-function ABMLocales({ data, reloadData, user }) {
+function ABMLocales({ data, setData, reloadData, user }) {
   const [modal, setModal] = useState(null);
   const [form, setForm] = useState({});
   const [saving, setSaving] = useState(false);
@@ -4659,6 +4674,7 @@ function ABMLocales({ data, reloadData, user }) {
     franquiciadoNombre:"",
     franquiciadoEmail:"",
     franquiciadoTelefono:"",
+    activo:true,
   });
   const openNew = () => { setForm(defaultLocalForm()); setFormErr(""); setModal("new"); };
   const openEdit = l => {
@@ -4693,6 +4709,7 @@ function ABMLocales({ data, reloadData, user }) {
       franquiciado_nombre:tipo === "franquicia" ? (String(form.franquiciadoNombre || "").trim() || null) : null,
       franquiciado_email:tipo === "franquicia" ? (String(form.franquiciadoEmail || "").trim().toLowerCase() || null) : null,
       franquiciado_telefono:tipo === "franquicia" ? (String(form.franquiciadoTelefono || "").trim() || null) : null,
+      activo: form.activo !== false,
     };
   };
 
@@ -4706,16 +4723,39 @@ function ABMLocales({ data, reloadData, user }) {
 
     setSaving(true);
     try {
-      if (modal==="new") await api.createLocal(payload);
-      else await api.updateLocal(form.id, payload);
-      await reloadData(); setModal(null);
+      if (modal==="new") {
+        const rows=await api.createLocal(payload);
+        const raw=Array.isArray(rows)?rows[0]:rows;
+        if(raw) setData(prev=>({...prev,locales:[...(prev.locales||[]),normalizeLocal(raw)]}));
+      } else {
+        const rows=await api.updateLocal(form.id, payload);
+        const raw=Array.isArray(rows)?rows[0]:rows;
+        if(raw) setData(prev=>({...prev,locales:(prev.locales||[]).map(l=>l.id===form.id?normalizeLocal(raw):l)}));
+      }
+      setModal(null);
     } catch(e) { setFormErr("Error al guardar: " + (e.message || e)); }
     setSaving(false);
   };
   const del = async (id) => {
     if (!esAdmin && !allowedLocalIds.has(id)) { notifyToast("No tenés permiso para eliminar este local.", "warning"); return; }
-    if (data.users.some(u=>u.localId===id)) { notifyToast("Hay manicuras asignadas a este local.", "warning"); return; }
-    await api.deleteLocal(id); await reloadData();
+    if (data.users.some(u=>u.localId===id&&u.activo)) { notifyToast("Hay personas activas asignadas a este local. Desasignalas antes de eliminarlo.", "warning"); return; }
+    if (!window.confirm("¿Eliminar definitivamente este local? Solo es posible si nunca tuvo movimientos ni referencias.")) return;
+    try{
+      await api.deleteLocal(id);
+      setData(prev=>({...prev,locales:(prev.locales||[]).filter(l=>l.id!==id)}));
+      notifyToast("Local eliminado.","success");
+    }catch(e){
+      notifyToast("No se puede eliminar porque el local tiene movimientos, historial u otras referencias. En ese caso, desactivalo.", "warning");
+    }
+  };
+  const toggleActivoLocal=async l=>{
+    const next=!localActivo(l);
+    try{
+      const rows=await api.updateLocal(l.id,{activo:next});
+      const raw=Array.isArray(rows)?rows[0]:rows;
+      setData(prev=>({...prev,locales:(prev.locales||[]).map(x=>x.id===l.id?(raw?normalizeLocal(raw):{...x,activo:next}):x)}));
+      notifyToast(next?"Local reactivado.":"Local desactivado. Ya no aparecerá en las vistas operativas.","success");
+    }catch(e){notifyToast("No se pudo cambiar el estado del local: "+(e.message||e),"error");}
   };
 
   const tipoLabel = (l) => (l.tipoLocal || l.tipo_local || "propio") === "franquicia" ? "Franquicia" : "Propio";
@@ -4741,6 +4781,7 @@ function ABMLocales({ data, reloadData, user }) {
                 <p style={{ margin:0,fontWeight:500,fontSize:14 }}>{l.nombre}</p>
                 <Badge color={tipo === "franquicia" ? "amber" : "info"}>{tipoLabel(l)}</Badge>
                 <Badge color={l.zona === "exclusiva" ? "pink" : l.zona === "premium" ? "amber" : "gray"}>{zonaLabel(l.zona)}</Badge>
+                <Badge color={localActivo(l)?"success":"gray"}>{localActivo(l)?"Activo":"Inactivo"}</Badge>
               </div>
               <p style={{ margin:"3px 0 0",fontSize:12,color:"var(--color-text-secondary)" }}>
                 {l.direccion || "Sin dirección"}{(l.codigoExterno||l.codigo_externo)?` · Código externo: ${l.codigoExterno||l.codigo_externo}`:""}{l.fechaApertura?` · Apertura: ${fmtFecha(parseDateLocal(l.fechaApertura))}`:""}
@@ -4753,6 +4794,7 @@ function ABMLocales({ data, reloadData, user }) {
             <Badge color="info">{qty} manicura{qty!==1?"s":""}</Badge>
             <Btn onClick={()=>setListaLocalModal({ localId:l.id, listaId:lista?.id||"" })} variant="secondary" size="sm">Lista de precios</Btn>
             <Btn onClick={()=>openEdit(l)} variant="ghost" size="sm">Editar</Btn>
+            <Btn onClick={()=>toggleActivoLocal(l)} variant={localActivo(l)?"secondary":"success"} size="sm">{localActivo(l)?"Desactivar":"Reactivar"}</Btn>
             <Btn onClick={()=>del(l.id)} variant="ghost" size="sm" style={{ color:COLORS.danger }}>Eliminar</Btn>
           </Card>;
         })}
@@ -4773,6 +4815,7 @@ function ABMLocales({ data, reloadData, user }) {
               <option value="exclusiva">Exclusiva</option>
             </ModalSelect>
             <div><label style={{ fontSize:12,color:"var(--color-text-secondary)",display:"block",marginBottom:4 }}>Fecha de apertura</label><input type="date" value={form.fechaApertura||""} onChange={e=>setForm(f=>({...f,fechaApertura:e.target.value}))} style={{ width:"100%",border:"1.5px solid #e0e0e0",borderRadius:8,padding:"9px 12px",fontSize:14,background:"#fafafa",color:"#1a1a1a",boxSizing:"border-box" }}/></div>
+            <ModalSelect label="Estado" value={form.activo===false?"inactivo":"activo"} onChange={v=>setForm(f=>({...f,activo:v==="activo"}))}><option value="activo">Activo</option><option value="inactivo">Inactivo</option></ModalSelect>
           </div>
           {(form.tipoLocal||"propio") === "franquicia" && <div style={{ border:"1px dashed #ead3dc",background:COLORS.pinkLight,borderRadius:12,padding:12,display:"flex",flexDirection:"column",gap:12 }}>
             <p style={{ margin:0,fontSize:13,fontWeight:600,color:COLORS.pinkDark }}>Datos del franquiciado</p>
@@ -4962,8 +5005,8 @@ function AsistenciaDiaria({ data, setData, reloadData, user }) {
   const [formTarde, setFormTarde] = useState({});
   const allowedLocalIds = getAssignedLocalIds(data, user);
   const localesVisibles = (isAdminLikeRole(user.rol)
-    ? data.locales
-    : data.locales.filter(l => allowedLocalIds.includes(l.id))
+    ? data.locales.filter(localActivo)
+    : data.locales.filter(l => localActivo(l) && allowedLocalIds.includes(l.id))
   ).sort((a,b)=>(a.nombre||"").localeCompare(b.nombre||""));
   const [filtroLocal, setFiltroLocal] = useState("todos");
 
@@ -7637,7 +7680,7 @@ function AgendaTurnos({ data, reloadData, user, agendaOpenRequest, onAgendaOpenR
   const esEncargada = user.rol === "encargada";
   const hoyKey = dateKey(new Date());
   const allowedLocalIds = esEncargada ? (data.encargadoLocales||[]).filter(x=>x.userId===user.id).map(x=>x.localId) : [];
-  const localesPermitidos = esAdmin ? data.locales : data.locales.filter(l=>allowedLocalIds.includes(l.id));
+  const localesPermitidos = esAdmin ? data.locales.filter(localActivo) : data.locales.filter(l=>localActivo(l) && allowedLocalIds.includes(l.id));
   const manicurasPermitidas = data.users.filter(u=>u.rol==="manicura" && u.activo && (esAdmin || allowedLocalIds.includes(u.localId)));
 
   const [tab, setTab] = useState("turnos");
@@ -9614,6 +9657,20 @@ function ReclutamientoArchivoLink({ actor, candidataId, archivo, onDelete = null
   return <div style={{display:"flex",alignItems:"center",gap:8,padding:"7px 9px",border:"1px solid #eee",borderRadius:9,background:"#fff"}}><span style={{fontSize:16}}>{archivo.mime_type==="application/pdf"?"📄":"🖼️"}</span><button type="button" onClick={abrir} style={{flex:1,minWidth:0,textAlign:"left",border:"none",background:"transparent",cursor:"pointer",fontSize:11,fontWeight:650,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{loading?"Abriendo...":archivo.nombre_archivo}</button>{onDelete&&<button type="button" onClick={()=>onDelete(archivo)} style={{border:"none",background:COLORS.dangerLight,color:COLORS.danger,borderRadius:7,cursor:"pointer",width:25,height:25}}>×</button>}</div>;
 }
 
+
+function ReclutamientoFotoPerfil({ actor, candidataId, archivo, size=54 }) {
+  const [url,setUrl]=useState("");
+  useEffect(()=>{
+    let alive=true;
+    if(!archivo?.storage_path){setUrl("");return;}
+    api.reclutamientoStorageRequest({action:"sign",actor,candidataId,path:archivo.storage_path,expiresIn:900})
+      .then(r=>{if(alive)setUrl(r.url||"");})
+      .catch(()=>{if(alive)setUrl("");});
+    return()=>{alive=false;};
+  },[actor?.id,actor?.sessionToken,candidataId,archivo?.storage_path]);
+  return url?<img src={url} alt="Foto de candidata" style={{width:size,height:size,borderRadius:"50%",objectFit:"cover",border:"2px solid #fff",boxShadow:"0 2px 8px rgba(0,0,0,.12)",flexShrink:0}}/>:<Avatar nombre="?" size={size}/>;
+}
+
 function ReclutamientoPage({ data, setData, user, fixedView = "tablero" }) {
   const [loading,setLoading]=useState(true),[vista,setVista]=useState(fixedView),[search,setSearch]=useState(""),[puesto,setPuesto]=useState("todos"),[estado,setEstado]=useState("activos");
   const [db,setDb]=useState({circuitos:[],plantillas:[],candidatas:[],locales:[],servicios:[],instancias:[],evaluadores:[],pruebas:[],archivos:[],aprobaciones:[],autorizadores:[]});
@@ -9659,9 +9716,9 @@ function ReclutamientoPage({ data, setData, user, fixedView = "tablero" }) {
   const rechazadas=activeApprovals.filter(a=>a.decision==="rechazada").length;
   const puedeAutorizar=detail&&(user.rol==="admin"||db.autorizadores.some(a=>Number(a.user_id)===Number(user.id)&&a.puesto===detail.puesto&&a.activo));
 
-  const baseForm=(puestoValue="manicura")=>({nombre:"",email:"",telefono:"",puesto:puestoValue,origen:"",disponibilidadDesde:"",disponibilidadHoraria:"",observaciones:"",localIds:[],servicios:[],cvFile:null});
+  const baseForm=(puestoValue="manicura")=>({nombre:"",email:"",telefono:"",puesto:puestoValue,origen:"",disponibilidadDesde:"",disponibilidadTipo:"full",disponibilidadTurno:"indistinto",trabajaFeriados:false,diasFranco:"",observaciones:"",localIds:[],servicios:[],cvFile:null,fotoFile:null});
   const openNew=()=>{setCandidateForm(baseForm("manicura"));setCandidateErr("");setCandidateServiceSearch("");setCandidateModal("new");};
-  const openEdit=c=>{setCandidateForm({id:c.id,nombre:c.nombre||"",email:c.email||"",telefono:c.telefono||"",puesto:c.puesto||"manicura",origen:c.origen||"",disponibilidadDesde:c.disponibilidad_desde||"",disponibilidadHoraria:c.disponibilidad_horaria||"",observaciones:c.observaciones||"",localIds:db.locales.filter(x=>Number(x.candidata_id)===Number(c.id)).map(x=>Number(x.local_id)),servicios:db.servicios.filter(x=>Number(x.candidata_id)===Number(c.id)).map(x=>({servicioId:Number(x.servicio_id),realiza:!!x.realiza,observacion:x.observacion||""})),cvFile:null});setCandidateErr("");setCandidateServiceSearch("");setCandidateModal("edit");};
+  const openEdit=c=>{setCandidateForm({id:c.id,nombre:c.nombre||"",email:c.email||"",telefono:c.telefono||"",puesto:c.puesto||"manicura",origen:c.origen||"",disponibilidadDesde:c.disponibilidad_desde||"",disponibilidadTipo:c.disponibilidad_tipo||"full",disponibilidadTurno:c.disponibilidad_turno||"indistinto",trabajaFeriados:c.trabaja_feriados===true,diasFranco:c.dias_franco||"",observaciones:c.observaciones||"",localIds:db.locales.filter(x=>Number(x.candidata_id)===Number(c.id)).map(x=>Number(x.local_id)),servicios:db.servicios.filter(x=>Number(x.candidata_id)===Number(c.id)).map(x=>({servicioId:Number(x.servicio_id),realiza:!!x.realiza,observacion:x.observacion||""})),cvFile:null,fotoFile:null});setCandidateErr("");setCandidateServiceSearch("");setCandidateModal("edit");};
   const toggleCandidateLocal=id=>setCandidateForm(f=>({...f,localIds:(f.localIds||[]).includes(id)?f.localIds.filter(x=>x!==id):[...(f.localIds||[]),id]}));
   const setCandidateServicio=(sid,realiza)=>setCandidateForm(f=>({...f,servicios:[...(f.servicios||[]).filter(x=>Number(x.servicioId)!==Number(sid)),{servicioId:Number(sid),realiza,observacion:""}]}));
   const removeCandidateServicio=sid=>setCandidateForm(f=>({...f,servicios:(f.servicios||[]).filter(x=>Number(x.servicioId)!==Number(sid))}));
@@ -9669,10 +9726,11 @@ function ReclutamientoPage({ data, setData, user, fixedView = "tablero" }) {
 
   const uploadArchivo=async({candidataId,instanciaId=null,pruebaServicioId=null,tipo,file})=>{
     const up=await api.reclutamientoStorageRequest({action:"upload",actor:user,candidataId,instanciaId,tipo,file});
-    await api.createReclutamientoArchivo({candidata_id:candidataId,instancia_id:instanciaId,prueba_servicio_id:pruebaServicioId,tipo,nombre_archivo:up.name||file.name,mime_type:up.mimeType||file.type,tamano_bytes:up.size||file.size,storage_path:up.path,creado_por_user_id:user.id});
+    const created=await api.createReclutamientoArchivo({candidata_id:candidataId,instancia_id:instanciaId,prueba_servicio_id:pruebaServicioId,tipo,nombre_archivo:up.name||file.name,mime_type:up.mimeType||file.type,tamano_bytes:up.size||file.size,storage_path:up.path,creado_por_user_id:user.id});
     await audit(candidataId,"ARCHIVO_SUBIDO",`${tipo}: ${file.name}`,{instanciaId,pruebaServicioId});
+    return created?.file || {candidata_id:candidataId,instancia_id:instanciaId,prueba_servicio_id:pruebaServicioId,tipo,nombre_archivo:up.name||file.name,mime_type:up.mimeType||file.type,tamano_bytes:up.size||file.size,storage_path:up.path};
   };
-  const deleteArchivo=async a=>{if(!window.confirm(`¿Eliminar ${a.nombre_archivo}?`))return;try{await api.reclutamientoStorageRequest({action:"delete",actor:user,candidataId:a.candidata_id,path:a.storage_path});await api.deleteReclutamientoArchivo(a.id);await audit(a.candidata_id,"ARCHIVO_ELIMINADO",a.nombre_archivo);await load();}catch(e){notifyToast("No se pudo eliminar el archivo: "+(e.message||e),"error");}};
+  const deleteArchivo=async a=>{if(!window.confirm(`¿Eliminar ${a.nombre_archivo}?`))return;try{await api.reclutamientoStorageRequest({action:"delete",actor:user,candidataId:a.candidata_id,path:a.storage_path});await api.deleteReclutamientoArchivo(a.id);setDb(prev=>({...prev,archivos:(prev.archivos||[]).filter(x=>Number(x.id)!==Number(a.id))}));await audit(a.candidata_id,"ARCHIVO_ELIMINADO",a.nombre_archivo);}catch(e){notifyToast("No se pudo eliminar el archivo: "+(e.message||e),"error");}};
 
   const saveCandidate=async()=>{
     setCandidateErr("");
@@ -9681,11 +9739,24 @@ function ReclutamientoPage({ data, setData, user, fixedView = "tablero" }) {
     setCandidateSaving(true);
     try{
       const circuito=db.circuitos.find(c=>c.puesto===candidateForm.puesto&&c.activo);
-      const payload={nombre:candidateForm.nombre.trim(),email:String(candidateForm.email||"").trim()||null,telefono:String(candidateForm.telefono||"").trim()||null,puesto:candidateForm.puesto,circuito_id:circuito?.id||null,origen:String(candidateForm.origen||"").trim()||null,disponibilidad_desde:candidateForm.disponibilidadDesde||null,disponibilidad_horaria:String(candidateForm.disponibilidadHoraria||"").trim()||null,observaciones:String(candidateForm.observaciones||"").trim()||null,actualizado_por_user_id:user.id};
+      const payload={nombre:candidateForm.nombre.trim(),email:String(candidateForm.email||"").trim()||null,telefono:String(candidateForm.telefono||"").trim()||null,puesto:candidateForm.puesto,circuito_id:circuito?.id||null,origen:String(candidateForm.origen||"").trim()||null,disponibilidad_desde:candidateForm.disponibilidadDesde||null,disponibilidad_tipo:candidateForm.disponibilidadTipo||"full",disponibilidad_turno:candidateForm.disponibilidadTurno||"indistinto",trabaja_feriados:candidateForm.trabajaFeriados===true,dias_franco:String(candidateForm.diasFranco||"").trim()||null,observaciones:String(candidateForm.observaciones||"").trim()||null,actualizado_por_user_id:user.id};
       const saved=await api.saveReclutamientoCandidataCompleta({id:candidateForm.id||null,...payload},candidateForm.localIds||[],candidateForm.servicios||[]);
       const id=saved.id;
       if(candidateForm.cvFile)await uploadArchivo({candidataId:id,tipo:"cv",file:candidateForm.cvFile});
-      setCandidateModal(null);notifyToast("Candidata guardada.","success");await load();
+      if(candidateForm.fotoFile)await uploadArchivo({candidataId:id,tipo:"foto",file:candidateForm.fotoFile});
+      const pack=await api.getReclutamientoProcesoCandidata(id);
+      setDb(prev=>({
+        ...prev,
+        candidatas:[...(prev.candidatas||[]).filter(x=>Number(x.id)!==Number(id)),pack.candidata],
+        locales:[...(prev.locales||[]).filter(x=>Number(x.candidata_id)!==Number(id)),...(pack.locales||[])],
+        servicios:[...(prev.servicios||[]).filter(x=>Number(x.candidata_id)!==Number(id)),...(pack.servicios||[])],
+        instancias:[...(prev.instancias||[]).filter(x=>Number(x.candidata_id)!==Number(id)),...(pack.instancias||[])],
+        evaluadores:[...(prev.evaluadores||[]).filter(x=>!(pack.instancias||[]).some(i=>Number(i.id)===Number(x.instancia_id))),...(pack.evaluadores||[])],
+        pruebas:[...(prev.pruebas||[]).filter(x=>!(pack.instancias||[]).some(i=>Number(i.id)===Number(x.instancia_id))),...(pack.pruebas||[])],
+        archivos:[...(prev.archivos||[]).filter(x=>Number(x.candidata_id)!==Number(id)),...(pack.archivos||[])],
+        aprobaciones:[...(prev.aprobaciones||[]).filter(x=>Number(x.candidata_id)!==Number(id)),...(pack.aprobaciones||[])],
+      }));
+      setCandidateModal(null);notifyToast("Candidata guardada.","success");
     }catch(e){setCandidateErr("No se pudo guardar: "+(e.message||e));}
     setCandidateSaving(false);
   };
@@ -9705,6 +9776,13 @@ function ReclutamientoPage({ data, setData, user, fixedView = "tablero" }) {
     const d=stageDraft[inst.id]||{};
     const bloqueo=markRealizada?bloqueoParaRealizar(inst):"";
     if(bloqueo){notifyToast(bloqueo,"warning");return;}
+    if(markRealizada&&!String(d.recomendacion||"").trim()){notifyToast("La recomendación es obligatoria para marcar la etapa como realizada.","warning");return;}
+    if(markRealizada&&!String(d.resultado||"").trim()){notifyToast("El resultado / sugerencia es obligatorio para marcar la etapa como realizada.","warning");return;}
+    if(markRealizada&&inst.tipo==="prueba_tecnica"){
+      const rows=(db.pruebas||[]).filter(x=>Number(x.instancia_id)===Number(inst.id));
+      if(!rows.length){notifyToast("La prueba técnica debe tener al menos un servicio evaluado.","warning");return;}
+      if(rows.some(x=>!String(x.resultado||"").trim())){notifyToast("Todos los servicios de la prueba técnica deben tener un resultado.","warning");return;}
+    }
     setStageSaving(inst.id);
     try{
       let estadoNuevo=d.estado||inst.estado;
@@ -9732,10 +9810,10 @@ function ReclutamientoPage({ data, setData, user, fixedView = "tablero" }) {
     setStageSaving(null);
   };
 
-  const addTestService=async inst=>{const svc=(data.agendaServicios||[]).find(s=>Number(s.id)===Number(testServiceId));if(!svc)return;try{await api.createReclutamientoPruebaServicio({instancia_id:inst.id,servicio_id:svc.id,servicio_nombre:svc.nombre,resultado:null,comentario:null});setTestServiceId("");await audit(inst.candidata_id,"SERVICIO_PRUEBA_AGREGADO",svc.nombre,{instanciaId:inst.id});await load();}catch(e){notifyToast("No se pudo agregar el servicio: "+(e.message||e),"error");}};
-  const saveTestService=async(row,patch)=>{try{await api.updateReclutamientoPruebaServicio(row.id,patch);await audit(detail?.id,"SERVICIO_PRUEBA_EDITADO",row.servicio_nombre,{pruebaServicioId:row.id});await load();}catch(e){notifyToast("No se pudo guardar la evaluación del servicio.","error");}};
-  const deleteTestService=async row=>{if(!window.confirm(`¿Quitar ${row.servicio_nombre} de la prueba?`))return;await api.deleteReclutamientoPruebaServicio(row.id);await audit(detail?.id,"SERVICIO_PRUEBA_ELIMINADO",row.servicio_nombre);await load();};
-  const uploadTestPhoto=async(inst,row,file)=>{try{await uploadArchivo({candidataId:inst.candidata_id,instanciaId:inst.id,pruebaServicioId:row.id,tipo:"foto",file});notifyToast("Foto subida.","success");await load();}catch(e){notifyToast("No se pudo subir la foto: "+(e.message||e),"error");}};
+  const addTestService=async inst=>{const svc=(data.agendaServicios||[]).find(s=>Number(s.id)===Number(testServiceId));if(!svc)return;try{const r=await api.createReclutamientoPruebaServicio({instancia_id:inst.id,servicio_id:svc.id,servicio_nombre:svc.nombre,resultado:null,comentario:null});const row={id:r.id,instancia_id:inst.id,servicio_id:svc.id,servicio_nombre:svc.nombre,resultado:null,comentario:null};setDb(prev=>({...prev,pruebas:[...(prev.pruebas||[]),row]}));setTestServiceId("");await audit(inst.candidata_id,"SERVICIO_PRUEBA_AGREGADO",svc.nombre,{instanciaId:inst.id});}catch(e){notifyToast("No se pudo agregar el servicio: "+(e.message||e),"error");}};
+  const saveTestService=async(row,patch)=>{try{await api.updateReclutamientoPruebaServicio(row.id,patch);setDb(prev=>({...prev,pruebas:(prev.pruebas||[]).map(x=>Number(x.id)===Number(row.id)?{...x,...patch}:x)}));await audit(detail?.id,"SERVICIO_PRUEBA_EDITADO",row.servicio_nombre,{pruebaServicioId:row.id});}catch(e){notifyToast("No se pudo guardar la evaluación del servicio.","error");}};
+  const deleteTestService=async row=>{if(!window.confirm(`¿Quitar ${row.servicio_nombre} de la prueba?`))return;try{await api.deleteReclutamientoPruebaServicio(row.id);setDb(prev=>({...prev,pruebas:(prev.pruebas||[]).filter(x=>Number(x.id)!==Number(row.id)),archivos:(prev.archivos||[]).filter(a=>Number(a.prueba_servicio_id)!==Number(row.id))}));await audit(detail?.id,"SERVICIO_PRUEBA_ELIMINADO",row.servicio_nombre);}catch(e){notifyToast("No se pudo quitar el servicio.","error");}};
+  const uploadTestPhoto=async(inst,row,file)=>{try{const created=await uploadArchivo({candidataId:inst.candidata_id,instanciaId:inst.id,pruebaServicioId:row.id,tipo:"foto",file});setDb(prev=>({...prev,archivos:[created,...(prev.archivos||[])]}));notifyToast("Foto subida.","success");}catch(e){notifyToast("No se pudo subir la foto: "+(e.message||e),"error");}};
 
   const decidir=async decision=>{if(!detail||!puedeAutorizar)return;try{await api.upsertReclutamientoAprobacion({candidata_id:detail.id,user_id:user.id,decision,comentario:null,activa:true,actualizado_en:new Date().toISOString()});await audit(detail.id,decision==="aprobada"?"APROBACION_RRHH":"RECHAZO_RRHH",user.nombre||user.usuario);notifyToast(decision==="aprobada"?"Aprobación registrada.":"Rechazo registrado.",decision==="aprobada"?"success":"warning");await load();}catch(e){notifyToast("No se pudo registrar la decisión: "+(e.message||e),"error");}};
   const quitarDecision=async()=>{if(!detail)return;try{await api.quitarReclutamientoAprobacion(detail.id);await load();notifyToast("Tu decisión fue retirada.","success");}catch(e){notifyToast("No se pudo retirar la decisión: "+(e.message||e),"error");}};
@@ -9761,13 +9839,90 @@ function ReclutamientoPage({ data, setData, user, fixedView = "tablero" }) {
       {candidatasFiltradas.length===0&&<Card><p style={{margin:0,fontSize:13,color:"var(--color-text-secondary)"}}>No hay candidatas con estos filtros.</p></Card>}
     </>:<div style={{display:"flex",flexDirection:"column",gap:14}}>{["manicura","encargada"].map(pst=>{const c=db.circuitos.find(x=>x.puesto===pst&&x.activo),etapas=c?db.plantillas.filter(x=>Number(x.circuito_id)===Number(c.id)).sort((a,b)=>a.orden-b.orden):[];return <Card key={pst}><div style={{display:"flex",justifyContent:"space-between",gap:12,alignItems:"center",flexWrap:"wrap"}}><div><h3 style={{margin:0,fontSize:15}}>Circuito · {pst==="manicura"?"Manicura":"Encargada"}</h3><p style={{margin:"3px 0 0",fontSize:11,color:"var(--color-text-secondary)"}}>Las candidatas nuevas copian estas etapas al iniciar su proceso.</p></div>{c&&<div style={{display:"flex",alignItems:"center",gap:6}}><span style={{fontSize:11}}>Aprobaciones RRHH</span><select disabled={configSaving} value={c.aprobaciones_requeridas||2} onChange={e=>saveCircuitApprovals(c,e.target.value)} style={{padding:"5px 8px",border:"1px solid #ddd",borderRadius:7}}><option value="1">1</option><option value="2">2</option></select></div>}</div><div style={{marginTop:12,display:"flex",flexDirection:"column",gap:6}}>{etapas.map(e=><div key={e.id} style={{display:"flex",gap:8,alignItems:"center",padding:"7px 9px",background:"var(--color-background-secondary)",borderRadius:8}}><Badge color="gray">{e.orden}</Badge><span style={{flex:1,fontSize:12,fontWeight:600}}>{e.nombre}</span><Badge color="info">{e.tipo.replace("_"," ")}</Badge><button disabled={configSaving} onClick={async()=>{if(!window.confirm("¿Eliminar esta etapa para futuras candidatas?"))return;await api.deleteReclutamientoEtapaPlantilla(e.id);await load();}} style={{border:"none",background:COLORS.dangerLight,color:COLORS.danger,borderRadius:6,cursor:"pointer"}}>×</button></div>)}</div><div style={{display:"grid",gridTemplateColumns:"1fr 170px 100px",gap:7,marginTop:10}}><Input value={newStage[pst].nombre} onChange={v=>setNewStage(p=>({...p,[pst]:{...p[pst],nombre:v}}))} placeholder="Nueva etapa"/><Select value={newStage[pst].tipo} onChange={v=>setNewStage(p=>({...p,[pst]:{...p[pst],tipo:v}}))}><option value="entrevista">Entrevista</option><option value="prueba_tecnica">Prueba técnica</option><option value="evaluacion">Evaluación</option><option value="documentacion">Documentación</option></Select><Btn size="sm" disabled={configSaving} onClick={()=>addStage(pst)} style={{justifyContent:"center"}}>Agregar</Btn></div><div style={{marginTop:14,borderTop:"1px solid #eee",paddingTop:10}}><p style={{margin:"0 0 7px",fontSize:11,fontWeight:800,textTransform:"uppercase",color:"var(--color-text-secondary)"}}>Autorizadores RRHH</p><div style={{display:"flex",gap:7,flexWrap:"wrap"}}>{rrhhUsers.map(u=>{const on=user.rol==="admin"&&Number(u.id)===Number(user.id)?true:db.autorizadores.some(a=>Number(a.user_id)===Number(u.id)&&a.puesto===pst&&a.activo);return <button key={u.id} disabled={configSaving||(u.rol==="admin"&&Number(u.id)===Number(user.id))} onClick={()=>toggleAuthorizer(u.id,pst)} style={{border:`1px solid ${on?COLORS.pink:"#ddd"}`,background:on?COLORS.pinkLight:"#fff",borderRadius:999,padding:"6px 9px",fontSize:10,cursor:"pointer"}}>{on?"✓ ":""}{u.nombre}</button>})}</div></div></Card>})}</div>}
 
-    {candidateModal&&<Modal title={candidateModal==="new"?"Nueva candidata":"Editar candidata"} onClose={()=>setCandidateModal(null)} width={820}><div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12}}><ModalInput label="Nombre completo" value={candidateForm.nombre||""} onChange={v=>setCandidateForm(f=>({...f,nombre:v}))}/><ModalSelect label="Puesto" value={candidateForm.puesto||"manicura"} onChange={v=>setCandidateForm(f=>({...f,puesto:v,servicios:v==="manicura"?f.servicios:[]}))}><option value="manicura">Manicura</option><option value="encargada">Encargada</option></ModalSelect><ModalInput label="Email" value={candidateForm.email||""} onChange={v=>setCandidateForm(f=>({...f,email:v}))}/><ModalInput label="Teléfono" value={candidateForm.telefono||""} onChange={v=>setCandidateForm(f=>({...f,telefono:v}))}/><ModalInput label="Origen de la candidatura" value={candidateForm.origen||""} onChange={v=>setCandidateForm(f=>({...f,origen:v}))}/><ModalInput label="Disponible desde" type="date" value={candidateForm.disponibilidadDesde||""} onChange={v=>setCandidateForm(f=>({...f,disponibilidadDesde:v}))}/></div><div style={{marginTop:12}}><ModalInput label="Disponibilidad horaria" value={candidateForm.disponibilidadHoraria||""} onChange={v=>setCandidateForm(f=>({...f,disponibilidadHoraria:v}))}/></div><div style={{marginTop:12}}><label style={{fontSize:13,fontWeight:500,color:"#555",display:"block",marginBottom:6}}>Observaciones</label><textarea value={candidateForm.observaciones||""} onChange={e=>setCandidateForm(f=>({...f,observaciones:e.target.value}))} rows={3} style={{width:"100%",border:"1.5px solid #e0e0e0",borderRadius:8,padding:10,resize:"vertical"}}/></div><div style={{marginTop:14,borderTop:"1px solid #eee",paddingTop:12}}><p style={{margin:"0 0 8px",fontSize:12,fontWeight:750}}>Sucursales posibles</p><div style={{display:"flex",gap:7,flexWrap:"wrap"}}>{(data.locales||[]).map(l=>{const on=(candidateForm.localIds||[]).includes(l.id);return <button type="button" key={l.id} onClick={()=>toggleCandidateLocal(l.id)} style={{border:`1px solid ${on?COLORS.pink:"#ddd"}`,background:on?COLORS.pinkLight:"#fff",borderRadius:999,padding:"6px 9px",fontSize:10,cursor:"pointer"}}>{on?"✓ ":""}{l.nombre}</button>})}</div></div>{candidateForm.puesto==="manicura"&&<div style={{marginTop:14,borderTop:"1px solid #eee",paddingTop:12}}><p style={{margin:"0 0 6px",fontSize:12,fontWeight:750}}>Servicios que realiza / no realiza</p><Input value={candidateServiceSearch} onChange={setCandidateServiceSearch} placeholder="Buscar servicio..."/><div style={{display:"flex",gap:6,flexWrap:"wrap",marginTop:7,maxHeight:130,overflowY:"auto"}}>{(data.agendaServicios||[]).filter(s=>!candidateServiceSearch||String(s.nombre||"").toLowerCase().includes(candidateServiceSearch.toLowerCase())).slice(0,30).map(s=>{const row=(candidateForm.servicios||[]).find(x=>Number(x.servicioId)===Number(s.id));return <div key={s.id} style={{display:"inline-flex",alignItems:"center",border:"1px solid #ddd",borderRadius:999,overflow:"hidden"}}><span style={{fontSize:10,padding:"5px 7px"}}>{s.nombre}</span><button type="button" onClick={()=>setCandidateServicio(s.id,true)} style={{border:"none",borderLeft:"1px solid #ddd",padding:"5px 7px",background:row?.realiza===true?COLORS.successLight:"#fff",color:row?.realiza===true?COLORS.success:"#666",cursor:"pointer"}}>Sí</button><button type="button" onClick={()=>setCandidateServicio(s.id,false)} style={{border:"none",borderLeft:"1px solid #ddd",padding:"5px 7px",background:row?.realiza===false?COLORS.dangerLight:"#fff",color:row?.realiza===false?COLORS.danger:"#666",cursor:"pointer"}}>No</button>{row&&<button type="button" onClick={()=>removeCandidateServicio(s.id)} style={{border:"none",borderLeft:"1px solid #ddd",padding:"5px 6px",background:"#fff",cursor:"pointer"}}>×</button>}</div>})}</div></div>}<div style={{marginTop:14,borderTop:"1px solid #eee",paddingTop:12}}><p style={{margin:"0 0 6px",fontSize:12,fontWeight:750}}>CV</p><input type="file" accept="application/pdf,image/jpeg,image/png,image/webp" onChange={e=>setCandidateForm(f=>({...f,cvFile:e.target.files?.[0]||null}))}/>{candidateModal==="edit"&&<div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(180px,1fr))",gap:6,marginTop:8}}>{db.archivos.filter(a=>Number(a.candidata_id)===Number(candidateForm.id)&&a.tipo==="cv").map(a=><ReclutamientoArchivoLink key={a.id} actor={user} candidataId={candidateForm.id} archivo={a} onDelete={deleteArchivo}/>)}</div>}</div>{candidateErr&&<p style={{color:COLORS.danger,background:COLORS.dangerLight,padding:8,borderRadius:8,fontSize:12}}>{candidateErr}</p>}<div style={{display:"flex",gap:8,marginTop:16}}><Btn onClick={saveCandidate} disabled={candidateSaving} style={{flex:1,justifyContent:"center"}}>{candidateSaving?"Guardando...":"Guardar"}</Btn><Btn variant="secondary" onClick={()=>setCandidateModal(null)} style={{flex:1,justifyContent:"center"}}>Cancelar</Btn></div></Modal>}
+    {candidateModal&&<Modal title={candidateModal==="new"?"Nueva candidata":"Editar candidata"} onClose={()=>setCandidateModal(null)} width={860}>
+      <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12}}>
+        <ModalInput label="Nombre completo" value={candidateForm.nombre||""} onChange={v=>setCandidateForm(f=>({...f,nombre:v}))}/>
+        <ModalSelect label="Puesto" value={candidateForm.puesto||"manicura"} onChange={v=>setCandidateForm(f=>({...f,puesto:v,servicios:v==="manicura"?f.servicios:[]}))}><option value="manicura">Manicura</option><option value="encargada">Encargada</option></ModalSelect>
+        <ModalInput label="Email" value={candidateForm.email||""} onChange={v=>setCandidateForm(f=>({...f,email:v}))}/>
+        <ModalInput label="Teléfono" value={candidateForm.telefono||""} onChange={v=>setCandidateForm(f=>({...f,telefono:v}))}/>
+        <ModalSelect label="Origen de la candidatura" value={candidateForm.origen||""} onChange={v=>setCandidateForm(f=>({...f,origen:v}))}><option value="">Seleccionar</option><option value="whatsapp">WhatsApp</option><option value="web">Web</option><option value="mail">Mail</option><option value="contacto">Contacto / referida</option><option value="instagram">Instagram</option><option value="local">Consulta en local</option><option value="otro">Otro</option></ModalSelect>
+        <ModalInput label="Disponible desde" type="date" value={candidateForm.disponibilidadDesde||""} onChange={v=>setCandidateForm(f=>({...f,disponibilidadDesde:v}))}/>
+      </div>
+
+      <div style={{marginTop:14,borderTop:"1px solid #eee",paddingTop:12}}>
+        <p style={{margin:"0 0 9px",fontSize:12,fontWeight:750}}>Disponibilidad</p>
+        <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12}}>
+          <ModalSelect label="Tipo de disponibilidad" value={candidateForm.disponibilidadTipo||"full"} onChange={v=>setCandidateForm(f=>({...f,disponibilidadTipo:v}))}><option value="full">Full</option><option value="fin_semana">Fin de semana</option></ModalSelect>
+          <ModalSelect label="Preferencia horaria" value={candidateForm.disponibilidadTurno||"indistinto"} onChange={v=>setCandidateForm(f=>({...f,disponibilidadTurno:v}))}><option value="indistinto">Indistinto</option><option value="am">AM</option><option value="pm">PM</option><option value="dia_completo">Día completo</option></ModalSelect>
+          <ModalSelect label="¿Trabaja feriados?" value={candidateForm.trabajaFeriados?"si":"no"} onChange={v=>setCandidateForm(f=>({...f,trabajaFeriados:v==="si"}))}><option value="no">No</option><option value="si">Sí</option></ModalSelect>
+          <ModalInput label="Días de franco / preferencias" value={candidateForm.diasFranco||""} onChange={v=>setCandidateForm(f=>({...f,diasFranco:v}))}/>
+        </div>
+      </div>
+
+      <div style={{marginTop:12}}><label style={{fontSize:13,fontWeight:500,color:"#555",display:"block",marginBottom:6}}>Observaciones</label><textarea value={candidateForm.observaciones||""} onChange={e=>setCandidateForm(f=>({...f,observaciones:e.target.value}))} rows={3} style={{width:"100%",border:"1.5px solid #e0e0e0",borderRadius:8,padding:10,resize:"vertical"}}/></div>
+
+      <div style={{marginTop:14,borderTop:"1px solid #eee",paddingTop:12}}><p style={{margin:"0 0 8px",fontSize:12,fontWeight:750}}>Sucursales posibles</p><div style={{display:"flex",gap:7,flexWrap:"wrap"}}>{(data.locales||[]).filter(localActivo).map(l=>{const on=(candidateForm.localIds||[]).includes(l.id);return <button type="button" key={l.id} onClick={()=>toggleCandidateLocal(l.id)} style={{border:`1px solid ${on?COLORS.pink:"#ddd"}`,background:on?COLORS.pinkLight:"#fff",borderRadius:999,padding:"6px 9px",fontSize:10,cursor:"pointer"}}>{on?"✓ ":""}{l.nombre}</button>})}</div></div>
+
+      {candidateForm.puesto==="manicura"&&<div style={{marginTop:14,borderTop:"1px solid #eee",paddingTop:12}}><p style={{margin:"0 0 6px",fontSize:12,fontWeight:750}}>Servicios que realiza / no realiza</p><Input value={candidateServiceSearch} onChange={setCandidateServiceSearch} placeholder="Buscar servicio..."/><div style={{display:"flex",gap:6,flexWrap:"wrap",marginTop:7,maxHeight:130,overflowY:"auto"}}>{(data.agendaServicios||[]).filter(s=>!candidateServiceSearch||String(s.nombre||"").toLowerCase().includes(candidateServiceSearch.toLowerCase())).slice(0,30).map(s=>{const row=(candidateForm.servicios||[]).find(x=>Number(x.servicioId)===Number(s.id));return <div key={s.id} style={{display:"inline-flex",alignItems:"center",border:"1px solid #ddd",borderRadius:999,overflow:"hidden"}}><span style={{fontSize:10,padding:"5px 7px"}}>{s.nombre}</span><button type="button" onClick={()=>setCandidateServicio(s.id,true)} style={{border:"none",borderLeft:"1px solid #ddd",padding:"5px 7px",background:row?.realiza===true?COLORS.successLight:"#fff",color:row?.realiza===true?COLORS.success:"#666",cursor:"pointer"}}>Sí</button><button type="button" onClick={()=>setCandidateServicio(s.id,false)} style={{border:"none",borderLeft:"1px solid #ddd",padding:"5px 7px",background:row?.realiza===false?COLORS.dangerLight:"#fff",color:row?.realiza===false?COLORS.danger:"#666",cursor:"pointer"}}>No</button>{row&&<button type="button" onClick={()=>removeCandidateServicio(s.id)} style={{border:"none",borderLeft:"1px solid #ddd",padding:"5px 6px",background:"#fff",cursor:"pointer"}}>×</button>}</div>})}</div></div>}
+
+      <div style={{marginTop:14,borderTop:"1px solid #eee",paddingTop:12,display:"grid",gridTemplateColumns:"1fr 1fr",gap:16}}>
+        <div><p style={{margin:"0 0 6px",fontSize:12,fontWeight:750}}>Foto de perfil</p><div style={{display:"flex",alignItems:"center",gap:10}}>
+          {candidateModal==="edit"&&db.archivos.filter(a=>Number(a.candidata_id)===Number(candidateForm.id)&&!a.instancia_id&&a.tipo==="foto").slice(0,1).map(a=><ReclutamientoFotoPerfil key={a.id||a.storage_path} actor={user} candidataId={candidateForm.id} archivo={a} size={58}/>)}
+          <label style={{fontSize:11,fontWeight:650,background:COLORS.pinkLight,color:COLORS.pinkDark,padding:"7px 10px",borderRadius:8,cursor:"pointer"}}>📷 {candidateForm.fotoFile?candidateForm.fotoFile.name:"Seleccionar foto"}<input type="file" accept="image/jpeg,image/png,image/webp" style={{display:"none"}} onChange={e=>setCandidateForm(f=>({...f,fotoFile:e.target.files?.[0]||null}))}/></label>
+        </div></div>
+        <div><p style={{margin:"0 0 6px",fontSize:12,fontWeight:750}}>CV</p><input type="file" accept="application/pdf,image/jpeg,image/png,image/webp" onChange={e=>setCandidateForm(f=>({...f,cvFile:e.target.files?.[0]||null}))}/>{candidateModal==="edit"&&<div style={{display:"grid",gap:6,marginTop:8}}>{db.archivos.filter(a=>Number(a.candidata_id)===Number(candidateForm.id)&&a.tipo==="cv").map(a=><ReclutamientoArchivoLink key={a.id} actor={user} candidataId={candidateForm.id} archivo={a} onDelete={deleteArchivo}/>)}</div>}</div>
+      </div>
+
+      {candidateErr&&<p style={{color:COLORS.danger,background:COLORS.dangerLight,padding:8,borderRadius:8,fontSize:12}}>{candidateErr}</p>}
+      <div style={{display:"flex",gap:8,marginTop:16}}><Btn onClick={saveCandidate} disabled={candidateSaving} style={{flex:1,justifyContent:"center"}}>{candidateSaving?"Guardando...":"Guardar"}</Btn><Btn variant="secondary" onClick={()=>setCandidateModal(null)} style={{flex:1,justifyContent:"center"}}>Cancelar</Btn></div>
+    </Modal>}
 
     {encIncorp&&<Modal title="Incorporar candidata como encargada" onClose={()=>setEncIncorp(null)} width={620}><div style={{display:"flex",flexDirection:"column",gap:11}}><div style={{padding:10,borderRadius:10,background:COLORS.successLight,fontSize:12}}><strong>{encIncorp.candidata.nombre}</strong> quedará dada de alta como encargada.</div><ModalInput label="Fecha de ingreso" type="date" value={encIncorp.fechaInicio} onChange={v=>setEncIncorp(x=>({...x,fechaInicio:v}))}/><div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10}}><ModalInput label="Usuario" value={encIncorp.usuario} onChange={v=>setEncIncorp(x=>({...x,usuario:v}))}/><ModalInput label="Email" value={encIncorp.email} onChange={v=>setEncIncorp(x=>({...x,email:v}))}/></div><ModalInput label="Contraseña inicial" value={encIncorp.password} onChange={v=>setEncIncorp(x=>({...x,password:v}))}/><ModalSelect label="Tipo de relación" value={encIncorp.tipoRelacion} onChange={v=>setEncIncorp(x=>({...x,tipoRelacion:v}))}><option value="a_resolver">A resolver</option><option value="monotributista">Monotributista</option><option value="dependencia">Relación de dependencia</option></ModalSelect><div><p style={{margin:"0 0 7px",fontSize:12,fontWeight:700}}>Locales asignados</p><div style={{display:"flex",gap:6,flexWrap:"wrap"}}>{(data.locales||[]).map(l=>{const on=(encIncorp.localIds||[]).includes(l.id);return <button key={l.id} type="button" onClick={()=>toggleEncIncorpLocal(l.id)} style={{border:`1px solid ${on?COLORS.pink:"#ddd"}`,background:on?COLORS.pinkLight:"#fff",borderRadius:999,padding:"6px 9px",fontSize:10,cursor:"pointer"}}>{on?"✓ ":""}{l.nombre}</button>})}</div></div><div style={{display:"flex",gap:8}}><Btn variant="success" onClick={confirmarEncargadaIncorp} disabled={encIncorpSaving} style={{flex:1,justifyContent:"center"}}>{encIncorpSaving?"Incorporando...":"Confirmar incorporación"}</Btn><Btn variant="secondary" onClick={()=>setEncIncorp(null)} style={{flex:1,justifyContent:"center"}}>Cancelar</Btn></div></div></Modal>}
     {detail&&<Modal title={`Proceso · ${detail.nombre}`} onClose={()=>setDetailId(null)} width={940}><div style={{display:"flex",justifyContent:"space-between",gap:10,alignItems:"center",flexWrap:"wrap",marginBottom:12}}><div style={{display:"flex",gap:7,alignItems:"center"}}>{estadoBadge(detail)}<Badge color="gray">{detail.puesto}</Badge>{detail.disponibilidad_desde&&<span style={{fontSize:11,color:"var(--color-text-secondary)"}}>Disponible desde {detail.disponibilidad_desde.split("-").reverse().join("/")}</span>}</div><div style={{display:"flex",gap:6}}>{detail.estado==="disponible"&&detail.puesto==="encargada"&&<Btn size="sm" variant="success" onClick={()=>openEncargadaIncorp(detail)}>Incorporar encargada</Btn>}<Btn size="sm" variant="ghost" onClick={()=>openEdit(detail)}>Editar ficha</Btn>{!["incorporada","desistio"].includes(detail.estado)&&<Btn size="sm" variant="secondary" onClick={()=>changeStatus(detail,detail.estado==="en_pausa"?"en_proceso":"en_pausa")}>{detail.estado==="en_pausa"?"Reabrir":"Pausar"}</Btn>}<Btn size="sm" variant="danger" onClick={()=>changeStatus(detail,"desistio")}>Desistió</Btn></div></div><div style={{display:"flex",flexDirection:"column",gap:10}}>{detailInstancias.map(inst=>{const d=stageDraft[inst.id]||{},evals=d.evaluadorIds||[],testRows=db.pruebas.filter(x=>Number(x.instancia_id)===Number(inst.id));return <Card key={inst.id} style={{padding:12,background:inst.estado==="realizada"?COLORS.successLight:"#fff"}}><div style={{display:"flex",justifyContent:"space-between",gap:8,alignItems:"center",flexWrap:"wrap"}}><div style={{display:"flex",alignItems:"center",gap:7}}><Badge color="gray">{inst.orden}</Badge><strong style={{fontSize:13}}>{inst.nombre}</strong><Badge color={inst.tipo==="prueba_tecnica"?"amber":"info"}>{inst.tipo.replace("_"," ")}</Badge></div><Badge color={inst.estado==="realizada"?"success":inst.estado==="programada"?"info":inst.estado==="rechazada"?"danger":"gray"}>{inst.estado.replace("_"," ")}</Badge></div><div style={{display:"grid",gridTemplateColumns:"1.2fr 1fr 1fr",gap:8,marginTop:10}}><div><label style={{fontSize:10,fontWeight:700,color:"#777"}}>Fecha y hora</label><input type="datetime-local" value={d.fechaHora||""} onChange={e=>updateStageDraft(inst.id,"fechaHora",e.target.value)} style={{width:"100%",padding:7,border:"1px solid #ddd",borderRadius:7}}/></div><div><label style={{fontSize:10,fontWeight:700,color:"#777"}}>Local</label><select value={d.localId||""} onChange={e=>updateStageDraft(inst.id,"localId",e.target.value)} style={{width:"100%",padding:7,border:"1px solid #ddd",borderRadius:7}}><option value="">Sin local</option>{(data.locales||[]).map(l=><option key={l.id} value={l.id}>{l.nombre}</option>)}</select></div><div><label style={{fontSize:10,fontWeight:700,color:"#777"}}>Modalidad</label><Input value={d.modalidad||""} onChange={v=>updateStageDraft(inst.id,"modalidad",v)} placeholder="Presencial / Meet..." style={{padding:7,fontSize:12}}/></div></div><div style={{marginTop:8}}><p style={{margin:"0 0 5px",fontSize:10,fontWeight:700,color:"#777"}}>Evaluadores</p><div style={{display:"flex",gap:6,flexWrap:"wrap"}}>{rrhhUsers.map(u=><button key={u.id} type="button" onClick={()=>toggleEvaluator(inst.id,u.id)} style={{border:`1px solid ${evals.includes(u.id)?COLORS.pink:"#ddd"}`,background:evals.includes(u.id)?COLORS.pinkLight:"#fff",borderRadius:999,padding:"5px 8px",fontSize:9,cursor:"pointer"}}>{evals.includes(u.id)?"✓ ":""}{u.nombre}</button>)}</div></div><div style={{display:"grid",gridTemplateColumns:"1fr 180px",gap:8,marginTop:8}}><div><label style={{fontSize:10,fontWeight:700,color:"#777"}}>Comentarios / evaluación</label><textarea value={d.comentarios||""} onChange={e=>updateStageDraft(inst.id,"comentarios",e.target.value)} rows={3} style={{width:"100%",border:"1px solid #ddd",borderRadius:7,padding:8,resize:"vertical"}}/></div><div><label style={{fontSize:10,fontWeight:700,color:"#777"}}>Recomendación</label><select value={d.recomendacion||""} onChange={e=>updateStageDraft(inst.id,"recomendacion",e.target.value)} style={{width:"100%",padding:7,border:"1px solid #ddd",borderRadius:7}}>{RECLUTAMIENTO_RECOMENDACIONES.map(([v,l])=><option key={v} value={v}>{l}</option>)}</select><label style={{fontSize:10,fontWeight:700,color:"#777",display:"block",marginTop:8}}>Resultado / sugerencia</label><textarea value={d.resultado||""} onChange={e=>updateStageDraft(inst.id,"resultado",e.target.value)} rows={2} style={{width:"100%",border:"1px solid #ddd",borderRadius:7,padding:7,resize:"vertical"}}/></div></div>{inst.tipo==="prueba_tecnica"&&<div style={{marginTop:10,borderTop:"1px dashed #ddd",paddingTop:10}}><div style={{display:"flex",gap:7,alignItems:"center",marginBottom:8}}><Select value={testServiceId} onChange={setTestServiceId} style={{maxWidth:320}}><option value="">Seleccionar servicio evaluado</option>{(data.agendaServicios||[]).filter(s=>s.activo!==false).map(s=><option key={s.id} value={s.id}>{s.nombre}</option>)}</Select><Btn size="sm" onClick={()=>addTestService(inst)}>+ Servicio</Btn></div>{testRows.map(row=><div key={row.id} style={{border:"1px solid #eee",borderRadius:9,padding:9,marginBottom:7}}><div style={{display:"grid",gridTemplateColumns:"1fr 190px 2fr 34px",gap:7,alignItems:"center"}}><strong style={{fontSize:11}}>{row.servicio_nombre}</strong><select defaultValue={row.resultado||""} onChange={e=>saveTestService(row,{resultado:e.target.value||null})} style={{padding:6,border:"1px solid #ddd",borderRadius:7,fontSize:10}}><option value="">Resultado</option><option value="aprobado">Aprobado</option><option value="con_observaciones">Con observaciones</option><option value="no_aprobado">No aprobado</option></select><input defaultValue={row.comentario||""} onBlur={e=>{if(e.target.value!==(row.comentario||""))saveTestService(row,{comentario:e.target.value||null});}} placeholder="Comentario del servicio" style={{padding:6,border:"1px solid #ddd",borderRadius:7,fontSize:10}}/><button onClick={()=>deleteTestService(row)} style={{border:"none",background:COLORS.dangerLight,color:COLORS.danger,borderRadius:7,height:30,cursor:"pointer"}}>×</button></div><div style={{display:"flex",gap:6,alignItems:"center",marginTop:7,flexWrap:"wrap"}}><label style={{fontSize:10,fontWeight:650,background:COLORS.pinkLight,color:COLORS.pinkDark,padding:"5px 8px",borderRadius:7,cursor:"pointer"}}>📷 Subir foto<input type="file" accept="image/jpeg,image/png,image/webp" style={{display:"none"}} onChange={e=>{const f=e.target.files?.[0];if(f)uploadTestPhoto(inst,row,f);e.target.value="";}}/></label>{db.archivos.filter(a=>Number(a.prueba_servicio_id)===Number(row.id)&&a.tipo==="foto").map(a=><ReclutamientoArchivoLink key={a.id} actor={user} candidataId={detail.id} archivo={a} onDelete={deleteArchivo}/>)}</div></div>)}</div>}{bloqueoParaRealizar(inst)&&inst.estado!=="realizada"&&<div style={{marginTop:8,padding:"7px 9px",borderRadius:8,background:COLORS.amberLight,color:COLORS.amber,fontSize:10}}>🔒 {bloqueoParaRealizar(inst)} Podés agendar esta etapa, pero todavía no realizarla.</div>}<div style={{display:"flex",gap:7,marginTop:10,justifyContent:"flex-end"}}><Btn size="sm" variant="secondary" disabled={stageSaving===inst.id} onClick={()=>saveStage(inst,false)}>Guardar / programar</Btn><Btn size="sm" variant="success" disabled={stageSaving===inst.id||!!bloqueoParaRealizar(inst)} onClick={()=>saveStage(inst,true)}>✓ Marcar realizada</Btn></div></Card>})}</div><Card style={{marginTop:12,padding:12}}><div style={{display:"flex",justifyContent:"space-between",gap:8,alignItems:"center",flexWrap:"wrap"}}><div><h3 style={{margin:0,fontSize:14}}>Aprobación RRHH</h3><p style={{margin:"3px 0 0",fontSize:11,color:"var(--color-text-secondary)"}}>{aprobadas}/{detailCircuito?.aprobaciones_requeridas||2} aprobaciones activas{rechazadas?` · ${rechazadas} rechazo(s)`:""}. Si una evaluación se modifica, las aprobaciones vigentes se invalidan automáticamente.</p></div><div style={{display:"flex",gap:6}}>{puedeAutorizar&&<><Btn size="sm" variant="success" onClick={()=>decidir("aprobada")}>Aprobar</Btn><Btn size="sm" variant="danger" onClick={()=>decidir("rechazada")}>Rechazar</Btn><Btn size="sm" variant="ghost" onClick={quitarDecision}>Quitar mi decisión</Btn></>}</div></div><div style={{display:"flex",gap:7,flexWrap:"wrap",marginTop:9}}>{activeApprovals.map(a=>{const u=(data.users||[]).find(x=>Number(x.id)===Number(a.user_id));return <span key={a.id} style={{fontSize:10,padding:"5px 8px",borderRadius:999,background:a.decision==="aprobada"?COLORS.successLight:COLORS.dangerLight,color:a.decision==="aprobada"?COLORS.success:COLORS.danger,fontWeight:700}}>{a.decision==="aprobada"?"✓":"✕"} {u?.nombre||`Usuario ${a.user_id}`}</span>})}</div></Card><div style={{marginTop:12}}><p style={{margin:"0 0 7px",fontSize:11,fontWeight:800,textTransform:"uppercase",color:"var(--color-text-secondary)"}}>Archivos generales</p><div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(180px,1fr))",gap:6}}>{db.archivos.filter(a=>Number(a.candidata_id)===Number(detail.id)&&!a.instancia_id).map(a=><ReclutamientoArchivoLink key={a.id} actor={user} candidataId={detail.id} archivo={a} onDelete={deleteArchivo}/>)}</div></div></Modal>}
   </div>;
 }
 
+
+
+function ReclutamientoProcesoResumen({ data, user, processData }) {
+  if(!processData)return null;
+  return <div style={{display:"flex",flexDirection:"column",gap:10}}>
+    <div style={{display:"flex",gap:7,alignItems:"center",flexWrap:"wrap"}}>
+      <Badge color={processData.candidata.puesto==="manicura"?"pink":"info"}>{processData.candidata.puesto==="manicura"?"Manicura":"Encargada"}</Badge>
+      <Badge color="gray">{processData.candidata.estado?.replaceAll("_"," ")}</Badge>
+      <span style={{fontSize:11,color:"var(--color-text-secondary)"}}>{processData.candidata.email||"Sin email"} · {processData.candidata.telefono||"Sin teléfono"}</span>
+    </div>
+    {(processData.instancias||[]).map(inst=>{
+      const evaluadores=(processData.evaluadores||[]).filter(e=>Number(e.instancia_id)===Number(inst.id)).map(e=>Number(e.user_id));
+      const pruebas=(processData.pruebas||[]).filter(p=>Number(p.instancia_id)===Number(inst.id));
+      const archivosInst=(processData.archivos||[]).filter(a=>Number(a.instancia_id)===Number(inst.id));
+      return <Card key={inst.id} style={{padding:11,background:inst.estado==="realizada"?"#f5f5f5":"#fff"}}>
+        <div style={{display:"flex",justifyContent:"space-between",gap:8,alignItems:"center"}}>
+          <div style={{display:"flex",gap:7,alignItems:"center"}}><Badge color="gray">{inst.orden}</Badge><strong style={{fontSize:12}}>{inst.nombre}</strong><Badge color={inst.tipo==="prueba_tecnica"?"amber":"info"}>{inst.tipo.replace("_"," ")}</Badge></div>
+          <Badge color={inst.estado==="realizada"?"success":inst.estado==="programada"?"info":"gray"}>{inst.estado.replace("_"," ")}</Badge>
+        </div>
+        <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(180px,1fr))",gap:8,marginTop:8,fontSize:11}}>
+          <span><strong>Fecha:</strong> {inst.fecha_hora?new Date(inst.fecha_hora).toLocaleString("es-AR",{dateStyle:"short",timeStyle:"short"}):"Sin agendar"}</span>
+          <span><strong>Local:</strong> {(data.locales||[]).find(l=>Number(l.id)===Number(inst.local_id))?.nombre||"Sin local"}</span>
+          <span><strong>Evaluadores:</strong> {evaluadores.map(id=>(data.users||[]).find(u=>Number(u.id)===id)?.nombre||`Usuario ${id}`).join(", ")||"Sin asignar"}</span>
+        </div>
+        {inst.comentarios&&<p style={{fontSize:11,margin:"8px 0 0"}}><strong>Comentarios:</strong> {inst.comentarios}</p>}
+        {(inst.recomendacion||inst.resultado)&&<p style={{fontSize:11,margin:"5px 0 0"}}><strong>Recomendación:</strong> {inst.recomendacion||"—"} · <strong>Resultado:</strong> {inst.resultado||"—"}</p>}
+        {inst.tipo==="prueba_tecnica"&&<div style={{marginTop:8,borderTop:"1px dashed #ddd",paddingTop:7}}>
+          {pruebas.map(p=>{const fotos=archivosInst.filter(a=>Number(a.prueba_servicio_id)===Number(p.id)&&a.tipo==="foto");return <div key={p.id} style={{padding:"6px 0",borderBottom:"1px solid #f1f1f1"}}>
+            <div style={{fontSize:11}}>• <strong>{p.servicio_nombre}</strong>{p.resultado?` · ${p.resultado.replace("_"," ")}`:""}{p.comentario?` · ${p.comentario}`:""}</div>
+            {fotos.length>0&&<div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(170px,1fr))",gap:5,marginTop:5}}>{fotos.map(a=><ReclutamientoArchivoLink key={a.id} actor={user} candidataId={processData.candidata.id} archivo={a}/>)}</div>}
+          </div>})}
+        </div>}
+        {archivosInst.filter(a=>!a.prueba_servicio_id).length>0&&<div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(170px,1fr))",gap:5,marginTop:7}}>{archivosInst.filter(a=>!a.prueba_servicio_id).map(a=><ReclutamientoArchivoLink key={a.id} actor={user} candidataId={processData.candidata.id} archivo={a}/>)}</div>}
+      </Card>
+    })}
+    {(processData.archivos||[]).filter(a=>!a.instancia_id).length>0&&<Card style={{padding:11}}>
+      <strong style={{fontSize:12}}>Archivos generales</strong>
+      <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(180px,1fr))",gap:6,marginTop:7}}>{(processData.archivos||[]).filter(a=>!a.instancia_id).map(a=><ReclutamientoArchivoLink key={a.id} actor={user} candidataId={processData.candidata.id} archivo={a}/>)}</div>
+    </Card>}
+  </div>;
+}
 
 function ReclutamientoCalendarioPage({ data, user, onOpenProcess }) {
   const now=new Date();
@@ -9836,6 +9991,13 @@ function ReclutamientoCalendarioPage({ data, user, onOpenProcess }) {
     if(markRealizada&&!selected.can_complete){
       notifyToast(selected.completion_reason||"La etapa anterior todavía no habilita esta evaluación.","warning");
       return;
+    }
+    if(markRealizada&&!String(draft.recomendacion||"").trim()){notifyToast("La recomendación es obligatoria para marcar la etapa como realizada.","warning");return;}
+    if(markRealizada&&!String(draft.resultado||"").trim()){notifyToast("El resultado / sugerencia es obligatorio para marcar la etapa como realizada.","warning");return;}
+    if(markRealizada&&selected.tipo==="prueba_tecnica"){
+      const rows=selected.pruebas||[];
+      if(!rows.length){notifyToast("La prueba técnica debe tener al menos un servicio evaluado.","warning");return;}
+      if(rows.some(x=>!String(x.resultado||"").trim())){notifyToast("Todos los servicios de la prueba técnica deben tener un resultado.","warning");return;}
     }
     setSaving(true);
     try{
@@ -9980,18 +10142,16 @@ function ReclutamientoCalendarioPage({ data, user, onOpenProcess }) {
       </>}
     </Modal>}
     {(processLoading||processData)&&<Modal title={`Proceso completo${processData?.candidata?.nombre?` · ${processData.candidata.nombre}`:""}`} onClose={closeFullProcess} width={980}>
-      {processLoading?<p style={{fontSize:12}}>Cargando proceso...</p>:processData&&<div style={{display:"flex",flexDirection:"column",gap:10}}>
-        <div style={{display:"flex",gap:7,alignItems:"center",flexWrap:"wrap"}}><Badge color={processData.candidata.puesto==="manicura"?"pink":"info"}>{processData.candidata.puesto==="manicura"?"Manicura":"Encargada"}</Badge><Badge color="gray">{processData.candidata.estado?.replaceAll("_"," ")}</Badge><span style={{fontSize:11,color:"var(--color-text-secondary)"}}>{processData.candidata.email||"Sin email"} · {processData.candidata.telefono||"Sin teléfono"}</span></div>
-        {(processData.instancias||[]).map(inst=>{const evaluadores=(processData.evaluadores||[]).filter(e=>Number(e.instancia_id)===Number(inst.id)).map(e=>Number(e.user_id));const assigned=evaluadores.includes(Number(user.id));const readOnly=!assigned;return <Card key={inst.id} style={{padding:11,background:inst.estado==="realizada"?"#f5f5f5":"#fff"}}><div style={{display:"flex",justifyContent:"space-between",gap:8,alignItems:"center"}}><div style={{display:"flex",gap:7,alignItems:"center"}}><Badge color="gray">{inst.orden}</Badge><strong style={{fontSize:12}}>{inst.nombre}</strong><Badge color={inst.tipo==="prueba_tecnica"?"amber":"info"}>{inst.tipo.replace("_"," ")}</Badge></div><Badge color={inst.estado==="realizada"?"success":inst.estado==="programada"?"info":"gray"}>{inst.estado.replace("_"," ")}</Badge></div><div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:8,marginTop:8,fontSize:11}}><span><strong>Fecha:</strong> {inst.fecha_hora?new Date(inst.fecha_hora).toLocaleString("es-AR",{dateStyle:"short",timeStyle:"short"}):"Sin agendar"}</span><span><strong>Local:</strong> {(data.locales||[]).find(l=>Number(l.id)===Number(inst.local_id))?.nombre||"Sin local"}</span><span><strong>Evaluadores:</strong> {evaluadores.map(id=>(data.users||[]).find(u=>Number(u.id)===id)?.nombre||`Usuario ${id}`).join(", ")||"Sin asignar"}</span></div>{inst.comentarios&&<p style={{fontSize:11,margin:"8px 0 0"}}><strong>Comentarios:</strong> {inst.comentarios}</p>}{inst.tipo==="prueba_tecnica"&&<div style={{marginTop:8,borderTop:"1px dashed #ddd",paddingTop:7}}>{(processData.pruebas||[]).filter(p=>Number(p.instancia_id)===Number(inst.id)).map(p=><div key={p.id} style={{fontSize:11,marginBottom:4}}>• <strong>{p.servicio_nombre}</strong>{p.resultado?` · ${p.resultado.replace("_"," ")}`:""}{p.comentario?` · ${p.comentario}`:""}</div>)}</div>}{readOnly&&<p style={{fontSize:10,color:"var(--color-text-secondary)",margin:"7px 0 0"}}>Solo lectura: no sos evaluador/a asignado/a en esta etapa.</p>}</Card>})}
-        <div style={{display:"flex",justifyContent:"flex-end"}}><Btn variant="secondary" onClick={closeFullProcess}>Cerrar proceso y volver a la cita</Btn></div>
-      </div>}
+      {processLoading?<p style={{fontSize:12}}>Cargando proceso...</p>:<><ReclutamientoProcesoResumen data={data} user={user} processData={processData}/><div style={{display:"flex",justifyContent:"flex-end",marginTop:12}}><Btn variant="secondary" onClick={closeFullProcess}>Cerrar proceso y volver a la cita</Btn></div></>}
     </Modal>}
   </div>;
 }
 
-function ReclutamientoAprobacionesPage({ user, onOpenProcess }) {
+function ReclutamientoAprobacionesPage({ data, user }) {
   const [loading,setLoading]=useState(true);
   const [rows,setRows]=useState([]);
+  const [review,setReview]=useState(null);
+  const [reviewLoading,setReviewLoading]=useState(false);
   const load=useCallback(async()=>{setLoading(true);try{setRows(await api.getReclutamientoAprobacionesPendientes());}catch(e){notifyToast("No se pudieron cargar las aprobaciones pendientes. "+(e.message||e),"error");}setLoading(false);},[]);
   useEffect(()=>{load();},[load]);
   const decidir=async(c,decision)=>{
@@ -9999,14 +10159,19 @@ function ReclutamientoAprobacionesPage({ user, onOpenProcess }) {
       await api.upsertReclutamientoAprobacion({candidata_id:c.id,user_id:user.id,decision,comentario:null,activa:true,actualizado_en:new Date().toISOString()});
       notifyToast(decision==="aprobada"?"Aprobación registrada.":"Rechazo registrado.",decision==="aprobada"?"success":"warning");
       setRows(prev=>prev.filter(x=>Number(x.id)!==Number(c.id)));
+      if(review?.candidata?.id===c.id)setReview(null);
     }catch(e){notifyToast("No se pudo registrar la decisión: "+(e.message||e),"error");}
   };
+  const revisar=async c=>{setReviewLoading(true);try{setReview(await api.getReclutamientoProcesoCandidata(c.id));}catch(e){notifyToast("No se pudo abrir el proceso. "+(e.message||e),"error");}setReviewLoading(false);};
+  const reviewRow=review?rows.find(x=>Number(x.id)===Number(review.candidata.id)):null;
   return <div>
     <div style={{marginBottom:14}}><h2 style={{margin:0,fontSize:18}}>Aprobaciones pendientes</h2><p style={{margin:"3px 0 0",fontSize:12,color:"var(--color-text-secondary)"}}>Procesos completos que requieren tu aprobación de RRHH.</p></div>
-    {loading?<Card><p style={{margin:0,fontSize:12}}>Cargando aprobaciones...</p></Card>:rows.length===0?<Card><p style={{margin:0,fontSize:13,color:"var(--color-text-secondary)"}}>No tenés aprobaciones pendientes.</p></Card>:<div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(270px,1fr))",gap:10}}>{rows.map(c=><Card key={c.id} style={{padding:12}}><div style={{display:"flex",justifyContent:"space-between",gap:8}}><div><strong style={{fontSize:13}}>{c.nombre}</strong><p style={{margin:"3px 0 0",fontSize:10,textTransform:"uppercase",fontWeight:700,color:"var(--color-text-secondary)"}}>{c.puesto}</p></div><Badge color="amber">Pendiente firma</Badge></div><p style={{fontSize:11,color:"var(--color-text-secondary)",margin:"9px 0"}}>{c.email||"Sin email"} · {c.telefono||"Sin teléfono"}</p><div style={{display:"flex",justifyContent:"space-between",alignItems:"center",fontSize:10,marginBottom:10}}><span>{c.aprobaciones}/{c.requeridas} aprobaciones</span>{c.rechazos>0&&<span style={{color:COLORS.danger}}>{c.rechazos} rechazo(s)</span>}</div><div style={{display:"flex",gap:6,flexWrap:"wrap"}}><Btn size="sm" variant="secondary" onClick={()=>{sessionStorage.setItem("niki_reclutamiento_candidata",String(c.id));onOpenProcess?.();}}>Revisar proceso</Btn><Btn size="sm" variant="success" onClick={()=>decidir(c,"aprobada")}>Aprobar</Btn><Btn size="sm" variant="danger" onClick={()=>decidir(c,"rechazada")}>Rechazar</Btn></div></Card>)}</div>}
+    {loading?<Card><p style={{margin:0,fontSize:12}}>Cargando aprobaciones...</p></Card>:rows.length===0?<Card><p style={{margin:0,fontSize:13,color:"var(--color-text-secondary)"}}>No tenés aprobaciones pendientes.</p></Card>:<div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(270px,1fr))",gap:10}}>{rows.map(c=><Card key={c.id} style={{padding:12}}><div style={{display:"flex",justifyContent:"space-between",gap:8}}><div><strong style={{fontSize:13}}>{c.nombre}</strong><p style={{margin:"3px 0 0",fontSize:10,textTransform:"uppercase",fontWeight:700,color:"var(--color-text-secondary)"}}>{c.puesto}</p></div><Badge color="amber">Pendiente firma</Badge></div><p style={{fontSize:11,color:"var(--color-text-secondary)",margin:"9px 0"}}>{c.email||"Sin email"} · {c.telefono||"Sin teléfono"}</p><div style={{display:"flex",justifyContent:"space-between",alignItems:"center",fontSize:10,marginBottom:10}}><span>{c.aprobaciones}/{c.requeridas} aprobaciones</span>{c.rechazos>0&&<span style={{color:COLORS.danger}}>{c.rechazos} rechazo(s)</span>}</div><div style={{display:"flex",gap:6,flexWrap:"wrap"}}><Btn size="sm" variant="secondary" onClick={()=>revisar(c)}>Revisar proceso</Btn><Btn size="sm" variant="success" onClick={()=>decidir(c,"aprobada")}>Aprobar</Btn><Btn size="sm" variant="danger" onClick={()=>decidir(c,"rechazada")}>Rechazar</Btn></div></Card>)}</div>}
+    {(reviewLoading||review)&&<Modal title={`Revisar proceso${review?.candidata?.nombre?` · ${review.candidata.nombre}`:""}`} onClose={()=>setReview(null)} width={980}>
+      {reviewLoading?<p style={{fontSize:12}}>Cargando proceso...</p>:<><ReclutamientoProcesoResumen data={data} user={user} processData={review}/><div style={{display:"flex",gap:7,justifyContent:"flex-end",marginTop:12}}>{reviewRow&&<><Btn size="sm" variant="success" onClick={()=>decidir(reviewRow,"aprobada")}>Aprobar</Btn><Btn size="sm" variant="danger" onClick={()=>decidir(reviewRow,"rechazada")}>Rechazar</Btn></>}<Btn size="sm" variant="secondary" onClick={()=>setReview(null)}>Cerrar y volver a aprobaciones</Btn></div></>}
+    </Modal>}
   </div>;
 }
-
 
 // ── APP PRINCIPAL ──────────────────────────────────────────────────
 function readSectionHash() {
@@ -10304,7 +10469,7 @@ export default function App() {
       label: "Asistencia y Horarios",
       icon: "🕒",
       items: [
-        { id: "asistencia", label: "Asistencia", icon: "📋" },
+        { id: "asistencia", label: "Registro de asistencia", icon: "📋" },
         { id: "horarios", label: "Horarios", icon: "🗓️" },
         { id: "bloqueo_horarios", label: "Bloqueos", icon: "🔐" },
         { id: "reportes_horas", label: "Horas y asistencia", icon: "⏱️" },
@@ -10339,15 +10504,6 @@ export default function App() {
       ],
     },
     {
-      id: "ayuda",
-      label: "Ayuda",
-      icon: "❔",
-      items: [
-        { id: "ayuda", label: "Centro de ayuda", icon: "❔" },
-        { id: "roadmap", label: "Roadmap", icon: "🗺️" },
-      ],
-    },
-    {
       id: "reclutamiento",
       label: "Reclutamiento",
       icon: "🎯",
@@ -10368,6 +10524,14 @@ export default function App() {
         { id: "reclutamiento_config", label: "Config. reclutamiento", icon: "🎯" },
         { id: "cobertura_config", label: "Config. cobertura", icon: "⚙️" },
         { id: "perfil", label: "Mi perfil", icon: "👤" },
+      ],
+    },    {
+      id: "ayuda",
+      label: "Ayuda",
+      icon: "❔",
+      items: [
+        { id: "ayuda", label: "Centro de ayuda", icon: "❔" },
+        { id: "roadmap", label: "Roadmap", icon: "🗺️" },
       ],
     },
   ];
@@ -10660,11 +10824,11 @@ export default function App() {
     if (seccion==="garantias") return user.rol!=="manicura" ? <GarantiasServicios data={data} reloadData={reloadData} user={user}/> : null;
     if (seccion==="informes") return user.rol!=="manicura" ? <InformeDiario data={data} reloadData={reloadData} user={user}/> : null;
     if (seccion==="manicuras") return <ABMManicuras data={data} setData={setData} reloadData={reloadData} user={user}/>;
-    if (seccion==="locales") return ["admin", "casa_matriz"].includes(user.rol) ? <ABMLocales data={data} reloadData={reloadData} user={user}/> : null;
+    if (seccion==="locales") return ["admin", "casa_matriz"].includes(user.rol) ? <ABMLocales data={data} setData={setData} reloadData={reloadData} user={user}/> : null;
     if (seccion==="encargadas") return ["admin", "casa_matriz"].includes(user.rol) ? <ABMEncargadas data={data} reloadData={reloadData} user={user}/> : null;
     if (seccion==="reclutamiento_candidatas") return ["admin", "casa_matriz"].includes(user.rol) ? <ReclutamientoPage data={data} setData={setData} user={user} fixedView="tablero"/> : null;
     if (seccion==="reclutamiento_calendario") return ["admin", "casa_matriz"].includes(user.rol) ? <ReclutamientoCalendarioPage data={data} user={user}/> : null;
-    if (seccion==="reclutamiento_aprobaciones") return ["admin", "casa_matriz"].includes(user.rol) ? <ReclutamientoAprobacionesPage user={user} onOpenProcess={()=>goToSection("reclutamiento_candidatas")}/> : null;
+    if (seccion==="reclutamiento_aprobaciones") return ["admin", "casa_matriz"].includes(user.rol) ? <ReclutamientoAprobacionesPage data={data} user={user}/> : null;
     if (seccion==="reclutamiento_config") return ["admin", "casa_matriz"].includes(user.rol) ? <ReclutamientoPage data={data} setData={setData} user={user} fixedView="config"/> : null;
     if (seccion==="cobertura_config") return <ConfiguracionCobertura data={data} reloadData={reloadData} user={user}/>;
     if (seccion==="perfil") return <MiPerfil data={data} reloadData={reloadData} user={user} setUser={setUser}/>;
