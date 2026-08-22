@@ -240,6 +240,20 @@ const patchOrPost = async (table, matchQuery, data) => {
   return patchResult;
 };
 
+const recruitmentEdge = async (action, payload = {}) => {
+  const actor = window.__nikiCurrentUser || null;
+  if (!actor?.id || !actor?.sessionToken) throw new Error("Sesión inválida para Reclutamiento.");
+  const res = await fetch(`${SUPABASE_URL}/functions/v1/reclutamiento-niki`, {
+    method:"POST",
+    headers:{ apikey:SUPABASE_KEY, Authorization:`Bearer ${SUPABASE_KEY}`, "Content-Type":"application/json" },
+    body:JSON.stringify({ action, actor_id:actor.id, session_token:actor.sessionToken, ...payload }),
+  });
+  const txt = await res.text();
+  const data = txt ? JSON.parse(txt) : {};
+  if (!res.ok || data?.ok === false) throw new Error(data?.error || txt || "Error de Reclutamiento");
+  return data;
+};
+
 const api = {
   getUsers: () => sb("users?select=id,nombre,usuario,email,rol,local_id,activo,codigo_externo,telefono,telefono_codigo_area,telefono_numero,dato_bancario,forma_pago_comision,solo_fin_de_semana,tipo_relacion,foto_perfil_path&order=id"),
   login: async (usuario, password) => {
@@ -483,6 +497,39 @@ const api = {
     return data;
   },
   setEncargadoLocales: async (userId, localIds) => { await sb(`encargado_locales?user_id=eq.${userId}`, { method:"DELETE", prefer:"" }); if (!localIds?.length) return []; return sb("encargado_locales", { method:"POST", body:JSON.stringify(localIds.map(local_id=>({ user_id:userId, local_id:parseInt(local_id) }))) }); },
+
+  // Reclutamiento: datos sensibles, siempre vía Edge Function con sesión Niki validada.
+  reclutamientoLoad: async () => (await recruitmentEdge("load")).data,
+  reclutamientoConfigLoad: async () => (await recruitmentEdge("config_load")).data,
+  getReclutamientoCalendario: async (desde,hasta,scope="mine") => (await recruitmentEdge("calendar",{desde,hasta,scope})).eventos || [],
+  getReclutamientoEventoDetalle: async (instanciaId) => (await recruitmentEdge("event_detail",{instancia_id:instanciaId})).detail,
+  getReclutamientoProcesoCandidata: async (candidataId) => (await recruitmentEdge("candidate_process",{candidata_id:candidataId})).data,
+  getReclutamientoAprobacionesPendientes: async () => (await recruitmentEdge("pending_approvals")).candidatas || [],
+  saveReclutamientoCandidataCompleta: (candidate,localIds,servicios) => recruitmentEdge("save_candidate",{candidate,local_ids:localIds||[],servicios:servicios||[]}),
+  saveReclutamientoInstanciaCompleta: (id,stage,evaluadorIds) => recruitmentEdge("save_stage",{instancia_id:id,stage,evaluador_ids:evaluadorIds||[]}),
+  getReclutamientoCandidatasDisponibles: async () => (await recruitmentEdge("available")).candidatas || [],
+  createReclutamientoCandidata: async (d) => { const r=await recruitmentEdge("save_candidate",{candidate:d,local_ids:[],servicios:[]}); return [{id:r.id,...d}]; },
+  updateReclutamientoCandidata: (id,d) => recruitmentEdge("save_candidate",{candidate:{id,...d},local_ids:d.local_ids||[],servicios:d.servicios||[]}),
+  setReclutamientoCandidataLocales: async () => [],
+  setReclutamientoCandidataServicios: async () => [],
+  updateReclutamientoInstancia: (id,d) => recruitmentEdge("save_stage",{instancia_id:id,stage:d,evaluador_ids:d.evaluador_ids||[]}),
+  setReclutamientoInstanciaEvaluadores: async () => [],
+  createReclutamientoPruebaServicio: d => recruitmentEdge("test_service_create",{instancia_id:d.instancia_id,servicio_id:d.servicio_id,servicio_nombre:d.servicio_nombre}),
+  updateReclutamientoPruebaServicio: (id,d) => recruitmentEdge("test_service_update",{id,patch:d}),
+  deleteReclutamientoPruebaServicio: id => recruitmentEdge("test_service_delete",{id}),
+  createReclutamientoArchivo: d => recruitmentEdge("file_add",{file:d}),
+  deleteReclutamientoArchivo: id => recruitmentEdge("file_delete",{id}),
+  upsertReclutamientoAprobacion: d => recruitmentEdge("approval",{candidata_id:d.candidata_id,decision:d.decision,comentario:d.comentario||null}),
+  quitarReclutamientoAprobacion: candidataId => recruitmentEdge("approval_remove",{candidata_id:candidataId}),
+  updateReclutamientoEstado: (candidataId,estado) => recruitmentEdge("candidate_status",{candidata_id:candidataId,estado}),
+  updateReclutamientoCircuito: (id,d) => recruitmentEdge("config_circuit",{id,aprobaciones_requeridas:d.aprobaciones_requeridas}),
+  setReclutamientoAutorizador: d => recruitmentEdge("config_authorizer",d),
+  createReclutamientoEtapaPlantilla: d => recruitmentEdge("config_stage_create",{stage:d}),
+  deleteReclutamientoEtapaPlantilla: id => recruitmentEdge("config_stage_delete",{id}),
+  marcarReclutamientoIncorporada: (candidataId,userId) => recruitmentEdge("candidate_incorporated",{candidata_id:candidataId,user_id:userId}),
+  createReclutamientoAuditoria: async () => null,
+  reclutamientoStorageRequest: async ({action,actor,candidataId,instanciaId=null,tipo="otro",file=null,path="",expiresIn=600}) => { const fd=new FormData();fd.append("action",action);fd.append("actor_id",String(actor?.id||""));fd.append("session_token",String(actor?.sessionToken||""));fd.append("candidata_id",String(candidataId||""));if(instanciaId)fd.append("instancia_id",String(instanciaId));if(tipo)fd.append("tipo",tipo);if(path)fd.append("path",path);fd.append("expires_in",String(expiresIn));if(file)fd.append("file",file,file.name);const res=await fetch(`${SUPABASE_URL}/functions/v1/reclutamiento-archivos-niki`,{method:"POST",headers:{apikey:SUPABASE_KEY,Authorization:`Bearer ${SUPABASE_KEY}`},body:fd});const txt=await res.text();const data=txt?JSON.parse(txt):{};if(!res.ok||data?.ok===false)throw new Error(data?.error||txt||"Error al gestionar archivo de reclutamiento");return data; },
+
   moverManicuraLocal: (payload) => sb("rpc/mover_manicura_local", { method:"POST", body:JSON.stringify(payload), prefer:"" }),
   desactivarManicura: (payload) => sb("rpc/desactivar_manicura", { method:"POST", body:JSON.stringify(payload), prefer:"" }),
 };
@@ -4278,6 +4325,19 @@ function LegajoDocumentosPanel({ actor, userId, documentos = [], onReload, onPho
 }
 
 // ── ABM MANICURAS ──────────────────────────────────────────────────
+function EncargadaEquipoEditor({ encargada, data, setData, user, reloadData, onClose }) {
+  const [tab,setTab]=useState("general"),[saving,setSaving]=useState(false),[err,setErr]=useState("");
+  const [form,setForm]=useState(()=>({...encargada,localIds:(data.encargadoLocales||[]).filter(x=>Number(x.userId)===Number(encargada.id)).map(x=>Number(x.localId)),password:"",password2:""}));
+  const [hist,setHist]=useState(()=>(data.usuarioHistorialLaboral||[]).filter(x=>Number(x.userId)===Number(encargada.id)).map(x=>({...x})));
+  const allowed=getAssignedLocalIds(data,user);const locales=user.rol==="admin"?(data.locales||[]):(data.locales||[]).filter(l=>allowed.includes(l.id));
+  const toggleLocal=id=>setForm(f=>({...f,localIds:(f.localIds||[]).includes(id)?f.localIds.filter(x=>x!==id):[...(f.localIds||[]),id]}));
+  const updHist=(key,k,v)=>setHist(rows=>rows.map(r=>(r.id||r.tempId)===key?{...r,[k]:v}:r));
+  const hoy=dateKey(new Date());
+  const save=async()=>{setErr("");const usuario=normalizeUsuarioValue(form.usuario),email=normalizeEmailValue(form.email);if(!form.nombre?.trim()||!usuario)return setErr("Nombre y usuario son obligatorios.");if(!isValidEmail(email))return setErr("El email debe ser válido.");if(usuarioEnUso(data.users,usuario,form.id)||emailEnUso(data.users,email,form.id))return setErr("El usuario o email ya están en uso.");if(form.password&&form.password!==form.password2)return setErr("Las contraseñas no coinciden.");const te=validarTelefonoArgentino(form.telefonoCodigoArea,form.telefonoNumero);if(te)return setErr(te);const be=validarDatoBancario(form.datoBancario);if(be)return setErr(be);for(const r of hist){if(!r.fechaInicio)return setErr("Todos los períodos laborales deben tener fecha de inicio.");if(r.fechaFin&&r.fechaFin<r.fechaInicio)return setErr("La fecha de fin no puede ser anterior al inicio.");if(r.fechaFin&&!r.motivoFin)return setErr("Indicá el motivo de cada período cerrado.");}if(hist.filter(r=>!r.fechaFin).length>1)return setErr("No puede haber más de un período laboral abierto.");setSaving(true);try{const abierto=hist.find(r=>!r.fechaFin);const payload={nombre:form.nombre.trim(),usuario,email,rol:"encargada",activo:!!abierto,telefono_codigo_area:onlyDigits(form.telefonoCodigoArea)||null,telefono_numero:onlyDigits(form.telefonoNumero)||null,telefono:[onlyDigits(form.telefonoCodigoArea),onlyDigits(form.telefonoNumero)].filter(Boolean).join("")||null,dato_bancario:String(form.datoBancario||"").trim()||null,tipo_relacion:form.tipoRelacion||"a_resolver"};await api.updateUser(form.id,payload);if(form.password)await api.changePassword({mode:"admin_set",actor_id:user.id,session_token:user.sessionToken,target_user_id:form.id,new_password:form.password});await api.setEncargadoLocales(form.id,form.localIds||[]);const old=(data.usuarioHistorialLaboral||[]).filter(x=>Number(x.userId)===Number(form.id)),ids=new Set(hist.filter(x=>x.id).map(x=>x.id));for(const x of old)if(!ids.has(x.id))await api.deleteUsuarioHistorialLaboral(x.id);const saved=[];for(const r of hist){const p={user_id:form.id,fecha_inicio:r.fechaInicio,fecha_fin:r.fechaFin||null,motivo_fin:r.fechaFin?r.motivoFin||null:null,observacion:r.observacion?.trim()||null};const rows=r.id?await api.updateUsuarioHistorialLaboral(r.id,p):await api.createUsuarioHistorialLaboral(p);const raw=Array.isArray(rows)?rows[0]:rows;if(raw)saved.push(normalizeUsuarioHistorialLaboral(raw));}const nextUser={...encargada,...form,nombre:payload.nombre,usuario,email,rol:"encargada",activo:!!abierto,telefonoCodigoArea:onlyDigits(form.telefonoCodigoArea),telefonoNumero:onlyDigits(form.telefonoNumero),datoBancario:String(form.datoBancario||"").trim(),tipoRelacion:form.tipoRelacion||"a_resolver"};setData(prev=>({...prev,users:(prev.users||[]).map(u=>Number(u.id)===Number(form.id)?nextUser:u),encargadoLocales:[...(prev.encargadoLocales||[]).filter(x=>Number(x.userId)!==Number(form.id)),...(form.localIds||[]).map(localId=>({userId:form.id,localId}))],usuarioHistorialLaboral:[...(prev.usuarioHistorialLaboral||[]).filter(x=>Number(x.userId)!==Number(form.id)),...saved]}));notifyToast("Encargada guardada.","success");onClose();}catch(e){setErr("No se pudo guardar: "+(e.message||e));}setSaving(false);};
+  const tabStyle=a=>({border:"none",borderRadius:8,padding:"7px 10px",fontSize:11,fontWeight:700,cursor:"pointer",background:a?COLORS.pink:COLORS.pinkLight,color:a?"#fff":COLORS.pinkDark});
+  return <Modal title={`Editar encargada · ${encargada.nombre}`} onClose={onClose} width={800}><div style={{display:"flex",gap:6,flexWrap:"wrap",marginBottom:14}}>{[["general","Datos generales"],["antiguedad","Antigüedad"],["laboral","Datos laborales"],["documentacion","Documentación"]].map(([k,l])=><button key={k} style={tabStyle(tab===k)} onClick={()=>setTab(k)}>{l}</button>)}</div>{tab==="general"?<div style={{display:"flex",flexDirection:"column",gap:11}}><ModalInput label="Nombre completo" value={form.nombre||""} onChange={v=>setForm(f=>({...f,nombre:v}))}/><div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10}}><ModalInput label="Usuario" value={form.usuario||""} onChange={v=>setForm(f=>({...f,usuario:v}))}/><ModalInput label="Email" value={form.email||""} onChange={v=>setForm(f=>({...f,email:v}))}/></div><div style={{display:"grid",gridTemplateColumns:".45fr 1fr",gap:10}}><ModalInput label="Código de área" value={form.telefonoCodigoArea||""} onChange={v=>setForm(f=>({...f,telefonoCodigoArea:onlyDigits(v).slice(0,4)}))}/><ModalInput label="Teléfono" value={form.telefonoNumero||""} onChange={v=>setForm(f=>({...f,telefonoNumero:onlyDigits(v).slice(0,8)}))}/></div><div><p style={{margin:"0 0 7px",fontSize:12,fontWeight:700}}>Locales asignados</p><div style={{display:"flex",gap:6,flexWrap:"wrap"}}>{locales.map(l=>{const on=(form.localIds||[]).includes(l.id);return <button key={l.id} onClick={()=>toggleLocal(l.id)} style={{border:`1px solid ${on?COLORS.pink:"#ddd"}`,background:on?COLORS.pinkLight:"#fff",borderRadius:999,padding:"6px 9px",fontSize:10,cursor:"pointer"}}>{on?"✓ ":""}{l.nombre}</button>})}</div></div><div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10}}><ModalInput label="Nueva contraseña (opcional)" type="password" value={form.password||""} onChange={v=>setForm(f=>({...f,password:v}))}/><ModalInput label="Repetir contraseña" type="password" value={form.password2||""} onChange={v=>setForm(f=>({...f,password2:v}))}/></div></div>:tab==="antiguedad"?<div><div style={{display:"flex",justifyContent:"space-between",marginBottom:9}}><p style={{margin:0,fontSize:12,color:"var(--color-text-secondary)"}}>Relación laboral general de la encargada.</p><Btn size="sm" onClick={()=>setHist(r=>[{tempId:`e-${Date.now()}`,fechaInicio:hoy,fechaFin:"",motivoFin:"",observacion:""},...r])}>+ Período</Btn></div>{hist.map(r=>{const k=r.id||r.tempId;return <div key={k} style={{display:"grid",gridTemplateColumns:"130px 130px 145px 1fr 34px",gap:7,marginBottom:7}}><input type="date" value={r.fechaInicio||""} onChange={e=>updHist(k,"fechaInicio",e.target.value)}/><input type="date" value={r.fechaFin||""} onChange={e=>updHist(k,"fechaFin",e.target.value)}/><select disabled={!r.fechaFin} value={r.motivoFin||""} onChange={e=>updHist(k,"motivoFin",e.target.value)}><option value="">{r.fechaFin?"Motivo":"Activo"}</option>{["Renuncia","Despido","Otro"].map(x=><option key={x}>{x}</option>)}</select><input value={r.observacion||""} placeholder="Observación" onChange={e=>updHist(k,"observacion",e.target.value)}/><button onClick={()=>setHist(a=>a.filter(x=>(x.id||x.tempId)!==k))}>×</button></div>})}</div>:tab==="laboral"?<div style={{display:"flex",flexDirection:"column",gap:11}}><ModalInput label="Alias o CBU" value={form.datoBancario||""} onChange={v=>setForm(f=>({...f,datoBancario:v}))}/><ModalSelect label="Tipo de relación" value={form.tipoRelacion||"a_resolver"} onChange={v=>setForm(f=>({...f,tipoRelacion:v}))}><option value="monotributista">Monotributista</option><option value="dependencia">Relación de Dependencia</option><option value="a_resolver">A resolver</option></ModalSelect></div>:<LegajoDocumentosPanel actor={user} userId={form.id} documentos={data.personaDocumentos||[]} onReload={reloadData} currentPhotoUrl={form.fotoPerfilUrl||""}/>} {err&&<p style={{color:COLORS.danger,background:COLORS.dangerLight,padding:8,borderRadius:8,fontSize:12}}>{err}</p>}<div style={{display:"flex",gap:8,marginTop:15}}><Btn onClick={save} disabled={saving} style={{flex:1,justifyContent:"center"}}>{saving?"Guardando...":"Guardar"}</Btn><Btn variant="secondary" onClick={onClose} style={{flex:1,justifyContent:"center"}}>Cancelar</Btn></div></Modal>;
+}
+
 function ABMManicuras({ data, setData, reloadData, user }) {
   const [modal, setModal] = useState(null);
   const [form, setForm] = useState({});
@@ -4305,12 +4365,18 @@ function ABMManicuras({ data, setData, reloadData, user }) {
   const [movimientoModal, setMovimientoModal] = useState(null);
   const [bajaModal, setBajaModal] = useState(null);
   const [savingMovimiento, setSavingMovimiento] = useState(false);
+  const [encargadaEquipoEdit, setEncargadaEquipoEdit] = useState(null);
+  const [dragCandidateId, setDragCandidateId] = useState(null);
+  const [candidateIncorpModal, setCandidateIncorpModal] = useState(null);
+  const [savingCandidateIncorp, setSavingCandidateIncorp] = useState(false);
+  useEffect(()=>{api.getReclutamientoCandidatasDisponibles().then(rows=>setData(prev=>prev?{...prev,reclutamientoCandidatas:rows||[]}:prev)).catch(()=>{});},[setData]);
   useEffect(() => {
     const cancelarArrastre = () => {
       if (dragCompactTimer.current) clearTimeout(dragCompactTimer.current);
       dragCompactTimer.current = null;
       setDragCompacto(false);
       setDragUserId(null);
+      setDragCandidateId(null);
       setDropLocalId(null);
     };
     const onKeyDown = (e) => {
@@ -4473,6 +4539,9 @@ function ABMManicuras({ data, setData, reloadData, user }) {
   const encargadasDeLocal = localId => encargadasEquipo.filter(e => (data.encargadoLocales||[]).some(x=>parseInt(x.userId)===parseInt(e.id)&&parseInt(x.localId)===parseInt(localId)) && coincideBusqueda(e)).sort((a,b)=>(a.nombre||"").localeCompare(b.nombre||""));
   const manicurasDeLocal = localId => manicuras.filter(m=>m.activo&&parseInt(localActualIdDe(m))===parseInt(localId)&&coincideBusqueda(m)).sort((a,b)=>(a.nombre||"").localeCompare(b.nombre||""));
   const inactivasEquipo = manicuras.filter(m=>!m.activo&&coincideBusqueda(m)).sort((a,b)=>(a.nombre||"").localeCompare(b.nombre||""));
+  const candidatasDisponiblesEquipo = (data.reclutamientoCandidatas||[]).filter(c=>c.estado==="disponible"&&c.puesto==="manicura"&&(!queryEquipo||normalizeSearch(`${c.nombre||""} ${c.email||""}`).includes(queryEquipo))).sort((a,b)=>(a.nombre||"").localeCompare(b.nombre||""));
+  const abrirIncorporacionCandidata = (c,destinoId) => setCandidateIncorpModal({candidata:c,destinoId:Number(destinoId),fechaInicio:hoy,usuario:String(c.email||"").split("@")[0].replace(/[^a-zA-Z0-9._-]/g,"").toLowerCase(),email:c.email||"",password:"niki123",tipoRelacion:"a_resolver"});
+  const confirmarIncorporacionCandidata = async () => {const x=candidateIncorpModal;if(!x)return;if(!x.fechaInicio||!x.usuario||!isValidEmail(x.email))return notifyToast("Completá fecha de ingreso, usuario y email válido.","warning");if(usuarioEnUso(data.users,x.usuario)||emailEnUso(data.users,x.email))return notifyToast("El usuario o email ya están en uso.","warning");setSavingCandidateIncorp(true);try{const c=x.candidata;const rows=await api.createUser({nombre:c.nombre,usuario:normalizeUsuarioValue(x.usuario),email:normalizeEmailValue(x.email),password:x.password||"niki123",rol:"manicura",local_id:x.destinoId,activo:true,telefono:c.telefono||null,tipo_relacion:x.tipoRelacion||"a_resolver"});const uid=Array.isArray(rows)?rows[0]?.id:rows?.id;if(!uid)throw new Error("No se obtuvo el usuario creado.");const hr=await api.createManicuraHistorialLocal({user_id:uid,local_id:x.destinoId,fecha_inicio:x.fechaInicio,fecha_fin:null,motivo_fin:null,observacion:`Incorporada desde reclutamiento · candidata ${c.id}`});await api.marcarReclutamientoIncorporada(c.id,uid);try{await api.enviarInvitacionUsuario({actor_id:user.id,session_token:user.sessionToken,target_user_id:uid});}catch{}const rawH=Array.isArray(hr)?hr[0]:hr;const newUser=normalizeUser(Array.isArray(rows)?rows[0]:rows);setData(prev=>({...prev,users:[...(prev.users||[]),newUser],manicuraHistorialLocales:rawH?[...(prev.manicuraHistorialLocales||[]),normalizeManicuraHistorialLocal(rawH)]:(prev.manicuraHistorialLocales||[]),reclutamientoCandidatas:(prev.reclutamientoCandidatas||[]).filter(z=>Number(z.id)!==Number(c.id))}));setCandidateIncorpModal(null);notifyToast("Candidata incorporada como manicura.","success");}catch(e){notifyToast("No se pudo incorporar: "+(e.message||e),"error");}setSavingCandidateIncorp(false);};
   const toggleLocalColapsado = localId => setLocalesColapsados(prev=>({...prev,[localId]:!prev[localId]}));
   const abrirMovimiento = (m,destinoId) => {
     const origenId = localActualIdDe(m);
@@ -4531,22 +4600,26 @@ function ABMManicuras({ data, setData, reloadData, user }) {
           <div style={{display:"flex",gap:7,flexWrap:"wrap"}}>{localesTipoEquipo.map(l=>{const selected=localesEquipoSeleccionados.some(id=>Number(id)===Number(l.id));return <button key={l.id} type="button" onClick={()=>toggleLocalEquipo(l.id)} style={{border:`1px solid ${selected?COLORS.pink:"rgba(120,120,120,.18)"}`,background:selected?COLORS.pinkLight:"#fff",borderRadius:999,padding:"6px 10px",fontSize:11,fontWeight:700,cursor:"pointer",color:selected?COLORS.pinkDark:"var(--color-text-primary)"}}>{selected?"✓ ":""}{l.nombre}</button>})}</div>
         </div>
       </Card>
-      <div style={{display:"grid",gridTemplateColumns:dragCompacto?"repeat(auto-fit,minmax(150px,1fr))":"repeat(auto-fit,minmax(300px,1fr))",gap:dragCompacto?8:12,alignItems:"start",transition:"all .18s ease",paddingBottom:dragUserId?86:0}}>
-        {localesVisiblesEquipo.map(local=>{const ms=manicurasDeLocal(local.id),es=encargadasDeLocal(local.id),horasLocal=ms.reduce((acc,m)=>acc+horasTeoricasEquipo(m.id,local.id),0),colapsado=!!localesColapsados[local.id],compacto=dragCompacto;return <Card key={local.id} onDragOver={e=>{e.preventDefault();setDropLocalId(local.id);}} onDragLeave={()=>setDropLocalId(null)} onDrop={e=>{e.preventDefault();const uid=parseInt(e.dataTransfer.getData("text/plain")||dragUserId||0);const m=manicuras.find(x=>parseInt(x.id)===uid);setDropLocalId(null);setDragCompacto(false);setDragUserId(null);if(m)abrirMovimiento(m,local.id);}} style={{padding:compacto?9:12,border:dropLocalId===local.id?`2px solid ${COLORS.pink}`:"1px solid rgba(120,120,120,.16)",minHeight:compacto?82:120,transition:"all .18s ease",background:dropLocalId===local.id?COLORS.pinkLight:"var(--color-background-primary)"}}>
+      <div style={{display:"grid",gridTemplateColumns:dragCompacto?"repeat(auto-fit,minmax(150px,1fr))":"repeat(auto-fit,minmax(300px,1fr))",gap:dragCompacto?8:12,alignItems:"start",transition:"all .18s ease",paddingBottom:(dragUserId||dragCandidateId)?86:0}}>
+        {localesVisiblesEquipo.map(local=>{const ms=manicurasDeLocal(local.id),es=encargadasDeLocal(local.id),horasLocal=ms.reduce((acc,m)=>acc+horasTeoricasEquipo(m.id,local.id),0),colapsado=!!localesColapsados[local.id],compacto=dragCompacto;return <Card key={local.id} onDragOver={e=>{e.preventDefault();setDropLocalId(local.id);}} onDragLeave={()=>setDropLocalId(null)} onDrop={e=>{e.preventDefault();const raw=e.dataTransfer.getData("text/plain")||"";setDropLocalId(null);setDragCompacto(false);setDragUserId(null);setDragCandidateId(null);if(raw.startsWith("candidate:")){const cid=Number(raw.split(":")[1]);const c=candidatasDisponiblesEquipo.find(x=>Number(x.id)===cid);if(c)abrirIncorporacionCandidata(c,local.id);return;}const uid=parseInt(raw||dragUserId||0);const m=manicuras.find(x=>parseInt(x.id)===uid);if(m)abrirMovimiento(m,local.id);}} style={{padding:compacto?9:12,border:dropLocalId===local.id?`2px solid ${COLORS.pink}`:"1px solid rgba(120,120,120,.16)",minHeight:compacto?82:120,transition:"all .18s ease",background:dropLocalId===local.id?COLORS.pinkLight:"var(--color-background-primary)"}}>
           <div style={{display:"flex",justifyContent:"space-between",gap:8,alignItems:"center",marginBottom:(compacto||colapsado)?0:10}}><div style={{minWidth:0}}><h3 style={{margin:0,fontSize:compacto?12:14,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{local.nombre}</h3><p style={{margin:"2px 0 0",fontSize:compacto?9:11,color:"var(--color-text-secondary)",whiteSpace:"nowrap"}}>{ms.length} manicura{ms.length===1?"":"s"} · {es.length} encargada{es.length===1?"":"s"} · <strong>{horasLocal.toFixed(1)} h</strong></p></div><div style={{display:"flex",alignItems:"center",gap:5}}><Badge color="info">{ms.length+es.length}</Badge>{!compacto&&<button type="button" onClick={()=>toggleLocalColapsado(local.id)} title={colapsado?"Expandir local":"Contraer local"} style={{border:"none",background:COLORS.grayLight,color:"#555",width:25,height:25,borderRadius:7,cursor:"pointer",fontSize:13}}>{colapsado?"▾":"▴"}</button>}</div></div>
           {compacto&&<div style={{marginTop:8,border:`1px dashed ${dropLocalId===local.id?COLORS.pink:"#d8d8d8"}`,borderRadius:8,padding:"8px 5px",textAlign:"center",fontSize:10,fontWeight:600,color:dropLocalId===local.id?COLORS.pinkDark:"#777",background:dropLocalId===local.id?COLORS.pinkLight:"transparent"}}>Soltar aquí</div>}
           {!colapsado&&<div style={{display:compacto?"block":"block",position:compacto?"absolute":"static",width:compacto?1:"auto",height:compacto?1:"auto",overflow:compacto?"hidden":"visible",opacity:compacto?0:1,pointerEvents:compacto?"none":"auto"}} aria-hidden={compacto?"true":undefined}>
-            {es.length>0&&<div style={{marginBottom:10}}><p style={{margin:"0 0 6px",fontSize:10,fontWeight:700,color:COLORS.pinkDark,textTransform:"uppercase",letterSpacing:".04em"}}>Encargadas</p><div style={{display:"flex",flexWrap:"wrap",gap:6}}>{es.map(e=><div key={`e-${e.id}`} style={{display:"flex",alignItems:"center",gap:6,padding:"6px 8px",border:`1px solid ${COLORS.pink}`,borderRadius:10,background:COLORS.pinkLight,minWidth:120,maxWidth:180}}><Avatar nombre={e.nombre} userId={e.id} photoUrl={e.fotoPerfilUrl} size={25}/><div style={{minWidth:0}}><p style={{margin:0,fontSize:11,fontWeight:700,color:COLORS.pinkDark,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{e.nombre}</p><p style={{margin:0,fontSize:9,color:COLORS.pinkDark,opacity:.78}}>Encargada</p></div></div>)}</div></div>}
+            {es.length>0&&<div style={{marginBottom:10}}><p style={{margin:"0 0 6px",fontSize:10,fontWeight:700,color:COLORS.pinkDark,textTransform:"uppercase",letterSpacing:".04em"}}>Encargadas</p><div style={{display:"flex",flexWrap:"wrap",gap:6}}>{es.map(e=><div key={`e-${e.id}`} style={{display:"flex",alignItems:"center",gap:6,padding:"6px 8px",border:`1px solid ${COLORS.pink}`,borderRadius:10,background:COLORS.pinkLight,minWidth:120,maxWidth:180}}><Avatar nombre={e.nombre} userId={e.id} photoUrl={e.fotoPerfilUrl} size={25}/><div style={{minWidth:0}}><p style={{margin:0,fontSize:11,fontWeight:700,color:COLORS.pinkDark,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{e.nombre}</p><p style={{margin:0,fontSize:9,color:COLORS.pinkDark,opacity:.78}}>Encargada</p></div><button type="button" onClick={()=>setEncargadaEquipoEdit(e)} title="Editar encargada" style={{border:"none",background:"transparent",cursor:"pointer",color:COLORS.pinkDark,fontSize:13,padding:2}}>✎</button></div>)}</div></div>}
             <div><p style={{margin:"0 0 6px",fontSize:10,fontWeight:700,color:"var(--color-text-secondary)",textTransform:"uppercase",letterSpacing:".04em"}}>Manicuras</p><div style={{display:"flex",flexWrap:"wrap",gap:6}}>{ms.map(m=><div key={m.id} draggable onDragStart={e=>{e.dataTransfer.effectAllowed="move";e.dataTransfer.setData("text/plain",String(m.id));setDragUserId(m.id);if(dragCompactTimer.current)clearTimeout(dragCompactTimer.current);dragCompactTimer.current=setTimeout(()=>setDragCompacto(true),120);}} onDragEnd={()=>{if(dragCompactTimer.current)clearTimeout(dragCompactTimer.current);dragCompactTimer.current=null;setDragCompacto(false);setDragUserId(null);setDropLocalId(null);}} style={{display:"flex",alignItems:"center",gap:6,padding:"6px 7px",border:"1px solid #e7e7e7",borderRadius:10,background:"#fff",cursor:"grab",userSelect:"none",WebkitUserSelect:"none",minWidth:128,maxWidth:190,flex:"1 1 145px"}}><Avatar nombre={m.nombre} userId={m.id} photoUrl={m.fotoPerfilUrl} size={26}/><div style={{flex:1,minWidth:0}}><p style={{margin:0,fontSize:11,fontWeight:650,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{m.nombre}</p><div style={{display:"flex",alignItems:"center",gap:5,flexWrap:"wrap"}}><span style={{fontSize:9,fontWeight:800,color:COLORS.info,background:COLORS.infoLight,borderRadius:999,padding:"2px 5px",whiteSpace:"nowrap"}}>{horasTeoricasEquipo(m.id,local.id).toFixed(1)} h</span>{m.soloFinDeSemana&&<span style={{fontSize:9,color:COLORS.amber}}>Fin de semana</span>}</div></div><button onClick={()=>openEdit(m)} title="Editar" style={{border:"none",background:"transparent",cursor:"pointer",color:COLORS.pinkDark,fontSize:13,padding:2}}>✎</button></div>)}</div>{ms.length===0&&<p style={{fontSize:11,color:"var(--color-text-secondary)",margin:"4px 0 0"}}>Sin manicuras activas.</p>}</div>
           </div>}
         </Card>})}
       </div>
       {!dragUserId&&inactivasEquipo.length>0&&<Card style={{marginTop:12,padding:12,background:"var(--color-background-secondary)"}}><div style={{display:"flex",justifyContent:"space-between",gap:8,alignItems:"center",marginBottom:8}}><div><h3 style={{margin:0,fontSize:13}}>Inactivas / sin local</h3><p style={{margin:"2px 0 0",fontSize:10,color:"var(--color-text-secondary)"}}>Arrastralas a un local para reactivarlas.</p></div><Badge color="gray">{inactivasEquipo.length}</Badge></div><div style={{display:"flex",flexWrap:"wrap",gap:6}}>{inactivasEquipo.map(m=><div key={m.id} draggable onDragStart={e=>{e.dataTransfer.effectAllowed="move";e.dataTransfer.setData("text/plain",String(m.id));setDragUserId(m.id);if(dragCompactTimer.current)clearTimeout(dragCompactTimer.current);dragCompactTimer.current=setTimeout(()=>setDragCompacto(true),120);}} onDragEnd={()=>{if(dragCompactTimer.current)clearTimeout(dragCompactTimer.current);dragCompactTimer.current=null;setDragCompacto(false);setDragUserId(null);setDropLocalId(null);}} style={{display:"flex",alignItems:"center",gap:6,padding:"6px 8px",border:"1px solid #ddd",borderRadius:10,background:"#fff",cursor:"grab",userSelect:"none",WebkitUserSelect:"none",minWidth:135}}><Avatar nombre={m.nombre} userId={m.id} photoUrl={m.fotoPerfilUrl} size={25}/><span style={{fontSize:11,fontWeight:600}}>{m.nombre}</span></div>)}</div></Card>}
+      {!dragUserId&&!dragCandidateId&&candidatasDisponiblesEquipo.length>0&&<Card style={{marginTop:12,padding:12,background:COLORS.successLight,border:`1px solid ${COLORS.success}55`}}><div style={{display:"flex",justifyContent:"space-between",alignItems:"center",gap:8,marginBottom:8}}><div><h3 style={{margin:0,fontSize:13,color:COLORS.success}}>Bolsa de candidatas aprobadas</h3><p style={{margin:"2px 0 0",fontSize:10,color:"var(--color-text-secondary)"}}>Arrastrá una candidata aprobada a un local para incorporarla como manicura.</p></div><Badge color="success">{candidatasDisponiblesEquipo.length}</Badge></div><div style={{display:"flex",flexWrap:"wrap",gap:6}}>{candidatasDisponiblesEquipo.map(c=><div key={`cand-${c.id}`} draggable onDragStart={e=>{e.dataTransfer.effectAllowed="move";e.dataTransfer.setData("text/plain",`candidate:${c.id}`);setDragCandidateId(c.id);if(dragCompactTimer.current)clearTimeout(dragCompactTimer.current);dragCompactTimer.current=setTimeout(()=>setDragCompacto(true),120);}} onDragEnd={()=>{if(dragCompactTimer.current)clearTimeout(dragCompactTimer.current);dragCompactTimer.current=null;setDragCompacto(false);setDragCandidateId(null);setDropLocalId(null);}} style={{display:"flex",alignItems:"center",gap:6,padding:"7px 9px",border:`1px solid ${COLORS.success}`,borderRadius:10,background:"#fff",cursor:"grab",userSelect:"none",minWidth:150}}><div style={{width:25,height:25,borderRadius:"50%",background:COLORS.successLight,color:COLORS.success,display:"flex",alignItems:"center",justifyContent:"center",fontWeight:800,fontSize:10}}>C</div><div><p style={{margin:0,fontSize:11,fontWeight:700}}>{c.nombre}</p><p style={{margin:0,fontSize:9,color:COLORS.success}}>Aprobada · lista para ingresar</p></div></div>)}</div></Card>}
       {dragUserId&&<div style={{position:"fixed",left:"50%",bottom:18,transform:"translateX(-50%)",zIndex:25000,width:"min(650px,calc(100vw - 28px))",display:"flex",gap:8,alignItems:"stretch"}}><div onDragOver={e=>e.preventDefault()} onDrop={e=>{e.preventDefault();const uid=parseInt(e.dataTransfer.getData("text/plain")||dragUserId||0);const m=manicuras.find(x=>parseInt(x.id)===uid);setDragCompacto(false);setDragUserId(null);setDropLocalId(null);if(m?.activo)abrirBaja(m);}} style={{flex:1,background:COLORS.dangerLight,border:`2px dashed ${COLORS.danger}`,borderRadius:14,padding:"12px 16px",boxShadow:"0 10px 30px rgba(0,0,0,.22)",textAlign:"center",color:COLORS.danger,fontWeight:700,fontSize:13}}>⊘ Dar de baja · soltá acá la manicura</div><button type="button" onClick={()=>{if(dragCompactTimer.current)clearTimeout(dragCompactTimer.current);dragCompactTimer.current=null;setDragCompacto(false);setDragUserId(null);setDropLocalId(null);}} style={{border:"1px solid rgba(120,120,120,.2)",background:"#fff",borderRadius:14,padding:"0 16px",fontWeight:700,cursor:"pointer",boxShadow:"0 10px 30px rgba(0,0,0,.16)"}}>Cancelar</button></div>}
+      {dragCandidateId&&<div style={{position:"fixed",left:"50%",bottom:18,transform:"translateX(-50%)",zIndex:25000,width:"min(520px,calc(100vw - 28px))",background:"#fff",border:`1px solid ${COLORS.success}`,borderRadius:14,padding:"11px 14px",boxShadow:"0 10px 30px rgba(0,0,0,.2)",display:"flex",justifyContent:"space-between",alignItems:"center",gap:10}}><span style={{fontSize:11,fontWeight:700,color:COLORS.success}}>Candidata aprobada · soltala sobre el local de ingreso</span><button onClick={()=>{setDragCompacto(false);setDragCandidateId(null);setDropLocalId(null);}} style={{border:"none",background:COLORS.grayLight,borderRadius:8,padding:"6px 10px",cursor:"pointer"}}>Cancelar</button></div>}
     </div>:<>
       <Card style={{marginBottom:12,padding:12}}><div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(180px,1fr))",gap:10}}><div><label style={{fontSize:11,color:"var(--color-text-secondary)"}}>Local</label><Select value={filtroLocal} onChange={setFiltroLocal}><option value="todos">Todos</option>{localesPermitidos.map(l=><option key={l.id} value={l.id}>{l.nombre}</option>)}</Select></div><div><label style={{fontSize:11,color:"var(--color-text-secondary)"}}>Estado</label><Select value={filtroEstado} onChange={setFiltroEstado}><option value="activas">Activas</option><option value="inactivas">Inactivas</option><option value="todas">Todas</option></Select></div><div><label style={{fontSize:11,color:"var(--color-text-secondary)"}}>Agrupar</label><Select value={agrupacion} onChange={setAgrupacion}><option value="local">Por local</option><option value="ninguna">Sin agrupar</option></Select></div></div></Card>
       <div style={{display:"flex",flexDirection:"column",gap:14}}>{gruposManicuras.map(grupo=><div key={grupo.key}><div style={{display:"flex",alignItems:"center",gap:8,marginBottom:7}}><h3 style={{margin:0,fontSize:13}}>{grupo.label}</h3><Badge color="gray">{grupo.items.length}</Badge></div><div style={{display:"flex",flexDirection:"column",gap:8}}>{grupo.items.map(m=>{const local=data.locales.find(l=>l.id===localActualIdDe(m));return <Card key={m.id} style={{display:"flex",alignItems:"center",gap:12,flexWrap:"wrap"}}><Avatar nombre={m.nombre} userId={m.id} photoUrl={m.fotoPerfilUrl}/><div style={{flex:1,minWidth:0}}><p style={{margin:0,fontWeight:500,fontSize:14}}>{m.nombre}</p><p style={{margin:0,fontSize:12,color:"var(--color-text-secondary)"}}>{m.usuario} · {m.email||"Sin mail"} · {local?.nombre||"Sin local"}</p></div><Badge color={m.activo?"success":"gray"}>{m.activo?"Activa":"Inactiva"}</Badge><Btn onClick={()=>openEdit(m)} variant="ghost" size="sm">Editar</Btn><Btn onClick={()=>reenviarInvitacion(m)} variant="ghost" size="sm" disabled={!m.email}>Invitar</Btn><Btn onClick={()=>openEdit(m,"antiguedad")} variant="ghost" size="sm">Antigüedad</Btn></Card>})}</div></div>)}</div>
     </>}
+    {candidateIncorpModal&&<Modal title="Incorporar candidata como manicura" onClose={()=>setCandidateIncorpModal(null)} width={560}><div style={{display:"flex",flexDirection:"column",gap:11}}><div style={{padding:10,borderRadius:10,background:COLORS.successLight,fontSize:12}}><strong>{candidateIncorpModal.candidata.nombre}</strong><br/>Ingreso a <strong>{data.locales.find(l=>Number(l.id)===Number(candidateIncorpModal.destinoId))?.nombre}</strong></div><ModalInput label="Fecha de ingreso" type="date" value={candidateIncorpModal.fechaInicio} onChange={v=>setCandidateIncorpModal(x=>({...x,fechaInicio:v}))}/><div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10}}><ModalInput label="Usuario" value={candidateIncorpModal.usuario} onChange={v=>setCandidateIncorpModal(x=>({...x,usuario:v}))}/><ModalInput label="Email" value={candidateIncorpModal.email} onChange={v=>setCandidateIncorpModal(x=>({...x,email:v}))}/></div><ModalInput label="Contraseña inicial" value={candidateIncorpModal.password} onChange={v=>setCandidateIncorpModal(x=>({...x,password:v}))}/><ModalSelect label="Tipo de relación" value={candidateIncorpModal.tipoRelacion} onChange={v=>setCandidateIncorpModal(x=>({...x,tipoRelacion:v}))}><option value="a_resolver">A resolver</option><option value="monotributista">Monotributista</option><option value="dependencia">Relación de dependencia</option></ModalSelect><p style={{margin:0,fontSize:11,color:"var(--color-text-secondary)"}}>Al confirmar se crea el usuario, se abre el primer período de antigüedad y la candidatura queda vinculada como incorporada. Los servicios de la prueba técnica no se copian automáticamente.</p><div style={{display:"flex",gap:8}}><Btn variant="success" onClick={confirmarIncorporacionCandidata} disabled={savingCandidateIncorp} style={{flex:1,justifyContent:"center"}}>{savingCandidateIncorp?"Incorporando...":"Confirmar incorporación"}</Btn><Btn variant="secondary" onClick={()=>setCandidateIncorpModal(null)} style={{flex:1,justifyContent:"center"}}>Cancelar</Btn></div></div></Modal>}
+    {encargadaEquipoEdit&&<EncargadaEquipoEditor encargada={encargadaEquipoEdit} data={data} setData={setData} user={user} reloadData={reloadData} onClose={()=>setEncargadaEquipoEdit(null)}/>}
     {movimientoModal&&<Modal title={movimientoModal.reactivacion?"Activar y asignar manicura":"Cambiar manicura de local"} onClose={()=>setMovimientoModal(null)} width={520}><div style={{display:"flex",flexDirection:"column",gap:12}}><div style={{padding:10,borderRadius:10,background:COLORS.infoLight,fontSize:13}}><strong>{movimientoModal.nombre}</strong><br/>{movimientoModal.origenId?(data.locales.find(l=>l.id===movimientoModal.origenId)?.nombre||"Sin local"):"Inactiva"} → <strong>{data.locales.find(l=>l.id===movimientoModal.destinoId)?.nombre}</strong></div>{!movimientoModal.reactivacion&&<ModalInput label="Fecha de fin en el local de origen" type="date" value={movimientoModal.fechaFin} onChange={v=>setMovimientoModal(m=>({...m,fechaFin:v}))}/>}<ModalInput label="Fecha de inicio en el local destino" type="date" value={movimientoModal.fechaInicio} onChange={v=>setMovimientoModal(m=>({...m,fechaInicio:v}))}/><ModalInput label="Observación (opcional)" value={movimientoModal.observacion} onChange={v=>setMovimientoModal(m=>({...m,observacion:v}))}/><div style={{display:"flex",gap:8}}><Btn onClick={confirmarMovimiento} disabled={savingMovimiento} style={{flex:1,justifyContent:"center"}}>{savingMovimiento?"Guardando...":"Confirmar"}</Btn><Btn variant="secondary" onClick={()=>setMovimientoModal(null)} style={{flex:1,justifyContent:"center"}}>Cancelar</Btn></div></div></Modal>}
     {bajaModal&&<Modal title="Dar de baja manicura" onClose={()=>setBajaModal(null)} width={500}><div style={{display:"flex",flexDirection:"column",gap:12}}><p style={{margin:0,fontSize:13}}>Se desactivará a <strong>{bajaModal.nombre}</strong> y se cerrará su período activo.</p><ModalInput label="Fecha de baja" type="date" value={bajaModal.fechaFin} onChange={v=>setBajaModal(b=>({...b,fechaFin:v}))}/><ModalSelect label="Motivo" value={bajaModal.motivo} onChange={v=>setBajaModal(b=>({...b,motivo:v}))}><option value="Baja">Baja</option><option value="Renuncia">Renuncia</option><option value="Despido">Despido</option><option value="Otro">Otro</option></ModalSelect><ModalInput label="Observación (opcional)" value={bajaModal.observacion} onChange={v=>setBajaModal(b=>({...b,observacion:v}))}/><div style={{display:"flex",gap:8}}><Btn variant="danger" onClick={confirmarBaja} disabled={savingMovimiento} style={{flex:1,justifyContent:"center"}}>{savingMovimiento?"Guardando...":"Dar de baja"}</Btn><Btn variant="secondary" onClick={()=>setBajaModal(null)} style={{flex:1,justifyContent:"center"}}>Cancelar</Btn></div></div></Modal>}
     {modal&&<Modal title={modal==="new"?"Nueva manicura":"Editar manicura"} onClose={()=>setModal(null)} width={780}>
@@ -9514,6 +9587,427 @@ function ReportePagoComisiones({ data, setData, user }) {
   </div>;
 }
 
+// ── RECLUTAMIENTO ─────────────────────────────────────────────────
+const RECLUTAMIENTO_ESTADOS = {
+  nueva:["Nueva","gray"], en_proceso:["En proceso","info"], pendiente_aprobacion:["Pendiente aprobación","amber"],
+  aprobada:["Aprobada","success"], disponible:["Disponible","success"], incorporada:["Incorporada","success"],
+  rechazada:["Rechazada","danger"], desistio:["Desistió","gray"], en_pausa:["En pausa","amber"],
+};
+const RECLUTAMIENTO_RECOMENDACIONES = [["","Sin definir"],["si","Sí"],["con_reservas","Con reservas"],["no","No"]];
+
+function reclutamientoDateTimeLocal(value) {
+  if (!value) return "";
+  const d = new Date(value);
+  if (Number.isNaN(d.getTime())) return String(value).slice(0,16);
+  const pad=n=>String(n).padStart(2,"0");
+  return `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
+}
+function reclutamientoFechaLocal(value) {
+  if (!value) return "";
+  const d = new Date(value);
+  return Number.isNaN(d.getTime()) ? String(value).slice(0,10) : dateKey(d);
+}
+
+function ReclutamientoArchivoLink({ actor, candidataId, archivo, onDelete = null }) {
+  const [loading,setLoading]=useState(false);
+  const abrir=async()=>{setLoading(true);try{const r=await api.reclutamientoStorageRequest({action:"sign",actor,candidataId,path:archivo.storage_path,expiresIn:600});window.open(r.url,"_blank","noopener,noreferrer");}catch(e){notifyToast("No se pudo abrir el archivo: "+(e.message||e),"error");}setLoading(false);};
+  return <div style={{display:"flex",alignItems:"center",gap:8,padding:"7px 9px",border:"1px solid #eee",borderRadius:9,background:"#fff"}}><span style={{fontSize:16}}>{archivo.mime_type==="application/pdf"?"📄":"🖼️"}</span><button type="button" onClick={abrir} style={{flex:1,minWidth:0,textAlign:"left",border:"none",background:"transparent",cursor:"pointer",fontSize:11,fontWeight:650,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{loading?"Abriendo...":archivo.nombre_archivo}</button>{onDelete&&<button type="button" onClick={()=>onDelete(archivo)} style={{border:"none",background:COLORS.dangerLight,color:COLORS.danger,borderRadius:7,cursor:"pointer",width:25,height:25}}>×</button>}</div>;
+}
+
+function ReclutamientoPage({ data, setData, user, fixedView = "tablero" }) {
+  const [loading,setLoading]=useState(true),[vista,setVista]=useState(fixedView),[search,setSearch]=useState(""),[puesto,setPuesto]=useState("todos"),[estado,setEstado]=useState("activos");
+  const [db,setDb]=useState({circuitos:[],plantillas:[],candidatas:[],locales:[],servicios:[],instancias:[],evaluadores:[],pruebas:[],archivos:[],aprobaciones:[],autorizadores:[]});
+  const [candidateModal,setCandidateModal]=useState(null),[candidateForm,setCandidateForm]=useState({}),[candidateErr,setCandidateErr]=useState(""),[candidateSaving,setCandidateSaving]=useState(false),[candidateServiceSearch,setCandidateServiceSearch]=useState("");
+  const [detailId,setDetailId]=useState(null),[stageDraft,setStageDraft]=useState({}),[stageSaving,setStageSaving]=useState(null),[testServiceId,setTestServiceId]=useState("");
+  const [encIncorp,setEncIncorp]=useState(null),[encIncorpSaving,setEncIncorpSaving]=useState(false);
+  const [configSaving,setConfigSaving]=useState(false),[newStage,setNewStage]=useState({manicura:{nombre:"",tipo:"entrevista"},encargada:{nombre:"",tipo:"entrevista"}});
+  const rrhhUsers=(data.users||[]).filter(u=>u.activo&&["admin","casa_matriz"].includes(u.rol)).sort((a,b)=>(a.nombre||"").localeCompare(b.nombre||""));
+  useEffect(()=>{ setVista(fixedView); },[fixedView]);
+
+  const load=useCallback(async()=>{
+    setLoading(true);
+    try{
+      const pack=fixedView==="config" ? await api.reclutamientoConfigLoad() : await api.reclutamientoLoad();
+      setDb(pack||{circuitos:[],plantillas:[],candidatas:[],locales:[],servicios:[],instancias:[],evaluadores:[],pruebas:[],archivos:[],aprobaciones:[],autorizadores:[]});
+      if(fixedView!=="config") setData(prev=>prev?{...prev,reclutamientoCandidatas:(pack?.candidatas||[]).filter(c=>c.estado==="disponible")}:prev);
+    }catch(e){notifyToast("No se pudo cargar Reclutamiento. Verificá la migración y la Edge Function. "+(e.message||e),"error");}
+    setLoading(false);
+  },[setData,fixedView]);
+  useEffect(()=>{load();},[load]);
+
+  const q=String(search||"").trim().toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g,"");
+  const candidatasFiltradas=useMemo(()=>db.candidatas.filter(c=>{
+    const texto=`${c.nombre||""} ${c.email||""} ${c.telefono||""}`.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g,"");
+    const okEstado=estado==="todos"||(estado==="activos"?!["incorporada","rechazada","desistio"].includes(c.estado):c.estado===estado);
+    return (!q||texto.includes(q))&&(puesto==="todos"||c.puesto===puesto)&&okEstado;
+  }),[db.candidatas,q,puesto,estado]);
+  const detail=db.candidatas.find(c=>Number(c.id)===Number(detailId));
+  const detailInstancias=detail?db.instancias.filter(i=>Number(i.candidata_id)===Number(detail.id)).sort((a,b)=>a.orden-b.orden):[];
+  const bloqueoParaRealizar=inst=>{
+    const anteriores=detailInstancias.filter(x=>x.obligatoria!==false&&Number(x.orden)<Number(inst.orden));
+    const pendiente=anteriores.find(x=>!["realizada","aprobada"].includes(String(x.estado||"")));
+    if(pendiente)return `Primero debe completarse "${pendiente.nombre}".`;
+    const desfavorable=anteriores.find(x=>x.tipo!=="documentacion"&&!["si","con_reservas"].includes(String(x.recomendacion||"")));
+    if(desfavorable)return String(desfavorable.recomendacion||"")==="no"
+      ? `El resultado de "${desfavorable.nombre}" fue No.`
+      : `Falta definir una recomendación favorable en "${desfavorable.nombre}".`;
+    return "";
+  };
+  const detailCircuito=detail?db.circuitos.find(c=>Number(c.id)===Number(detail.circuito_id)):null;
+  const activeApprovals=detail?db.aprobaciones.filter(a=>Number(a.candidata_id)===Number(detail.id)&&a.activa):[];
+  const aprobadas=activeApprovals.filter(a=>a.decision==="aprobada").length;
+  const rechazadas=activeApprovals.filter(a=>a.decision==="rechazada").length;
+  const puedeAutorizar=detail&&(user.rol==="admin"||db.autorizadores.some(a=>Number(a.user_id)===Number(user.id)&&a.puesto===detail.puesto&&a.activo));
+
+  const baseForm=(puestoValue="manicura")=>({nombre:"",email:"",telefono:"",puesto:puestoValue,origen:"",disponibilidadDesde:"",disponibilidadHoraria:"",observaciones:"",localIds:[],servicios:[],cvFile:null});
+  const openNew=()=>{setCandidateForm(baseForm("manicura"));setCandidateErr("");setCandidateServiceSearch("");setCandidateModal("new");};
+  const openEdit=c=>{setCandidateForm({id:c.id,nombre:c.nombre||"",email:c.email||"",telefono:c.telefono||"",puesto:c.puesto||"manicura",origen:c.origen||"",disponibilidadDesde:c.disponibilidad_desde||"",disponibilidadHoraria:c.disponibilidad_horaria||"",observaciones:c.observaciones||"",localIds:db.locales.filter(x=>Number(x.candidata_id)===Number(c.id)).map(x=>Number(x.local_id)),servicios:db.servicios.filter(x=>Number(x.candidata_id)===Number(c.id)).map(x=>({servicioId:Number(x.servicio_id),realiza:!!x.realiza,observacion:x.observacion||""})),cvFile:null});setCandidateErr("");setCandidateServiceSearch("");setCandidateModal("edit");};
+  const toggleCandidateLocal=id=>setCandidateForm(f=>({...f,localIds:(f.localIds||[]).includes(id)?f.localIds.filter(x=>x!==id):[...(f.localIds||[]),id]}));
+  const setCandidateServicio=(sid,realiza)=>setCandidateForm(f=>({...f,servicios:[...(f.servicios||[]).filter(x=>Number(x.servicioId)!==Number(sid)),{servicioId:Number(sid),realiza,observacion:""}]}));
+  const removeCandidateServicio=sid=>setCandidateForm(f=>({...f,servicios:(f.servicios||[]).filter(x=>Number(x.servicioId)!==Number(sid))}));
+  const audit=async(candidataId,accion,detalle,datos=null)=>{try{await api.createReclutamientoAuditoria({candidata_id:candidataId||null,user_id:user.id,accion,detalle,datos});}catch(e){console.warn("Auditoría reclutamiento",e);}};
+
+  const uploadArchivo=async({candidataId,instanciaId=null,pruebaServicioId=null,tipo,file})=>{
+    const up=await api.reclutamientoStorageRequest({action:"upload",actor:user,candidataId,instanciaId,tipo,file});
+    await api.createReclutamientoArchivo({candidata_id:candidataId,instancia_id:instanciaId,prueba_servicio_id:pruebaServicioId,tipo,nombre_archivo:up.name||file.name,mime_type:up.mimeType||file.type,tamano_bytes:up.size||file.size,storage_path:up.path,creado_por_user_id:user.id});
+    await audit(candidataId,"ARCHIVO_SUBIDO",`${tipo}: ${file.name}`,{instanciaId,pruebaServicioId});
+  };
+  const deleteArchivo=async a=>{if(!window.confirm(`¿Eliminar ${a.nombre_archivo}?`))return;try{await api.reclutamientoStorageRequest({action:"delete",actor:user,candidataId:a.candidata_id,path:a.storage_path});await api.deleteReclutamientoArchivo(a.id);await audit(a.candidata_id,"ARCHIVO_ELIMINADO",a.nombre_archivo);await load();}catch(e){notifyToast("No se pudo eliminar el archivo: "+(e.message||e),"error");}};
+
+  const saveCandidate=async()=>{
+    setCandidateErr("");
+    if(!String(candidateForm.nombre||"").trim())return setCandidateErr("El nombre es obligatorio.");
+    if(candidateForm.email&&!isValidEmail(candidateForm.email))return setCandidateErr("El email no es válido.");
+    setCandidateSaving(true);
+    try{
+      const circuito=db.circuitos.find(c=>c.puesto===candidateForm.puesto&&c.activo);
+      const payload={nombre:candidateForm.nombre.trim(),email:String(candidateForm.email||"").trim()||null,telefono:String(candidateForm.telefono||"").trim()||null,puesto:candidateForm.puesto,circuito_id:circuito?.id||null,origen:String(candidateForm.origen||"").trim()||null,disponibilidad_desde:candidateForm.disponibilidadDesde||null,disponibilidad_horaria:String(candidateForm.disponibilidadHoraria||"").trim()||null,observaciones:String(candidateForm.observaciones||"").trim()||null,actualizado_por_user_id:user.id};
+      const saved=await api.saveReclutamientoCandidataCompleta({id:candidateForm.id||null,...payload},candidateForm.localIds||[],candidateForm.servicios||[]);
+      const id=saved.id;
+      if(candidateForm.cvFile)await uploadArchivo({candidataId:id,tipo:"cv",file:candidateForm.cvFile});
+      setCandidateModal(null);notifyToast("Candidata guardada.","success");await load();
+    }catch(e){setCandidateErr("No se pudo guardar: "+(e.message||e));}
+    setCandidateSaving(false);
+  };
+
+  const openDetail=c=>{setDetailId(c.id);const d={};db.instancias.filter(i=>Number(i.candidata_id)===Number(c.id)).forEach(i=>{d[i.id]={fechaHora:reclutamientoDateTimeLocal(i.fecha_hora),localId:i.local_id||"",modalidad:i.modalidad||"",comentarios:i.comentarios||"",recomendacion:i.recomendacion||"",resultado:i.resultado||"",estado:i.estado||"pendiente",evaluadorIds:db.evaluadores.filter(x=>Number(x.instancia_id)===Number(i.id)).map(x=>Number(x.user_id))};});setStageDraft(d);setTestServiceId("");};
+  useEffect(()=>{
+    if(loading || vista!=="tablero") return;
+    const pendingId=Number(sessionStorage.getItem("niki_reclutamiento_candidata")||0);
+    if(!pendingId) return;
+    const c=db.candidatas.find(x=>Number(x.id)===pendingId);
+    if(c){ sessionStorage.removeItem("niki_reclutamiento_candidata"); openDetail(c); }
+  },[loading,vista,db.candidatas]);
+
+  const updateStageDraft=(id,k,v)=>setStageDraft(p=>({...p,[id]:{...(p[id]||{}),[k]:v}}));
+  const toggleEvaluator=(instId,uid)=>setStageDraft(p=>{const arr=p[instId]?.evaluadorIds||[];return {...p,[instId]:{...(p[instId]||{}),evaluadorIds:arr.includes(uid)?arr.filter(x=>x!==uid):[...arr,uid]}};});
+  const saveStage=async(inst,markRealizada=false)=>{
+    const d=stageDraft[inst.id]||{};
+    const bloqueo=markRealizada?bloqueoParaRealizar(inst):"";
+    if(bloqueo){notifyToast(bloqueo,"warning");return;}
+    setStageSaving(inst.id);
+    try{
+      let estadoNuevo=d.estado||inst.estado;
+      if(markRealizada)estadoNuevo="realizada";else if(d.fechaHora&&estadoNuevo==="pendiente")estadoNuevo="programada";
+      const result=await api.saveReclutamientoInstanciaCompleta(inst.id,{
+        fecha_hora:d.fechaHora?new Date(d.fechaHora).toISOString():null,
+        local_id:d.localId?Number(d.localId):null,
+        modalidad:String(d.modalidad||"").trim()||null,
+        comentarios:String(d.comentarios||"").trim()||null,
+        recomendacion:d.recomendacion||null,
+        resultado:String(d.resultado||"").trim()||null,
+        estado:estadoNuevo,
+        realizada_en:markRealizada?new Date().toISOString():(inst.realizada_en||null),
+      },d.evaluadorIds||[]);
+      const saved=result?.instancia||{...inst,fecha_hora:d.fechaHora?new Date(d.fechaHora).toISOString():null,local_id:d.localId?Number(d.localId):null,modalidad:d.modalidad||null,comentarios:d.comentarios||null,recomendacion:d.recomendacion||null,resultado:d.resultado||null,estado:estadoNuevo};
+      setDb(prev=>({
+        ...prev,
+        instancias:(prev.instancias||[]).map(x=>Number(x.id)===Number(inst.id)?saved:x),
+        evaluadores:[...(prev.evaluadores||[]).filter(x=>Number(x.instancia_id)!==Number(inst.id)),...(result?.evaluador_ids||d.evaluadorIds||[]).map(uid=>({instancia_id:inst.id,user_id:Number(uid)}))],
+        candidatas:(prev.candidatas||[]).map(c=>Number(c.id)===Number(inst.candidata_id)&&result?.candidata_estado?{...c,estado:result.candidata_estado}:c),
+      }));
+      setStageDraft(prev=>({...prev,[inst.id]:{...d,fechaHora:reclutamientoDateTimeLocal(saved.fecha_hora),localId:saved.local_id||"",modalidad:saved.modalidad||"",comentarios:saved.comentarios||"",recomendacion:saved.recomendacion||"",resultado:saved.resultado||"",estado:saved.estado||estadoNuevo,evaluadorIds:result?.evaluador_ids||d.evaluadorIds||[]}}));
+      notifyToast(markRealizada?"Etapa marcada como realizada.":"Etapa guardada.","success");
+    }catch(e){notifyToast("No se pudo guardar la etapa: "+(e.message||e),"error");}
+    setStageSaving(null);
+  };
+
+  const addTestService=async inst=>{const svc=(data.agendaServicios||[]).find(s=>Number(s.id)===Number(testServiceId));if(!svc)return;try{await api.createReclutamientoPruebaServicio({instancia_id:inst.id,servicio_id:svc.id,servicio_nombre:svc.nombre,resultado:null,comentario:null});setTestServiceId("");await audit(inst.candidata_id,"SERVICIO_PRUEBA_AGREGADO",svc.nombre,{instanciaId:inst.id});await load();}catch(e){notifyToast("No se pudo agregar el servicio: "+(e.message||e),"error");}};
+  const saveTestService=async(row,patch)=>{try{await api.updateReclutamientoPruebaServicio(row.id,patch);await audit(detail?.id,"SERVICIO_PRUEBA_EDITADO",row.servicio_nombre,{pruebaServicioId:row.id});await load();}catch(e){notifyToast("No se pudo guardar la evaluación del servicio.","error");}};
+  const deleteTestService=async row=>{if(!window.confirm(`¿Quitar ${row.servicio_nombre} de la prueba?`))return;await api.deleteReclutamientoPruebaServicio(row.id);await audit(detail?.id,"SERVICIO_PRUEBA_ELIMINADO",row.servicio_nombre);await load();};
+  const uploadTestPhoto=async(inst,row,file)=>{try{await uploadArchivo({candidataId:inst.candidata_id,instanciaId:inst.id,pruebaServicioId:row.id,tipo:"foto",file});notifyToast("Foto subida.","success");await load();}catch(e){notifyToast("No se pudo subir la foto: "+(e.message||e),"error");}};
+
+  const decidir=async decision=>{if(!detail||!puedeAutorizar)return;try{await api.upsertReclutamientoAprobacion({candidata_id:detail.id,user_id:user.id,decision,comentario:null,activa:true,actualizado_en:new Date().toISOString()});await audit(detail.id,decision==="aprobada"?"APROBACION_RRHH":"RECHAZO_RRHH",user.nombre||user.usuario);notifyToast(decision==="aprobada"?"Aprobación registrada.":"Rechazo registrado.",decision==="aprobada"?"success":"warning");await load();}catch(e){notifyToast("No se pudo registrar la decisión: "+(e.message||e),"error");}};
+  const quitarDecision=async()=>{if(!detail)return;try{await api.quitarReclutamientoAprobacion(detail.id);await load();notifyToast("Tu decisión fue retirada.","success");}catch(e){notifyToast("No se pudo retirar la decisión: "+(e.message||e),"error");}};
+
+  const openEncargadaIncorp=c=>setEncIncorp({candidata:c,fechaInicio:dateKey(new Date()),usuario:String(c.email||"").split("@")[0].replace(/[^a-zA-Z0-9._-]/g,"").toLowerCase(),email:c.email||"",password:"niki123",tipoRelacion:"a_resolver",localIds:db.locales.filter(x=>Number(x.candidata_id)===Number(c.id)).map(x=>Number(x.local_id))});
+  const toggleEncIncorpLocal=id=>setEncIncorp(x=>({...x,localIds:(x.localIds||[]).includes(id)?x.localIds.filter(v=>v!==id):[...(x.localIds||[]),id]}));
+  const confirmarEncargadaIncorp=async()=>{const x=encIncorp;if(!x)return;if(!x.fechaInicio||!x.usuario||!isValidEmail(x.email))return notifyToast("Completá fecha de ingreso, usuario y email válido.","warning");if(!(x.localIds||[]).length)return notifyToast("Asigná al menos un local.","warning");if(usuarioEnUso(data.users,x.usuario)||emailEnUso(data.users,x.email))return notifyToast("El usuario o email ya están en uso.","warning");setEncIncorpSaving(true);try{const c=x.candidata;const rows=await api.createUser({nombre:c.nombre,usuario:normalizeUsuarioValue(x.usuario),email:normalizeEmailValue(x.email),password:x.password||"niki123",rol:"encargada",local_id:null,activo:true,telefono:c.telefono||null,tipo_relacion:x.tipoRelacion||"a_resolver"});const uid=Array.isArray(rows)?rows[0]?.id:rows?.id;if(!uid)throw new Error("No se obtuvo el usuario creado.");await api.setEncargadoLocales(uid,x.localIds||[]);const hr=await api.createUsuarioHistorialLaboral({user_id:uid,fecha_inicio:x.fechaInicio,fecha_fin:null,motivo_fin:null,observacion:`Incorporada desde reclutamiento · candidata ${c.id}`});await api.marcarReclutamientoIncorporada(c.id,uid);try{await api.enviarInvitacionUsuario({actor_id:user.id,session_token:user.sessionToken,target_user_id:uid});}catch{}const newUser=normalizeUser(Array.isArray(rows)?rows[0]:rows),rawH=Array.isArray(hr)?hr[0]:hr;setData(prev=>({...prev,users:[...(prev.users||[]),newUser],encargadoLocales:[...(prev.encargadoLocales||[]),...(x.localIds||[]).map(localId=>({userId:uid,localId}))],usuarioHistorialLaboral:rawH?[...(prev.usuarioHistorialLaboral||[]),normalizeUsuarioHistorialLaboral(rawH)]:(prev.usuarioHistorialLaboral||[]),reclutamientoCandidatas:(prev.reclutamientoCandidatas||[]).filter(z=>Number(z.id)!==Number(c.id))}));setEncIncorp(null);setDetailId(null);notifyToast("Candidata incorporada como encargada.","success");await load();}catch(e){notifyToast("No se pudo incorporar: "+(e.message||e),"error");}setEncIncorpSaving(false);};
+
+  const changeStatus=async(c,status)=>{try{await api.updateReclutamientoEstado(c.id,status);await load();}catch(e){notifyToast("No se pudo cambiar el estado: "+(e.message||e),"error");}};
+  const estadoBadge=c=>{const [label,color]=RECLUTAMIENTO_ESTADOS[c.estado]||[c.estado,"gray"];return <Badge color={color}>{label}</Badge>;};
+  const localidadNames=c=>db.locales.filter(x=>Number(x.candidata_id)===Number(c.id)).map(x=>(data.locales||[]).find(l=>Number(l.id)===Number(x.local_id))?.nombre).filter(Boolean);
+
+  const saveCircuitApprovals=async(circuito,value)=>{setConfigSaving(true);try{await api.updateReclutamientoCircuito(circuito.id,{aprobaciones_requeridas:Number(value)});await load();}catch(e){notifyToast("No se pudo guardar la configuración.","error");}setConfigSaving(false);};
+  const toggleAuthorizer=async(uid,pst)=>{const current=db.autorizadores.find(a=>Number(a.user_id)===Number(uid)&&a.puesto===pst);setConfigSaving(true);try{await api.setReclutamientoAutorizador({user_id:uid,puesto:pst,activo:current?!current.activo:true});await load();}catch(e){notifyToast("No se pudo guardar el autorizador.","error");}setConfigSaving(false);};
+  const addStage=async pst=>{const c=db.circuitos.find(x=>x.puesto===pst&&x.activo),d=newStage[pst];if(!c||!d.nombre.trim())return;const orden=Math.max(0,...db.plantillas.filter(x=>Number(x.circuito_id)===Number(c.id)).map(x=>Number(x.orden)||0))+1;setConfigSaving(true);try{await api.createReclutamientoEtapaPlantilla({circuito_id:c.id,orden,nombre:d.nombre.trim(),tipo:d.tipo,obligatoria:true,activa:true});setNewStage(p=>({...p,[pst]:{nombre:"",tipo:"entrevista"}}));await load();}catch(e){notifyToast("No se pudo agregar la etapa.","error");}setConfigSaving(false);};
+
+  if(loading)return <div style={{padding:20}}><NikiSplash text="Cargando reclutamiento..."/></div>;
+  return <div>
+    <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",gap:10,flexWrap:"wrap",marginBottom:14}}><div><h2 style={{margin:0,fontSize:18}}>{vista==="config"?"Configuración de reclutamiento":"Candidatas y procesos"}</h2><p style={{margin:"3px 0 0",fontSize:12,color:"var(--color-text-secondary)"}}>{vista==="config"?"Circuitos, etapas y autorizadores de RRHH.":"Seguimiento completo de candidatas, entrevistas, pruebas y estado del proceso."}</p></div>{vista==="tablero"&&<Btn size="sm" onClick={openNew}>+ Nueva candidata</Btn>}</div>
+    {vista==="tablero"?<>
+      <Card style={{marginBottom:14,padding:12}}><div style={{display:"grid",gridTemplateColumns:"2fr 1fr 1fr",gap:9}}><Input value={search} onChange={setSearch} placeholder="Buscar por nombre, email o teléfono"/><Select value={puesto} onChange={setPuesto}><option value="todos">Todos los puestos</option><option value="manicura">Manicuras</option><option value="encargada">Encargadas</option></Select><Select value={estado} onChange={setEstado}><option value="activos">Procesos activos</option><option value="todos">Todos los estados</option>{Object.entries(RECLUTAMIENTO_ESTADOS).map(([k,v])=><option key={k} value={k}>{v[0]}</option>)}</Select></div></Card>
+      <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(245px,1fr))",gap:12}}>{candidatasFiltradas.map(c=>{const inst=db.instancias.filter(i=>Number(i.candidata_id)===Number(c.id)),done=inst.filter(i=>["realizada","aprobada"].includes(i.estado)).length,total=inst.filter(i=>i.obligatoria).length,locs=localidadNames(c);return <Card key={c.id} style={{padding:12}}><div style={{display:"flex",justifyContent:"space-between",gap:8,alignItems:"flex-start"}}><div style={{minWidth:0}}><p style={{margin:0,fontSize:14,fontWeight:700,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{c.nombre}</p><p style={{margin:"2px 0 0",fontSize:10,color:"var(--color-text-secondary)",textTransform:"uppercase",fontWeight:700}}>{c.puesto}</p></div>{estadoBadge(c)}</div><p style={{margin:"9px 0 0",fontSize:11,color:"var(--color-text-secondary)"}}>{c.email||"Sin email"} · {c.telefono||"Sin teléfono"}</p><p style={{margin:"6px 0 0",fontSize:11}}>{locs.length?`Sucursales: ${locs.join(", ")}`:"Sin sucursales preferidas"}</p><div style={{marginTop:10,height:7,borderRadius:999,background:"#eee",overflow:"hidden"}}><div style={{height:"100%",width:`${total?Math.min(100,(done/total)*100):0}%`,background:COLORS.pink}}/></div><div style={{display:"flex",justifyContent:"space-between",fontSize:10,color:"var(--color-text-secondary)",marginTop:4}}><span>{done}/{total} etapas</span><span>{db.aprobaciones.filter(a=>Number(a.candidata_id)===Number(c.id)&&a.activa&&a.decision==="aprobada").length}/{db.circuitos.find(x=>Number(x.id)===Number(c.circuito_id))?.aprobaciones_requeridas||2} aprobaciones</span></div><div style={{display:"flex",gap:6,marginTop:11}}><Btn size="sm" onClick={()=>openDetail(c)} style={{flex:1,justifyContent:"center"}}>Abrir proceso</Btn><Btn size="sm" variant="ghost" onClick={()=>openEdit(c)}>Editar</Btn></div></Card>})}</div>
+      {candidatasFiltradas.length===0&&<Card><p style={{margin:0,fontSize:13,color:"var(--color-text-secondary)"}}>No hay candidatas con estos filtros.</p></Card>}
+    </>:<div style={{display:"flex",flexDirection:"column",gap:14}}>{["manicura","encargada"].map(pst=>{const c=db.circuitos.find(x=>x.puesto===pst&&x.activo),etapas=c?db.plantillas.filter(x=>Number(x.circuito_id)===Number(c.id)).sort((a,b)=>a.orden-b.orden):[];return <Card key={pst}><div style={{display:"flex",justifyContent:"space-between",gap:12,alignItems:"center",flexWrap:"wrap"}}><div><h3 style={{margin:0,fontSize:15}}>Circuito · {pst==="manicura"?"Manicura":"Encargada"}</h3><p style={{margin:"3px 0 0",fontSize:11,color:"var(--color-text-secondary)"}}>Las candidatas nuevas copian estas etapas al iniciar su proceso.</p></div>{c&&<div style={{display:"flex",alignItems:"center",gap:6}}><span style={{fontSize:11}}>Aprobaciones RRHH</span><select disabled={configSaving} value={c.aprobaciones_requeridas||2} onChange={e=>saveCircuitApprovals(c,e.target.value)} style={{padding:"5px 8px",border:"1px solid #ddd",borderRadius:7}}><option value="1">1</option><option value="2">2</option></select></div>}</div><div style={{marginTop:12,display:"flex",flexDirection:"column",gap:6}}>{etapas.map(e=><div key={e.id} style={{display:"flex",gap:8,alignItems:"center",padding:"7px 9px",background:"var(--color-background-secondary)",borderRadius:8}}><Badge color="gray">{e.orden}</Badge><span style={{flex:1,fontSize:12,fontWeight:600}}>{e.nombre}</span><Badge color="info">{e.tipo.replace("_"," ")}</Badge><button disabled={configSaving} onClick={async()=>{if(!window.confirm("¿Eliminar esta etapa para futuras candidatas?"))return;await api.deleteReclutamientoEtapaPlantilla(e.id);await load();}} style={{border:"none",background:COLORS.dangerLight,color:COLORS.danger,borderRadius:6,cursor:"pointer"}}>×</button></div>)}</div><div style={{display:"grid",gridTemplateColumns:"1fr 170px 100px",gap:7,marginTop:10}}><Input value={newStage[pst].nombre} onChange={v=>setNewStage(p=>({...p,[pst]:{...p[pst],nombre:v}}))} placeholder="Nueva etapa"/><Select value={newStage[pst].tipo} onChange={v=>setNewStage(p=>({...p,[pst]:{...p[pst],tipo:v}}))}><option value="entrevista">Entrevista</option><option value="prueba_tecnica">Prueba técnica</option><option value="evaluacion">Evaluación</option><option value="documentacion">Documentación</option></Select><Btn size="sm" disabled={configSaving} onClick={()=>addStage(pst)} style={{justifyContent:"center"}}>Agregar</Btn></div><div style={{marginTop:14,borderTop:"1px solid #eee",paddingTop:10}}><p style={{margin:"0 0 7px",fontSize:11,fontWeight:800,textTransform:"uppercase",color:"var(--color-text-secondary)"}}>Autorizadores RRHH</p><div style={{display:"flex",gap:7,flexWrap:"wrap"}}>{rrhhUsers.map(u=>{const on=user.rol==="admin"&&Number(u.id)===Number(user.id)?true:db.autorizadores.some(a=>Number(a.user_id)===Number(u.id)&&a.puesto===pst&&a.activo);return <button key={u.id} disabled={configSaving||(u.rol==="admin"&&Number(u.id)===Number(user.id))} onClick={()=>toggleAuthorizer(u.id,pst)} style={{border:`1px solid ${on?COLORS.pink:"#ddd"}`,background:on?COLORS.pinkLight:"#fff",borderRadius:999,padding:"6px 9px",fontSize:10,cursor:"pointer"}}>{on?"✓ ":""}{u.nombre}</button>})}</div></div></Card>})}</div>}
+
+    {candidateModal&&<Modal title={candidateModal==="new"?"Nueva candidata":"Editar candidata"} onClose={()=>setCandidateModal(null)} width={820}><div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12}}><ModalInput label="Nombre completo" value={candidateForm.nombre||""} onChange={v=>setCandidateForm(f=>({...f,nombre:v}))}/><ModalSelect label="Puesto" value={candidateForm.puesto||"manicura"} onChange={v=>setCandidateForm(f=>({...f,puesto:v,servicios:v==="manicura"?f.servicios:[]}))}><option value="manicura">Manicura</option><option value="encargada">Encargada</option></ModalSelect><ModalInput label="Email" value={candidateForm.email||""} onChange={v=>setCandidateForm(f=>({...f,email:v}))}/><ModalInput label="Teléfono" value={candidateForm.telefono||""} onChange={v=>setCandidateForm(f=>({...f,telefono:v}))}/><ModalInput label="Origen de la candidatura" value={candidateForm.origen||""} onChange={v=>setCandidateForm(f=>({...f,origen:v}))}/><ModalInput label="Disponible desde" type="date" value={candidateForm.disponibilidadDesde||""} onChange={v=>setCandidateForm(f=>({...f,disponibilidadDesde:v}))}/></div><div style={{marginTop:12}}><ModalInput label="Disponibilidad horaria" value={candidateForm.disponibilidadHoraria||""} onChange={v=>setCandidateForm(f=>({...f,disponibilidadHoraria:v}))}/></div><div style={{marginTop:12}}><label style={{fontSize:13,fontWeight:500,color:"#555",display:"block",marginBottom:6}}>Observaciones</label><textarea value={candidateForm.observaciones||""} onChange={e=>setCandidateForm(f=>({...f,observaciones:e.target.value}))} rows={3} style={{width:"100%",border:"1.5px solid #e0e0e0",borderRadius:8,padding:10,resize:"vertical"}}/></div><div style={{marginTop:14,borderTop:"1px solid #eee",paddingTop:12}}><p style={{margin:"0 0 8px",fontSize:12,fontWeight:750}}>Sucursales posibles</p><div style={{display:"flex",gap:7,flexWrap:"wrap"}}>{(data.locales||[]).map(l=>{const on=(candidateForm.localIds||[]).includes(l.id);return <button type="button" key={l.id} onClick={()=>toggleCandidateLocal(l.id)} style={{border:`1px solid ${on?COLORS.pink:"#ddd"}`,background:on?COLORS.pinkLight:"#fff",borderRadius:999,padding:"6px 9px",fontSize:10,cursor:"pointer"}}>{on?"✓ ":""}{l.nombre}</button>})}</div></div>{candidateForm.puesto==="manicura"&&<div style={{marginTop:14,borderTop:"1px solid #eee",paddingTop:12}}><p style={{margin:"0 0 6px",fontSize:12,fontWeight:750}}>Servicios que realiza / no realiza</p><Input value={candidateServiceSearch} onChange={setCandidateServiceSearch} placeholder="Buscar servicio..."/><div style={{display:"flex",gap:6,flexWrap:"wrap",marginTop:7,maxHeight:130,overflowY:"auto"}}>{(data.agendaServicios||[]).filter(s=>!candidateServiceSearch||String(s.nombre||"").toLowerCase().includes(candidateServiceSearch.toLowerCase())).slice(0,30).map(s=>{const row=(candidateForm.servicios||[]).find(x=>Number(x.servicioId)===Number(s.id));return <div key={s.id} style={{display:"inline-flex",alignItems:"center",border:"1px solid #ddd",borderRadius:999,overflow:"hidden"}}><span style={{fontSize:10,padding:"5px 7px"}}>{s.nombre}</span><button type="button" onClick={()=>setCandidateServicio(s.id,true)} style={{border:"none",borderLeft:"1px solid #ddd",padding:"5px 7px",background:row?.realiza===true?COLORS.successLight:"#fff",color:row?.realiza===true?COLORS.success:"#666",cursor:"pointer"}}>Sí</button><button type="button" onClick={()=>setCandidateServicio(s.id,false)} style={{border:"none",borderLeft:"1px solid #ddd",padding:"5px 7px",background:row?.realiza===false?COLORS.dangerLight:"#fff",color:row?.realiza===false?COLORS.danger:"#666",cursor:"pointer"}}>No</button>{row&&<button type="button" onClick={()=>removeCandidateServicio(s.id)} style={{border:"none",borderLeft:"1px solid #ddd",padding:"5px 6px",background:"#fff",cursor:"pointer"}}>×</button>}</div>})}</div></div>}<div style={{marginTop:14,borderTop:"1px solid #eee",paddingTop:12}}><p style={{margin:"0 0 6px",fontSize:12,fontWeight:750}}>CV</p><input type="file" accept="application/pdf,image/jpeg,image/png,image/webp" onChange={e=>setCandidateForm(f=>({...f,cvFile:e.target.files?.[0]||null}))}/>{candidateModal==="edit"&&<div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(180px,1fr))",gap:6,marginTop:8}}>{db.archivos.filter(a=>Number(a.candidata_id)===Number(candidateForm.id)&&a.tipo==="cv").map(a=><ReclutamientoArchivoLink key={a.id} actor={user} candidataId={candidateForm.id} archivo={a} onDelete={deleteArchivo}/>)}</div>}</div>{candidateErr&&<p style={{color:COLORS.danger,background:COLORS.dangerLight,padding:8,borderRadius:8,fontSize:12}}>{candidateErr}</p>}<div style={{display:"flex",gap:8,marginTop:16}}><Btn onClick={saveCandidate} disabled={candidateSaving} style={{flex:1,justifyContent:"center"}}>{candidateSaving?"Guardando...":"Guardar"}</Btn><Btn variant="secondary" onClick={()=>setCandidateModal(null)} style={{flex:1,justifyContent:"center"}}>Cancelar</Btn></div></Modal>}
+
+    {encIncorp&&<Modal title="Incorporar candidata como encargada" onClose={()=>setEncIncorp(null)} width={620}><div style={{display:"flex",flexDirection:"column",gap:11}}><div style={{padding:10,borderRadius:10,background:COLORS.successLight,fontSize:12}}><strong>{encIncorp.candidata.nombre}</strong> quedará dada de alta como encargada.</div><ModalInput label="Fecha de ingreso" type="date" value={encIncorp.fechaInicio} onChange={v=>setEncIncorp(x=>({...x,fechaInicio:v}))}/><div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10}}><ModalInput label="Usuario" value={encIncorp.usuario} onChange={v=>setEncIncorp(x=>({...x,usuario:v}))}/><ModalInput label="Email" value={encIncorp.email} onChange={v=>setEncIncorp(x=>({...x,email:v}))}/></div><ModalInput label="Contraseña inicial" value={encIncorp.password} onChange={v=>setEncIncorp(x=>({...x,password:v}))}/><ModalSelect label="Tipo de relación" value={encIncorp.tipoRelacion} onChange={v=>setEncIncorp(x=>({...x,tipoRelacion:v}))}><option value="a_resolver">A resolver</option><option value="monotributista">Monotributista</option><option value="dependencia">Relación de dependencia</option></ModalSelect><div><p style={{margin:"0 0 7px",fontSize:12,fontWeight:700}}>Locales asignados</p><div style={{display:"flex",gap:6,flexWrap:"wrap"}}>{(data.locales||[]).map(l=>{const on=(encIncorp.localIds||[]).includes(l.id);return <button key={l.id} type="button" onClick={()=>toggleEncIncorpLocal(l.id)} style={{border:`1px solid ${on?COLORS.pink:"#ddd"}`,background:on?COLORS.pinkLight:"#fff",borderRadius:999,padding:"6px 9px",fontSize:10,cursor:"pointer"}}>{on?"✓ ":""}{l.nombre}</button>})}</div></div><div style={{display:"flex",gap:8}}><Btn variant="success" onClick={confirmarEncargadaIncorp} disabled={encIncorpSaving} style={{flex:1,justifyContent:"center"}}>{encIncorpSaving?"Incorporando...":"Confirmar incorporación"}</Btn><Btn variant="secondary" onClick={()=>setEncIncorp(null)} style={{flex:1,justifyContent:"center"}}>Cancelar</Btn></div></div></Modal>}
+    {detail&&<Modal title={`Proceso · ${detail.nombre}`} onClose={()=>setDetailId(null)} width={940}><div style={{display:"flex",justifyContent:"space-between",gap:10,alignItems:"center",flexWrap:"wrap",marginBottom:12}}><div style={{display:"flex",gap:7,alignItems:"center"}}>{estadoBadge(detail)}<Badge color="gray">{detail.puesto}</Badge>{detail.disponibilidad_desde&&<span style={{fontSize:11,color:"var(--color-text-secondary)"}}>Disponible desde {detail.disponibilidad_desde.split("-").reverse().join("/")}</span>}</div><div style={{display:"flex",gap:6}}>{detail.estado==="disponible"&&detail.puesto==="encargada"&&<Btn size="sm" variant="success" onClick={()=>openEncargadaIncorp(detail)}>Incorporar encargada</Btn>}<Btn size="sm" variant="ghost" onClick={()=>openEdit(detail)}>Editar ficha</Btn>{!["incorporada","desistio"].includes(detail.estado)&&<Btn size="sm" variant="secondary" onClick={()=>changeStatus(detail,detail.estado==="en_pausa"?"en_proceso":"en_pausa")}>{detail.estado==="en_pausa"?"Reabrir":"Pausar"}</Btn>}<Btn size="sm" variant="danger" onClick={()=>changeStatus(detail,"desistio")}>Desistió</Btn></div></div><div style={{display:"flex",flexDirection:"column",gap:10}}>{detailInstancias.map(inst=>{const d=stageDraft[inst.id]||{},evals=d.evaluadorIds||[],testRows=db.pruebas.filter(x=>Number(x.instancia_id)===Number(inst.id));return <Card key={inst.id} style={{padding:12,background:inst.estado==="realizada"?COLORS.successLight:"#fff"}}><div style={{display:"flex",justifyContent:"space-between",gap:8,alignItems:"center",flexWrap:"wrap"}}><div style={{display:"flex",alignItems:"center",gap:7}}><Badge color="gray">{inst.orden}</Badge><strong style={{fontSize:13}}>{inst.nombre}</strong><Badge color={inst.tipo==="prueba_tecnica"?"amber":"info"}>{inst.tipo.replace("_"," ")}</Badge></div><Badge color={inst.estado==="realizada"?"success":inst.estado==="programada"?"info":inst.estado==="rechazada"?"danger":"gray"}>{inst.estado.replace("_"," ")}</Badge></div><div style={{display:"grid",gridTemplateColumns:"1.2fr 1fr 1fr",gap:8,marginTop:10}}><div><label style={{fontSize:10,fontWeight:700,color:"#777"}}>Fecha y hora</label><input type="datetime-local" value={d.fechaHora||""} onChange={e=>updateStageDraft(inst.id,"fechaHora",e.target.value)} style={{width:"100%",padding:7,border:"1px solid #ddd",borderRadius:7}}/></div><div><label style={{fontSize:10,fontWeight:700,color:"#777"}}>Local</label><select value={d.localId||""} onChange={e=>updateStageDraft(inst.id,"localId",e.target.value)} style={{width:"100%",padding:7,border:"1px solid #ddd",borderRadius:7}}><option value="">Sin local</option>{(data.locales||[]).map(l=><option key={l.id} value={l.id}>{l.nombre}</option>)}</select></div><div><label style={{fontSize:10,fontWeight:700,color:"#777"}}>Modalidad</label><Input value={d.modalidad||""} onChange={v=>updateStageDraft(inst.id,"modalidad",v)} placeholder="Presencial / Meet..." style={{padding:7,fontSize:12}}/></div></div><div style={{marginTop:8}}><p style={{margin:"0 0 5px",fontSize:10,fontWeight:700,color:"#777"}}>Evaluadores</p><div style={{display:"flex",gap:6,flexWrap:"wrap"}}>{rrhhUsers.map(u=><button key={u.id} type="button" onClick={()=>toggleEvaluator(inst.id,u.id)} style={{border:`1px solid ${evals.includes(u.id)?COLORS.pink:"#ddd"}`,background:evals.includes(u.id)?COLORS.pinkLight:"#fff",borderRadius:999,padding:"5px 8px",fontSize:9,cursor:"pointer"}}>{evals.includes(u.id)?"✓ ":""}{u.nombre}</button>)}</div></div><div style={{display:"grid",gridTemplateColumns:"1fr 180px",gap:8,marginTop:8}}><div><label style={{fontSize:10,fontWeight:700,color:"#777"}}>Comentarios / evaluación</label><textarea value={d.comentarios||""} onChange={e=>updateStageDraft(inst.id,"comentarios",e.target.value)} rows={3} style={{width:"100%",border:"1px solid #ddd",borderRadius:7,padding:8,resize:"vertical"}}/></div><div><label style={{fontSize:10,fontWeight:700,color:"#777"}}>Recomendación</label><select value={d.recomendacion||""} onChange={e=>updateStageDraft(inst.id,"recomendacion",e.target.value)} style={{width:"100%",padding:7,border:"1px solid #ddd",borderRadius:7}}>{RECLUTAMIENTO_RECOMENDACIONES.map(([v,l])=><option key={v} value={v}>{l}</option>)}</select><label style={{fontSize:10,fontWeight:700,color:"#777",display:"block",marginTop:8}}>Resultado / sugerencia</label><textarea value={d.resultado||""} onChange={e=>updateStageDraft(inst.id,"resultado",e.target.value)} rows={2} style={{width:"100%",border:"1px solid #ddd",borderRadius:7,padding:7,resize:"vertical"}}/></div></div>{inst.tipo==="prueba_tecnica"&&<div style={{marginTop:10,borderTop:"1px dashed #ddd",paddingTop:10}}><div style={{display:"flex",gap:7,alignItems:"center",marginBottom:8}}><Select value={testServiceId} onChange={setTestServiceId} style={{maxWidth:320}}><option value="">Seleccionar servicio evaluado</option>{(data.agendaServicios||[]).filter(s=>s.activo!==false).map(s=><option key={s.id} value={s.id}>{s.nombre}</option>)}</Select><Btn size="sm" onClick={()=>addTestService(inst)}>+ Servicio</Btn></div>{testRows.map(row=><div key={row.id} style={{border:"1px solid #eee",borderRadius:9,padding:9,marginBottom:7}}><div style={{display:"grid",gridTemplateColumns:"1fr 190px 2fr 34px",gap:7,alignItems:"center"}}><strong style={{fontSize:11}}>{row.servicio_nombre}</strong><select defaultValue={row.resultado||""} onChange={e=>saveTestService(row,{resultado:e.target.value||null})} style={{padding:6,border:"1px solid #ddd",borderRadius:7,fontSize:10}}><option value="">Resultado</option><option value="aprobado">Aprobado</option><option value="con_observaciones">Con observaciones</option><option value="no_aprobado">No aprobado</option></select><input defaultValue={row.comentario||""} onBlur={e=>{if(e.target.value!==(row.comentario||""))saveTestService(row,{comentario:e.target.value||null});}} placeholder="Comentario del servicio" style={{padding:6,border:"1px solid #ddd",borderRadius:7,fontSize:10}}/><button onClick={()=>deleteTestService(row)} style={{border:"none",background:COLORS.dangerLight,color:COLORS.danger,borderRadius:7,height:30,cursor:"pointer"}}>×</button></div><div style={{display:"flex",gap:6,alignItems:"center",marginTop:7,flexWrap:"wrap"}}><label style={{fontSize:10,fontWeight:650,background:COLORS.pinkLight,color:COLORS.pinkDark,padding:"5px 8px",borderRadius:7,cursor:"pointer"}}>📷 Subir foto<input type="file" accept="image/jpeg,image/png,image/webp" style={{display:"none"}} onChange={e=>{const f=e.target.files?.[0];if(f)uploadTestPhoto(inst,row,f);e.target.value="";}}/></label>{db.archivos.filter(a=>Number(a.prueba_servicio_id)===Number(row.id)&&a.tipo==="foto").map(a=><ReclutamientoArchivoLink key={a.id} actor={user} candidataId={detail.id} archivo={a} onDelete={deleteArchivo}/>)}</div></div>)}</div>}{bloqueoParaRealizar(inst)&&inst.estado!=="realizada"&&<div style={{marginTop:8,padding:"7px 9px",borderRadius:8,background:COLORS.amberLight,color:COLORS.amber,fontSize:10}}>🔒 {bloqueoParaRealizar(inst)} Podés agendar esta etapa, pero todavía no realizarla.</div>}<div style={{display:"flex",gap:7,marginTop:10,justifyContent:"flex-end"}}><Btn size="sm" variant="secondary" disabled={stageSaving===inst.id} onClick={()=>saveStage(inst,false)}>Guardar / programar</Btn><Btn size="sm" variant="success" disabled={stageSaving===inst.id||!!bloqueoParaRealizar(inst)} onClick={()=>saveStage(inst,true)}>✓ Marcar realizada</Btn></div></Card>})}</div><Card style={{marginTop:12,padding:12}}><div style={{display:"flex",justifyContent:"space-between",gap:8,alignItems:"center",flexWrap:"wrap"}}><div><h3 style={{margin:0,fontSize:14}}>Aprobación RRHH</h3><p style={{margin:"3px 0 0",fontSize:11,color:"var(--color-text-secondary)"}}>{aprobadas}/{detailCircuito?.aprobaciones_requeridas||2} aprobaciones activas{rechazadas?` · ${rechazadas} rechazo(s)`:""}. Si una evaluación se modifica, las aprobaciones vigentes se invalidan automáticamente.</p></div><div style={{display:"flex",gap:6}}>{puedeAutorizar&&<><Btn size="sm" variant="success" onClick={()=>decidir("aprobada")}>Aprobar</Btn><Btn size="sm" variant="danger" onClick={()=>decidir("rechazada")}>Rechazar</Btn><Btn size="sm" variant="ghost" onClick={quitarDecision}>Quitar mi decisión</Btn></>}</div></div><div style={{display:"flex",gap:7,flexWrap:"wrap",marginTop:9}}>{activeApprovals.map(a=>{const u=(data.users||[]).find(x=>Number(x.id)===Number(a.user_id));return <span key={a.id} style={{fontSize:10,padding:"5px 8px",borderRadius:999,background:a.decision==="aprobada"?COLORS.successLight:COLORS.dangerLight,color:a.decision==="aprobada"?COLORS.success:COLORS.danger,fontWeight:700}}>{a.decision==="aprobada"?"✓":"✕"} {u?.nombre||`Usuario ${a.user_id}`}</span>})}</div></Card><div style={{marginTop:12}}><p style={{margin:"0 0 7px",fontSize:11,fontWeight:800,textTransform:"uppercase",color:"var(--color-text-secondary)"}}>Archivos generales</p><div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(180px,1fr))",gap:6}}>{db.archivos.filter(a=>Number(a.candidata_id)===Number(detail.id)&&!a.instancia_id).map(a=><ReclutamientoArchivoLink key={a.id} actor={user} candidataId={detail.id} archivo={a} onDelete={deleteArchivo}/>)}</div></div></Modal>}
+  </div>;
+}
+
+
+function ReclutamientoCalendarioPage({ data, user, onOpenProcess }) {
+  const now=new Date();
+  const [vista,setVista]=useState("mes");
+  const [scope,setScope]=useState("mine");
+  const [cursor,setCursor]=useState(new Date(now.getFullYear(),now.getMonth(),now.getDate(),12));
+  const [loading,setLoading]=useState(true);
+  const [eventos,setEventos]=useState([]);
+  const [selected,setSelected]=useState(null);
+  const [draft,setDraft]=useState({});
+  const [detailLoading,setDetailLoading]=useState(false);
+  const [saving,setSaving]=useState(false);
+  const [testServiceId,setTestServiceId]=useState("");
+  const [processData,setProcessData]=useState(null);
+  const [processLoading,setProcessLoading]=useState(false);
+
+  const weekStart=useMemo(()=>getMon(cursor),[cursor]);
+  const range=useMemo(()=>{
+    if(vista==="semana"){
+      const desde=new Date(weekStart);desde.setHours(0,0,0,0);
+      const hasta=new Date(desde);hasta.setDate(hasta.getDate()+7);
+      return {desde,hasta};
+    }
+    return {desde:new Date(cursor.getFullYear(),cursor.getMonth(),1,0,0,0),hasta:new Date(cursor.getFullYear(),cursor.getMonth()+1,1,0,0,0)};
+  },[vista,cursor,weekStart]);
+
+  const loadCalendar=useCallback(async()=>{
+    setLoading(true);
+    try{setEventos(await api.getReclutamientoCalendario(range.desde.toISOString(),range.hasta.toISOString(),scope));}
+    catch(e){notifyToast("No se pudo cargar el calendario de Reclutamiento. "+(e.message||e),"error");}
+    setLoading(false);
+  },[range.desde.getTime(),range.hasta.getTime(),scope]);
+  useEffect(()=>{loadCalendar();},[loadCalendar]);
+
+  const hydrateDraft=e=>setDraft({
+    fechaHora:reclutamientoDateTimeLocal(e.fecha_hora),
+    localId:e.local_id||"",
+    modalidad:e.modalidad||"",
+    comentarios:e.comentarios||"",
+    recomendacion:e.recomendacion||"",
+    resultado:e.resultado||"",
+    estado:e.estado||"programada",
+    evaluadorIds:e.evaluador_ids||[],
+  });
+
+  const openEvent=async e=>{
+    setSelected(e);hydrateDraft(e);setTestServiceId("");
+    setDetailLoading(true);
+    try{
+      const detail=await api.getReclutamientoEventoDetalle(e.id);
+      setSelected({...e,...detail});
+      hydrateDraft({...e,...detail});
+    }catch(err){notifyToast("No se pudo abrir el detalle de la cita. "+(err.message||err),"error");}
+    setDetailLoading(false);
+  };
+
+  const refreshSelected=async()=>{
+    if(!selected?.id)return;
+    const detail=await api.getReclutamientoEventoDetalle(selected.id);
+    setSelected(prev=>({...prev,...detail}));
+    hydrateDraft({...selected,...detail});
+  };
+
+  const save=async(markRealizada=false)=>{
+    if(!selected?.editable)return;
+    if(markRealizada&&!selected.can_complete){
+      notifyToast(selected.completion_reason||"La etapa anterior todavía no habilita esta evaluación.","warning");
+      return;
+    }
+    setSaving(true);
+    try{
+      const estado=markRealizada?"realizada":(draft.fechaHora?(draft.estado==="realizada"?"realizada":"programada"):draft.estado||"pendiente");
+      const result=await api.saveReclutamientoInstanciaCompleta(selected.id,{
+        fecha_hora:draft.fechaHora?new Date(draft.fechaHora).toISOString():null,
+        local_id:draft.localId?Number(draft.localId):null,
+        modalidad:String(draft.modalidad||"").trim()||null,
+        comentarios:String(draft.comentarios||"").trim()||null,
+        recomendacion:draft.recomendacion||null,
+        resultado:String(draft.resultado||"").trim()||null,
+        estado,
+        realizada_en:markRealizada?new Date().toISOString():selected.realizada_en||null,
+      },selected.evaluador_ids||[]);
+      notifyToast(markRealizada?"Evaluación marcada como realizada.":"Cita actualizada.","success");
+      setSelected(null);
+      await loadCalendar();
+    }catch(e){notifyToast("No se pudo guardar: "+(e.message||e),"error");}
+    setSaving(false);
+  };
+
+  const addTestService=async()=>{
+    const svc=(data.agendaServicios||[]).find(s=>Number(s.id)===Number(testServiceId));
+    if(!svc||!selected)return;
+    try{
+      await api.createReclutamientoPruebaServicio({instancia_id:selected.id,servicio_id:svc.id,servicio_nombre:svc.nombre});
+      setTestServiceId("");
+      await refreshSelected();
+    }catch(e){notifyToast("No se pudo agregar el servicio. "+(e.message||e),"error");}
+  };
+  const saveTestService=async(row,patch)=>{
+    try{await api.updateReclutamientoPruebaServicio(row.id,patch);await refreshSelected();}
+    catch(e){notifyToast("No se pudo guardar la evaluación del servicio. "+(e.message||e),"error");}
+  };
+  const deleteTestService=async row=>{
+    if(!window.confirm(`¿Quitar ${row.servicio_nombre} de la prueba?`))return;
+    try{await api.deleteReclutamientoPruebaServicio(row.id);await refreshSelected();}
+    catch(e){notifyToast("No se pudo quitar el servicio. "+(e.message||e),"error");}
+  };
+  const uploadTestPhoto=async(row,file)=>{
+    if(!selected||!file)return;
+    try{
+      const up=await api.reclutamientoStorageRequest({action:"upload",actor:user,candidataId:selected.candidata_id,instanciaId:selected.id,tipo:"foto",file});
+      await api.createReclutamientoArchivo({candidata_id:selected.candidata_id,instancia_id:selected.id,prueba_servicio_id:row.id,tipo:"foto",nombre_archivo:up.name||file.name,mime_type:up.mimeType||file.type,tamano_bytes:up.size||file.size,storage_path:up.path,creado_por_user_id:user.id});
+      await refreshSelected();
+      notifyToast("Foto subida.","success");
+    }catch(e){notifyToast("No se pudo subir la foto. "+(e.message||e),"error");}
+  };
+  const deleteTestPhoto=async archivo=>{
+    if(!window.confirm(`¿Eliminar ${archivo.nombre_archivo}?`))return;
+    try{
+      await api.reclutamientoStorageRequest({action:"delete",actor:user,candidataId:selected.candidata_id,instanciaId:selected.id,path:archivo.storage_path});
+      await api.deleteReclutamientoArchivo(archivo.id);
+      await refreshSelected();
+    }catch(e){notifyToast("No se pudo eliminar la foto. "+(e.message||e),"error");}
+  };
+
+
+  const openFullProcess=async()=>{
+    if(!selected?.candidata_id)return;
+    setProcessLoading(true);
+    try{setProcessData(await api.getReclutamientoProcesoCandidata(selected.candidata_id));}
+    catch(e){notifyToast("No se pudo abrir el proceso completo. "+(e.message||e),"error");}
+    setProcessLoading(false);
+  };
+  const closeFullProcess=()=>setProcessData(null);
+
+  const colorFor=e=>{
+    if(e.estado==="realizada"||e.estado==="aprobada")return {bg:"#f1f1f1",border:"#b5b5b5",fg:"#666"};
+    const isTest=e.tipo==="prueba_tecnica",isMani=e.candidata?.puesto==="manicura";
+    if(isTest&&isMani)return {bg:"#fff0dc",border:"#d88724",fg:"#8a4d08"};
+    if(isTest&&!isMani)return {bg:"#efe9ff",border:"#8064c9",fg:"#4c368e"};
+    if(!isTest&&isMani)return {bg:COLORS.pinkLight,border:COLORS.pink,fg:COLORS.pinkDark};
+    return {bg:COLORS.infoLight,border:COLORS.info,fg:COLORS.info};
+  };
+
+  const movePrev=()=>setCursor(d=>{const n=new Date(d);vista==="semana"?n.setDate(n.getDate()-7):n.setMonth(n.getMonth()-1);return n;});
+  const moveNext=()=>setCursor(d=>{const n=new Date(d);vista==="semana"?n.setDate(n.getDate()+7):n.setMonth(n.getMonth()+1);return n;});
+  const title=vista==="semana"
+    ? `${fmtFecha(weekStart)} al ${fmtFecha(new Date(weekStart.getFullYear(),weekStart.getMonth(),weekStart.getDate()+6))}`
+    : `${MESES[cursor.getMonth()]} ${cursor.getFullYear()}`;
+
+  const renderEvent=e=>{
+    const c=colorFor(e),tm=new Date(e.fecha_hora).toLocaleTimeString("es-AR",{hour:"2-digit",minute:"2-digit"});
+    const done=e.estado==="realizada"||e.estado==="aprobada";
+    return <button key={e.id} onClick={()=>openEvent(e)} style={{border:`1px solid ${c.border}`,background:c.bg,color:c.fg,borderRadius:7,padding:"5px 6px",textAlign:"left",cursor:"pointer",fontSize:9,lineHeight:1.25,opacity:done?.78:1}}>
+      <strong>{done?"✓ ":""}{tm} · {e.candidata?.nombre||"Candidata"}</strong><br/>{e.tipo==="prueba_tecnica"?"Prueba":"Entrevista"} · {e.candidata?.puesto==="manicura"?"Manicura":"Encargada"}
+    </button>;
+  };
+
+  const monthStartDow=(new Date(cursor.getFullYear(),cursor.getMonth(),1).getDay()+6)%7;
+  const daysInMonth=new Date(cursor.getFullYear(),cursor.getMonth()+1,0).getDate();
+  const cells=Array.from({length:Math.ceil((monthStartDow+daysInMonth)/7)*7},(_,idx)=>{const d=idx-monthStartDow+1;return d>=1&&d<=daysInMonth?d:null;});
+  const keyForDay=d=>`${cursor.getFullYear()}-${String(cursor.getMonth()+1).padStart(2,"0")}-${String(d).padStart(2,"0")}`;
+  const weekDays=useMemo(()=>Array.from({length:7},(_,i)=>{const d=new Date(weekStart);d.setDate(d.getDate()+i);return d;}),[weekStart]);
+
+  return <div>
+    <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",gap:10,flexWrap:"wrap",marginBottom:14}}>
+      <div><h2 style={{margin:0,fontSize:18}}>Calendario de entrevistas y pruebas</h2><p style={{margin:"3px 0 0",fontSize:12,color:"var(--color-text-secondary)"}}>{scope==="mine"?"Se muestran únicamente las citas donde estás asignado/a como evaluador/a.":"Se muestran todas las citas. Las que no tenés asignadas son de solo lectura."}</p></div>
+      <div style={{display:"flex",gap:6,flexWrap:"wrap"}}><Btn size="sm" variant={scope==="mine"?"primary":"secondary"} onClick={()=>setScope("mine")}>Mis citas</Btn><Btn size="sm" variant={scope==="all"?"primary":"secondary"} onClick={()=>setScope("all")}>Todas</Btn><span style={{width:1,background:"#ddd",margin:"0 2px"}}/><Btn size="sm" variant={vista==="semana"?"primary":"secondary"} onClick={()=>setVista("semana")}>Semana</Btn><Btn size="sm" variant={vista==="mes"?"primary":"secondary"} onClick={()=>setVista("mes")}>Mes</Btn></div>
+    </div>
+    <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",gap:8,marginBottom:10}}>
+      <Btn size="sm" variant="secondary" onClick={movePrev}>‹</Btn><strong style={{fontSize:13,textAlign:"center"}}>{title}</strong><Btn size="sm" variant="secondary" onClick={moveNext}>›</Btn>
+    </div>
+    <div style={{display:"flex",gap:8,flexWrap:"wrap",fontSize:10,marginBottom:10}}>
+      <span style={{padding:"4px 7px",borderRadius:999,background:COLORS.pinkLight,color:COLORS.pinkDark}}>Manicura · entrevista</span>
+      <span style={{padding:"4px 7px",borderRadius:999,background:"#fff0dc",color:"#8a4d08"}}>Manicura · prueba</span>
+      <span style={{padding:"4px 7px",borderRadius:999,background:COLORS.infoLight,color:COLORS.info}}>Encargada · entrevista</span>
+      <span style={{padding:"4px 7px",borderRadius:999,background:"#efe9ff",color:"#4c368e"}}>Encargada · prueba</span>
+      <span style={{padding:"4px 7px",borderRadius:999,background:"#f1f1f1",color:"#666"}}>✓ Realizada</span>
+    </div>
+    {loading?<Card><p style={{margin:0,fontSize:12}}>Cargando calendario...</p></Card>:vista==="mes"?<Card style={{padding:0,overflow:"hidden"}}>
+      <div style={{display:"grid",gridTemplateColumns:"repeat(7,minmax(0,1fr))",borderBottom:"1px solid #eee"}}>{["Lun","Mar","Mié","Jue","Vie","Sáb","Dom"].map(x=><div key={x} style={{padding:"8px 6px",textAlign:"center",fontSize:10,fontWeight:700,color:"#777"}}>{x}</div>)}</div>
+      <div style={{display:"grid",gridTemplateColumns:"repeat(7,minmax(0,1fr))"}}>{cells.map((d,idx)=>{const dayEvents=d?eventos.filter(e=>reclutamientoFechaLocal(e.fecha_hora)===keyForDay(d)):[];return <div key={idx} style={{minHeight:112,borderRight:"1px solid #eee",borderBottom:"1px solid #eee",padding:5,background:d?"#fff":"#fafafa"}}>{d&&<><div style={{fontSize:11,fontWeight:700,marginBottom:5}}>{d}</div><div style={{display:"flex",flexDirection:"column",gap:4}}>{dayEvents.map(renderEvent)}</div></>}</div>})}</div>
+    </Card>:<Card style={{padding:0,overflowX:"auto"}}>
+      <div style={{display:"grid",gridTemplateColumns:"repeat(7,minmax(150px,1fr))",minWidth:1050}}>
+        {weekDays.map(d=>{const dk=dateKey(d),dayEvents=eventos.filter(e=>reclutamientoFechaLocal(e.fecha_hora)===dk).sort((a,b)=>new Date(a.fecha_hora)-new Date(b.fecha_hora));const today=dk===dateKey(new Date());return <div key={dk} style={{minHeight:430,borderRight:"1px solid #eee",background:today?COLORS.pinkLight:"#fff"}}><div style={{padding:"9px 8px",borderBottom:"1px solid #eee",textAlign:"center"}}><strong style={{fontSize:11}}>{["Dom","Lun","Mar","Mié","Jue","Vie","Sáb"][d.getDay()]} {d.getDate()}</strong></div><div style={{padding:7,display:"flex",flexDirection:"column",gap:6}}>{dayEvents.length?dayEvents.map(renderEvent):<span style={{fontSize:10,color:"#aaa",textAlign:"center",marginTop:10}}>Sin citas</span>}</div></div>})}
+      </div>
+    </Card>}
+    {selected&&<Modal title={`${selected.tipo==="prueba_tecnica"?"Prueba":"Entrevista"} · ${selected.candidata?.nombre||"Candidata"}`} onClose={()=>setSelected(null)} width={760}>
+      {detailLoading?<p style={{fontSize:12}}>Cargando detalle...</p>:<>
+      {!selected.editable&&<div style={{padding:9,borderRadius:8,background:COLORS.amberLight,color:COLORS.amber,fontSize:11,marginBottom:10}}>Podés consultar esta cita, pero solo el evaluador asignado o Admin puede editarla.</div>}
+      {selected.estado==="realizada"&&<div style={{padding:9,borderRadius:8,background:"#f1f1f1",color:"#666",fontSize:11,marginBottom:10}}>✓ Esta instancia ya fue realizada.</div>}
+      {!selected.can_complete&&selected.estado!=="realizada"&&<div style={{padding:9,borderRadius:8,background:COLORS.amberLight,color:COLORS.amber,fontSize:11,marginBottom:10}}>🔒 {selected.completion_reason} Podés mantenerla agendada, pero todavía no marcarla como realizada.</div>}
+      <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10}}>
+        <ModalInput label="Fecha y hora" type="datetime-local" disabled={!selected.editable} value={draft.fechaHora||""} onChange={v=>setDraft(x=>({...x,fechaHora:v}))}/>
+        <div><label style={{fontSize:13,fontWeight:500,color:"#555",display:"block",marginBottom:6}}>Local</label><select disabled={!selected.editable} value={draft.localId||""} onChange={e=>setDraft(x=>({...x,localId:e.target.value}))} style={{width:"100%",border:"1.5px solid #e0e0e0",borderRadius:8,padding:"9px 12px",fontSize:14,background:selected.editable?"#fafafa":"#f0f0f0"}}><option value="">Sin local</option>{(data.locales||[]).map(l=><option key={l.id} value={l.id}>{l.nombre}</option>)}</select></div>
+      </div>
+      <div style={{marginTop:10}}><ModalInput label="Modalidad" disabled={!selected.editable} value={draft.modalidad||""} onChange={v=>setDraft(x=>({...x,modalidad:v}))}/></div>
+      <div style={{marginTop:10}}><label style={{fontSize:12,fontWeight:600,color:"#555"}}>Comentarios / evaluación</label><textarea disabled={!selected.editable} value={draft.comentarios||""} onChange={e=>setDraft(x=>({...x,comentarios:e.target.value}))} rows={4} style={{width:"100%",marginTop:5,border:"1px solid #ddd",borderRadius:8,padding:8}}/></div>
+      <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10,marginTop:10}}><ModalSelect label="Recomendación" value={draft.recomendacion||""} onChange={v=>setDraft(x=>({...x,recomendacion:v}))}>{RECLUTAMIENTO_RECOMENDACIONES.map(([v,l])=><option key={v} value={v}>{l}</option>)}</ModalSelect><div><label style={{fontSize:12,fontWeight:600,color:"#555"}}>Resultado / sugerencia</label><textarea disabled={!selected.editable} value={draft.resultado||""} onChange={e=>setDraft(x=>({...x,resultado:e.target.value}))} rows={2} style={{width:"100%",marginTop:5,border:"1px solid #ddd",borderRadius:8,padding:8}}/></div></div>
+
+      {selected.tipo==="prueba_tecnica"&&<div style={{marginTop:14,borderTop:"1px dashed #ddd",paddingTop:12}}>
+        <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",gap:8,flexWrap:"wrap",marginBottom:8}}><strong style={{fontSize:12}}>Servicios evaluados</strong>{selected.editable&&<div style={{display:"flex",gap:6,flex:1,maxWidth:430}}><Select value={testServiceId} onChange={setTestServiceId}><option value="">Seleccionar servicio</option>{(data.agendaServicios||[]).filter(s=>s.activo!==false).map(s=><option key={s.id} value={s.id}>{s.nombre}</option>)}</Select><Btn size="sm" onClick={addTestService}>+ Agregar</Btn></div>}</div>
+        {(selected.pruebas||[]).length===0?<p style={{fontSize:11,color:"var(--color-text-secondary)"}}>Todavía no se cargaron servicios para esta prueba.</p>:(selected.pruebas||[]).map(row=><div key={row.id} style={{border:"1px solid #eee",borderRadius:9,padding:9,marginBottom:8}}>
+          <div style={{display:"grid",gridTemplateColumns:"1fr 170px 2fr 34px",gap:7,alignItems:"center"}}><strong style={{fontSize:11}}>{row.servicio_nombre}</strong><select disabled={!selected.editable} value={row.resultado||""} onChange={e=>saveTestService(row,{resultado:e.target.value||null})} style={{padding:6,border:"1px solid #ddd",borderRadius:7,fontSize:10}}><option value="">Resultado</option><option value="aprobado">Aprobado</option><option value="con_observaciones">Con observaciones</option><option value="no_aprobado">No aprobado</option></select><input disabled={!selected.editable} value={row.comentario||""} onChange={e=>setSelected(x=>({...x,pruebas:(x.pruebas||[]).map(r=>r.id===row.id?{...r,comentario:e.target.value}:r)}))} onBlur={e=>saveTestService(row,{comentario:e.target.value||null})} placeholder="Comentario" style={{padding:6,border:"1px solid #ddd",borderRadius:7,fontSize:10}}/>{selected.editable?<button onClick={()=>deleteTestService(row)} style={{border:"none",background:COLORS.dangerLight,color:COLORS.danger,borderRadius:7,height:30,cursor:"pointer"}}>×</button>:<span/>}</div>
+          <div style={{display:"flex",gap:6,alignItems:"center",marginTop:7,flexWrap:"wrap"}}>{selected.editable&&<label style={{fontSize:10,fontWeight:650,background:COLORS.pinkLight,color:COLORS.pinkDark,padding:"5px 8px",borderRadius:7,cursor:"pointer"}}>📷 Subir foto<input type="file" accept="image/jpeg,image/png,image/webp" style={{display:"none"}} onChange={e=>{const f=e.target.files?.[0];if(f)uploadTestPhoto(row,f);e.target.value="";}}/></label>}{(selected.archivos||[]).filter(a=>Number(a.prueba_servicio_id)===Number(row.id)&&a.tipo==="foto").map(a=><ReclutamientoArchivoLink key={a.id} actor={user} candidataId={selected.candidata_id} archivo={a} onDelete={selected.editable?deleteTestPhoto:null}/>)}</div>
+        </div>)}
+      </div>}
+
+      <div style={{display:"flex",gap:7,marginTop:14,flexWrap:"wrap"}}>{selected.editable&&<><Btn size="sm" onClick={()=>save(false)} disabled={saving}>Guardar</Btn><Btn size="sm" variant="success" onClick={()=>save(true)} disabled={saving||!selected.can_complete}>✓ Marcar realizada</Btn></>}<Btn size="sm" variant="secondary" onClick={openFullProcess}>Abrir proceso completo</Btn></div>
+      </>}
+    </Modal>}
+    {(processLoading||processData)&&<Modal title={`Proceso completo${processData?.candidata?.nombre?` · ${processData.candidata.nombre}`:""}`} onClose={closeFullProcess} width={980}>
+      {processLoading?<p style={{fontSize:12}}>Cargando proceso...</p>:processData&&<div style={{display:"flex",flexDirection:"column",gap:10}}>
+        <div style={{display:"flex",gap:7,alignItems:"center",flexWrap:"wrap"}}><Badge color={processData.candidata.puesto==="manicura"?"pink":"info"}>{processData.candidata.puesto==="manicura"?"Manicura":"Encargada"}</Badge><Badge color="gray">{processData.candidata.estado?.replaceAll("_"," ")}</Badge><span style={{fontSize:11,color:"var(--color-text-secondary)"}}>{processData.candidata.email||"Sin email"} · {processData.candidata.telefono||"Sin teléfono"}</span></div>
+        {(processData.instancias||[]).map(inst=>{const evaluadores=(processData.evaluadores||[]).filter(e=>Number(e.instancia_id)===Number(inst.id)).map(e=>Number(e.user_id));const assigned=evaluadores.includes(Number(user.id));const readOnly=!assigned;return <Card key={inst.id} style={{padding:11,background:inst.estado==="realizada"?"#f5f5f5":"#fff"}}><div style={{display:"flex",justifyContent:"space-between",gap:8,alignItems:"center"}}><div style={{display:"flex",gap:7,alignItems:"center"}}><Badge color="gray">{inst.orden}</Badge><strong style={{fontSize:12}}>{inst.nombre}</strong><Badge color={inst.tipo==="prueba_tecnica"?"amber":"info"}>{inst.tipo.replace("_"," ")}</Badge></div><Badge color={inst.estado==="realizada"?"success":inst.estado==="programada"?"info":"gray"}>{inst.estado.replace("_"," ")}</Badge></div><div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:8,marginTop:8,fontSize:11}}><span><strong>Fecha:</strong> {inst.fecha_hora?new Date(inst.fecha_hora).toLocaleString("es-AR",{dateStyle:"short",timeStyle:"short"}):"Sin agendar"}</span><span><strong>Local:</strong> {(data.locales||[]).find(l=>Number(l.id)===Number(inst.local_id))?.nombre||"Sin local"}</span><span><strong>Evaluadores:</strong> {evaluadores.map(id=>(data.users||[]).find(u=>Number(u.id)===id)?.nombre||`Usuario ${id}`).join(", ")||"Sin asignar"}</span></div>{inst.comentarios&&<p style={{fontSize:11,margin:"8px 0 0"}}><strong>Comentarios:</strong> {inst.comentarios}</p>}{inst.tipo==="prueba_tecnica"&&<div style={{marginTop:8,borderTop:"1px dashed #ddd",paddingTop:7}}>{(processData.pruebas||[]).filter(p=>Number(p.instancia_id)===Number(inst.id)).map(p=><div key={p.id} style={{fontSize:11,marginBottom:4}}>• <strong>{p.servicio_nombre}</strong>{p.resultado?` · ${p.resultado.replace("_"," ")}`:""}{p.comentario?` · ${p.comentario}`:""}</div>)}</div>}{readOnly&&<p style={{fontSize:10,color:"var(--color-text-secondary)",margin:"7px 0 0"}}>Solo lectura: no sos evaluador/a asignado/a en esta etapa.</p>}</Card>})}
+        <div style={{display:"flex",justifyContent:"flex-end"}}><Btn variant="secondary" onClick={closeFullProcess}>Cerrar proceso y volver a la cita</Btn></div>
+      </div>}
+    </Modal>}
+  </div>;
+}
+
+function ReclutamientoAprobacionesPage({ user, onOpenProcess }) {
+  const [loading,setLoading]=useState(true);
+  const [rows,setRows]=useState([]);
+  const load=useCallback(async()=>{setLoading(true);try{setRows(await api.getReclutamientoAprobacionesPendientes());}catch(e){notifyToast("No se pudieron cargar las aprobaciones pendientes. "+(e.message||e),"error");}setLoading(false);},[]);
+  useEffect(()=>{load();},[load]);
+  const decidir=async(c,decision)=>{
+    try{
+      await api.upsertReclutamientoAprobacion({candidata_id:c.id,user_id:user.id,decision,comentario:null,activa:true,actualizado_en:new Date().toISOString()});
+      notifyToast(decision==="aprobada"?"Aprobación registrada.":"Rechazo registrado.",decision==="aprobada"?"success":"warning");
+      setRows(prev=>prev.filter(x=>Number(x.id)!==Number(c.id)));
+    }catch(e){notifyToast("No se pudo registrar la decisión: "+(e.message||e),"error");}
+  };
+  return <div>
+    <div style={{marginBottom:14}}><h2 style={{margin:0,fontSize:18}}>Aprobaciones pendientes</h2><p style={{margin:"3px 0 0",fontSize:12,color:"var(--color-text-secondary)"}}>Procesos completos que requieren tu aprobación de RRHH.</p></div>
+    {loading?<Card><p style={{margin:0,fontSize:12}}>Cargando aprobaciones...</p></Card>:rows.length===0?<Card><p style={{margin:0,fontSize:13,color:"var(--color-text-secondary)"}}>No tenés aprobaciones pendientes.</p></Card>:<div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(270px,1fr))",gap:10}}>{rows.map(c=><Card key={c.id} style={{padding:12}}><div style={{display:"flex",justifyContent:"space-between",gap:8}}><div><strong style={{fontSize:13}}>{c.nombre}</strong><p style={{margin:"3px 0 0",fontSize:10,textTransform:"uppercase",fontWeight:700,color:"var(--color-text-secondary)"}}>{c.puesto}</p></div><Badge color="amber">Pendiente firma</Badge></div><p style={{fontSize:11,color:"var(--color-text-secondary)",margin:"9px 0"}}>{c.email||"Sin email"} · {c.telefono||"Sin teléfono"}</p><div style={{display:"flex",justifyContent:"space-between",alignItems:"center",fontSize:10,marginBottom:10}}><span>{c.aprobaciones}/{c.requeridas} aprobaciones</span>{c.rechazos>0&&<span style={{color:COLORS.danger}}>{c.rechazos} rechazo(s)</span>}</div><div style={{display:"flex",gap:6,flexWrap:"wrap"}}><Btn size="sm" variant="secondary" onClick={()=>{sessionStorage.setItem("niki_reclutamiento_candidata",String(c.id));onOpenProcess?.();}}>Revisar proceso</Btn><Btn size="sm" variant="success" onClick={()=>decidir(c,"aprobada")}>Aprobar</Btn><Btn size="sm" variant="danger" onClick={()=>decidir(c,"rechazada")}>Rechazar</Btn></div></Card>)}</div>}
+  </div>;
+}
+
+
 // ── APP PRINCIPAL ──────────────────────────────────────────────────
 function readSectionHash() {
   const h = (window.location.hash || "").replace(/^#\/?/, "").trim();
@@ -9524,8 +10018,8 @@ function defaultSectionForRole(role) {
 }
 function sectionAllowedForRole(section, role) {
   const reportesOperativos = ["reportes","reportes_horas","reportes_cobertura","reportes_comisiones","reporte_pago_comisiones"];
-  const admin = ["inicio","ayuda","roadmap","asistencia","horarios","bloqueo_horarios",...reportesOperativos,"turnos","adelantos","garantias","informes","manicuras","encargadas","locales","cobertura_config","perfil"];
-  const casaMatriz = ["inicio","ayuda","roadmap","asistencia","horarios","bloqueo_horarios",...reportesOperativos,"adelantos","garantias","informes","manicuras","encargadas","locales","cobertura_config","perfil"];
+  const admin = ["inicio","ayuda","roadmap","asistencia","horarios","bloqueo_horarios",...reportesOperativos,"turnos","adelantos","garantias","informes","manicuras","encargadas","reclutamiento_candidatas","reclutamiento_calendario","reclutamiento_aprobaciones","reclutamiento_config","locales","cobertura_config","perfil"];
+  const casaMatriz = ["inicio","ayuda","roadmap","asistencia","horarios","bloqueo_horarios",...reportesOperativos,"adelantos","garantias","informes","manicuras","encargadas","reclutamiento_candidatas","reclutamiento_calendario","reclutamiento_aprobaciones","reclutamiento_config","locales","cobertura_config","perfil"];
   const encargada = ["inicio","ayuda","asistencia","horarios","bloqueo_horarios",...reportesOperativos,"adelantos","garantias","informes","manicuras","cobertura_config","perfil"];
   const manicura = ["inicio","ayuda","horarios","reportes","reportes_horas","reportes_comisiones","perfil"];
   const allowed = role === "admin" ? admin : role === "casa_matriz" ? casaMatriz : role === "encargada" ? encargada : manicura;
@@ -9541,6 +10035,7 @@ export default function App() {
   const userRef = useRef(user);
   useEffect(() => {
     userRef.current = user;
+    window.__nikiCurrentUser = user || null;
   }, [user]);
   const [seccion, setSeccion] = useState(null);
   const [publicHash, setPublicHash] = useState(() => readSectionHash());
@@ -9624,8 +10119,8 @@ export default function App() {
   }, [dismissToast, user?.rol]);
 
   const reloadData = useCallback(async (actorOverride = null) => {
-    const [users, locales, horarios, asistencias, periodos, feriados, reglasCobertura, configCobertura, encargadoLocales, usuarioLocales, manicuraHistorialLocales, usuarioHistorialLaboral, personaDocumentos, comisiones, comisionesImportaciones, comisionesCriterios, comisionesConfiguracion, comisionesManicuraConfig, adelantos, garantias, informesDiarios, agendaServicios, agendaManicuraServicios, agendaListasPrecios, agendaLocalListas, agendaPreciosServicios, agendaClientes, agendaTurnos, agendaTurnosPagos, agendaTurnoServicios, agendaBloqueos] = await Promise.all([
-      api.getUsers(), api.getLocales(), api.getHorarios(), api.getAsistencias(), api.getPeriodos(), api.getFeriados(), api.getReglasCobertura(), api.getConfigCobertura(), api.getEncargadoLocales(), api.getUsuarioLocales(), api.getManicuraHistorialLocales(), api.getUsuarioHistorialLaboral(), api.getPersonaDocumentos(), api.getComisiones(), api.getComisionesImportaciones(), api.getComisionesCriterios(), api.getComisionesConfiguracion(), api.getComisionesManicuraConfig(), api.getAdelantos(), api.getGarantias(), api.getInformesDiarios(), api.getAgendaServicios(), api.getAgendaManicuraServicios(), api.getAgendaListasPrecios(), api.getAgendaLocalListas(), api.getAgendaPreciosServicios(), api.getAgendaClientes(), api.getAgendaTurnos(), api.getAgendaTurnosPagos(), api.getAgendaTurnoServicios(), api.getAgendaBloqueos()
+    const [users, locales, horarios, asistencias, periodos, feriados, reglasCobertura, configCobertura, encargadoLocales, usuarioLocales, manicuraHistorialLocales, usuarioHistorialLaboral, personaDocumentos, comisiones, comisionesImportaciones, comisionesCriterios, comisionesConfiguracion, comisionesManicuraConfig, adelantos, garantias, informesDiarios, agendaServicios, agendaManicuraServicios, agendaListasPrecios, agendaLocalListas, agendaPreciosServicios, agendaClientes, agendaTurnos, agendaTurnosPagos, agendaTurnoServicios, agendaBloqueos, reclutamientoCandidatas] = await Promise.all([
+      api.getUsers(), api.getLocales(), api.getHorarios(), api.getAsistencias(), api.getPeriodos(), api.getFeriados(), api.getReglasCobertura(), api.getConfigCobertura(), api.getEncargadoLocales(), api.getUsuarioLocales(), api.getManicuraHistorialLocales(), api.getUsuarioHistorialLaboral(), api.getPersonaDocumentos(), api.getComisiones(), api.getComisionesImportaciones(), api.getComisionesCriterios(), api.getComisionesConfiguracion(), api.getComisionesManicuraConfig(), api.getAdelantos(), api.getGarantias(), api.getInformesDiarios(), api.getAgendaServicios(), api.getAgendaManicuraServicios(), api.getAgendaListasPrecios(), api.getAgendaLocalListas(), api.getAgendaPreciosServicios(), api.getAgendaClientes(), api.getAgendaTurnos(), api.getAgendaTurnosPagos(), api.getAgendaTurnoServicios(), api.getAgendaBloqueos(), (api.getReclutamientoCandidatasDisponibles().catch(()=>[]))
     ]);
     const nextData = {
       users: await Promise.all((users || []).map(async raw => {
@@ -9671,6 +10166,7 @@ export default function App() {
       agendaTurnosPagos: (agendaTurnosPagos||[]).map(normalizeAgendaTurnoPago),
       agendaTurnoServicios: (agendaTurnoServicios||[]).map(normalizeAgendaTurnoServicio),
       agendaBloqueos: (agendaBloqueos||[]).map(normalizeAgendaBloqueo),
+      reclutamientoCandidatas: reclutamientoCandidatas || [],
     };
     window.__nikiUsers = nextData.users;
     setData(nextData);
@@ -9852,6 +10348,16 @@ export default function App() {
       ],
     },
     {
+      id: "reclutamiento",
+      label: "Reclutamiento",
+      icon: "🎯",
+      items: [
+        { id: "reclutamiento_candidatas", label: "Candidatas y procesos", icon: "👤" },
+        { id: "reclutamiento_calendario", label: "Calendario", icon: "🗓️" },
+        { id: "reclutamiento_aprobaciones", label: "Aprobaciones pendientes", icon: "✅" },
+      ],
+    },
+    {
       id: "configuracion",
       label: "Configuración",
       icon: "⚙️",
@@ -9859,6 +10365,7 @@ export default function App() {
         { id: "manicuras", label: "Manicuras", icon: "💅" },
         { id: "encargadas", label: "Usuarios", icon: "👥" },
         { id: "locales", label: "Locales", icon: "🏠" },
+        { id: "reclutamiento_config", label: "Config. reclutamiento", icon: "🎯" },
         { id: "cobertura_config", label: "Config. cobertura", icon: "⚙️" },
         { id: "perfil", label: "Mi perfil", icon: "👤" },
       ],
@@ -10155,6 +10662,10 @@ export default function App() {
     if (seccion==="manicuras") return <ABMManicuras data={data} setData={setData} reloadData={reloadData} user={user}/>;
     if (seccion==="locales") return ["admin", "casa_matriz"].includes(user.rol) ? <ABMLocales data={data} reloadData={reloadData} user={user}/> : null;
     if (seccion==="encargadas") return ["admin", "casa_matriz"].includes(user.rol) ? <ABMEncargadas data={data} reloadData={reloadData} user={user}/> : null;
+    if (seccion==="reclutamiento_candidatas") return ["admin", "casa_matriz"].includes(user.rol) ? <ReclutamientoPage data={data} setData={setData} user={user} fixedView="tablero"/> : null;
+    if (seccion==="reclutamiento_calendario") return ["admin", "casa_matriz"].includes(user.rol) ? <ReclutamientoCalendarioPage data={data} user={user}/> : null;
+    if (seccion==="reclutamiento_aprobaciones") return ["admin", "casa_matriz"].includes(user.rol) ? <ReclutamientoAprobacionesPage user={user} onOpenProcess={()=>goToSection("reclutamiento_candidatas")}/> : null;
+    if (seccion==="reclutamiento_config") return ["admin", "casa_matriz"].includes(user.rol) ? <ReclutamientoPage data={data} setData={setData} user={user} fixedView="config"/> : null;
     if (seccion==="cobertura_config") return <ConfiguracionCobertura data={data} reloadData={reloadData} user={user}/>;
     if (seccion==="perfil") return <MiPerfil data={data} reloadData={reloadData} user={user} setUser={setUser}/>;
     if (seccion==="ayuda") return <CentroAyuda user={user} onBack={() => goToSection("inicio")}/>;
