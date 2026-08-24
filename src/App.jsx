@@ -325,6 +325,8 @@ const api = {
   createUser: (d) => sb("users", { method: "POST", body: JSON.stringify(d) }),
   updateUser: (id, d) => sb(`users?id=eq.${id}`, { method: "PATCH", body: JSON.stringify(d) }),
   getLocales: () => sb("locales?select=*&order=id"),
+  getLocalHorarios: () => sb("local_horarios?select=*&order=local_id,dia_semana"),
+  upsertLocalHorarios: (rows) => sb("local_horarios?on_conflict=local_id,dia_semana", { method:"POST", prefer:"resolution=merge-duplicates,return=representation", body:JSON.stringify(rows) }),
   createLocal: (d) => sb("locales", { method: "POST", body: JSON.stringify(d) }),
   updateLocal: (id, d) => sb(`locales?id=eq.${id}`, { method: "PATCH", body: JSON.stringify(d) }),
   deleteLocal: (id) => sb(`locales?id=eq.${id}`, { method: "DELETE", prefer: "" }),
@@ -403,8 +405,13 @@ const api = {
   upsertConfigCobertura: (d) => patchOrPost("config_cobertura", `local_id=eq.${d.local_id}`, d),
   getEncargadoLocales: () => sb("encargado_locales?select=*"),
   getComisiones: () => sbAll("comisiones_detalle?select=*&order=fecha_pago.desc,id.desc"),
+  getComisionesPeriodo: (periodo) => sbAll(`comisiones_detalle?select=*&periodo=eq.${encodeURIComponent(periodo)}&order=fecha_pago.desc,id.desc`),
   getComisionesImportaciones: () => sb("comisiones_importaciones?select=*&order=creado_en.desc&limit=10"),
+  getComisionesImportacionesPeriodo: (periodo) => sb(`comisiones_importaciones?select=*&periodo=eq.${encodeURIComponent(periodo)}&order=creado_en.desc&limit=10`),
   getComisionesCriterios: () => sb("comisiones_criterios_semanales?select=*"),
+  getComisionesCriteriosPeriodo: (periodo) => sb(`comisiones_criterios_semanales?select=*&periodo=eq.${encodeURIComponent(periodo)}`),
+  getHorariosRango: (desde,hasta) => sbAll(`horarios?select=*&fecha=gte.${desde}&fecha=lte.${hasta}&order=id`),
+  getAsistenciasRango: (desde,hasta) => sbAll(`asistencias?select=*&fecha=gte.${desde}&fecha=lte.${hasta}&order=id`),
   upsertComisionCriterio: (d) => patchOrPost("comisiones_criterios_semanales", `periodo=eq.${d.periodo}&semana=eq.${d.semana}&user_id=eq.${d.user_id}`, d),
   getComisionesConfiguracion: () => sb("comisiones_configuracion?select=*&order=activo.desc,id.asc"),
   upsertComisionesConfiguracion: (d) => patchOrPost("comisiones_configuracion", `id=eq.${d.id || 1}`, d),
@@ -1175,19 +1182,18 @@ function ModalInputWithHelp({ label, help, value, onChange, type="text", placeho
 
 // ── CALENDARIO ────────────────────────────────────────────────────
 const CAL_SLOT_H = 48;
-const CAL_START = 10;
-const CAL_END = 20;
-const CAL_VIEW_START = 10;
-const CAL_HOURS = Array.from({ length: CAL_END - CAL_START }, (_, i) => CAL_START + i);
-const CAL_LABEL_HOURS = Array.from({ length: CAL_END - CAL_START + 1 }, (_, i) => CAL_START + i);
-const CAL_TOTAL_SLOTS = (CAL_END - CAL_START) * 2;
-const CAL_GRID_H = CAL_TOTAL_SLOTS * (CAL_SLOT_H / 2);
+const CAL_TOTAL_SLOTS = 48; // 24 horas en bloques de 30 minutos
+const CAL_DEFAULT_START = 10;
+const CAL_DEFAULT_END = 20;
 
-function calToSlot(h, m) { return (h - CAL_START) * 2 + (m >= 30 ? 1 : 0); }
-function calFromSlot(s) { return { h: CAL_START + Math.floor(s / 2), m: s % 2 === 0 ? 0 : 30 }; }
+function calToSlot(h, m) { return Math.max(0, Math.min(CAL_TOTAL_SLOTS, h * 2 + (m >= 30 ? 1 : 0))); }
+function calFromSlot(s) { return { h: Math.floor(s / 2), m: s % 2 === 0 ? 0 : 30 }; }
 function calFmt(h, m) { return `${String(h).padStart(2,"0")}:${String(m).padStart(2,"0")}`; }
 function calSlotY(s) { return s * (CAL_SLOT_H / 2); }
-function calYSlot(y) { return Math.max(0, Math.min(CAL_TOTAL_SLOTS - 1, Math.round(y / (CAL_SLOT_H / 2)))); }
+function calYSlot(y, viewStartSlot=CAL_DEFAULT_START*2, viewEndSlot=CAL_DEFAULT_END*2) {
+  const relative = Math.round(y / (CAL_SLOT_H / 2));
+  return Math.max(viewStartSlot, Math.min(viewEndSlot - 1, viewStartSlot + relative));
+}
 function calHoras(b) { return b ? (b.endSlot - b.startSlot) / 2 : 0; }
 function getMon(date) { const d = new Date(date); const day = d.getDay(); d.setDate(d.getDate() + (day === 0 ? -6 : 1 - day)); d.setHours(0,0,0,0); return d; }
 
@@ -1217,9 +1223,9 @@ function TooltipHorario({ tooltip }) {
   );
 }
 
-function BloqueCalendario({ fecha, bloque, onChange, onCommit, onDelete, bloqueado, onOpen, asistencia, manicuraNombre, onTooltip, onHideTooltip, readOnly = false }) {
+function BloqueCalendario({ fecha, bloque, onChange, onCommit, onDelete, bloqueado, onOpen, asistencia, manicuraNombre, onTooltip, onHideTooltip, readOnly = false, viewStartSlot=CAL_DEFAULT_START*2, viewEndSlot=CAL_DEFAULT_END*2 }) {
   const { startSlot: ss, endSlot: es } = bloque;
-  const top = calSlotY(ss), height = Math.max(calSlotY(es) - top, 24);
+  const top = calSlotY(ss - viewStartSlot), height = Math.max(calSlotY(es - ss), 24);
   const s = calFromSlot(ss), e = calFromSlot(es);
   const dragState = useRef({ moved:false, last:null });
   const locked = bloqueado || !!asistencia;
@@ -1251,12 +1257,12 @@ function BloqueCalendario({ fecha, bloque, onChange, onCommit, onDelete, bloquea
 
       if (mode === "move") {
         const dur = oe - os;
-        const ns = Math.max(0, Math.min(CAL_TOTAL_SLOTS - dur, os + d));
+        const ns = Math.max(viewStartSlot, Math.min(viewEndSlot - dur, os + d));
         nb = { startSlot: ns, endSlot: ns + dur };
       } else if (mode === "top") {
-        nb = { startSlot: Math.max(0, Math.min(oe - 2, os + d)), endSlot: oe };
+        nb = { startSlot: Math.max(viewStartSlot, Math.min(oe - 2, os + d)), endSlot: oe };
       } else {
-        nb = { startSlot: os, endSlot: Math.max(os + 2, Math.min(CAL_TOTAL_SLOTS, oe + d)) };
+        nb = { startSlot: os, endSlot: Math.max(os + 2, Math.min(viewEndSlot, oe + d)) };
       }
 
       dragState.current.last = nb;
@@ -1275,7 +1281,7 @@ function BloqueCalendario({ fecha, bloque, onChange, onCommit, onDelete, bloquea
     window.addEventListener("pointermove", mv, { passive:false });
     window.addEventListener("pointerup", up);
     window.addEventListener("pointercancel", up);
-  }, [ss, es, fecha, onChange, onCommit, locked, readOnly]);
+  }, [ss, es, fecha, onChange, onCommit, locked, readOnly, viewStartSlot, viewEndSlot]);
 
   return (
     <div
@@ -1329,7 +1335,7 @@ function CalendarioHorarios({ data, setData, reloadData, user, agendaRequest, on
   const [manicuraId, setManicuraId] = useState(savedState?.manicuraId ?? defaultManicuraId);
   const [manicuraPickerOpen, setManicuraPickerOpen] = useState(false);
   const [navVisible, setNavVisible] = useState(savedState?.navVisible ?? !isMobile);
-  const calendarShellHeight = vista === "mes" ? (isMobile ? 560 : 560) : (isMobile ? "calc(100vh - 154px)" : 640);
+  const calendarShellMinHeight = vista === "mes" ? (isMobile ? 560 : 620) : (isMobile ? 560 : 620);
   const weeklyMinWidth = isMobile ? 520 : (navVisible ? 620 : 720);
   const monthMinWidth = isMobile ? 520 : 0;
   const compactMonth = isMobile || navVisible;
@@ -1344,6 +1350,20 @@ function CalendarioHorarios({ data, setData, reloadData, user, agendaRequest, on
   const tooltipTimer = useRef(null);
   const saveTimers = useRef({});
   const [tooltip, setTooltip] = useState(null);
+  const [localHorarios, setLocalHorarios] = useState([]);
+
+  useEffect(() => {
+    let alive=true;
+    api.getLocalHorarios().then(rows=>{ if(alive) setLocalHorarios(rows||[]); }).catch(e=>console.warn("Horarios de locales",e));
+    return ()=>{alive=false;};
+  }, []);
+
+  const horarioLocalDia = useCallback((localId, jsDay) => {
+    const diaSemana = jsDay === 0 ? 7 : jsDay;
+    const row = (localHorarios||[]).find(x=>Number(x.local_id)===Number(localId)&&Number(x.dia_semana)===diaSemana);
+    if (row) return { abierto:row.abierto!==false, apertura:String(row.hora_apertura||"").slice(0,5), cierre:String(row.hora_cierre||"").slice(0,5) };
+    return diaSemana === 7 ? { abierto:false, apertura:"10:00", cierre:"20:00" } : { abierto:true, apertura:"10:00", cierre:"20:00" };
+  }, [localHorarios]);
 
   useEffect(() => {
     onStateChange?.({
@@ -1487,6 +1507,40 @@ function CalendarioHorarios({ data, setData, reloadData, user, agendaRequest, on
 
   const getB = f => localH[f] ?? bloques[f];
   const getBFor = (uid, f) => localHAll[horarioKey(uid, f)] ?? getBloqueFor(uid, f);
+
+  const rangoVisual = useMemo(() => {
+    let starts=[], ends=[];
+    const pushHorario=(localId,d,bloque)=>{
+      const h=horarioLocalDia(localId,d.getDay());
+      if(h.abierto&&h.apertura&&h.cierre){
+        const [ah,am]=h.apertura.split(":").map(Number),[ch,cm]=h.cierre.split(":").map(Number);
+        starts.push(calToSlot(ah,am)); ends.push(calToSlot(ch,cm));
+      }
+      if(bloque){starts.push(bloque.startSlot);ends.push(bloque.endSlot);}
+    };
+    if(vista==="semana"){
+      const lid=selectedManicura?.localId;
+      Array.from({length:6},(_,i)=>{const d=new Date(weekStart);d.setDate(d.getDate()+i);return d;}).forEach(d=>pushHorario(lid,d,getB(dateKey(d))));
+    } else if(vista==="dia"){
+      const d=new Date(diaVista+"T12:00:00");
+      const lid=parseInt(localDiaId)||selectedManicura?.localId||localesHorarios[0]?.id;
+      const dayMs=(puedeGestionar?manicuras:manicuras.filter(m=>m.id===user.id)).filter(m=>m.localId===Number(lid));
+      pushHorario(lid,d,null);
+      dayMs.forEach(m=>{const b=getBFor(m.id,diaVista); if(b){starts.push(b.startSlot);ends.push(b.endSlot);}});
+    }
+    if(!starts.length||!ends.length)return {startSlot:CAL_DEFAULT_START*2,endSlot:CAL_DEFAULT_END*2};
+    let startSlot=Math.max(0,Math.min(...starts));
+    let endSlot=Math.min(CAL_TOTAL_SLOTS,Math.max(...ends));
+    startSlot=Math.floor(startSlot/2)*2; endSlot=Math.ceil(endSlot/2)*2;
+    if(endSlot-startSlot<8)endSlot=Math.min(CAL_TOTAL_SLOTS,startSlot+8);
+    return {startSlot,endSlot};
+  }, [vista, selectedManicura?.localId, weekStart, diaVista, localDiaId, localHorarios, bloques, localH, localHAll, manicuras]);
+  const viewStartSlot=rangoVisual.startSlot, viewEndSlot=rangoVisual.endSlot;
+  const viewStartHour=Math.floor(viewStartSlot/2), viewEndHour=Math.ceil(viewEndSlot/2);
+  const viewHours=Array.from({length:Math.max(1,viewEndHour-viewStartHour)},(_,i)=>viewStartHour+i);
+  const viewLabelHours=Array.from({length:Math.max(1,viewEndHour-viewStartHour)+1},(_,i)=>viewStartHour+i);
+  const viewGridH=(viewEndSlot-viewStartSlot)*(CAL_SLOT_H/2);
+  const slotFromPointer=(y)=>calYSlot(y,viewStartSlot,viewEndSlot);
 
   const auditarHorario = useCallback(async ({ accion, uid, fecha, anterior = null, nuevo = null }) => {
     const manicura = data.users.find(u => parseInt(u.id) === parseInt(uid));
@@ -1877,27 +1931,28 @@ function CalendarioHorarios({ data, setData, reloadData, user, agendaRequest, on
       </div>
       {/* Cuerpo scrolleable: eje + grid juntos */}
       <div ref={setScrollRef} style={{ flex:1,overflowY:"hidden",display:"flex",minWidth:weeklyMinWidth }}>
-        <div style={{ width:44,flexShrink:0,borderRight:"0.5px solid rgba(120,120,120,0.24)",position:"relative",height:CAL_GRID_H+18 }}>
-          {CAL_LABEL_HOURS.map(h=>{
-            const top=(h-CAL_START)*CAL_SLOT_H;
-            return <span key={h} style={{ position:"absolute",right:6,top,transform:h===CAL_START?"translateY(1px)":h===CAL_END?"translateY(-100%)":"translateY(-50%)",fontSize:10,color:"var(--color-text-secondary)",lineHeight:1 }}>{String(h).padStart(2,"0")}:00</span>;
+        <div style={{ width:44,flexShrink:0,borderRight:"0.5px solid rgba(120,120,120,0.24)",position:"relative",height:viewGridH+18 }}>
+          {viewLabelHours.map(h=>{
+            const top=(h-viewStartHour)*CAL_SLOT_H;
+            return <span key={h} style={{ position:"absolute",right:6,top,transform:h===viewStartHour?"translateY(1px)":h===viewEndHour?"translateY(-100%)":"translateY(-50%)",fontSize:10,color:"var(--color-text-secondary)",lineHeight:1 }}>{String(h).padStart(2,"0")}:00</span>;
           })}
         </div>
         <div style={{ flex:1,display:"grid",gridTemplateColumns:"repeat(6,1fr)" }}>
           {weekDays.map((d,i)=>{
-            const f=dateKey(d),fer=feriados.has(f),b=getB(f),lockedDay=bloqueadoPorFecha(f);
+            const f=dateKey(d),fer=feriados.has(f),b=getB(f),localDay=horarioLocalDia(selectedManicura?.localId,d.getDay()),closedLocal=!localDay.abierto,lockedDay=bloqueadoPorFecha(f)||closedLocal;
             return <div key={i}
               onClick={e=>{
                 if (lockedDay || b || hasAsistencia(f)) return;
                 const rect = e.currentTarget.getBoundingClientRect();
-                const slot = calYSlot(e.clientY - rect.top);
-                onAddB(f,{startSlot:slot,endSlot:Math.min(CAL_TOTAL_SLOTS,slot+8)});
+                const slot = slotFromPointer(e.clientY - rect.top);
+                onAddB(f,{startSlot:slot,endSlot:Math.min(viewEndSlot,slot+8)});
               }}
-              style={{ position:"relative",height:CAL_GRID_H+18,borderLeft:"0.5px solid rgba(120,120,120,0.24)",cursor:lockedDay?"default":(b?"default":"cell"),background:fer?"rgba(186,117,23,0.05)":"transparent" }}>
-              {CAL_HOURS.map((_,hi)=><div key={hi} style={{ position:"absolute",top:hi*CAL_SLOT_H,left:0,right:0,height:CAL_SLOT_H,borderTop:"0.5px solid rgba(120,120,120,0.24)",pointerEvents:"none" }}><div style={{ position:"absolute",top:"50%",left:0,right:0,borderTop:"1px dashed rgba(120,120,120,0.16)",opacity:0.5 }}/></div>)}
-              <div style={{ position:"absolute",top:CAL_GRID_H,left:0,right:0,borderTop:"0.5px solid rgba(120,120,120,0.24)",pointerEvents:"none" }}/>
+              style={{ position:"relative",height:viewGridH+18,borderLeft:"0.5px solid rgba(120,120,120,0.24)",cursor:lockedDay?"default":(b?"default":"cell"),background:closedLocal?"rgba(120,120,120,0.06)":fer?"rgba(186,117,23,0.05)":"transparent" }}>
+              {viewHours.map((_,hi)=><div key={hi} style={{ position:"absolute",top:hi*CAL_SLOT_H,left:0,right:0,height:CAL_SLOT_H,borderTop:"0.5px solid rgba(120,120,120,0.24)",pointerEvents:"none" }}><div style={{ position:"absolute",top:"50%",left:0,right:0,borderTop:"1px dashed rgba(120,120,120,0.16)",opacity:0.5 }}/></div>)}
+              <div style={{ position:"absolute",top:viewGridH,left:0,right:0,borderTop:"0.5px solid rgba(120,120,120,0.24)",pointerEvents:"none" }}/>
 
-              {b && <BloqueCalendario fecha={f} bloque={b} onChange={(f2,nb)=>{if(hasAsistencia(f2))return;setLocalH(p=>({...p,[f2]:nb}));}} onCommit={(f2,nb)=>saveBloque(f2,nb)} onDelete={onDeleteB} bloqueado={lockedDay||hasAsistencia(f)} onOpen={setModalDk} asistencia={getAsistencia(f)} manicuraNombre={selectedManicura?.nombre} onTooltip={showTooltip} onHideTooltip={hideTooltip}/>}
+              {closedLocal&&!b&&<div style={{position:"absolute",top:8,left:5,right:5,fontSize:9,color:"var(--color-text-secondary)",textAlign:"center"}}>Local cerrado</div>}
+              {b && <BloqueCalendario fecha={f} bloque={b} onChange={(f2,nb)=>{if(hasAsistencia(f2))return;setLocalH(p=>({...p,[f2]:nb}));}} onCommit={(f2,nb)=>saveBloque(f2,nb)} onDelete={onDeleteB} bloqueado={lockedDay||hasAsistencia(f)} onOpen={setModalDk} asistencia={getAsistencia(f)} manicuraNombre={selectedManicura?.nombre} onTooltip={showTooltip} onHideTooltip={hideTooltip} viewStartSlot={viewStartSlot} viewEndSlot={viewEndSlot}/>}
             </div>;
           })}
         </div>
@@ -1930,10 +1985,10 @@ function CalendarioHorarios({ data, setData, reloadData, user, agendaRequest, on
       <div style={{ display:"flex",flex:1,overflow:"hidden" }}>
         <div style={{ width:44,flexShrink:0,borderRight:"0.5px solid rgba(120,120,120,0.24)",display:"flex",flexDirection:"column" }}>
           <div style={{ height:48,flexShrink:0,borderBottom:"0.5px solid rgba(120,120,120,0.24)" }}/>
-          <div style={{ position:"relative",height:CAL_GRID_H+18,flexShrink:0 }}>
-            {CAL_LABEL_HOURS.map(h=>{
-              const top=(h-CAL_START)*CAL_SLOT_H;
-              return <span key={h} style={{ position:"absolute",right:6,top,transform:h===CAL_START?"translateY(1px)":h===CAL_END?"translateY(-100%)":"translateY(-50%)",fontSize:10,color:"var(--color-text-secondary)",lineHeight:1 }}>{String(h).padStart(2,"0")}:00</span>;
+          <div style={{ position:"relative",height:viewGridH+18,flexShrink:0 }}>
+            {viewLabelHours.map(h=>{
+              const top=(h-viewStartHour)*CAL_SLOT_H;
+              return <span key={h} style={{ position:"absolute",right:6,top,transform:h===viewStartHour?"translateY(1px)":h===viewEndHour?"translateY(-100%)":"translateY(-50%)",fontSize:10,color:"var(--color-text-secondary)",lineHeight:1 }}>{String(h).padStart(2,"0")}:00</span>;
             })}
           </div>
         </div>
@@ -1947,26 +2002,28 @@ function CalendarioHorarios({ data, setData, reloadData, user, agendaRequest, on
               </div>)}
             </div>
 
-            <div style={{ display:"grid",gridTemplateColumns:gridCols,height:CAL_GRID_H+18 }}>
+            <div style={{ display:"grid",gridTemplateColumns:gridCols,height:viewGridH+18 }}>
               {cols.map(m=>{
                 const b=getBFor(m.id,diaVista), asis=getAsistenciaFor(m.id,diaVista), fer=feriados.has(diaVista);
+                const dayDate=new Date(diaVista+"T12:00:00"), localDay=horarioLocalDia(m.localId,dayDate.getDay()), closedLocal=!localDay.abierto;
                 const lockedByPeriod = bloqueadoPorFecha(diaVista, m.id);
-                const lockedForEdit = lockedByPeriod || !!asis;
+                const lockedForEdit = lockedByPeriod || !!asis || closedLocal;
                 return <div key={m.id}
                   onClick={async e=>{
                     if (!puedeEditarManicura(m.id)) return;
                     setManicuraId(m.id);
                     if (b || lockedForEdit) { setModalDk(diaVista); return; }
                     const rect=e.currentTarget.getBoundingClientRect();
-                    const slot=calYSlot(e.clientY-rect.top);
-                    const nb={startSlot:slot,endSlot:Math.min(CAL_TOTAL_SLOTS,slot+8)};
+                    const slot=slotFromPointer(e.clientY-rect.top);
+                    const nb={startSlot:slot,endSlot:Math.min(viewEndSlot,slot+8)};
                     const st=calFromSlot(nb.startSlot), en=calFromSlot(nb.endSlot);
                     await onAddBFor(m.id, diaVista, nb);
                   }}
-                  style={{ position:"relative",height:CAL_GRID_H+18,borderLeft:"0.5px solid rgba(120,120,120,0.24)",cursor:puedeEditarManicura(m.id)&&!b&&!lockedForEdit?"cell":"default",background:fer?"rgba(186,117,23,0.05)":"transparent",minWidth:0 }}>
-                  {CAL_HOURS.map((_,hi)=><div key={hi} style={{ position:"absolute",top:hi*CAL_SLOT_H,left:0,right:0,height:CAL_SLOT_H,borderTop:"0.5px solid rgba(120,120,120,0.24)",pointerEvents:"none" }}><div style={{ position:"absolute",top:"50%",left:0,right:0,borderTop:"1px dashed rgba(120,120,120,0.16)",opacity:0.5 }}/></div>)}
-                  <div style={{ position:"absolute",top:CAL_GRID_H,left:0,right:0,borderTop:"0.5px solid rgba(120,120,120,0.24)",pointerEvents:"none" }}/>
-                  {b && <BloqueCalendario fecha={diaVista} bloque={b} onChange={(f2,nb)=>{ if(asis) return; setLocalHAll(p=>({...p,[horarioKey(m.id,f2)]:nb})); }} onCommit={(f2,nb)=>saveBloqueFor(m.id,f2,nb)} onDelete={(f2)=>onDeleteBFor(m.id,f2)} bloqueado={lockedByPeriod || !!asis} onOpen={()=>{ setManicuraId(m.id); setModalDk(diaVista); }} asistencia={asis} manicuraNombre={m.nombre} onTooltip={(ev,f,bl)=>showTooltip(ev,f,bl,m.nombre,asis)} onHideTooltip={hideTooltip}/>} 
+                  style={{ position:"relative",height:viewGridH+18,borderLeft:"0.5px solid rgba(120,120,120,0.24)",cursor:puedeEditarManicura(m.id)&&!b&&!lockedForEdit?"cell":"default",background:closedLocal?"rgba(120,120,120,0.06)":fer?"rgba(186,117,23,0.05)":"transparent",minWidth:0 }}>
+                  {viewHours.map((_,hi)=><div key={hi} style={{ position:"absolute",top:hi*CAL_SLOT_H,left:0,right:0,height:CAL_SLOT_H,borderTop:"0.5px solid rgba(120,120,120,0.24)",pointerEvents:"none" }}><div style={{ position:"absolute",top:"50%",left:0,right:0,borderTop:"1px dashed rgba(120,120,120,0.16)",opacity:0.5 }}/></div>)}
+                  <div style={{ position:"absolute",top:viewGridH,left:0,right:0,borderTop:"0.5px solid rgba(120,120,120,0.24)",pointerEvents:"none" }}/>
+                  {b && <BloqueCalendario fecha={diaVista} bloque={b} onChange={(f2,nb)=>{ if(asis) return; setLocalHAll(p=>({...p,[horarioKey(m.id,f2)]:nb})); }} onCommit={(f2,nb)=>saveBloqueFor(m.id,f2,nb)} onDelete={(f2)=>onDeleteBFor(m.id,f2)} bloqueado={lockedByPeriod || !!asis} onOpen={()=>{ setManicuraId(m.id); setModalDk(diaVista); }} asistencia={asis} manicuraNombre={m.nombre} onTooltip={(ev,f,bl)=>showTooltip(ev,f,bl,m.nombre,asis)} onHideTooltip={hideTooltip} viewStartSlot={viewStartSlot} viewEndSlot={viewEndSlot}/>} 
+                  {!b && closedLocal && <div style={{ position:"absolute",left:4,right:4,top:8,background:"#f1f1f1",color:"#777",borderRadius:6,padding:"4px 6px",fontSize:10,fontWeight:600,textAlign:"center" }}>Local cerrado</div>}
                   {!b && lockedByPeriod && <div style={{ position:"absolute",left:4,right:4,top:8,background:COLORS.amberLight,color:COLORS.amber,borderRadius:6,padding:"4px 6px",fontSize:10,fontWeight:600,textAlign:"center" }}>Bloqueado</div>}
                 </div>;
               })}
@@ -1978,7 +2035,7 @@ function CalendarioHorarios({ data, setData, reloadData, user, agendaRequest, on
           <div style={{ height:48,flexShrink:0,borderBottom:"0.5px solid rgba(120,120,120,0.24)",display:"flex",alignItems:"center",justifyContent:"center" }}>
             <span style={{ fontSize:11,color:"var(--color-text-secondary)",fontWeight:500 }}>{totalDia.toFixed(1)}h</span>
           </div>
-          <div style={{ height:CAL_GRID_H+18,display:"flex",alignItems:"flex-start",justifyContent:"center",paddingTop:16 }}>
+          <div style={{ height:viewGridH+18,display:"flex",alignItems:"flex-start",justifyContent:"center",paddingTop:16 }}>
             <span style={{ fontSize:16,fontWeight:500,color:totalDia>0?COLORS.success:"var(--color-text-secondary)" }}>{totalDia.toFixed(1)}h</span>
           </div>
         </div>
@@ -2054,7 +2111,10 @@ function CalendarioHorarios({ data, setData, reloadData, user, agendaRequest, on
   // ── MODAL DÍA ────────────────────────────────────────────────────
   const ModalDia = ({ f }) => {
     const b = getB(f);
-    const def = b ? { s:calFmt(calFromSlot(b.startSlot).h,calFromSlot(b.startSlot).m), e:calFmt(calFromSlot(b.endSlot).h,calFromSlot(b.endSlot).m) } : { s:"10:00", e:"20:00" };
+    const modalDate=new Date(f+"T12:00:00");
+    const modalLocalId=selectedManicura?.localId;
+    const modalLocalHorario=horarioLocalDia(modalLocalId,modalDate.getDay());
+    const def = b ? { s:calFmt(calFromSlot(b.startSlot).h,calFromSlot(b.startSlot).m), e:calFmt(calFromSlot(b.endSlot).h,calFromSlot(b.endSlot).m) } : { s:modalLocalHorario.apertura||"10:00", e:modalLocalHorario.cierre||"20:00" };
     const [start,setStart] = useState(def.s);
     const [end,setEnd] = useState(def.e);
     const fer = feriados.has(f);
@@ -2063,7 +2123,7 @@ function CalendarioHorarios({ data, setData, reloadData, user, agendaRequest, on
     const lockedDia = bloqueadoPorFecha(f) || !!asistencia;
     const d = new Date(f+"T12:00:00"), dow=d.getDay();
     const label = `${DIAS_SEMANA[dow===0?6:dow-1]} ${d.getDate()} de ${MESES[d.getMonth()]}`;
-    const opciones = Array.from({length:CAL_TOTAL_SLOTS + 1},(_,i)=>{ const {h,m}=calFromSlot(i); return calFmt(h,m); });
+    const opciones = Array.from({length:Math.max(1,viewEndSlot-viewStartSlot)+1},(_,i)=>{ const {h,m}=calFromSlot(viewStartSlot+i); return calFmt(h,m); });
     const guardar = async () => {
       const [sh,sm]=start.split(":").map(Number),[eh,em]=end.split(":").map(Number);
       const ss=calToSlot(sh,sm),es=calToSlot(eh,em);
@@ -2108,9 +2168,9 @@ function CalendarioHorarios({ data, setData, reloadData, user, agendaRequest, on
           <Btn onClick={() => { window.location.hash = "bloqueo_horarios"; }} variant="secondary" size="sm">🔐 Gestionar bloqueo de horarios</Btn>
         </div>}
       </div>
-      <div style={{ display:"flex",height:calendarShellHeight,border:"0.5px solid rgba(120,120,120,0.18)",borderRadius:12,overflow:"hidden",background:"var(--color-background-primary)",maxWidth:"100%",minWidth:0 }}>
+      <div style={{ display:"flex",minHeight:calendarShellMinHeight,height:"auto",border:"0.5px solid rgba(120,120,120,0.18)",borderRadius:12,overflow:"visible",background:"var(--color-background-primary)",maxWidth:"100%",minWidth:0,alignItems:"stretch" }}>
         {/* Panel lateral */}
-        {navVisible && <div style={{ width:isMobile?215:210,flexShrink:0,borderRight:"0.5px solid rgba(120,120,120,0.18)",display:"flex",flexDirection:"column",background:"var(--color-background-secondary)",overflowY:"auto",overflowX:"hidden",height:"fit-content",maxHeight:"calc(100vh - 125px)",alignSelf:"flex-start",paddingBottom:12 }}>
+        {navVisible && <div style={{ width:isMobile?215:210,flexShrink:0,borderRight:"0.5px solid rgba(120,120,120,0.18)",display:"flex",flexDirection:"column",background:"var(--color-background-secondary)",overflowY:"auto",overflowX:"hidden",height:"auto",maxHeight:"calc(100vh - 110px)",alignSelf:"flex-start",position:"sticky",top:76,paddingBottom:12 }}>
           {puedeGestionar && <div style={{ padding:"10px 10px 6px" }}>
             <p style={{ margin:"0 0 6px",fontSize:11,fontWeight:500,color:"var(--color-text-secondary)",textTransform:"uppercase",letterSpacing:"0.05em" }}>Manicura</p>
             <div style={{position:"relative"}}>
@@ -2193,7 +2253,7 @@ function CalendarioHorarios({ data, setData, reloadData, user, agendaRequest, on
           </div>}
         </div>}
         {/* Contenido principal */}
-        <div style={{ flex:1,display:"flex",flexDirection:"column",overflow:"hidden",minWidth:0 }}>
+        <div style={{ flex:1,display:"flex",flexDirection:"column",overflow:"visible",minWidth:0 }}>
           <div style={{ padding:"6px 10px",borderBottom:"0.5px solid rgba(120,120,120,0.18)",display:"flex",alignItems:"center",gap:8 }}>
             {/* Botón ocultar panel — claramente separado del período */}
             <button onClick={()=>setNavVisible(v=>!v)} title={navVisible?"Ocultar panel":"Mostrar panel"} style={{ background:"none",border:"0.5px solid rgba(120,120,120,0.24)",borderRadius:6,padding:"3px 10px",cursor:"pointer",fontSize:12,color:"var(--color-text-secondary)",whiteSpace:"nowrap",flexShrink:0 }}>
@@ -4653,12 +4713,36 @@ function ABMLocales({ data, setData, reloadData, user }) {
   const [saving, setSaving] = useState(false);
   const [formErr, setFormErr] = useState("");
   const [listaLocalModal, setListaLocalModal] = useState(null);
+  const [horariosLocalModal, setHorariosLocalModal] = useState(null);
+  const [horariosLocalSaving, setHorariosLocalSaving] = useState(false);
   const esAdmin = user?.rol === "admin";
   const allowedLocalIds = useMemo(() => new Set(getAssignedLocalIds(data, user)), [data, user]);
   const localesVisibles = useMemo(() => {
     if (esAdmin) return data.locales || [];
     return (data.locales || []).filter(l => allowedLocalIds.has(l.id));
   }, [data.locales, esAdmin, allowedLocalIds]);
+
+  const diasHorariosLocal = [[1,"Lunes"],[2,"Martes"],[3,"Miércoles"],[4,"Jueves"],[5,"Viernes"],[6,"Sábado"],[7,"Domingo"]];
+  const defaultHorariosLocal = () => diasHorariosLocal.map(([diaSemana,nombre])=>({diaSemana,nombre,abierto:diaSemana!==7,horaApertura:"10:00",horaCierre:"20:00"}));
+  const openHorariosLocal = async (local) => {
+    try {
+      const all=await api.getLocalHorarios();
+      const rows=(all||[]).filter(x=>Number(x.local_id)===Number(local.id));
+      const base=defaultHorariosLocal().map(d=>{const r=rows.find(x=>Number(x.dia_semana)===d.diaSemana);return r?{...d,abierto:r.abierto!==false,horaApertura:String(r.hora_apertura||d.horaApertura).slice(0,5),horaCierre:String(r.hora_cierre||d.horaCierre).slice(0,5)}:d;});
+      setHorariosLocalModal({local,rows:base});
+    } catch(e){notifyToast("No se pudieron cargar los horarios del local: "+(e.message||e),"error");}
+  };
+  const updateHorarioLocalDraft=(diaSemana,key,value)=>setHorariosLocalModal(m=>({...m,rows:m.rows.map(r=>r.diaSemana===diaSemana?{...r,[key]:value}:r)}));
+  const saveHorariosLocal=async()=>{
+    const m=horariosLocalModal;if(!m)return;
+    for(const r of m.rows){if(r.abierto&&(!r.horaApertura||!r.horaCierre||r.horaApertura>=r.horaCierre)){notifyToast(`Revisá el horario de ${r.nombre}.`,"warning");return;}}
+    setHorariosLocalSaving(true);
+    try{
+      await api.upsertLocalHorarios(m.rows.map(r=>({local_id:m.local.id,dia_semana:r.diaSemana,abierto:r.abierto,hora_apertura:r.abierto?r.horaApertura:null,hora_cierre:r.abierto?r.horaCierre:null})));
+      notifyToast("Horarios del local guardados.","success");setHorariosLocalModal(null);
+    }catch(e){notifyToast("No se pudieron guardar los horarios: "+(e.message||e),"error");}
+    setHorariosLocalSaving(false);
+  };
 
   const getListaLocal = (localId) => {
     const rel = (data.agendaLocalListas||[]).find(x=>x.localId===localId&&x.activo);
@@ -4793,6 +4877,7 @@ function ABMLocales({ data, setData, reloadData, user }) {
             </div>
             <Badge color="info">{qty} manicura{qty!==1?"s":""}</Badge>
             <Btn onClick={()=>setListaLocalModal({ localId:l.id, listaId:lista?.id||"" })} variant="secondary" size="sm">Lista de precios</Btn>
+            <Btn onClick={()=>openHorariosLocal(l)} variant="secondary" size="sm">Horarios</Btn>
             <Btn onClick={()=>openEdit(l)} variant="ghost" size="sm">Editar</Btn>
             <Btn onClick={()=>toggleActivoLocal(l)} variant={localActivo(l)?"secondary":"success"} size="sm">{localActivo(l)?"Desactivar":"Reactivar"}</Btn>
             <Btn onClick={()=>del(l.id)} variant="ghost" size="sm" style={{ color:COLORS.danger }}>Eliminar</Btn>
@@ -4828,6 +4913,18 @@ function ABMLocales({ data, setData, reloadData, user }) {
             <Btn onClick={save} disabled={saving} style={{ flex:1,justifyContent:"center" }}>{saving?"Guardando...":"Guardar"}</Btn>
             <Btn onClick={()=>setModal(null)} variant="secondary" style={{ flex:1,justifyContent:"center" }}>Cancelar</Btn>
           </div>
+        </div>
+      </Modal>}
+      {horariosLocalModal && <Modal title={`Horarios · ${horariosLocalModal.local.nombre}`} onClose={()=>setHorariosLocalModal(null)} width={620}>
+        <div style={{display:"flex",flexDirection:"column",gap:8}}>
+          <p style={{margin:"0 0 4px",fontSize:12,color:"var(--color-text-secondary)"}}>Definí el horario de apertura y cierre para cada día. El calendario de horarios usa estos valores como rango visible.</p>
+          {horariosLocalModal.rows.map(r=><div key={r.diaSemana} style={{display:"grid",gridTemplateColumns:"120px 90px 1fr 1fr",gap:8,alignItems:"center",padding:"8px 10px",border:"1px solid #eee",borderRadius:9,background:r.abierto?"#fff":"#f6f6f6"}}>
+            <strong style={{fontSize:12}}>{r.nombre}</strong>
+            <label style={{display:"flex",alignItems:"center",gap:5,fontSize:11}}><input type="checkbox" checked={r.abierto} onChange={e=>updateHorarioLocalDraft(r.diaSemana,"abierto",e.target.checked)}/>{r.abierto?"Abierto":"Cerrado"}</label>
+            <input type="time" step="1800" disabled={!r.abierto} value={r.horaApertura} onChange={e=>updateHorarioLocalDraft(r.diaSemana,"horaApertura",e.target.value)} style={{border:"1px solid #ddd",borderRadius:7,padding:"7px 8px",background:r.abierto?"#fafafa":"#eee"}}/>
+            <input type="time" step="1800" disabled={!r.abierto} value={r.horaCierre} onChange={e=>updateHorarioLocalDraft(r.diaSemana,"horaCierre",e.target.value)} style={{border:"1px solid #ddd",borderRadius:7,padding:"7px 8px",background:r.abierto?"#fafafa":"#eee"}}/>
+          </div>)}
+          <div style={{display:"flex",gap:8,marginTop:8}}><Btn onClick={saveHorariosLocal} disabled={horariosLocalSaving} style={{flex:1,justifyContent:"center"}}>{horariosLocalSaving?"Guardando...":"Guardar horarios"}</Btn><Btn variant="secondary" onClick={()=>setHorariosLocalModal(null)} style={{flex:1,justifyContent:"center"}}>Cancelar</Btn></div>
         </div>
       </Modal>}
       {listaLocalModal && <Modal title="Lista de precios del local" onClose={()=>setListaLocalModal(null)}>
@@ -5175,7 +5272,7 @@ function AsistenciaDiaria({ data, setData, reloadData, user }) {
 
 // ── REPORTES ───────────────────────────────────────────────────────
 
-function Reportes({ data, user, onOpenAgenda, reportRestore, reloadData, savedState = null, onStateChange = null }) {
+function Reportes({ data, setData, user, onOpenAgenda, reportRestore, reloadData, savedState = null, onStateChange = null }) {
   const hoy = new Date();
   const esAdmin = isAdminLikeRole(user.rol);
   const esEncargada = user.rol === "encargada";
@@ -5212,6 +5309,10 @@ function Reportes({ data, user, onOpenAgenda, reportRestore, reloadData, savedSt
   const [garantiaDetalleComisiones, setGarantiaDetalleComisiones] = useState(null);
   const [configComisionesDraft, setConfigComisionesDraft] = useState(null);
   const [savingConfigComisiones, setSavingConfigComisiones] = useState(false);
+  const [refreshingComisiones, setRefreshingComisiones] = useState(false);
+  const [comisionesReady, setComisionesReady] = useState(false);
+  const [ultimaActualizacionComisiones, setUltimaActualizacionComisiones] = useState(null);
+  const refreshComisionesSeq = useRef(0);
   const [configComisionesFiltros, setConfigComisionesFiltros] = useState({ local:"", tipoLocal:"", zona:"", manicura:"", estado:"activas", configuracion:"" });
   const [colsComisiones, setColsComisiones] = useState([
     { key:"fecha", label:"Fecha", width:90 },
@@ -5246,6 +5347,71 @@ function Reportes({ data, user, onOpenAgenda, reportRestore, reloadData, savedSt
       sortComisiones,
     });
   }, [tab, filtroTipo, filtroId, mes, anio, filtroSemana, filtroEstado, fechaDesde, fechaHasta, expandidos, expandidosLocales, localCobertura, periodoComisiones, localComisiones, manicuraComisiones, semanaComisiones, gruposComisiones, collapsedComisiones, sortComisiones]);
+
+  const refrescarDatosComisiones = useCallback(async ({ silencioso=false } = {}) => {
+    if (!periodoComisiones) return;
+    const seq = ++refreshComisionesSeq.current;
+    if (!silencioso) setRefreshingComisiones(true);
+    try {
+      const [yy,mm] = periodoComisiones.split("-").map(Number);
+      const semanas = getCommissionWeeksForMonth(yy, (mm || 1) - 1);
+      const desde = semanas[0]?.desdeKey || `${periodoComisiones}-01`;
+      const hasta = semanas[semanas.length-1]?.hastaKey || dateKey(new Date(yy, mm || 1, 0));
+      const [comisionesRaw, importacionesRaw, criteriosRaw, configuracionRaw, manicuraConfigRaw, adelantosRaw, garantiasRaw, horariosRaw, asistenciasRaw] = await Promise.all([
+        api.getComisionesPeriodo(periodoComisiones),
+        api.getComisionesImportacionesPeriodo(periodoComisiones),
+        api.getComisionesCriteriosPeriodo(periodoComisiones),
+        api.getComisionesConfiguracion(),
+        api.getComisionesManicuraConfig(),
+        api.getAdelantos(),
+        api.getGarantias(),
+        api.getHorariosRango(desde,hasta),
+        api.getAsistenciasRango(desde,hasta),
+      ]);
+      if (seq !== refreshComisionesSeq.current) return;
+      const nuevasComisiones=(comisionesRaw||[]).map(normalizeComision);
+      const nuevasImportaciones=(importacionesRaw||[]).map(normalizeComisionImportacion);
+      const nuevosCriterios=(criteriosRaw||[]).map(normalizeComisionCriterio);
+      const nuevaConfig=(configuracionRaw||[]).map(normalizeComisionesConfiguracion);
+      const nuevaConfigManicura=(manicuraConfigRaw||[]).map(normalizeComisionesManicuraConfig);
+      const nuevosAdelantos=(adelantosRaw||[]).map(normalizeAdelanto);
+      const nuevasGarantias=(garantiasRaw||[]).map(normalizeGarantia);
+      const nuevosHorarios=(horariosRaw||[]).map(normalizeHorario);
+      const nuevasAsistencias=(asistenciasRaw||[]).map(normalizeAsistencia);
+      setData(prev => {
+        if (!prev) return prev;
+        const comisionesFuera=(prev.comisiones||[]).filter(c=>c.periodo!==periodoComisiones);
+        const importFuera=(prev.comisionesImportaciones||[]).filter(i=>i.periodo!==periodoComisiones);
+        const criteriosFuera=(prev.comisionesCriterios||[]).filter(c=>c.periodo!==periodoComisiones);
+        const horariosFuera=(prev.horarios||[]).filter(h=>h.fecha<desde||h.fecha>hasta);
+        const asistenciasFuera=(prev.asistencias||[]).filter(a=>a.fecha<desde||a.fecha>hasta);
+        return {
+          ...prev,
+          comisiones:[...comisionesFuera,...nuevasComisiones],
+          comisionesImportaciones:[...importFuera,...nuevasImportaciones],
+          comisionesCriterios:[...criteriosFuera,...nuevosCriterios],
+          comisionesConfiguracion:nuevaConfig,
+          comisionesManicuraConfig:nuevaConfigManicura,
+          adelantos:nuevosAdelantos,
+          garantias:nuevasGarantias,
+          horarios:[...horariosFuera,...nuevosHorarios],
+          asistencias:[...asistenciasFuera,...nuevasAsistencias],
+        };
+      });
+      setUltimaActualizacionComisiones(new Date());
+      setComisionesReady(true);
+    } catch(e) {
+      notifyToast("No se pudieron actualizar los datos de comisiones: " + (e.message || e), "error");
+    } finally {
+      if (seq === refreshComisionesSeq.current) setRefreshingComisiones(false);
+    }
+  }, [periodoComisiones, setData]);
+
+  useEffect(() => {
+    if (tab !== "comisiones") return;
+    setComisionesReady(false);
+    refrescarDatosComisiones();
+  }, [tab, periodoComisiones, refrescarDatosComisiones]);
 
   const manicuras = data.users.filter(u=>u.rol==="manicura"&&u.activo&&(esAdmin || allowedLocalIds.includes(u.localId)));
   const semanasDelMes = useMemo(()=>getSemanas(getDiasDelMes(anio,mes)),[anio,mes]);
@@ -5662,19 +5828,32 @@ function Reportes({ data, user, onOpenAgenda, reportRestore, reloadData, savedSt
     };
     const guardarCriterioComision = async (uid, localIdValue, porcentaje) => {
       if (!uid || sinSemanaComisiones) return;
+      const semanaNum=parseInt(semanaComisiones);
+      const localNorm=localIdValue || null;
+      const previo=(data.comisionesCriterios||[]).find(c=>c.periodo===periodoComisiones&&Number(c.semana)===semanaNum&&Number(c.userId)===Number(uid)&&Number(c.localId||0)===Number(localNorm||0));
+      const optimista={
+        id:previo?.id || `tmp-${uid}-${localNorm||0}-${semanaNum}`,
+        periodo:periodoComisiones, semana:semanaNum, userId:Number(uid), localId:localNorm,
+        porcentaje:Number(porcentaje), motivo:"seleccion_manual", actualizadoPor:user.id, actualizadoEn:new Date().toISOString()
+      };
+      setData(prev=>prev?{...prev,comisionesCriterios:[...(prev.comisionesCriterios||[]).filter(c=>!(c.periodo===periodoComisiones&&Number(c.semana)===semanaNum&&Number(c.userId)===Number(uid)&&Number(c.localId||0)===Number(localNorm||0))),optimista]}:prev);
       try {
-        await api.upsertComisionCriterio({
+        const saved=await api.upsertComisionCriterio({
           periodo: periodoComisiones,
-          semana: parseInt(semanaComisiones),
+          semana: semanaNum,
           user_id: uid,
-          local_id: localIdValue || null,
+          local_id: localNorm,
           porcentaje: parseInt(porcentaje),
           motivo: "seleccion_manual",
           actualizado_por_user_id: user.id,
           actualizado_en: new Date().toISOString()
         });
-        await reloadData();
-      } catch(e) { notifyToast("No se pudo guardar el porcentaje de comisión: " + (e.message || e), "error"); }
+        const normalizado=Array.isArray(saved)&&saved[0]?normalizeComisionCriterio(saved[0]):optimista;
+        setData(prev=>prev?{...prev,comisionesCriterios:[...(prev.comisionesCriterios||[]).filter(c=>!(c.periodo===periodoComisiones&&Number(c.semana)===semanaNum&&Number(c.userId)===Number(uid)&&Number(c.localId||0)===Number(localNorm||0))),normalizado]}:prev);
+      } catch(e) {
+        setData(prev=>prev?{...prev,comisionesCriterios:[...(prev.comisionesCriterios||[]).filter(c=>!(c.periodo===periodoComisiones&&Number(c.semana)===semanaNum&&Number(c.userId)===Number(uid)&&Number(c.localId||0)===Number(localNorm||0))),...(previo?[previo]:[])]}:prev);
+        notifyToast("No se pudo guardar el porcentaje de comisión: " + (e.message || e), "error");
+      }
     };
     const abrirConfigComisiones = () => {
       setConfigComisionesDraft({
@@ -5760,7 +5939,12 @@ function Reportes({ data, user, onOpenAgenda, reportRestore, reloadData, savedSt
             await api.upsertComisionesManicuraConfig(payload);
           }
         }
-        await reloadData();
+        const [cfgGeneralRaw,cfgManicuraRaw] = await Promise.all([api.getComisionesConfiguracion(),api.getComisionesManicuraConfig()]);
+        setData(prev=>prev?{...prev,
+          comisionesConfiguracion:(cfgGeneralRaw||[]).map(normalizeComisionesConfiguracion),
+          comisionesManicuraConfig:(cfgManicuraRaw||[]).map(normalizeComisionesManicuraConfig),
+          users:(prev.users||[]).map(u=>jornadasPorUsuario.has(Number(u.id))?{...u,soloFinDeSemana:jornadasPorUsuario.get(Number(u.id))}:u),
+        }:prev);
         setConfigComisionesDraft(null);
         notifyToast("Configuración de comisiones guardada.", "success");
       } catch(e) {
@@ -6202,6 +6386,11 @@ function Reportes({ data, user, onOpenAgenda, reportRestore, reloadData, savedSt
           <div style={{ display:"flex",gap:8,justifyContent:"flex-end" }}><Btn variant="secondary" onClick={()=>setConfigComisionesDraft(null)}>Cancelar</Btn><Btn onClick={guardarConfigComisiones} disabled={savingConfigComisiones}>{savingConfigComisiones?"Guardando...":"Guardar configuración"}</Btn></div>
         </div>
       </Modal>}
+      <div style={{ display:"flex",justifyContent:"space-between",alignItems:"center",gap:8,flexWrap:"wrap",marginBottom:10,padding:"8px 10px",background:"var(--color-background-secondary)",borderRadius:9 }}>
+        <span style={{fontSize:11,color:"var(--color-text-secondary)"}}>{refreshingComisiones?"Actualizando datos del período...":ultimaActualizacionComisiones?`Datos actualizados a las ${ultimaActualizacionComisiones.toLocaleTimeString("es-AR",{hour:"2-digit",minute:"2-digit"})}`:"Los datos se actualizan automáticamente al abrir el reporte."}</span>
+        <Btn size="sm" variant="ghost" onClick={()=>refrescarDatosComisiones()} disabled={refreshingComisiones}>{refreshingComisiones?"Actualizando...":"↻ Actualizar ahora"}</Btn>
+      </div>
+      {!comisionesReady&&refreshingComisiones?<Card style={{padding:18,marginBottom:12}}><div style={{display:"flex",alignItems:"center",gap:10}}><span style={{fontSize:18}}>↻</span><div><strong style={{fontSize:13}}>Actualizando reporte de comisiones</strong><p style={{margin:"3px 0 0",fontSize:11,color:"var(--color-text-secondary)"}}>Se consulta únicamente el período seleccionado, sin recargar el resto de NikiAsistencia.</p></div></div></Card>:<>
       <div style={{ display:"flex",gap:8,marginBottom:16,flexWrap:"wrap",alignItems:"center" }}>
         {puedeGestionar&&<Select value={localComisiones || String(localComisionesSeleccionado || "")} onChange={v=>{setLocalComisiones(v);setManicuraComisiones("todas");}} style={{ width:190 }}>{localesComisionesDisponibles.map(l=><option key={l.id} value={l.id}>{l.nombre}</option>)}</Select>}
         {puedeGestionar&&<Select value={manicuraComisiones} onChange={setManicuraComisiones} style={{ width:220 }}><option value="todas">Todas las manicuras</option>{manicurasComision.map(m=><option key={m.id} value={m.id}>{m.nombre}</option>)}</Select>}
@@ -6329,6 +6518,7 @@ function Reportes({ data, user, onOpenAgenda, reportRestore, reloadData, savedSt
           {gruposComisiones.length ? renderUnifiedGroupRows(groupedTree) : registros.map(c=>renderDataRow(c))}
         </div></div>}
       </Card>
+      </>}
     </>;
   };
 
@@ -10793,6 +10983,7 @@ export default function App() {
     <Reportes
       key={key}
       data={data}
+      setData={setData}
       reloadData={reloadData}
       user={user}
       savedState={screenState.reportes?.[tab] || null}
