@@ -406,6 +406,7 @@ const api = {
   getEncargadoLocales: () => sb("encargado_locales?select=*"),
   getComisiones: () => sbAll("comisiones_detalle?select=*&order=fecha_pago.desc,id.desc"),
   getComisionesPeriodo: (periodo) => sbAll(`comisiones_detalle?select=*&periodo=eq.${encodeURIComponent(periodo)}&order=fecha_pago.desc,id.desc`),
+  reconciliarComisiones: ({ userId=null, periodo=null, localIds=null } = {}) => sb("rpc/reconciliar_comisiones_manicura", { method:"POST", body:JSON.stringify({ p_user_id:userId, p_periodo:periodo, p_local_ids:Array.isArray(localIds)&&localIds.length?localIds:null }) }),
   getComisionesImportaciones: () => sb("comisiones_importaciones?select=*&order=creado_en.desc&limit=10"),
   getComisionesImportacionesPeriodo: (periodo) => sb(`comisiones_importaciones?select=*&periodo=eq.${encodeURIComponent(periodo)}&order=creado_en.desc&limit=10`),
   getComisionesCriterios: () => sb("comisiones_criterios_semanales?select=*"),
@@ -5312,6 +5313,8 @@ function Reportes({ data, setData, user, onOpenAgenda, reportRestore, reloadData
   const [refreshingComisiones, setRefreshingComisiones] = useState(false);
   const [comisionesReady, setComisionesReady] = useState(false);
   const [ultimaActualizacionComisiones, setUltimaActualizacionComisiones] = useState(null);
+  const [comisionesSinVincularModal, setComisionesSinVincularModal] = useState(false);
+  const [reintentandoVinculacion, setReintentandoVinculacion] = useState(false);
   const refreshComisionesSeq = useRef(0);
   const [configComisionesFiltros, setConfigComisionesFiltros] = useState({ local:"", tipoLocal:"", zona:"", manicura:"", estado:"activas", configuracion:"" });
   const [colsComisiones, setColsComisiones] = useState([
@@ -5409,8 +5412,12 @@ function Reportes({ data, setData, user, onOpenAgenda, reportRestore, reloadData
 
   useEffect(() => {
     if (tab !== "comisiones") return;
-    setComisionesReady(false);
-    refrescarDatosComisiones();
+    const yaHayPeriodo = (data.comisiones || []).some(c => c.periodo === periodoComisiones)
+      || (data.comisionesImportaciones || []).some(i => i.periodo === periodoComisiones);
+    // Si ya tenemos el período en memoria, se muestra inmediatamente y se refresca detrás.
+    // La primera entrada sí espera la consulta para no presentar un reporte vacío como definitivo.
+    setComisionesReady(yaHayPeriodo);
+    refrescarDatosComisiones({ silencioso:yaHayPeriodo });
   }, [tab, periodoComisiones, refrescarDatosComisiones]);
 
   const manicuras = data.users.filter(u=>u.rol==="manicura"&&u.activo&&(esAdmin || allowedLocalIds.includes(u.localId)));
@@ -5601,6 +5608,26 @@ function Reportes({ data, setData, user, onOpenAgenda, reportRestore, reloadData
       .filter(c=>!sinSemanaComisiones && fechaEnSemanaSeleccionada(c.fechaPago))
       .filter(c=>!localComisionesSeleccionado || c.localId === localComisionesSeleccionado || normalize(c.nombreLocal) === normalize(localNameById.get(localComisionesSeleccionado)))
       .filter(c=>manicuraComisiones === "todas" || c.userId === parseInt(manicuraComisiones) || normalize(c.nombreManicura) === normalize(userNameById.get(parseInt(manicuraComisiones))));
+    const comisionesSinVincularVisibles = (data.comisiones||[])
+      .filter(c=>c.periodo===periodoComisiones && !c.userId)
+      .filter(c=>puedeGestionar && puedeVerComision(c))
+      .filter(c=>!sinSemanaComisiones && fechaEnSemanaSeleccionada(c.fechaPago))
+      .filter(c=>!localComisionesSeleccionado || c.localId === localComisionesSeleccionado || normalize(c.nombreLocal) === normalize(localNameById.get(localComisionesSeleccionado)));
+    const reintentarVinculacionComisiones = async () => {
+      if (reintentandoVinculacion) return;
+      setReintentandoVinculacion(true);
+      try {
+        const localIds = localComisionesSeleccionado ? [Number(localComisionesSeleccionado)] : localesComisionesDisponibles.map(l=>Number(l.id));
+        const raw = await api.reconciliarComisiones({ periodo:periodoComisiones, localIds });
+        const result = Array.isArray(raw) ? raw[0] : raw;
+        const vinculadas = Number(result?.vinculadas || 0);
+        await refrescarDatosComisiones({ silencioso:true });
+        notifyToast(vinculadas ? `${vinculadas} registro${vinculadas===1?"":"s"} de comisión vinculado${vinculadas===1?"":"s"}.` : "No se encontraron nuevas coincidencias para vincular.", vinculadas ? "success" : "info");
+        if (vinculadas) setComisionesSinVincularModal(false);
+      } catch(e) {
+        notifyToast("No se pudo reintentar la vinculación: "+(e.message||e),"error");
+      } finally { setReintentandoVinculacion(false); }
+    };
     const garantiaVisible = (g, tipo) => {
       const uid = tipo === "reparacion" ? g.manicuraReparacionId : g.manicuraOriginalId;
       if (esAdmin) return true;
@@ -5718,12 +5745,21 @@ function Reportes({ data, setData, user, onOpenAgenda, reportRestore, reloadData
         configuracionPropia: !!cfg,
       };
     };
+    // Índices de acceso para evitar recorrer horarios/asistencias completos por cada registro.
+    const horariosComisionMap = new Map();
+    (data.horarios || []).forEach(h => horariosComisionMap.set(`${Number(h.userId)}|${h.fecha}`, h));
+    const asistenciasComisionMap = new Map();
+    (data.asistencias || []).forEach(a => {
+      const k = `${Number(a.userId)}|${a.fecha}`;
+      if (!asistenciasComisionMap.has(k)) asistenciasComisionMap.set(k, []);
+      asistenciasComisionMap.get(k).push(a);
+    });
     const horasTeoricasSemana = (uid) => semanaKeysComision.reduce((acc,f)=>{
-      const h = (data.horarios||[]).find(x=>x.userId===uid && x.fecha===f && x.trabaja && x.entrada && x.salida);
-      if (!h) return acc;
+      const h = horariosComisionMap.get(`${Number(uid)}|${f}`);
+      if (!h || !h.trabaja || !h.entrada || !h.salida) return acc;
       return acc + Math.max(0, minutesFromTimeComision(h.salida) - minutesFromTimeComision(h.entrada)) / 60;
     },0);
-    const asistenciasSemanaUsuario = (uid) => semanaKeysComision.flatMap(f => (data.asistencias||[]).filter(a=>a.userId===uid && a.fecha===f));
+    const asistenciasSemanaUsuario = (uid) => semanaKeysComision.flatMap(f => asistenciasComisionMap.get(`${Number(uid)}|${f}`) || []);
     const faltasSemana = (uid, localIdValue=null) => {
       const regla = reglaComision(uid, localIdValue);
       return asistenciasSemanaUsuario(uid).filter(a => a.estado === "ausente" && (regla.contarFaltasJustificadas || !a.certificado)).length;
@@ -5736,7 +5772,7 @@ function Reportes({ data, setData, user, onOpenAgenda, reportRestore, reloadData
     const porcentajeAutomatico = (uid, localIdValue=null) => {
       if (!uid || sinSemanaComisiones) return Number(configGeneralComisiones.porcentajeBase || 40);
       const regla = reglaComision(uid, localIdValue);
-      const tieneHorariosCargados = semanaKeysComision.some(f => (data.horarios || []).some(h => Number(h.userId) === Number(uid) && h.fecha === f && h.trabaja && h.entrada && h.salida));
+      const tieneHorariosCargados = semanaKeysComision.some(f => { const h = horariosComisionMap.get(`${Number(uid)}|${f}`); return !!(h?.trabaja && h?.entrada && h?.salida); });
       // Mientras no todas las sucursales carguen horarios, si la semana no tiene ningún horario
       // se considera cumplida la condición de horas y se aplica el porcentaje base.
       if (!tieneHorariosCargados) return regla.porcentajeBase;
@@ -5804,11 +5840,11 @@ function Reportes({ data, setData, user, onOpenAgenda, reportRestore, reloadData
       return (semanas[parseInt(semana) - 1] || []).filter(Boolean).map(d => dateKey(d));
     };
     const horasTeoricasSemanaFor = (uid, periodo, semana) => semanaKeysPorPeriodo(periodo, semana).reduce((acc, f) => {
-      const h = (data.horarios || []).find(x => x.userId === uid && x.fecha === f && x.trabaja && x.entrada && x.salida);
+      const h = horariosComisionMap.get(`${Number(uid)}|${f}`);
       if (!h) return acc;
       return acc + Math.max(0, minutesFromTimeComision(h.salida) - minutesFromTimeComision(h.entrada)) / 60;
     }, 0);
-    const faltasSemanaFor = (uid, periodo, semana) => semanaKeysPorPeriodo(periodo, semana).filter(f => (data.asistencias || []).some(a => a.userId === uid && a.fecha === f && a.estado === "ausente")).length;
+    const faltasSemanaFor = (uid, periodo, semana) => semanaKeysPorPeriodo(periodo, semana).filter(f => (asistenciasComisionMap.get(`${Number(uid)}|${f}`) || []).some(a => a.estado === "ausente")).length;
     const criterioInfoFor = (uid, periodo, semana, localIdValue=null) => {
       if (!uid || !periodo || !semana) return { porcentaje: 40, guardado: false, automatico: 40, horas: 0, faltas: 0 };
       const guardado = (data.comisionesCriterios || []).find(c => c.periodo === periodo && String(c.semana) === String(semana) && c.userId === uid && ((c.localId || 0) === (localIdValue || 0)))
@@ -5816,7 +5852,7 @@ function Reportes({ data, setData, user, onOpenAgenda, reportRestore, reloadData
       const horas = horasTeoricasSemanaFor(uid, periodo, semana);
       const faltas = faltasSemanaFor(uid, periodo, semana);
       const regla = reglaComision(uid, localIdValue);
-      const tarde = semanaKeysPorPeriodo(periodo, semana).filter(f => (data.asistencias || []).some(a => a.userId === uid && a.fecha === f && a.estado === "tarde")).length;
+      const tarde = semanaKeysPorPeriodo(periodo, semana).filter(f => (asistenciasComisionMap.get(`${Number(uid)}|${f}`) || []).some(a => a.estado === "tarde")).length;
       const automatico = (faltas > regla.maxFaltasNoJustificadas || horas < regla.horasObjetivo || tarde > regla.maxLlegadasTarde) ? regla.porcentajeReducido : regla.porcentajeBase;
       return { porcentaje: guardado?.porcentaje || automatico, guardado: !!guardado, automatico, horas, faltas, llegadasTarde:tarde, regla };
     };
@@ -6327,6 +6363,17 @@ function Reportes({ data, setData, user, onOpenAgenda, reportRestore, reloadData
     };
 
     return <>
+      {comisionesSinVincularModal&&<Modal title="Comisiones sin vincular" onClose={()=>setComisionesSinVincularModal(false)} width={880}>
+        <div style={{display:"flex",flexDirection:"column",gap:10}}>
+          <div style={{padding:"10px 12px",background:COLORS.amberLight,borderRadius:10,color:COLORS.amber,fontSize:12}}>Estos registros pertenecen únicamente a los locales y período visibles en el reporte. No se incluyen sucursales fuera de tu alcance.</div>
+          <div style={{maxHeight:430,overflowY:"auto",border:"1px solid rgba(120,120,120,0.14)",borderRadius:10}}>
+            <div style={{display:"grid",gridTemplateColumns:"90px 1.1fr 1fr 1.2fr 1.4fr 100px",gap:8,padding:"8px 10px",background:"var(--color-background-secondary)",fontSize:10,fontWeight:800,textTransform:"uppercase",position:"sticky",top:0,zIndex:1}}><span>Fecha</span><span>Local</span><span>Código</span><span>Manicura origen</span><span>Servicio</span><span>Comisión</span></div>
+            {comisionesSinVincularVisibles.map(c=><div key={c.id} style={{display:"grid",gridTemplateColumns:"90px 1.1fr 1fr 1.2fr 1.4fr 100px",gap:8,padding:"8px 10px",borderTop:"1px solid rgba(120,120,120,0.08)",fontSize:11,alignItems:"center"}}><span>{c.fechaPago?c.fechaPago.split("-").reverse().join("/"):"—"}</span><span>{localNameById.get(Number(c.localId)) || c.nombreLocal || "Sin local"}</span><code style={{fontSize:10}}>{c.codigoExternoManicura||"—"}</code><span>{c.nombreManicura||"—"}</span><span>{c.servicio||"—"}</span><strong>{fmtMoney(c.comision)}</strong></div>)}
+            {!comisionesSinVincularVisibles.length&&<div style={{padding:18,fontSize:12,color:"var(--color-text-secondary)"}}>No quedan registros sin vincular en la selección actual.</div>}
+          </div>
+          <div style={{display:"flex",justifyContent:"flex-end",gap:8}}><Btn variant="secondary" onClick={()=>setComisionesSinVincularModal(false)}>Cerrar</Btn><Btn onClick={reintentarVinculacionComisiones} disabled={reintentandoVinculacion}>{reintentandoVinculacion?"Reintentando...":"↻ Reintentar vinculación"}</Btn></div>
+        </div>
+      </Modal>}
       {configComisionesDraft&&<Modal title="Configuración de comisiones" onClose={()=>setConfigComisionesDraft(null)} width={980}>
         <div style={{ display:"flex",flexDirection:"column",gap:14 }}>
           <div style={{ background:COLORS.infoLight,border:`1px solid ${COLORS.info}22`,borderRadius:10,padding:"10px 12px" }}>
@@ -6390,6 +6437,10 @@ function Reportes({ data, setData, user, onOpenAgenda, reportRestore, reloadData
         <span style={{fontSize:11,color:"var(--color-text-secondary)"}}>{refreshingComisiones?"Actualizando datos del período...":ultimaActualizacionComisiones?`Datos actualizados a las ${ultimaActualizacionComisiones.toLocaleTimeString("es-AR",{hour:"2-digit",minute:"2-digit"})}`:"Los datos se actualizan automáticamente al abrir el reporte."}</span>
         <Btn size="sm" variant="ghost" onClick={()=>refrescarDatosComisiones()} disabled={refreshingComisiones}>{refreshingComisiones?"Actualizando...":"↻ Actualizar ahora"}</Btn>
       </div>
+      {puedeGestionar&&comisionesSinVincularVisibles.length>0&&<div style={{display:"flex",alignItems:"center",justifyContent:"space-between",gap:10,flexWrap:"wrap",marginBottom:10,padding:"10px 12px",background:COLORS.amberLight,border:`1px solid ${COLORS.amber}44`,borderRadius:10}}>
+        <div><strong style={{fontSize:12,color:COLORS.amber}}>⚠ {comisionesSinVincularVisibles.length} registro{comisionesSinVincularVisibles.length===1?"":"s"} de comisión sin vincular</strong><p style={{margin:"2px 0 0",fontSize:10,color:COLORS.amber}}>Solo corresponde{comisionesSinVincularVisibles.length===1?"":"n"} a la sucursal, período y semana visibles.</p></div>
+        <div style={{display:"flex",gap:6}}><Btn size="sm" variant="secondary" onClick={()=>setComisionesSinVincularModal(true)}>Ver registros</Btn><Btn size="sm" onClick={reintentarVinculacionComisiones} disabled={reintentandoVinculacion}>{reintentandoVinculacion?"Reintentando...":"↻ Reintentar"}</Btn></div>
+      </div>}
       {!comisionesReady&&refreshingComisiones?<Card style={{padding:18,marginBottom:12}}><div style={{display:"flex",alignItems:"center",gap:10}}><span style={{fontSize:18}}>↻</span><div><strong style={{fontSize:13}}>Actualizando reporte de comisiones</strong><p style={{margin:"3px 0 0",fontSize:11,color:"var(--color-text-secondary)"}}>Se consulta únicamente el período seleccionado, sin recargar el resto de NikiAsistencia.</p></div></div></Card>:<>
       <div style={{ display:"flex",gap:8,marginBottom:16,flexWrap:"wrap",alignItems:"center" }}>
         {puedeGestionar&&<Select value={localComisiones || String(localComisionesSeleccionado || "")} onChange={v=>{setLocalComisiones(v);setManicuraComisiones("todas");}} style={{ width:190 }}>{localesComisionesDisponibles.map(l=><option key={l.id} value={l.id}>{l.nombre}</option>)}</Select>}
@@ -7289,9 +7340,10 @@ function ABMEncargadas({ data, reloadData, user }) {
   const toggleLocal=id=>setForm(f=>({...f,localIds:(f.localIds||[]).includes(id)?f.localIds.filter(x=>x!==id):[...(f.localIds||[]),id]}));
   const updHist=(key,field,value)=>setHistorialDraft(rows=>rows.map(r=>(r.id||r.tempId)===key?{...r,[field]:value}:r));
   const validateHist=()=>{if(!historialDraft.length)return "Debe existir al menos un período laboral.";for(const r of historialDraft){if(!r.fechaInicio)return "Todos los períodos deben tener fecha de inicio.";if(r.fechaFin&&r.fechaFin<r.fechaInicio)return "La fecha de fin no puede ser anterior al inicio.";if(r.fechaFin&&!r.motivoFin)return "Indicá el motivo del período cerrado.";}if(historialDraft.filter(r=>!r.fechaFin).length>1)return "No puede haber más de un período abierto.";const a=[...historialDraft].sort((x,y)=>x.fechaInicio.localeCompare(y.fechaInicio));for(let i=0;i<a.length;i++)for(let j=i+1;j<a.length;j++){if(a[i].fechaInicio<=(a[j].fechaFin||"9999-12-31")&&a[j].fechaInicio<=(a[i].fechaFin||"9999-12-31"))return "Los períodos no pueden superponerse.";}return "";};
-  const save=async()=>{setFormErr("");const usuario=normalizeUsuarioValue(form.usuario),email=normalizeEmailValue(form.email);if(!form.nombre?.trim()||!usuario)return setFormErr("Nombre y usuario son obligatorios.");if(!isValidEmail(email))return setFormErr("El email es obligatorio y debe ser válido.");if(usuarioEnUso(data.users,usuario,form.id)||emailEnUso(data.users,email,form.id))return setFormErr("El usuario o el email ya están en uso.");if(modal==="new"&&!form.password)return setFormErr("Ingresá una contraseña.");if(form.password&&form.password!==form.password2)return setFormErr("Las contraseñas no coinciden.");const te=validarTelefonoArgentino(form.telefonoCodigoArea,form.telefonoNumero);if(te){setModalTab("general");return setFormErr(te);}const be=validarDatoBancario(form.datoBancario);if(be){setModalTab("laboral");return setFormErr(be);}const he=validateHist();if(he){setModalTab("antiguedad");return setFormErr(he);}setSaving(true);try{const abierto=historialDraft.find(r=>!r.fechaFin),payload={nombre:form.nombre.trim(),usuario,email,rol:form.rol,activo:!!abierto,telefono_codigo_area:onlyDigits(form.telefonoCodigoArea)||null,telefono_numero:onlyDigits(form.telefonoNumero)||null,telefono:[onlyDigits(form.telefonoCodigoArea),onlyDigits(form.telefonoNumero)].join("")||null,dato_bancario:String(form.datoBancario||"").trim()||null,tipo_relacion:form.tipoRelacion||"a_resolver"};let uid=form.id;if(modal==="new"){const c=await api.createUser({...payload,password:form.password});uid=c?.[0]?.id;}else{await api.updateUser(uid,payload);if(form.password)await api.changePassword({mode:"admin_set",actor_id:user.id,session_token:user.sessionToken,target_user_id:uid,new_password:form.password});}await api.setEncargadoLocales(uid,form.rol==="encargada"?(form.localIds||[]):[]);await api.setUsuarioLocales(uid,form.rol==="casa_matriz"?(form.localIds||[]):[]);const old=(data.usuarioHistorialLaboral||[]).filter(x=>x.userId===uid),ids=new Set(historialDraft.filter(x=>x.id).map(x=>x.id));for(const x of old)if(!ids.has(x.id))await api.deleteUsuarioHistorialLaboral(x.id);for(const r of historialDraft){const p={user_id:uid,fecha_inicio:r.fechaInicio,fecha_fin:r.fechaFin||null,motivo_fin:r.fechaFin?r.motivoFin||null:null,observacion:r.observacion?.trim()||null};if(r.id)await api.updateUsuarioHistorialLaboral(r.id,p);else await api.createUsuarioHistorialLaboral(p);}setModal(null);notifyToast("Usuario guardado correctamente.","success");void reloadData();}catch(e){setFormErr("Error al guardar: "+e.message);}setSaving(false);};
+  const save=async()=>{setFormErr("");const usuario=normalizeUsuarioValue(form.usuario),email=normalizeEmailValue(form.email);if(!form.nombre?.trim()||!usuario)return setFormErr("Nombre y usuario son obligatorios.");if(!isValidEmail(email))return setFormErr("El email es obligatorio y debe ser válido.");if(usuarioEnUso(data.users,usuario,form.id)||emailEnUso(data.users,email,form.id))return setFormErr("El usuario o el email ya están en uso.");if(modal==="new"&&!form.password)return setFormErr("Ingresá una contraseña.");if(form.password&&form.password!==form.password2)return setFormErr("Las contraseñas no coinciden.");const te=validarTelefonoArgentino(form.telefonoCodigoArea,form.telefonoNumero);if(te){setModalTab("general");return setFormErr(te);}const be=validarDatoBancario(form.datoBancario);if(be){setModalTab("laboral");return setFormErr(be);}const he=validateHist();if(he){setModalTab("antiguedad");return setFormErr(he);}setSaving(true);try{const abierto=historialDraft.find(r=>!r.fechaFin),payload={nombre:form.nombre.trim(),usuario,email,rol:form.rol,activo:!!abierto,telefono_codigo_area:onlyDigits(form.telefonoCodigoArea)||null,telefono_numero:onlyDigits(form.telefonoNumero)||null,telefono:[onlyDigits(form.telefonoCodigoArea),onlyDigits(form.telefonoNumero)].join("")||null,dato_bancario:String(form.datoBancario||"").trim()||null,tipo_relacion:form.tipoRelacion||"a_resolver"};let uid=form.id;if(modal==="new"){const c=await api.createUser({...payload,password:form.password});uid=c?.[0]?.id;if(!uid)throw new Error("No se obtuvo el usuario creado.");}else{await api.updateUser(uid,payload);if(form.password)await api.changePassword({mode:"admin_set",actor_id:user.id,session_token:user.sessionToken,target_user_id:uid,new_password:form.password});}await api.setEncargadoLocales(uid,form.rol==="encargada"?(form.localIds||[]):[]);await api.setUsuarioLocales(uid,form.rol==="casa_matriz"?(form.localIds||[]):[]);const old=(data.usuarioHistorialLaboral||[]).filter(x=>x.userId===uid),ids=new Set(historialDraft.filter(x=>x.id).map(x=>x.id));for(const x of old)if(!ids.has(x.id))await api.deleteUsuarioHistorialLaboral(x.id);for(const r of historialDraft){const p={user_id:uid,fecha_inicio:r.fechaInicio,fecha_fin:r.fechaFin||null,motivo_fin:r.fechaFin?r.motivoFin||null:null,observacion:r.observacion?.trim()||null};if(r.id)await api.updateUsuarioHistorialLaboral(r.id,p);else await api.createUsuarioHistorialLaboral(p);}if(modal==="new"){try{await api.enviarInvitacionUsuario({actor_id:user.id,session_token:user.sessionToken,target_user_id:uid});notifyToast(`Usuario creado e invitación enviada a ${email}.`,"success",{title:"Invitación enviada"});}catch(invErr){notifyToast("El usuario se creó, pero no se pudo enviar la invitación: "+(invErr.message||invErr),"warning",{title:"Invitación pendiente"});}}else{notifyToast("Usuario guardado correctamente.","success");}setModal(null);void reloadData();}catch(e){setFormErr("Error al guardar: "+e.message);}setSaving(false);};
+  const reenviarInvitacion=async(u)=>{if(!canManageUserRole(user,u.rol))return notifyToast("No tenés permiso para invitar este usuario.","warning");if(!u?.email)return notifyToast("El usuario no tiene email cargado.","warning");try{await api.enviarInvitacionUsuario({actor_id:user.id,session_token:user.sessionToken,target_user_id:u.id});notifyToast(`Invitación enviada a ${u.email}.`,"success",{title:"Invitación enviada"});}catch(e){notifyToast("No se pudo enviar la invitación: "+(e.message||e),"error");}};
   const tabStyle=a=>({border:"none",borderRadius:8,padding:"8px 12px",fontSize:12,fontWeight:600,cursor:"pointer",background:a?COLORS.pink:COLORS.pinkLight,color:a?"#fff":COLORS.pinkDark});
-  return <div><div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:16}}><h2 style={{margin:0,fontSize:18}}>Usuarios internos</h2><Btn size="sm" onClick={openNew}>+ Nuevo</Btn></div><Card style={{marginBottom:14}}><div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(180px,1fr))",gap:10}}><Select value={filtroRol} onChange={setFiltroRol}><option value="todos">Todos los tipos</option>{actorEsAdmin&&<option value="admin">Admin</option>}<option value="casa_matriz">Casa Matriz</option><option value="encargada">Encargada</option></Select><Select value={filtroLocal} onChange={setFiltroLocal}><option value="todos">Todas las sucursales</option>{localesGestionables.map(l=><option key={l.id} value={l.id}>{l.nombre}</option>)}</Select><Select value={filtroEstado} onChange={setFiltroEstado}><option value="activas">Activas</option><option value="inactivas">Inactivas</option><option value="todas">Todas</option></Select><Select value={agrupacion} onChange={setAgrupacion}><option value="rol">Agrupar por tipo</option><option value="local">Agrupar por sucursal</option><option value="ninguna">Sin agrupar</option></Select></div></Card><div style={{display:"flex",flexDirection:"column",gap:14}}>{grupos.map(g=><div key={g.key}>{agrupacion!=="ninguna"&&<h3 style={{fontSize:14,margin:"0 0 7px 4px"}}>{g.label} <Badge color="info">{g.items.length}</Badge></h3>}{g.items.map(e=><Card key={`${g.key}-${e.id}`} style={{display:"flex",alignItems:"center",gap:12,marginBottom:8,flexWrap:"wrap"}}><Avatar nombre={e.nombre} userId={e.id} photoUrl={e.fotoPerfilUrl}/><div style={{flex:1}}><p style={{margin:0,fontWeight:600}}>{e.nombre}</p><p style={{margin:0,fontSize:12,color:"var(--color-text-secondary)"}}>{e.usuario} · {e.email} · {roleLabel(e.rol)}</p></div><Badge color={e.activo?"success":"gray"}>{e.activo?"Activa":"Inactiva"}</Badge><Btn size="sm" variant="ghost" onClick={()=>openEdit(e)}>Editar</Btn></Card>)}</div>)}</div>{modal&&<Modal title={modal==="new"?"Nuevo usuario":"Editar usuario"} width={800} onClose={()=>setModal(null)}><div className="niki-config-tabs" style={{marginBottom:16}}>{[["general","Datos generales"],["antiguedad","Antigüedad"],["laboral","Datos laborales y bancarios"],["documentacion","Documentación"]].map(([k,l])=><button key={k} style={tabStyle(modalTab===k)} onClick={()=>setModalTab(k)}>{l}</button>)}</div>{modalTab==="general"?<div style={{display:"flex",flexDirection:"column",gap:12}}><ModalInput label="Nombre completo" value={form.nombre||""} onChange={v=>setForm(f=>({...f,nombre:v}))}/><ModalInput label="Usuario" value={form.usuario||""} onChange={v=>setForm(f=>({...f,usuario:v}))}/><ModalInput label="Email" value={form.email||""} onChange={v=>setForm(f=>({...f,email:v}))}/><div className="niki-mobile-one-column" style={{display:"grid",gridTemplateColumns:".45fr 1fr",gap:12}}><ModalInput label="Código de área" value={form.telefonoCodigoArea||""} onChange={v=>setForm(f=>({...f,telefonoCodigoArea:onlyDigits(v).slice(0,4)}))}/><ModalInput label="Número de teléfono" value={form.telefonoNumero||""} onChange={v=>setForm(f=>({...f,telefonoNumero:onlyDigits(v).slice(0,8)}))}/></div><ModalSelect label="Tipo de usuario" value={form.rol||"encargada"} onChange={v=>setForm(f=>({...f,rol:v}))}>{rolesGestionables.map(r=><option key={r} value={r}>{roleLabel(r)}</option>)}</ModalSelect>{form.rol==="encargada"&&<div>{localesGestionables.map(l=><label key={l.id} style={{display:"block",fontSize:13}}><input type="checkbox" checked={(form.localIds||[]).includes(l.id)} onChange={()=>toggleLocal(l.id)}/> {l.nombre}</label>)}</div>}{form.rol==="casa_matriz"&&<div>{franquiciasDisponibles.map(l=><label key={l.id} style={{display:"block",fontSize:13}}><input type="checkbox" checked={(form.localIds||[]).includes(l.id)} onChange={()=>toggleLocal(l.id)}/> {l.nombre}</label>)}</div>}<ModalInput label={modal==="new"?"Contraseña":"Nueva contraseña (opcional)"} type="password" value={form.password||""} onChange={v=>setForm(f=>({...f,password:v}))}/><ModalInput label="Repetir contraseña" type="password" value={form.password2||""} onChange={v=>setForm(f=>({...f,password2:v}))}/></div>:modalTab==="antiguedad"?<div><div style={{display:"flex",justifyContent:"space-between",marginBottom:10}}><p style={{fontSize:12,color:"var(--color-text-secondary)"}}>Sin local: registra la relación laboral general.</p><Btn size="sm" onClick={()=>setHistorialDraft(r=>[{tempId:`n-${Date.now()}`,fechaInicio:hoy,fechaFin:"",motivoFin:"",observacion:""},...r])}>+ Período</Btn></div>{historialDraft.map(r=>{const k=r.id||r.tempId;return <div className="niki-history-row" key={k} style={{display:"grid",gridTemplateColumns:"130px 130px 150px 1fr 36px",gap:8,marginBottom:8}}><input type="date" value={r.fechaInicio||""} onChange={e=>updHist(k,"fechaInicio",e.target.value)}/><input type="date" value={r.fechaFin||""} onChange={e=>updHist(k,"fechaFin",e.target.value)}/><select disabled={!r.fechaFin} value={r.motivoFin||""} onChange={e=>updHist(k,"motivoFin",e.target.value)}><option value="">{r.fechaFin?"Motivo":"Activo"}</option>{motivos.map(x=><option key={x}>{x}</option>)}</select><input value={r.observacion||""} placeholder="Observación" onChange={e=>updHist(k,"observacion",e.target.value)}/><button onClick={()=>setHistorialDraft(a=>a.filter(x=>(x.id||x.tempId)!==k))}>×</button></div>})}</div>:modalTab==="laboral"?<div style={{display:"flex",flexDirection:"column",gap:12}}><ModalInput label="Alias o CBU bancario" value={form.datoBancario||""} onChange={v=>setForm(f=>({...f,datoBancario:v}))}/><ModalSelect label="Tipo de relación" value={form.tipoRelacion||"a_resolver"} onChange={v=>setForm(f=>({...f,tipoRelacion:v}))}><option value="monotributista">Monotributista</option><option value="dependencia">Relación de Dependencia</option><option value="a_resolver">A resolver</option></ModalSelect></div>:<LegajoDocumentosPanel actor={user} userId={form.id} documentos={data.personaDocumentos||[]} onReload={reloadData} currentPhotoUrl={form.fotoPerfilUrl||""}/>} {formErr&&<p style={{color:COLORS.danger,background:COLORS.dangerLight,padding:8,borderRadius:8}}>{formErr}</p>}<div style={{display:"flex",gap:8,marginTop:16,flexWrap:"wrap"}}><Btn onClick={save} disabled={saving} style={{flex:1,justifyContent:"center"}}>{saving?"Guardando...":"Guardar"}</Btn><Btn variant="secondary" onClick={()=>setModal(null)} style={{flex:1,justifyContent:"center"}}>Cancelar</Btn></div></Modal>}</div>;
+  return <div><div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:16}}><h2 style={{margin:0,fontSize:18}}>Usuarios internos</h2><Btn size="sm" onClick={openNew}>+ Nuevo</Btn></div><Card style={{marginBottom:14}}><div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(180px,1fr))",gap:10}}><Select value={filtroRol} onChange={setFiltroRol}><option value="todos">Todos los tipos</option>{actorEsAdmin&&<option value="admin">Admin</option>}<option value="casa_matriz">Casa Matriz</option><option value="encargada">Encargada</option></Select><Select value={filtroLocal} onChange={setFiltroLocal}><option value="todos">Todas las sucursales</option>{localesGestionables.map(l=><option key={l.id} value={l.id}>{l.nombre}</option>)}</Select><Select value={filtroEstado} onChange={setFiltroEstado}><option value="activas">Activas</option><option value="inactivas">Inactivas</option><option value="todas">Todas</option></Select><Select value={agrupacion} onChange={setAgrupacion}><option value="rol">Agrupar por tipo</option><option value="local">Agrupar por sucursal</option><option value="ninguna">Sin agrupar</option></Select></div></Card><div style={{display:"flex",flexDirection:"column",gap:14}}>{grupos.map(g=><div key={g.key}>{agrupacion!=="ninguna"&&<h3 style={{fontSize:14,margin:"0 0 7px 4px"}}>{g.label} <Badge color="info">{g.items.length}</Badge></h3>}{g.items.map(e=><Card key={`${g.key}-${e.id}`} style={{display:"flex",alignItems:"center",gap:12,marginBottom:8,flexWrap:"wrap"}}><Avatar nombre={e.nombre} userId={e.id} photoUrl={e.fotoPerfilUrl}/><div style={{flex:1}}><p style={{margin:0,fontWeight:600}}>{e.nombre}</p><p style={{margin:0,fontSize:12,color:"var(--color-text-secondary)"}}>{e.usuario} · {e.email} · {roleLabel(e.rol)}</p></div><Badge color={e.activo?"success":"gray"}>{e.activo?"Activa":"Inactiva"}</Badge><Btn size="sm" variant="ghost" onClick={()=>openEdit(e)}>Editar</Btn><Btn size="sm" variant="ghost" onClick={()=>reenviarInvitacion(e)} disabled={!e.email||!canManageUserRole(user,e.rol)}>Reenviar invitación</Btn></Card>)}</div>)}</div>{modal&&<Modal title={modal==="new"?"Nuevo usuario":"Editar usuario"} width={800} onClose={()=>setModal(null)}><div className="niki-config-tabs" style={{marginBottom:16}}>{[["general","Datos generales"],["antiguedad","Antigüedad"],["laboral","Datos laborales y bancarios"],["documentacion","Documentación"]].map(([k,l])=><button key={k} style={tabStyle(modalTab===k)} onClick={()=>setModalTab(k)}>{l}</button>)}</div>{modalTab==="general"?<div style={{display:"flex",flexDirection:"column",gap:12}}><ModalInput label="Nombre completo" value={form.nombre||""} onChange={v=>setForm(f=>({...f,nombre:v}))}/><ModalInput label="Usuario" value={form.usuario||""} onChange={v=>setForm(f=>({...f,usuario:v}))}/><ModalInput label="Email" value={form.email||""} onChange={v=>setForm(f=>({...f,email:v}))}/><div className="niki-mobile-one-column" style={{display:"grid",gridTemplateColumns:".45fr 1fr",gap:12}}><ModalInput label="Código de área" value={form.telefonoCodigoArea||""} onChange={v=>setForm(f=>({...f,telefonoCodigoArea:onlyDigits(v).slice(0,4)}))}/><ModalInput label="Número de teléfono" value={form.telefonoNumero||""} onChange={v=>setForm(f=>({...f,telefonoNumero:onlyDigits(v).slice(0,8)}))}/></div><ModalSelect label="Tipo de usuario" value={form.rol||"encargada"} onChange={v=>setForm(f=>({...f,rol:v}))}>{rolesGestionables.map(r=><option key={r} value={r}>{roleLabel(r)}</option>)}</ModalSelect>{form.rol==="encargada"&&<div>{localesGestionables.map(l=><label key={l.id} style={{display:"block",fontSize:13}}><input type="checkbox" checked={(form.localIds||[]).includes(l.id)} onChange={()=>toggleLocal(l.id)}/> {l.nombre}</label>)}</div>}{form.rol==="casa_matriz"&&<div>{franquiciasDisponibles.map(l=><label key={l.id} style={{display:"block",fontSize:13}}><input type="checkbox" checked={(form.localIds||[]).includes(l.id)} onChange={()=>toggleLocal(l.id)}/> {l.nombre}</label>)}</div>}<ModalInput label={modal==="new"?"Contraseña":"Nueva contraseña (opcional)"} type="password" value={form.password||""} onChange={v=>setForm(f=>({...f,password:v}))}/><ModalInput label="Repetir contraseña" type="password" value={form.password2||""} onChange={v=>setForm(f=>({...f,password2:v}))}/></div>:modalTab==="antiguedad"?<div><div style={{display:"flex",justifyContent:"space-between",marginBottom:10}}><p style={{fontSize:12,color:"var(--color-text-secondary)"}}>Sin local: registra la relación laboral general.</p><Btn size="sm" onClick={()=>setHistorialDraft(r=>[{tempId:`n-${Date.now()}`,fechaInicio:hoy,fechaFin:"",motivoFin:"",observacion:""},...r])}>+ Período</Btn></div>{historialDraft.map(r=>{const k=r.id||r.tempId;return <div className="niki-history-row" key={k} style={{display:"grid",gridTemplateColumns:"130px 130px 150px 1fr 36px",gap:8,marginBottom:8}}><input type="date" value={r.fechaInicio||""} onChange={e=>updHist(k,"fechaInicio",e.target.value)}/><input type="date" value={r.fechaFin||""} onChange={e=>updHist(k,"fechaFin",e.target.value)}/><select disabled={!r.fechaFin} value={r.motivoFin||""} onChange={e=>updHist(k,"motivoFin",e.target.value)}><option value="">{r.fechaFin?"Motivo":"Activo"}</option>{motivos.map(x=><option key={x}>{x}</option>)}</select><input value={r.observacion||""} placeholder="Observación" onChange={e=>updHist(k,"observacion",e.target.value)}/><button onClick={()=>setHistorialDraft(a=>a.filter(x=>(x.id||x.tempId)!==k))}>×</button></div>})}</div>:modalTab==="laboral"?<div style={{display:"flex",flexDirection:"column",gap:12}}><ModalInput label="Alias o CBU bancario" value={form.datoBancario||""} onChange={v=>setForm(f=>({...f,datoBancario:v}))}/><ModalSelect label="Tipo de relación" value={form.tipoRelacion||"a_resolver"} onChange={v=>setForm(f=>({...f,tipoRelacion:v}))}><option value="monotributista">Monotributista</option><option value="dependencia">Relación de Dependencia</option><option value="a_resolver">A resolver</option></ModalSelect></div>:<LegajoDocumentosPanel actor={user} userId={form.id} documentos={data.personaDocumentos||[]} onReload={reloadData} currentPhotoUrl={form.fotoPerfilUrl||""}/>} {formErr&&<p style={{color:COLORS.danger,background:COLORS.dangerLight,padding:8,borderRadius:8}}>{formErr}</p>}<div style={{display:"flex",gap:8,marginTop:16,flexWrap:"wrap"}}><Btn onClick={save} disabled={saving} style={{flex:1,justifyContent:"center"}}>{saving?"Guardando...":"Guardar"}</Btn><Btn variant="secondary" onClick={()=>setModal(null)} style={{flex:1,justifyContent:"center"}}>Cancelar</Btn></div></Modal>}</div>;
 }
 
 // ── INFORME DIARIO ─────────────────────────────────────────────────
@@ -9354,6 +9406,9 @@ function ReportePagoComisiones({ data, setData, user }) {
   const [savingPagoUserId, setSavingPagoUserId] = useState(null);
   const [dragPagoUserId, setDragPagoUserId] = useState(null);
   const [dragPagoTarget, setDragPagoTarget] = useState("");
+  const [cargandoPagoComisiones, setCargandoPagoComisiones] = useState(false);
+  const [pagoComisionesReady, setPagoComisionesReady] = useState(false);
+  const refreshPagoSeq = useRef(0);
 
   const semanas = useMemo(() => getCommissionWeeksForMonth(Number(anio), Number(mes) - 1), [anio, mes]);
   useEffect(() => { setSemana("todas"); }, [anio, mes]);
@@ -9363,6 +9418,50 @@ function ReportePagoComisiones({ data, setData, user }) {
   const localNombre = useCallback((id, fallback="") => localById.get(Number(id))?.nombre || fallback || "Sin local", [localById]);
   const localTipo = useCallback((id) => (localById.get(Number(id))?.tipoLocal || localById.get(Number(id))?.tipo_local || "propio"), [localById]);
   const periodo = `${anio}-${String(mes).padStart(2,"0")}`;
+  const refrescarPagoComisiones = useCallback(async ({ silencioso=false } = {}) => {
+    const seq = ++refreshPagoSeq.current;
+    if (!silencioso) setCargandoPagoComisiones(true);
+    try {
+      const semanasPeriodo = getCommissionWeeksForMonth(Number(anio), Number(mes) - 1);
+      const desde = semanasPeriodo[0]?.desdeKey || `${periodo}-01`;
+      const hasta = semanasPeriodo[semanasPeriodo.length-1]?.hastaKey || dateKey(new Date(Number(anio), Number(mes), 0));
+      const [comisionesRaw, criteriosRaw, configRaw, configManicuraRaw, horariosRaw, asistenciasRaw] = await Promise.all([
+        api.getComisionesPeriodo(periodo),
+        api.getComisionesCriteriosPeriodo(periodo),
+        api.getComisionesConfiguracion(),
+        api.getComisionesManicuraConfig(),
+        api.getHorariosRango(desde,hasta),
+        api.getAsistenciasRango(desde,hasta),
+      ]);
+      if (seq !== refreshPagoSeq.current) return;
+      setData?.(prev => {
+        if (!prev) return prev;
+        const comisionesFuera=(prev.comisiones||[]).filter(c=>c.periodo!==periodo);
+        const criteriosFuera=(prev.comisionesCriterios||[]).filter(c=>c.periodo!==periodo);
+        const horariosFuera=(prev.horarios||[]).filter(h=>h.fecha<desde||h.fecha>hasta);
+        const asistenciasFuera=(prev.asistencias||[]).filter(a=>a.fecha<desde||a.fecha>hasta);
+        return {
+          ...prev,
+          comisiones:[...comisionesFuera,...(comisionesRaw||[]).map(normalizeComision)],
+          comisionesCriterios:[...criteriosFuera,...(criteriosRaw||[]).map(normalizeComisionCriterio)],
+          comisionesConfiguracion:(configRaw||[]).map(normalizeComisionesConfiguracion),
+          comisionesManicuraConfig:(configManicuraRaw||[]).map(normalizeComisionesManicuraConfig),
+          horarios:[...horariosFuera,...(horariosRaw||[]).map(normalizeHorario)],
+          asistencias:[...asistenciasFuera,...(asistenciasRaw||[]).map(normalizeAsistencia)],
+        };
+      });
+      setPagoComisionesReady(true);
+    } catch (err) {
+      notifyToast("No se pudieron actualizar los datos de pago de comisiones: " + (err.message || err), "error");
+    } finally {
+      if (seq === refreshPagoSeq.current) setCargandoPagoComisiones(false);
+    }
+  }, [anio, mes, periodo, setData]);
+  useEffect(() => {
+    const yaHayPeriodo = (data.comisiones || []).some(c => c.periodo === periodo);
+    setPagoComisionesReady(yaHayPeriodo);
+    refrescarPagoComisiones({ silencioso:yaHayPeriodo });
+  }, [periodo, refrescarPagoComisiones]);
   const semanaSeleccionada = semana === "todas" ? null : semanas.find(w => String(w.numero) === String(semana));
   const localBaseIds = localesPermitidos
     .filter(l => tipoLocal === "todos" || (l.tipoLocal || l.tipo_local || "propio") === tipoLocal)
@@ -9404,19 +9503,38 @@ function ReportePagoComisiones({ data, setData, user }) {
     for (let d = new Date(week.desde); d <= week.hasta; d.setDate(d.getDate() + 1)) keys.push(dateKey(d));
     return keys;
   };
+  const horariosPagoMap = useMemo(() => {
+    const map = new Map();
+    (data.horarios || []).forEach(h => map.set(`${Number(h.userId)}|${h.fecha}`, h));
+    return map;
+  }, [data.horarios]);
+  const asistenciasPagoMap = useMemo(() => {
+    const map = new Map();
+    (data.asistencias || []).forEach(a => {
+      const k = `${Number(a.userId)}|${a.fecha}`;
+      if (!map.has(k)) map.set(k, []);
+      map.get(k).push(a);
+    });
+    return map;
+  }, [data.asistencias]);
+  const criteriosPagoMap = useMemo(() => {
+    const map = new Map();
+    (data.comisionesCriterios || []).forEach(c => map.set(`${c.periodo}|${c.semana}|${Number(c.userId)}|${Number(c.localId || 0)}`, c));
+    return map;
+  }, [data.comisionesCriterios]);
   const horasTeoricasPagoSemana = useCallback((uid, periodoValue, semanaValue) => semanaKeysPagoComision(periodoValue, semanaValue).reduce((acc, f) => {
-    const h = (data.horarios || []).find(x => Number(x.userId) === Number(uid) && x.fecha === f && x.trabaja && x.entrada && x.salida);
-    if (!h) return acc;
+    const h = horariosPagoMap.get(`${Number(uid)}|${f}`);
+    if (!h || !h.trabaja || !h.entrada || !h.salida) return acc;
     return acc + Math.max(0, minutosPagoComision(h.salida) - minutosPagoComision(h.entrada)) / 60;
-  }, 0), [data.horarios]);
-  const asistenciasPagoSemana = useCallback((uid, periodoValue, semanaValue) => semanaKeysPagoComision(periodoValue, semanaValue).flatMap(f => (data.asistencias || []).filter(a => Number(a.userId) === Number(uid) && a.fecha === f)), [data.asistencias]);
+  }, 0), [horariosPagoMap]);
+  const asistenciasPagoSemana = useCallback((uid, periodoValue, semanaValue) => semanaKeysPagoComision(periodoValue, semanaValue).flatMap(f => asistenciasPagoMap.get(`${Number(uid)}|${f}`) || []), [asistenciasPagoMap]);
   const criterioPagoComision = useCallback((uid, periodoValue, semanaValue, localIdValue=null) => {
     if (!uid || !periodoValue || !semanaValue) return { porcentaje: Number(configGeneralPagoComisiones.porcentajeBase || 40), regla: reglaPagoComision(uid, localIdValue) };
     const regla = reglaPagoComision(uid, localIdValue);
-    const guardado = (data.comisionesCriterios || []).find(c => c.periodo === periodoValue && String(c.semana) === String(semanaValue) && Number(c.userId) === Number(uid) && Number(c.localId || 0) === Number(localIdValue || 0))
-      || (data.comisionesCriterios || []).find(c => c.periodo === periodoValue && String(c.semana) === String(semanaValue) && Number(c.userId) === Number(uid) && !c.localId);
+    const guardado = criteriosPagoMap.get(`${periodoValue}|${semanaValue}|${Number(uid)}|${Number(localIdValue || 0)}`)
+      || criteriosPagoMap.get(`${periodoValue}|${semanaValue}|${Number(uid)}|0`);
     const weekKeys = semanaKeysPagoComision(periodoValue, semanaValue);
-    const tieneHorariosCargados = weekKeys.some(f => (data.horarios || []).some(h => Number(h.userId) === Number(uid) && h.fecha === f && h.trabaja && h.entrada && h.salida));
+    const tieneHorariosCargados = weekKeys.some(f => { const h = horariosPagoMap.get(`${Number(uid)}|${f}`); return !!(h?.trabaja && h?.entrada && h?.salida); });
     const horas = horasTeoricasPagoSemana(uid, periodoValue, semanaValue);
     const asistencias = asistenciasPagoSemana(uid, periodoValue, semanaValue);
     const faltas = asistencias.filter(a => a.estado === "ausente" && (regla.contarFaltasJustificadas || !a.certificado)).length;
@@ -9425,7 +9543,7 @@ function ReportePagoComisiones({ data, setData, user }) {
       ? regla.porcentajeBase
       : (faltas > regla.maxFaltasNoJustificadas || horas < regla.horasObjetivo || llegadasTarde > regla.maxLlegadasTarde) ? regla.porcentajeReducido : regla.porcentajeBase;
     return { porcentaje: Number(guardado?.porcentaje || automatico), regla, guardado: !!guardado, automatico, horas, faltas, llegadasTarde };
-  }, [asistenciasPagoSemana, configGeneralPagoComisiones, data.comisionesCriterios, horasTeoricasPagoSemana, reglaPagoComision]);
+  }, [asistenciasPagoSemana, configGeneralPagoComisiones, criteriosPagoMap, horasTeoricasPagoSemana, reglaPagoComision, horariosPagoMap]);
   const comisionConPorcentajePago = (comisionBase, porcentaje, porcentajeBase=40) => Number(comisionBase || 0) * (Number(porcentaje || porcentajeBase) / Math.max(1, Number(porcentajeBase || 40)));
   const comisionAplicadaPago = useCallback((c) => {
     const valor = Number(c?.comision || 0);
@@ -9533,6 +9651,19 @@ function ReportePagoComisiones({ data, setData, user }) {
     // totales, gráficos y listado de pago usen exactamente el mismo criterio que el cálculo.
     const semanasEvaluar = semanaSeleccionada ? [semanaSeleccionada] : semanas;
     const manicurasActivas = (data.users || []).filter(u=>u.rol==="manicura" && u.activo!==false);
+
+    // Índice previo por manicura/local/semana. Antes se hacía rows.filter(...) dentro
+    // del triple bucle semana x local x manicura, lo que volvía muy costoso abrir
+    // el reporte de pago cuando había muchos registros de comisiones.
+    const comisionSemanaMap = new Map();
+    rows.forEach(r => {
+      if (r.tipo !== "comision") return;
+      const semanaRow = semanasEvaluar.find(w => isDateInRangeKey(r.fecha, w.desdeKey, w.hastaKey));
+      if (!semanaRow) return;
+      const key = `${Number(r.userId||0)}|${Number(r.localId||0)}|${semanaRow.numero}`;
+      comisionSemanaMap.set(key, (comisionSemanaMap.get(key) || 0) + Number(r.importe || 0));
+    });
+
     semanasEvaluar.forEach(w => {
       localBaseIds.forEach(lid => {
         manicurasActivas.forEach(m => {
@@ -9542,7 +9673,7 @@ function ReportePagoComisiones({ data, setData, user }) {
           if (!(minimum > 0)) return;
           const criterio = criterioPagoComision(m.id, periodo, w.numero, lid);
           if (Number(criterio.porcentaje) !== Number(criterio.regla?.porcentajeBase || configGeneralPagoComisiones.porcentajeBase || 40)) return;
-          const comisionSemana = rows.filter(r => r.tipo==="comision" && Number(r.userId)===Number(m.id) && Number(r.localId)===Number(lid) && isDateInRangeKey(r.fecha,w.desdeKey,w.hastaKey)).reduce((acc,r)=>acc+Number(r.importe||0),0);
+          const comisionSemana = comisionSemanaMap.get(`${Number(m.id)}|${Number(lid)}|${w.numero}`) || 0;
           if (comisionSemana >= minimum) return;
           rows.push({
             id:`minimo-${m.id}-${lid}-${w.desdeKey}`,
@@ -9698,6 +9829,8 @@ function ReportePagoComisiones({ data, setData, user }) {
     .filter(l => tipoLocal === "todos" || (l.tipoLocal || l.tipo_local || "propio") === tipoLocal);
 
   return <div style={{ display:"flex",flexDirection:"column",gap:16 }}>
+    {cargandoPagoComisiones && <div style={{ padding:"8px 11px",borderRadius:10,background:COLORS.infoLight,color:COLORS.info,fontSize:12,fontWeight:700 }}>Actualizando período…</div>}
+    {!pagoComisionesReady && cargandoPagoComisiones && <div style={{ padding:"18px",textAlign:"center",color:"var(--color-text-secondary)",fontSize:13 }}>Cargando datos de pago de comisiones…</div>}
     <div style={{ display:"flex",alignItems:"flex-start",justifyContent:"space-between",gap:12,flexWrap:"wrap" }}>
       <div>
         <h2 style={{ margin:"0 0 4px",fontSize:22,fontWeight:850,color:"var(--color-text-primary)" }}>Reporte de pago de comisiones</h2>
@@ -10363,6 +10496,161 @@ function ReclutamientoAprobacionesPage({ data, user }) {
   </div>;
 }
 
+
+function ReporteAntiguedadPersonal({ data, setData, user }) {
+  const [loading,setLoading]=useState(true);
+  const [lastUpdated,setLastUpdated]=useState(null);
+  const [search,setSearch]=useState("");
+  const [tipoLocal,setTipoLocal]=useState("todos");
+  const [localIds,setLocalIds]=useState([]);
+  const [rol,setRol]=useState("todos");
+  const [estado,setEstado]=useState("activos");
+  const [orden,setOrden]=useState("antiguedad_desc");
+  const [agruparLocal,setAgruparLocal]=useState(false);
+  const [detalle,setDetalle]=useState(null);
+
+  const refresh=useCallback(async()=>{
+    setLoading(true);
+    try{
+      const [users,locales,manicuraHistorial,usuarioHistorial,encargadoLocales]=await Promise.all([
+        api.getUsers(),api.getLocales(),api.getManicuraHistorialLocales(),api.getUsuarioHistorialLaboral(),api.getEncargadoLocales()
+      ]);
+      const normalized={
+        users:(users||[]).map(normalizeUser),
+        locales:(locales||[]).map(normalizeLocal),
+        manicuraHistorialLocales:(manicuraHistorial||[]).map(normalizeManicuraHistorialLocal),
+        usuarioHistorialLaboral:(usuarioHistorial||[]).map(normalizeUsuarioHistorialLaboral),
+        encargadoLocales:(encargadoLocales||[]).map(x=>({userId:x.user_id,localId:x.local_id})),
+      };
+      setData(prev=>({...prev,...normalized}));
+      setLastUpdated(new Date());
+    }catch(e){notifyToast("No se pudo actualizar la antigüedad del personal: "+(e.message||e),"error");}
+    setLoading(false);
+  },[setData]);
+  useEffect(()=>{refresh();},[refresh]);
+
+  const localById=useMemo(()=>new Map((data.locales||[]).map(l=>[Number(l.id),l])),[data.locales]);
+  const localesVisibles=useMemo(()=>(data.locales||[])
+    .filter(l=>l.activo!==false)
+    .filter(l=>tipoLocal==="todos"||(l.tipoLocal||l.tipo_local||"propio")===tipoLocal)
+    .sort((a,b)=>(a.nombre||"").localeCompare(b.nombre||"")),[data.locales,tipoLocal]);
+
+  useEffect(()=>{setLocalIds(prev=>prev.filter(id=>localesVisibles.some(l=>Number(l.id)===Number(id))));},[tipoLocal,localesVisibles]);
+  const toggleLocal=id=>setLocalIds(prev=>prev.includes(id)?prev.filter(x=>x!==id):[...prev,id]);
+
+  const today=dateKey(new Date());
+  const monthsBetween=(start,end)=>{
+    if(!start)return 0;
+    const a=parseDateLocal(start),b=parseDateLocal(end||today);if(!a||!b)return 0;
+    let months=(b.getFullYear()-a.getFullYear())*12+(b.getMonth()-a.getMonth());
+    if(b.getDate()<a.getDate())months-=1;
+    return Math.max(0,months);
+  };
+  const tenureLabel=months=>{
+    const y=Math.floor(months/12),m=months%12;
+    if(y&&m)return `${y} ${y===1?"año":"años"} · ${m} ${m===1?"mes":"meses"}`;
+    if(y)return `${y} ${y===1?"año":"años"}`;
+    return `${m} ${m===1?"mes":"meses"}`;
+  };
+  const endForInactive=(hist)=>{
+    const ends=hist.map(h=>h.fechaFin).filter(Boolean).sort();
+    return ends.length?ends[ends.length-1]:today;
+  };
+
+  const rows=useMemo(()=>{
+    return (data.users||[]).filter(u=>["manicura","encargada"].includes(u.rol)).map(u=>{
+      if(u.rol==="manicura"){
+        const hist=(data.manicuraHistorialLocales||[]).filter(h=>Number(h.userId)===Number(u.id)).sort((a,b)=>(a.fechaInicio||"").localeCompare(b.fechaInicio||""));
+        const active=hist.filter(h=>!h.fechaFin).sort((a,b)=>(b.fechaInicio||"").localeCompare(a.fechaInicio||""))[0]||null;
+        const inicio=hist[0]?.fechaInicio||"";
+        const end=u.activo===false?endForInactive(hist):today;
+        const lids=active?[Number(active.localId)]:[];
+        return {user:u,rol:u.rol,hist,inicio,months:monthsBetween(inicio,end),localIds:lids,activeLocalId:active?.localId||null,hasMultiLocal:new Set(hist.map(h=>Number(h.localId))).size>1};
+      }
+      const hist=(data.usuarioHistorialLaboral||[]).filter(h=>Number(h.userId)===Number(u.id)).sort((a,b)=>(a.fechaInicio||"").localeCompare(b.fechaInicio||""));
+      const inicio=hist[0]?.fechaInicio||"";
+      const end=u.activo===false?endForInactive(hist):today;
+      const lids=(data.encargadoLocales||[]).filter(x=>Number(x.userId)===Number(u.id)).map(x=>Number(x.localId));
+      return {user:u,rol:u.rol,hist,inicio,months:monthsBetween(inicio,end),localIds:lids,activeLocalId:lids[0]||null,hasMultiLocal:false};
+    });
+  },[data.users,data.manicuraHistorialLocales,data.usuarioHistorialLaboral,data.encargadoLocales,today]);
+
+  const filtered=useMemo(()=>{
+    const q=String(search||"").trim().toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g,"");
+    const wantedLocalSet=new Set(localIds.map(Number));
+    const arr=rows.filter(r=>{
+      const localObjs=r.localIds.map(id=>localById.get(Number(id))).filter(Boolean);
+      const tipos=localObjs.map(l=>l.tipoLocal||l.tipo_local||"propio");
+      const hayTipo=tipoLocal==="todos"||tipos.includes(tipoLocal);
+      const hayLocal=!wantedLocalSet.size||r.localIds.some(id=>wantedLocalSet.has(Number(id)));
+      const hayRol=rol==="todos"||r.rol===rol;
+      const hayEstado=estado==="todos"||(estado==="activos"?r.user.activo!==false:r.user.activo===false);
+      const txt=`${r.user.nombre||""} ${r.user.usuario||""} ${localObjs.map(l=>l.nombre).join(" ")}`.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g,"");
+      return hayTipo&&hayLocal&&hayRol&&hayEstado&&(!q||txt.includes(q));
+    });
+    return [...arr].sort((a,b)=>{
+      if(orden==="nombre")return (a.user.nombre||"").localeCompare(b.user.nombre||"");
+      if(orden==="local"){
+        const la=a.localIds.map(id=>localById.get(Number(id))?.nombre||"").join(", "),lb=b.localIds.map(id=>localById.get(Number(id))?.nombre||"").join(", ");
+        return la.localeCompare(lb)||(a.user.nombre||"").localeCompare(b.user.nombre||"");
+      }
+      if(orden==="antiguedad_asc")return a.months-b.months||(a.user.nombre||"").localeCompare(b.user.nombre||"");
+      return b.months-a.months||(a.user.nombre||"").localeCompare(b.user.nombre||"");
+    });
+  },[rows,search,tipoLocal,localIds,rol,estado,orden,localById]);
+
+  const groups=useMemo(()=>{
+    if(!agruparLocal)return [];
+    const map=new Map();
+    filtered.forEach(r=>{
+      const lids=r.localIds.length?r.localIds:[0];
+      lids.forEach(lid=>{
+        const key=Number(lid)||0;
+        if(!map.has(key))map.set(key,{id:key,label:key?(localById.get(key)?.nombre||"Local") : "Sin local",rows:[]});
+        map.get(key).rows.push(r);
+      });
+    });
+    return [...map.values()].sort((a,b)=>a.label.localeCompare(b.label)).map(g=>{
+      const manicuras=g.rows.filter(r=>r.rol==="manicura");
+      const avg=manicuras.length?Math.round(manicuras.reduce((acc,r)=>acc+r.months,0)/manicuras.length):null;
+      return {...g,avgManicuras:avg};
+    });
+  },[agruparLocal,filtered,localById]);
+
+  const renderRows=(items)=> <div style={{overflowX:"auto"}}><div style={{minWidth:760}}>
+    <div style={{display:"grid",gridTemplateColumns:"2fr 110px 1.5fr 125px 150px 86px",gap:8,padding:"8px 12px",fontSize:10,fontWeight:800,textTransform:"uppercase",color:"var(--color-text-secondary)",borderBottom:"1px solid #eee"}}><span>Persona</span><span>Rol</span><span>Local activo</span><span>Inicio</span><span>Antigüedad</span><span></span></div>
+    {items.map(r=>{const localNames=r.localIds.map(id=>localById.get(Number(id))?.nombre).filter(Boolean);return <div key={`${r.user.id}-${agruparLocal?(r.activeLocalId||localNames.join("-")):"row"}`} style={{display:"grid",gridTemplateColumns:"2fr 110px 1.5fr 125px 150px 86px",gap:8,padding:"10px 12px",alignItems:"center",borderBottom:"1px solid rgba(120,120,120,.08)",fontSize:12}}>
+      <div style={{display:"flex",alignItems:"center",gap:9,minWidth:0}}><Avatar nombre={r.user.nombre} userId={r.user.id} photoUrl={r.user.fotoPerfilUrl} size={32}/><div style={{minWidth:0}}><strong style={{display:"block",whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{r.user.nombre}</strong>{r.user.activo===false&&<span style={{fontSize:9,color:"var(--color-text-secondary)"}}>Inactiva</span>}</div></div>
+      <Badge color={r.rol==="manicura"?"pink":"info"}>{r.rol==="manicura"?"Manicura":"Encargada"}</Badge>
+      <div style={{fontSize:11}}>{localNames.length?localNames.join(", "):"Sin local"}</div>
+      <div>{r.inicio?fmtFecha(parseDateLocal(r.inicio)):"—"}</div>
+      <div><strong>{tenureLabel(r.months)}</strong></div>
+      <div><Btn size="sm" variant="ghost" onClick={()=>setDetalle(r)}>Historial</Btn></div>
+    </div>})}
+    {!items.length&&<div style={{padding:18,fontSize:12,color:"var(--color-text-secondary)"}}>No hay personal para los filtros seleccionados.</div>}
+  </div></div>;
+
+  return <div>
+    <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",gap:12,flexWrap:"wrap",marginBottom:14}}><div><h2 style={{margin:0,fontSize:18}}>Antigüedad del personal</h2><p style={{margin:"3px 0 0",fontSize:12,color:"var(--color-text-secondary)"}}>Antigüedad calculada desde el primer período registrado. Útil para validar historial, equipos y comisiones.</p></div><div style={{display:"flex",alignItems:"center",gap:8}}>{lastUpdated&&<span style={{fontSize:10,color:"var(--color-text-secondary)"}}>Actualizado {lastUpdated.toLocaleTimeString("es-AR",{hour:"2-digit",minute:"2-digit"})}</span>}<Btn size="sm" variant="secondary" onClick={refresh} disabled={loading}>↻ Actualizar</Btn></div></div>
+
+    <Card style={{padding:12,marginBottom:12}}><div style={{display:"grid",gridTemplateColumns:"minmax(210px,1.6fr) 150px 150px 180px 150px",gap:9,alignItems:"end"}}>
+      <div><label style={{fontSize:10,fontWeight:800,color:"var(--color-text-secondary)",display:"block",marginBottom:5}}>Buscar</label><Input value={search} onChange={setSearch} placeholder="Nombre, usuario o local..."/></div>
+      <div><label style={{fontSize:10,fontWeight:800,color:"var(--color-text-secondary)",display:"block",marginBottom:5}}>Tipo de local</label><Select value={tipoLocal} onChange={setTipoLocal}><option value="todos">Todos</option><option value="propio">Propios</option><option value="franquicia">Franquicias</option></Select></div>
+      <div><label style={{fontSize:10,fontWeight:800,color:"var(--color-text-secondary)",display:"block",marginBottom:5}}>Puesto</label><Select value={rol} onChange={setRol}><option value="todos">Todos</option><option value="manicura">Manicuras</option><option value="encargada">Encargadas</option></Select></div>
+      <div><label style={{fontSize:10,fontWeight:800,color:"var(--color-text-secondary)",display:"block",marginBottom:5}}>Ordenar</label><Select value={orden} onChange={setOrden}><option value="antiguedad_desc">Mayor antigüedad</option><option value="antiguedad_asc">Menor antigüedad</option><option value="nombre">Nombre</option><option value="local">Local</option></Select></div>
+      <div><label style={{fontSize:10,fontWeight:800,color:"var(--color-text-secondary)",display:"block",marginBottom:5}}>Estado</label><Select value={estado} onChange={setEstado}><option value="activos">Activos</option><option value="inactivos">Inactivos</option><option value="todos">Todos</option></Select></div>
+    </div>
+    <div style={{marginTop:10}}><div style={{display:"flex",justifyContent:"space-between",gap:8,alignItems:"center",flexWrap:"wrap"}}><span style={{fontSize:10,fontWeight:800,color:"var(--color-text-secondary)"}}>Locales</span><button type="button" onClick={()=>setAgruparLocal(x=>!x)} style={{border:`1px solid ${agruparLocal?COLORS.pink:"#ddd"}`,background:agruparLocal?COLORS.pinkLight:"#fff",color:agruparLocal?COLORS.pinkDark:"#555",borderRadius:999,padding:"6px 10px",fontSize:10,cursor:"pointer",fontWeight:700}}>{agruparLocal?"✓ ":""}Agrupar por local</button></div><div style={{display:"flex",gap:6,flexWrap:"wrap",marginTop:7}}>{localesVisibles.map(l=>{const on=localIds.includes(Number(l.id));return <button key={l.id} type="button" onClick={()=>toggleLocal(Number(l.id))} style={{border:`1px solid ${on?COLORS.pink:"#ddd"}`,background:on?COLORS.pinkLight:"#fff",color:on?COLORS.pinkDark:"#555",borderRadius:999,padding:"6px 9px",fontSize:10,cursor:"pointer"}}>{on?"✓ ":""}{l.nombre}</button>})}</div></div></Card>
+
+    {loading?<Card><p style={{margin:0,fontSize:12}}>Actualizando antigüedad...</p></Card>:agruparLocal?<div style={{display:"flex",flexDirection:"column",gap:12}}>{groups.map(g=><Card key={g.id} style={{padding:0,overflow:"hidden"}}><div style={{padding:"11px 13px",display:"flex",justifyContent:"space-between",alignItems:"center",gap:8,background:"var(--color-background-secondary)",borderBottom:"1px solid #eee"}}><div><strong style={{fontSize:13}}>{g.label}</strong><span style={{fontSize:10,color:"var(--color-text-secondary)",marginLeft:8}}>{g.rows.length} persona{g.rows.length===1?"":"s"}</span></div>{g.avgManicuras!==null&&<div style={{fontSize:11}}><span style={{color:"var(--color-text-secondary)"}}>Promedio manicuras:</span> <strong>{tenureLabel(g.avgManicuras)}</strong></div>}</div>{renderRows(g.rows)}</Card>)}</div>:<Card style={{padding:0,overflow:"hidden"}}>{renderRows(filtered)}</Card>}
+
+    {detalle&&<Modal title={`Historial · ${detalle.user.nombre}`} onClose={()=>setDetalle(null)} width={720}><div style={{display:"flex",gap:8,alignItems:"center",flexWrap:"wrap",marginBottom:12}}><Badge color={detalle.rol==="manicura"?"pink":"info"}>{detalle.rol==="manicura"?"Manicura":"Encargada"}</Badge><span style={{fontSize:12}}>Inicio total: <strong>{detalle.inicio?fmtFecha(parseDateLocal(detalle.inicio)):"—"}</strong></span><span style={{fontSize:12}}>Antigüedad: <strong>{tenureLabel(detalle.months)}</strong></span></div>
+      {detalle.rol==="manicura"?<div style={{display:"flex",flexDirection:"column",gap:7}}>{detalle.hist.map((h,idx)=><div key={h.id||idx} style={{display:"grid",gridTemplateColumns:"1.3fr 120px 120px 1fr",gap:8,padding:"9px 10px",border:"1px solid #eee",borderRadius:9,fontSize:11}}><strong>{localById.get(Number(h.localId))?.nombre||`Local ${h.localId}`}</strong><span>{h.fechaInicio?fmtFecha(parseDateLocal(h.fechaInicio)):"—"}</span><span>{h.fechaFin?fmtFecha(parseDateLocal(h.fechaFin)):"Actual"}</span><span style={{color:"var(--color-text-secondary)"}}>{h.motivoFin||h.observacion||(!h.fechaFin?"Período activo":"—")}</span></div>)}{!detalle.hist.length&&<p style={{fontSize:12,color:"var(--color-text-secondary)"}}>No hay historial de locales registrado.</p>}</div>:<><div style={{padding:9,borderRadius:9,background:COLORS.infoLight,fontSize:11,marginBottom:10}}><strong>Locales asignados actualmente:</strong> {detalle.localIds.map(id=>localById.get(Number(id))?.nombre).filter(Boolean).join(", ")||"Sin locales"}</div><div style={{display:"flex",flexDirection:"column",gap:7}}>{detalle.hist.map((h,idx)=><div key={h.id||idx} style={{display:"grid",gridTemplateColumns:"120px 120px 1fr",gap:8,padding:"9px 10px",border:"1px solid #eee",borderRadius:9,fontSize:11}}><span>{h.fechaInicio?fmtFecha(parseDateLocal(h.fechaInicio)):"—"}</span><span>{h.fechaFin?fmtFecha(parseDateLocal(h.fechaFin)):"Actual"}</span><span style={{color:"var(--color-text-secondary)"}}>{h.motivoFin||h.observacion||(!h.fechaFin?"Período activo":"—")}</span></div>)}{!detalle.hist.length&&<p style={{fontSize:12,color:"var(--color-text-secondary)"}}>No hay historial laboral registrado.</p>}</div></>}
+      <div style={{display:"flex",justifyContent:"flex-end",marginTop:14}}><Btn variant="secondary" onClick={()=>setDetalle(null)}>Cerrar</Btn></div>
+    </Modal>}
+  </div>;
+}
+
 // ── APP PRINCIPAL ──────────────────────────────────────────────────
 function readSectionHash() {
   const h = (window.location.hash || "").replace(/^#\/?/, "").trim();
@@ -10373,8 +10661,8 @@ function defaultSectionForRole(role) {
 }
 function sectionAllowedForRole(section, role) {
   const reportesOperativos = ["reportes","reportes_horas","reportes_cobertura","reportes_comisiones","reporte_pago_comisiones"];
-  const admin = ["inicio","ayuda","roadmap","asistencia","horarios","bloqueo_horarios",...reportesOperativos,"turnos","adelantos","garantias","informes","manicuras","encargadas","reclutamiento_candidatas","reclutamiento_calendario","reclutamiento_aprobaciones","reclutamiento_config","locales","cobertura_config","perfil"];
-  const casaMatriz = ["inicio","ayuda","roadmap","asistencia","horarios","bloqueo_horarios",...reportesOperativos,"adelantos","garantias","informes","manicuras","encargadas","reclutamiento_candidatas","reclutamiento_calendario","reclutamiento_aprobaciones","reclutamiento_config","locales","cobertura_config","perfil"];
+  const admin = ["inicio","ayuda","roadmap","asistencia","horarios","bloqueo_horarios",...reportesOperativos,"turnos","adelantos","garantias","informes","manicuras","encargadas","reclutamiento_candidatas","reclutamiento_calendario","reclutamiento_aprobaciones","reclutamiento_antiguedad","reclutamiento_config","locales","cobertura_config","perfil"];
+  const casaMatriz = ["inicio","ayuda","roadmap","asistencia","horarios","bloqueo_horarios",...reportesOperativos,"adelantos","garantias","informes","manicuras","encargadas","reclutamiento_candidatas","reclutamiento_calendario","reclutamiento_aprobaciones","reclutamiento_antiguedad","reclutamiento_config","locales","cobertura_config","perfil"];
   const encargada = ["inicio","ayuda","asistencia","horarios","bloqueo_horarios",...reportesOperativos,"adelantos","garantias","informes","manicuras","cobertura_config","perfil"];
   const manicura = ["inicio","ayuda","horarios","reportes","reportes_horas","reportes_comisiones","perfil"];
   const allowed = role === "admin" ? admin : role === "casa_matriz" ? casaMatriz : role === "encargada" ? encargada : manicura;
@@ -10474,8 +10762,11 @@ export default function App() {
   }, [dismissToast, user?.rol]);
 
   const reloadData = useCallback(async (actorOverride = null) => {
-    const [users, locales, horarios, asistencias, periodos, feriados, reglasCobertura, configCobertura, encargadoLocales, usuarioLocales, manicuraHistorialLocales, usuarioHistorialLaboral, personaDocumentos, comisiones, comisionesImportaciones, comisionesCriterios, comisionesConfiguracion, comisionesManicuraConfig, adelantos, garantias, informesDiarios, agendaServicios, agendaManicuraServicios, agendaListasPrecios, agendaLocalListas, agendaPreciosServicios, agendaClientes, agendaTurnos, agendaTurnosPagos, agendaTurnoServicios, agendaBloqueos, reclutamientoCandidatas] = await Promise.all([
-      api.getUsers(), api.getLocales(), api.getHorarios(), api.getAsistencias(), api.getPeriodos(), api.getFeriados(), api.getReglasCobertura(), api.getConfigCobertura(), api.getEncargadoLocales(), api.getUsuarioLocales(), api.getManicuraHistorialLocales(), api.getUsuarioHistorialLaboral(), api.getPersonaDocumentos(), api.getComisiones(), api.getComisionesImportaciones(), api.getComisionesCriterios(), api.getComisionesConfiguracion(), api.getComisionesManicuraConfig(), api.getAdelantos(), api.getGarantias(), api.getInformesDiarios(), api.getAgendaServicios(), api.getAgendaManicuraServicios(), api.getAgendaListasPrecios(), api.getAgendaLocalListas(), api.getAgendaPreciosServicios(), api.getAgendaClientes(), api.getAgendaTurnos(), api.getAgendaTurnosPagos(), api.getAgendaTurnoServicios(), api.getAgendaBloqueos(), (api.getReclutamientoCandidatasDisponibles().catch(()=>[]))
+    // Comisiones de detalle, importaciones y criterios ya no se cargan completas al iniciar
+    // NikiAsistencia. Son tablas que crecen continuamente y hacían pesado el estado global.
+    // Cada reporte carga únicamente el período que necesita.
+    const [users, locales, horarios, asistencias, periodos, feriados, reglasCobertura, configCobertura, encargadoLocales, usuarioLocales, manicuraHistorialLocales, usuarioHistorialLaboral, personaDocumentos, comisionesConfiguracion, comisionesManicuraConfig, adelantos, garantias, informesDiarios, agendaServicios, agendaManicuraServicios, agendaListasPrecios, agendaLocalListas, agendaPreciosServicios, agendaClientes, agendaTurnos, agendaTurnosPagos, agendaTurnoServicios, agendaBloqueos, reclutamientoCandidatas] = await Promise.all([
+      api.getUsers(), api.getLocales(), api.getHorarios(), api.getAsistencias(), api.getPeriodos(), api.getFeriados(), api.getReglasCobertura(), api.getConfigCobertura(), api.getEncargadoLocales(), api.getUsuarioLocales(), api.getManicuraHistorialLocales(), api.getUsuarioHistorialLaboral(), api.getPersonaDocumentos(), api.getComisionesConfiguracion(), api.getComisionesManicuraConfig(), api.getAdelantos(), api.getGarantias(), api.getInformesDiarios(), api.getAgendaServicios(), api.getAgendaManicuraServicios(), api.getAgendaListasPrecios(), api.getAgendaLocalListas(), api.getAgendaPreciosServicios(), api.getAgendaClientes(), api.getAgendaTurnos(), api.getAgendaTurnosPagos(), api.getAgendaTurnoServicios(), api.getAgendaBloqueos(), (api.getReclutamientoCandidatasDisponibles().catch(()=>[]))
     ]);
     const nextData = {
       users: await Promise.all((users || []).map(async raw => {
@@ -10503,9 +10794,10 @@ export default function App() {
       manicuraHistorialLocales: (manicuraHistorialLocales||[]).map(normalizeManicuraHistorialLocal),
       usuarioHistorialLaboral: (usuarioHistorialLaboral||[]).map(normalizeUsuarioHistorialLaboral),
       personaDocumentos: (personaDocumentos||[]).map(normalizePersonaDocumento),
-      comisiones: (comisiones||[]).map(normalizeComision),
-      comisionesImportaciones: (comisionesImportaciones||[]).map(normalizeComisionImportacion),
-      comisionesCriterios: (comisionesCriterios||[]).map(normalizeComisionCriterio),
+      // Se inicializan vacías y se hidratan por período al abrir los reportes de comisiones.
+      comisiones: [],
+      comisionesImportaciones: [],
+      comisionesCriterios: [],
       comisionesConfiguracion: (comisionesConfiguracion||[]).map(normalizeComisionesConfiguracion),
       comisionesManicuraConfig: (comisionesManicuraConfig||[]).map(normalizeComisionesManicuraConfig),
       adelantos: (adelantos||[]).map(normalizeAdelanto),
@@ -10701,6 +10993,7 @@ export default function App() {
         { id: "reclutamiento_candidatas", label: "Candidatas y procesos", icon: "👤" },
         { id: "reclutamiento_calendario", label: "Calendario", icon: "🗓️" },
         { id: "reclutamiento_aprobaciones", label: "Aprobaciones pendientes", icon: "✅" },
+        { id: "reclutamiento_antiguedad", label: "Antigüedad del personal", icon: "⏳" },
       ],
     },
     {
@@ -11020,6 +11313,7 @@ export default function App() {
     if (seccion==="reclutamiento_candidatas") return ["admin", "casa_matriz"].includes(user.rol) ? <ReclutamientoPage data={data} setData={setData} user={user} fixedView="tablero"/> : null;
     if (seccion==="reclutamiento_calendario") return ["admin", "casa_matriz"].includes(user.rol) ? <ReclutamientoCalendarioPage data={data} user={user}/> : null;
     if (seccion==="reclutamiento_aprobaciones") return ["admin", "casa_matriz"].includes(user.rol) ? <ReclutamientoAprobacionesPage data={data} user={user}/> : null;
+    if (seccion==="reclutamiento_antiguedad") return ["admin", "casa_matriz"].includes(user.rol) ? <ReporteAntiguedadPersonal data={data} setData={setData} user={user}/> : null;
     if (seccion==="reclutamiento_config") return ["admin", "casa_matriz"].includes(user.rol) ? <ReclutamientoPage data={data} setData={setData} user={user} fixedView="config"/> : null;
     if (seccion==="cobertura_config") return <ConfiguracionCobertura data={data} reloadData={reloadData} user={user}/>;
     if (seccion==="perfil") return <MiPerfil data={data} reloadData={reloadData} user={user} setUser={setUser}/>;
