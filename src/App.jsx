@@ -406,6 +406,7 @@ const api = {
   getEncargadoLocales: () => sb("encargado_locales?select=*"),
   getComisiones: () => sbAll("comisiones_detalle?select=*&order=fecha_pago.desc,id.desc"),
   getComisionesPeriodo: (periodo) => sbAll(`comisiones_detalle?select=*&periodo=eq.${encodeURIComponent(periodo)}&order=fecha_pago.desc,id.desc`),
+  getComisionesRango: (desde,hasta) => sbAll(`comisiones_detalle?select=*&fecha_pago=gte.${encodeURIComponent(desde)}&fecha_pago=lte.${encodeURIComponent(hasta)}&order=fecha_pago.desc,id.desc`),
   reconciliarComisiones: ({ userId=null, periodo=null, localIds=null } = {}) => sb("rpc/reconciliar_comisiones_manicura", { method:"POST", body:JSON.stringify({ p_user_id:userId, p_periodo:periodo, p_local_ids:Array.isArray(localIds)&&localIds.length?localIds:null }) }),
   getComisionesImportaciones: () => sb("comisiones_importaciones?select=*&order=creado_en.desc&limit=10"),
   getComisionesImportacionesPeriodo: (periodo) => sb(`comisiones_importaciones?select=*&periodo=eq.${encodeURIComponent(periodo)}&order=creado_en.desc&limit=10`),
@@ -5361,7 +5362,7 @@ function Reportes({ data, setData, user, onOpenAgenda, reportRestore, reloadData
       const desde = semanas[0]?.desdeKey || `${periodoComisiones}-01`;
       const hasta = semanas[semanas.length-1]?.hastaKey || dateKey(new Date(yy, mm || 1, 0));
       const [comisionesRaw, importacionesRaw, criteriosRaw, configuracionRaw, manicuraConfigRaw, adelantosRaw, garantiasRaw, horariosRaw, asistenciasRaw] = await Promise.all([
-        api.getComisionesPeriodo(periodoComisiones),
+        api.getComisionesRango(desde,hasta),
         api.getComisionesImportacionesPeriodo(periodoComisiones),
         api.getComisionesCriteriosPeriodo(periodoComisiones),
         api.getComisionesConfiguracion(),
@@ -5383,7 +5384,10 @@ function Reportes({ data, setData, user, onOpenAgenda, reportRestore, reloadData
       const nuevasAsistencias=(asistenciasRaw||[]).map(normalizeAsistencia);
       setData(prev => {
         if (!prev) return prev;
-        const comisionesFuera=(prev.comisiones||[]).filter(c=>c.periodo!==periodoComisiones);
+        const comisionesFuera=(prev.comisiones||[]).filter(c=>{
+          const f=String(c.fechaPago||"").slice(0,10);
+          return !f || f<desde || f>hasta;
+        });
         const importFuera=(prev.comisionesImportaciones||[]).filter(i=>i.periodo!==periodoComisiones);
         const criteriosFuera=(prev.comisionesCriterios||[]).filter(c=>c.periodo!==periodoComisiones);
         const horariosFuera=(prev.horarios||[]).filter(h=>h.fecha<desde||h.fecha>hasta);
@@ -5609,7 +5613,7 @@ function Reportes({ data, setData, user, onOpenAgenda, reportRestore, reloadData
       .filter(c=>!localComisionesSeleccionado || c.localId === localComisionesSeleccionado || normalize(c.nombreLocal) === normalize(localNameById.get(localComisionesSeleccionado)))
       .filter(c=>manicuraComisiones === "todas" || c.userId === parseInt(manicuraComisiones) || normalize(c.nombreManicura) === normalize(userNameById.get(parseInt(manicuraComisiones))));
     const comisionesSinVincularVisibles = (data.comisiones||[])
-      .filter(c=>c.periodo===periodoComisiones && !c.userId)
+      .filter(c=>!c.userId)
       .filter(c=>puedeGestionar && puedeVerComision(c))
       .filter(c=>!sinSemanaComisiones && fechaEnSemanaSeleccionada(c.fechaPago))
       .filter(c=>!localComisionesSeleccionado || c.localId === localComisionesSeleccionado || normalize(c.nombreLocal) === normalize(localNameById.get(localComisionesSeleccionado)));
@@ -9426,7 +9430,7 @@ function ReportePagoComisiones({ data, setData, user }) {
       const desde = semanasPeriodo[0]?.desdeKey || `${periodo}-01`;
       const hasta = semanasPeriodo[semanasPeriodo.length-1]?.hastaKey || dateKey(new Date(Number(anio), Number(mes), 0));
       const [comisionesRaw, criteriosRaw, configRaw, configManicuraRaw, horariosRaw, asistenciasRaw] = await Promise.all([
-        api.getComisionesPeriodo(periodo),
+        api.getComisionesRango(desde,hasta),
         api.getComisionesCriteriosPeriodo(periodo),
         api.getComisionesConfiguracion(),
         api.getComisionesManicuraConfig(),
@@ -9436,7 +9440,10 @@ function ReportePagoComisiones({ data, setData, user }) {
       if (seq !== refreshPagoSeq.current) return;
       setData?.(prev => {
         if (!prev) return prev;
-        const comisionesFuera=(prev.comisiones||[]).filter(c=>c.periodo!==periodo);
+        const comisionesFuera=(prev.comisiones||[]).filter(c=>{
+          const f=String(c.fechaPago||"").slice(0,10);
+          return !f || f<desde || f>hasta;
+        });
         const criteriosFuera=(prev.comisionesCriterios||[]).filter(c=>c.periodo!==periodo);
         const horariosFuera=(prev.horarios||[]).filter(h=>h.fecha<desde||h.fecha>hasta);
         const asistenciasFuera=(prev.asistencias||[]).filter(a=>a.fecha<desde||a.fecha>hasta);
@@ -9551,7 +9558,12 @@ function ReportePagoComisiones({ data, setData, user }) {
     if (c.tipoRegistro === "garantia") return valor;
     const periodoRegistro = c.periodo || String(c.fechaPago || "").slice(0,7);
     const semanaRegistro = weekOfMonthValue(c.fechaPago);
-    const info = criterioPagoComision(c.userId, periodoRegistro, semanaRegistro, c.localId);
+    // Si el usuario eligió una semana que cruza de mes, toda la semana usa el
+    // criterio del mes/semana seleccionados. El día del mes anterior no debe
+    // evaluarse con una regla semanal distinta solo por su fecha calendario.
+    const periodoCriterio = semanaSeleccionada ? periodo : periodoRegistro;
+    const semanaCriterio = semanaSeleccionada ? Number(semanaSeleccionada.numero) : semanaRegistro;
+    const info = criterioPagoComision(c.userId, periodoCriterio, semanaCriterio, c.localId);
     return comisionConPorcentajePago(valor, info.porcentaje, info.regla?.porcentajeBase || configGeneralPagoComisiones.porcentajeBase || 40);
   }, [criterioPagoComision, configGeneralPagoComisiones]);
 
