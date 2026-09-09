@@ -151,7 +151,7 @@ Deno.serve(async (req) => {
       if (actor.rol === "encargada") return Number(actor.id) === Number(targetUserId);
       const { data:u,error:uError } = await admin.from("users").select("id,rol,activo,nombre").eq("id",targetUserId).maybeSingle();
       if (uError) throw uError;
-      if (!u || u.rol !== "encargada") return false;
+      if (!u) return false;
       const { data:rels,error:rError } = await admin.from("encargado_locales").select("local_id").eq("user_id",targetUserId);
       if (rError) throw rError;
       return (rels||[]).some((r:any)=>allowedLocalIds.includes(Number(r.local_id)));
