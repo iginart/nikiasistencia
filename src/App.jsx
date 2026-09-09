@@ -1648,6 +1648,30 @@ function CalendarioHorarios({ data, setData, reloadData, user, agendaRequest, on
     const lid=Number(localId)||(Number(uid)===Number(manicuraId)?selectedLocalId:getManicuraLocalIdForDate(data,uid,f));
     return (data.horarios||[]).some(h=>registroCoincideLocal(data,h,parseInt(uid),f,lid)&&h.trabaja&&h.entrada&&h.salida);
   }, [data, manicuraId, selectedLocalId]);
+  const buscarSuperposicionHorario = useCallback((uid, f, localId, entrada, salida) => {
+    if (!uid || !f || !localId || !entrada || !salida) return null;
+    const toMin = (v) => {
+      const [hh,mm]=String(v||"").slice(0,5).split(":").map(Number);
+      return Number.isFinite(hh)&&Number.isFinite(mm) ? hh*60+mm : null;
+    };
+    const nuevoDesde=toMin(entrada), nuevoHasta=toMin(salida);
+    if (nuevoDesde==null || nuevoHasta==null || nuevoHasta<=nuevoDesde) return null;
+    return (data.horarios||[]).find(h => {
+      if (Number(h.userId)!==Number(uid) || String(h.fecha)!==String(f) || !h.trabaja || !h.entrada || !h.salida) return false;
+      if (Number(h.localId)===Number(localId)) return false;
+      const desde=toMin(h.entrada), hasta=toMin(h.salida);
+      return desde!=null && hasta!=null && nuevoDesde < hasta && nuevoHasta > desde;
+    }) || null;
+  }, [data.horarios]);
+  const validarSuperposicionHorario = useCallback((uid, f, localId, entrada, salida) => {
+    const conflicto = buscarSuperposicionHorario(uid, f, localId, entrada, salida);
+    if (!conflicto) return true;
+    const localActual = data.locales.find(l=>Number(l.id)===Number(localId))?.nombre || "la sucursal seleccionada";
+    const localConflicto = data.locales.find(l=>Number(l.id)===Number(conflicto.localId))?.nombre || "otra sucursal";
+    const manicura = data.users.find(u=>Number(u.id)===Number(uid))?.nombre || "La manicura";
+    notifyToast(`${manicura} ya tiene un horario el ${String(f).split("-").reverse().join("/")} en ${localConflicto}, de ${String(conflicto.entrada).slice(0,5)} a ${String(conflicto.salida).slice(0,5)}. El horario de ${localActual} (${entrada} a ${salida}) se superpone y no puede guardarse.`, "error", { title:"Horarios superpuestos" });
+    return false;
+  }, [buscarSuperposicionHorario, data.locales, data.users]);
   const pedirConfirmacion = useCallback((config) => new Promise(resolve => {
     confirmResolver.current = resolve;
     setConfirmDialog(config);
@@ -1790,8 +1814,14 @@ function CalendarioHorarios({ data, setData, reloadData, user, agendaRequest, on
       return false;
     }
     const s = calFromSlot(bl.startSlot), e = calFromSlot(bl.endSlot);
+    const entradaNueva=calFmt(s.h,s.m), salidaNueva=calFmt(e.h,e.m);
+    if (!validarSuperposicionHorario(uid, f, localIdRegistro, entradaNueva, salidaNueva)) {
+      if (opts.clearSelected !== false && parseInt(uid) === parseInt(manicuraId)) setLocalH(p => { const n={...p}; delete n[f]; return n; });
+      setLocalHAll(p => { const n={...p}; delete n[key]; return n; });
+      return false;
+    }
     const anterior = (data.horarios || []).find(h => registroCoincideLocal(data,h,uid,f,localIdRegistro)) || null;
-    const nuevo = { user_id:parseInt(uid), local_id:localIdRegistro, fecha:f, entrada:calFmt(s.h,s.m), salida:calFmt(e.h,e.m), trabaja:true };
+    const nuevo = { user_id:parseInt(uid), local_id:localIdRegistro, fecha:f, entrada:entradaNueva, salida:salidaNueva, trabaja:true };
     try {
       const savedRows = await api.upsertHorario(nuevo);
       const rawSaved = Array.isArray(savedRows) ? savedRows[0] : savedRows;
@@ -1807,11 +1837,13 @@ function CalendarioHorarios({ data, setData, reloadData, user, agendaRequest, on
     } catch (err) {
       if (parseInt(uid) === parseInt(manicuraId)) setLocalH(p => { const n={...p}; delete n[f]; return n; });
       setLocalHAll(p => { const n={...p}; delete n[key]; return n; });
-      notifyToast(`No se pudo guardar el horario. ${err?.message || "Reintentá en unos segundos."}`, "error", { title:"Horario no guardado" });
+      const msg=String(err?.message||"");
+      if(msg.includes("HORARIO_SUPERPUESTO") || msg.toLowerCase().includes("superpone")) notifyToast(msg.replace(/^.*HORARIO_SUPERPUESTO[: ]*/i,""), "error", { title:"Horarios superpuestos" });
+      else notifyToast(`No se pudo guardar el horario. ${msg || "Reintentá en unos segundos."}`, "error", { title:"Horario no guardado" });
       console.error("Error al guardar horario", err);
       return false;
     }
-  }, [manicuraId, localH, localHAll, bloques, getBloqueFor, getAsistenciaFor, reloadData, confirmarCambioHorario, horarioKey, validarEdicionHorarioActual, data.horarios, auditarHorario]);
+  }, [manicuraId, localH, localHAll, bloques, getBloqueFor, getAsistenciaFor, reloadData, confirmarCambioHorario, horarioKey, validarEdicionHorarioActual, data.horarios, auditarHorario, validarSuperposicionHorario]);
 
   const saveBloque = useCallback(async (f, b) => saveBloqueFor(parseInt(manicuraId), f, b), [manicuraId, saveBloqueFor]);
 
@@ -1827,8 +1859,14 @@ function CalendarioHorarios({ data, setData, reloadData, user, agendaRequest, on
     if (parseInt(uid) === parseInt(manicuraId)) setLocalH(p => ({...p,[f]:b}));
     setLocalHAll(p => ({...p,[key]:b}));
     const s = calFromSlot(b.startSlot), e = calFromSlot(b.endSlot);
+    const entradaNueva=calFmt(s.h,s.m), salidaNueva=calFmt(e.h,e.m);
+    if (!validarSuperposicionHorario(uid, f, localIdRegistro, entradaNueva, salidaNueva)) {
+      if (parseInt(uid) === parseInt(manicuraId)) setLocalH(p => { const n={...p}; delete n[f]; return n; });
+      setLocalHAll(p => { const n={...p}; delete n[key]; return n; });
+      return false;
+    }
     const anterior = (data.horarios || []).find(h => registroCoincideLocal(data,h,uid,f,localIdRegistro)) || null;
-    const nuevo = { user_id:parseInt(uid), local_id:localIdRegistro, fecha:f, entrada:calFmt(s.h,s.m), salida:calFmt(e.h,e.m), trabaja:true };
+    const nuevo = { user_id:parseInt(uid), local_id:localIdRegistro, fecha:f, entrada:entradaNueva, salida:salidaNueva, trabaja:true };
     try {
       const savedRows = await api.upsertHorario(nuevo);
       const rawSaved = Array.isArray(savedRows) ? savedRows[0] : savedRows;
@@ -1845,11 +1883,13 @@ function CalendarioHorarios({ data, setData, reloadData, user, agendaRequest, on
     } catch (err) {
       if (parseInt(uid) === parseInt(manicuraId)) setLocalH(p => { const n={...p}; delete n[f]; return n; });
       setLocalHAll(p => { const n={...p}; delete n[key]; return n; });
-      notifyToast(`No se pudo guardar el horario. ${err?.message || "Reintentá en unos segundos."}`, "error", { title:"Horario no guardado" });
+      const msg=String(err?.message||"");
+      if(msg.includes("HORARIO_SUPERPUESTO") || msg.toLowerCase().includes("superpone")) notifyToast(msg.replace(/^.*HORARIO_SUPERPUESTO[: ]*/i,""), "error", { title:"Horarios superpuestos" });
+      else notifyToast(`No se pudo guardar el horario. ${msg || "Reintentá en unos segundos."}`, "error", { title:"Horario no guardado" });
       console.error("Error al guardar horario", err);
       return false;
     }
-  }, [manicuraId, reloadData, getAsistenciaFor, confirmarCambioHorario, hasHorarioPersistidoFor, horarioKey, validarEdicionHorarioActual, data.horarios, auditarHorario]);
+  }, [manicuraId, reloadData, getAsistenciaFor, confirmarCambioHorario, hasHorarioPersistidoFor, horarioKey, validarEdicionHorarioActual, data.horarios, auditarHorario, validarSuperposicionHorario]);
 
   const onAddB = useCallback(async (f, b) => onAddBFor(parseInt(manicuraId), f, b), [manicuraId, onAddBFor]);
 
@@ -5474,7 +5514,7 @@ function Reportes({ data, setData, user, onOpenAgenda, reportRestore, reloadData
   const initialReportTab = reportRestore?.tab === "cobertura" && !puedeVerCobertura ? "horas" : (reportRestore?.tab || savedState?.tab || "horas");
   const [tab, setTab] = useState(initialReportTab);
   const [filtroTipo, setFiltroTipo] = useState(savedState?.filtroTipo || (puedeGestionar ? "manicura" : "manicura"));
-  const [filtroId, setFiltroId] = useState(savedState?.filtroId ?? (puedeGestionar ? (data.users.filter(u=>u.rol==="manicura"&&(esAdmin||allowedLocalIds.includes(u.localId)))[0]?.id || "") : user.id));
+  const [filtroId, setFiltroId] = useState(savedState?.filtroId ?? (puedeGestionar ? (data.users.find(u=>u.rol==="manicura" && (esAdmin || getActiveManicuraLocalIds(data,u.id).some(id=>allowedLocalIds.includes(Number(id))) || (!getActiveManicuraLocalIds(data,u.id).length && allowedLocalIds.includes(Number(u.localId)))))?.id || "") : user.id));
   const restoreDate = reportRestore?.fecha ? new Date(reportRestore.fecha + "T12:00:00") : null;
   const [mes, setMes] = useState(Number.isInteger(savedState?.mes) ? savedState.mes : (restoreDate ? restoreDate.getMonth() : hoy.getMonth()));
   const [anio, setAnio] = useState(Number.isInteger(savedState?.anio) ? savedState.anio : (restoreDate ? restoreDate.getFullYear() : hoy.getFullYear()));
@@ -5613,28 +5653,73 @@ function Reportes({ data, setData, user, onOpenAgenda, reportRestore, reloadData
     refrescarDatosComisiones({ silencioso:yaHayPeriodo });
   }, [tab, periodoComisiones, refrescarDatosComisiones]);
 
-  const manicuras = data.users.filter(u=>u.rol==="manicura"&&u.activo&&(esAdmin || allowedLocalIds.includes(u.localId)));
+  const manicuras = data.users.filter(u => {
+    if (u.rol !== "manicura" || !u.activo) return false;
+    if (esAdmin) return true;
+    const ids = new Set([
+      ...getActiveManicuraLocalIds(data,u.id),
+      ...(data.manicuraHistorialLocales || []).filter(h=>Number(h.userId)===Number(u.id)).map(h=>Number(h.localId)),
+      ...(data.horarios || []).filter(h=>Number(h.userId)===Number(u.id) && h.localId != null).map(h=>Number(h.localId)),
+      ...(data.asistencias || []).filter(a=>Number(a.userId)===Number(u.id) && a.localId != null).map(a=>Number(a.localId)),
+      ...(u.localId ? [Number(u.localId)] : []),
+    ]);
+    return Array.from(ids).some(id=>allowedLocalIds.includes(Number(id)));
+  });
   const semanasDelMes = useMemo(()=>getSemanas(getDiasDelMes(anio,mes)),[anio,mes]);
 
   const TabBtn = ({id,label}) => <button onClick={()=>setTab(id)} style={{ padding:"8px 16px",border:"none",borderRadius:8,cursor:"pointer",fontSize:14,fontWeight:500,background:tab===id?COLORS.pink:"transparent",color:tab===id?"#fff":"var(--color-text-secondary)" }}>{label}</button>;
   const estadoColor={presente:"success",tarde:"amber",ausente:"danger"};
   const estadoLabel={presente:"Presente",tarde:"Tarde",ausente:"Ausente"};
   const toggleExp = id => setExpandidos(e=>({...e,[id]:!e[id]}));
+  const localNombreReporte = localId => localId == null ? "Sin local" : (data.locales.find(l=>Number(l.id)===Number(localId))?.nombre || `Local ${localId}`);
+  const localKeyReporte = localId => localId == null ? "sin-local" : String(localId);
+  const usuarioTieneLocal = (m, localId) => {
+    const lid = Number(localId);
+    if (!lid) return false;
+    if ((data.manicuraHistorialLocales||[]).some(h=>Number(h.userId)===Number(m.id)&&Number(h.localId)===lid)) return true;
+    if ((data.horarios||[]).some(h=>Number(h.userId)===Number(m.id)&&Number(h.localId)===lid)) return true;
+    if ((data.asistencias||[]).some(a=>Number(a.userId)===Number(m.id)&&Number(a.localId)===lid)) return true;
+    return Number(m.localId)===lid;
+  };
 
   const filtrarM = () => {
-    let base = puedeGestionar?(filtroTipo==="manicura"?manicuras.filter(m=>m.id===parseInt(filtroId)):filtroTipo==="local"?manicuras.filter(m=>m.localId===parseInt(filtroId)):manicuras):[data.users.find(u=>u.id===user.id)].filter(Boolean);
+    let base = puedeGestionar
+      ? (filtroTipo==="manicura"
+          ? manicuras.filter(m=>m.id===parseInt(filtroId))
+          : filtroTipo==="local"
+            ? manicuras.filter(m=>usuarioTieneLocal(m,filtroId))
+            : manicuras)
+      : [data.users.find(u=>u.id===user.id)].filter(Boolean);
     if (filtroEstado!=="todos") base=base.filter(m=>data.asistencias.some(a=>a.userId===m.id&&a.fecha>=fechaDesde&&a.fecha<=fechaHasta&&a.estado===filtroEstado));
     return base;
   };
   const mF = filtrarM();
 
-  const buildHorasReport = m => {
+  const mesDesdeKey = `${anio}-${String(mes+1).padStart(2,"0")}-01`;
+  const mesHastaKey = dateKey(new Date(anio,mes+1,0));
+  const localIdsHorasPara = m => {
+    const ids = Array.from(new Set((data.horarios||[])
+      .filter(h=>Number(h.userId)===Number(m.id)&&h.fecha>=mesDesdeKey&&h.fecha<=mesHastaKey&&h.trabaja&&h.entrada&&h.salida)
+      .map(h=>h.localId==null?null:Number(h.localId))));
+    const scoped = filtroTipo==="local" ? ids.filter(id=>Number(id)===Number(filtroId)) : ids;
+    return scoped.sort((a,b)=>localNombreReporte(a).localeCompare(localNombreReporte(b)));
+  };
+  const localIdsAsistenciaPara = m => {
+    const ids = Array.from(new Set((data.asistencias||[])
+      .filter(a=>Number(a.userId)===Number(m.id)&&a.fecha>=fechaDesde&&a.fecha<=fechaHasta)
+      .map(a=>a.localId==null?null:Number(a.localId))));
+    const scoped = filtroTipo==="local" ? ids.filter(id=>Number(id)===Number(filtroId)) : ids;
+    return scoped.sort((a,b)=>localNombreReporte(a).localeCompare(localNombreReporte(b)));
+  };
+  const registroEnLocalReporte = (r, localId) => localId == null ? r.localId == null : Number(r.localId)===Number(localId);
+
+  const buildHorasReport = (m, reportLocalId) => {
     const dias=getDiasDelMes(anio,mes), semanas=getSemanas(dias);
     const semanasData=semanas.map((sem,si)=>{
       const diasData=sem.map(d=>{
         const dk=dateKey(d);
-        const h=data.horarios.find(hh=>hh.userId===m.id&&hh.fecha===dk);
-        const a=data.asistencias.find(aa=>aa.userId===m.id&&aa.fecha===dk);
+        const h=(data.horarios||[]).find(hh=>Number(hh.userId)===Number(m.id)&&hh.fecha===dk&&registroEnLocalReporte(hh,reportLocalId));
+        const a=(data.asistencias||[]).find(aa=>Number(aa.userId)===Number(m.id)&&aa.fecha===dk&&registroEnLocalReporte(aa,reportLocalId));
         const trabaja=h?.trabaja&&h?.entrada&&h?.salida;
         const horasTeo=trabaja?calcHoras(h.entrada,h.salida):0;
         let horasReal=0;
@@ -5645,31 +5730,31 @@ function Reportes({ data, setData, user, onOpenAgenda, reportRestore, reloadData
       return {semana:si+1,dias:diasData,totalTeo:diasData.reduce((a,d)=>a+d.horasTeo,0),totalReal:diasData.reduce((a,d)=>a+d.horasReal,0)};
     });
     const semFilt=filtroSemana==="todas"?semanasData:semanasData.filter(s=>s.semana===parseInt(filtroSemana));
-    return {...m,semanasData:semFilt,totalMesTeo:semFilt.reduce((a,s)=>a+s.totalTeo,0),totalMesReal:semFilt.reduce((a,s)=>a+s.totalReal,0),diasTrabajo:semFilt.flatMap(s=>s.dias).filter(d=>d.trabaja).length};
+    return {...m,reportLocalId,reportLocalNombre:localNombreReporte(reportLocalId),reportKey:`${m.id}|${localKeyReporte(reportLocalId)}`,semanasData:semFilt,totalMesTeo:semFilt.reduce((a,s)=>a+s.totalTeo,0),totalMesReal:semFilt.reduce((a,s)=>a+s.totalReal,0),diasTrabajo:semFilt.flatMap(s=>s.dias).filter(d=>d.trabaja).length};
   };
-  const horasReportes = mF.map(m => buildHorasReport(m));
+  const horasReportes = mF.flatMap(m => localIdsHorasPara(m).map(localId => buildHorasReport(m,localId)));
   const horasPorLocal = useMemo(() => {
     const map = new Map();
     horasReportes.forEach(r => {
-      const key = String(r.localId || "sin-local");
-      const local = data.locales.find(l=>l.id===r.localId);
-      if (!map.has(key)) map.set(key,{ key, localId:r.localId, nombre:local?.nombre||"Sin local", items:[], totalTeo:0, totalReal:0 });
+      const key = localKeyReporte(r.reportLocalId);
+      if (!map.has(key)) map.set(key,{ key, localId:r.reportLocalId, nombre:r.reportLocalNombre, items:[], totalTeo:0, totalReal:0 });
       const g=map.get(key); g.items.push(r); g.totalTeo+=r.totalMesTeo; g.totalReal+=r.totalMesReal;
     });
     return Array.from(map.values()).sort((a,b)=>a.nombre.localeCompare(b.nombre));
-  }, [mF, mes, anio, filtroSemana, filtroEstado, data.horarios, data.asistencias, data.locales]);
+  }, [horasReportes]);
   const diferenciaHoras = (real,teo) => real-teo;
   const diferenciaPct = (real,teo) => teo>0 ? ((real-teo)/teo)*100 : null;
   const fmtDiff = (real,teo) => { const d=diferenciaHoras(real,teo), p=diferenciaPct(real,teo); return `${d>0?"+":""}${d.toFixed(1)}h${p===null?"":` · ${p>0?"+":""}${p.toFixed(1)}%`}`; };
   const diffColor = (real,teo) => real<teo?COLORS.danger:real>teo?COLORS.success:"var(--color-text-secondary)";
 
-  const buildAsistenciaReport = m => {
-    let asist=data.asistencias.filter(a=>a.userId===m.id&&a.fecha>=fechaDesde&&a.fecha<=fechaHasta).sort((a,b)=>a.fecha.localeCompare(b.fecha));
+  const buildAsistenciaReport = (m, reportLocalId) => {
+    let asist=(data.asistencias||[]).filter(a=>Number(a.userId)===Number(m.id)&&a.fecha>=fechaDesde&&a.fecha<=fechaHasta&&registroEnLocalReporte(a,reportLocalId)).sort((a,b)=>a.fecha.localeCompare(b.fecha));
     if(filtroSemana!=="todas"){const semDias=(semanasDelMes[parseInt(filtroSemana)-1]||[]).map(d=>dateKey(d));asist=asist.filter(a=>semDias.includes(a.fecha));}
     const asistFilt=filtroEstado==="todos"?asist:asist.filter(a=>a.estado===filtroEstado);
     const presentes=asist.filter(a=>a.estado==="presente").length, tardes=asist.filter(a=>a.estado==="tarde").length, ausentes=asist.filter(a=>a.estado==="ausente").length, total=presentes+tardes+ausentes;
-    return {...m,asist:asistFilt,presentes,tardes,ausentes,total,pct:total>0?Math.round(((presentes+tardes)/total)*100):0};
+    return {...m,reportLocalId,reportLocalNombre:localNombreReporte(reportLocalId),reportKey:`${m.id}|${localKeyReporte(reportLocalId)}`,asist:asistFilt,presentes,tardes,ausentes,total,pct:total>0?Math.round(((presentes+tardes)/total)*100):0};
   };
+  const asistenciaReportes = mF.flatMap(m => localIdsAsistenciaPara(m).map(localId => buildAsistenciaReport(m,localId)));
 
   const defaultRules = [
     {diaSemana:1,afluencia:"baja",minimoDiario:2,maximoDiario:4,minimoApertura:1,minimoCierre:1},
@@ -6794,12 +6879,12 @@ function Reportes({ data, setData, user, onOpenAgenda, reportRestore, reloadData
             <div style={{textAlign:"right"}}><p style={{margin:0,fontSize:16,fontWeight:700,color:diffColor(grupo.totalReal,grupo.totalTeo)}}>{fmtDiff(grupo.totalReal,grupo.totalTeo)}</p><p style={{margin:0,fontSize:10,color:"var(--color-text-secondary)",textTransform:"uppercase"}}>Diferencia</p></div>
             <span style={{justifySelf:"end",background:COLORS.pinkLight,color:COLORS.pinkDark,borderRadius:8,padding:"6px 10px",fontSize:12,fontWeight:600}}>{abierto?"▲ Ocultar":"▼ Desplegar"}</span>
           </button>
-          {abierto&&<div style={{padding:"10px 12px 12px",background:"var(--color-background-primary)"}}>{grupo.items.map(r=>{const exp=expandidos[r.id];return <div key={r.id} style={{border:"1px solid rgba(120,120,120,0.14)",borderRadius:10,marginBottom:8,overflow:"hidden"}}><div style={{display:"flex",alignItems:"center",gap:12,padding:"10px 12px",flexWrap:"wrap"}}><Avatar nombre={r.nombre} size={32}/><div style={{flex:1,minWidth:170}}><p style={{margin:0,fontWeight:600,fontSize:13}}>{r.nombre}</p><p style={{margin:0,fontSize:11,color:"var(--color-text-secondary)"}}>{r.diasTrabajo} días</p></div><div style={{display:"flex",gap:16,alignItems:"center",flexWrap:"wrap"}}><span style={{fontSize:13}}><strong>{r.totalMesTeo.toFixed(1)}h</strong> teo.</span><span style={{fontSize:13,color:r.totalMesReal<r.totalMesTeo?COLORS.danger:COLORS.success}}><strong>{r.totalMesReal.toFixed(1)}h</strong> real.</span><span style={{fontSize:13,fontWeight:700,color:diffColor(r.totalMesReal,r.totalMesTeo),minWidth:110,textAlign:"right"}}>{fmtDiff(r.totalMesReal,r.totalMesTeo)}</span></div><button onClick={()=>toggleExp(r.id)} style={{background:COLORS.pinkLight,color:COLORS.pinkDark,border:"none",borderRadius:8,padding:"6px 10px",fontSize:11,fontWeight:600,cursor:"pointer"}}>{exp?"▲ Ocultar":"▼ Ver detalle"}</button></div>{exp&&<div style={{padding:"0 12px 12px",borderTop:"1px solid #eee"}}>{r.semanasData.map(sem=><div key={sem.semana} style={{marginTop:10}}><div style={{display:"flex",justifyContent:"space-between",gap:10,marginBottom:6,fontSize:11,color:"var(--color-text-secondary)"}}><strong>SEMANA {sem.semana}</strong><span>Teo. {sem.totalTeo.toFixed(1)}h · Real {sem.totalReal.toFixed(1)}h · <strong style={{color:diffColor(sem.totalReal,sem.totalTeo)}}>{fmtDiff(sem.totalReal,sem.totalTeo)}</strong></span></div>{sem.dias.map(d=><div key={d.fecha} style={{display:"grid",gridTemplateColumns:"60px 1fr 54px 54px 80px",gap:8,padding:"5px 8px",borderRadius:6,background:d.trabaja?"var(--color-background-secondary)":"transparent",opacity:d.trabaja?1:.45,fontSize:12}}><span>{d.label}</span><span>{d.trabaja?`${d.entrada} – ${d.salida}`:"—"}</span><span style={{textAlign:"right"}}>{d.trabaja?`${d.horasTeo.toFixed(1)}h`:""}</span><span style={{textAlign:"right",color:d.horasReal<d.horasTeo?COLORS.danger:COLORS.success}}>{d.trabaja?(d.asistencia?`${d.horasReal.toFixed(1)}h`:"—"):""}</span>{d.trabaja?(d.asistencia?<Badge color={estadoColor[d.asistencia.estado]}>{d.asistencia.estado==="presente"?"✓":d.asistencia.estado==="tarde"?"Tarde":"Ausente"}</Badge>:<Badge color="gray">Sin reg.</Badge>):<Badge color="gray">Libre</Badge>}</div>)}</div>)}</div>}</div>})}<div style={{display:"grid",gridTemplateColumns:"1fr repeat(3,minmax(110px,auto))",gap:14,alignItems:"center",padding:"12px 14px",marginTop:10,borderRadius:10,background:COLORS.pinkLight,border:`1px solid ${COLORS.pink}55`}}><strong style={{fontSize:13}}>Total {grupo.nombre}</strong><strong style={{textAlign:"right"}}>{grupo.totalTeo.toFixed(1)}h</strong><strong style={{textAlign:"right",color:grupo.totalReal<grupo.totalTeo?COLORS.danger:COLORS.success}}>{grupo.totalReal.toFixed(1)}h</strong><strong style={{textAlign:"right",color:diffColor(grupo.totalReal,grupo.totalTeo)}}>{fmtDiff(grupo.totalReal,grupo.totalTeo)}</strong></div></div>}
+          {abierto&&<div style={{padding:"10px 12px 12px",background:"var(--color-background-primary)"}}>{grupo.items.map(r=>{const exp=expandidos[r.reportKey];return <div key={r.reportKey} style={{border:"1px solid rgba(120,120,120,0.14)",borderRadius:10,marginBottom:8,overflow:"hidden"}}><div style={{display:"flex",alignItems:"center",gap:12,padding:"10px 12px",flexWrap:"wrap"}}><Avatar nombre={r.nombre} size={32}/><div style={{flex:1,minWidth:170}}><p style={{margin:0,fontWeight:600,fontSize:13}}>{r.nombre}</p><p style={{margin:0,fontSize:11,color:"var(--color-text-secondary)"}}>{r.reportLocalNombre} · {r.diasTrabajo} días</p></div><div style={{display:"flex",gap:16,alignItems:"center",flexWrap:"wrap"}}><span style={{fontSize:13}}><strong>{r.totalMesTeo.toFixed(1)}h</strong> teo.</span><span style={{fontSize:13,color:r.totalMesReal<r.totalMesTeo?COLORS.danger:COLORS.success}}><strong>{r.totalMesReal.toFixed(1)}h</strong> real.</span><span style={{fontSize:13,fontWeight:700,color:diffColor(r.totalMesReal,r.totalMesTeo),minWidth:110,textAlign:"right"}}>{fmtDiff(r.totalMesReal,r.totalMesTeo)}</span></div><button onClick={()=>toggleExp(r.reportKey)} style={{background:COLORS.pinkLight,color:COLORS.pinkDark,border:"none",borderRadius:8,padding:"6px 10px",fontSize:11,fontWeight:600,cursor:"pointer"}}>{exp?"▲ Ocultar":"▼ Ver detalle"}</button></div>{exp&&<div style={{padding:"0 12px 12px",borderTop:"1px solid #eee"}}>{r.semanasData.map(sem=><div key={sem.semana} style={{marginTop:10}}><div style={{display:"flex",justifyContent:"space-between",gap:10,marginBottom:6,fontSize:11,color:"var(--color-text-secondary)"}}><strong>SEMANA {sem.semana}</strong><span>Teo. {sem.totalTeo.toFixed(1)}h · Real {sem.totalReal.toFixed(1)}h · <strong style={{color:diffColor(sem.totalReal,sem.totalTeo)}}>{fmtDiff(sem.totalReal,sem.totalTeo)}</strong></span></div>{sem.dias.map(d=><div key={d.fecha} style={{display:"grid",gridTemplateColumns:"60px 1fr 54px 54px 80px",gap:8,padding:"5px 8px",borderRadius:6,background:d.trabaja?"var(--color-background-secondary)":"transparent",opacity:d.trabaja?1:.45,fontSize:12}}><span>{d.label}</span><span>{d.trabaja?`${d.entrada} – ${d.salida}`:"—"}</span><span style={{textAlign:"right"}}>{d.trabaja?`${d.horasTeo.toFixed(1)}h`:""}</span><span style={{textAlign:"right",color:d.horasReal<d.horasTeo?COLORS.danger:COLORS.success}}>{d.trabaja?(d.asistencia?`${d.horasReal.toFixed(1)}h`:"—"):""}</span>{d.trabaja?(d.asistencia?<Badge color={estadoColor[d.asistencia.estado]}>{d.asistencia.estado==="presente"?"✓":d.asistencia.estado==="tarde"?"Tarde":"Ausente"}</Badge>:<Badge color="gray">Sin reg.</Badge>):<Badge color="gray">Libre</Badge>}</div>)}</div>)}</div>}</div>})}<div style={{display:"grid",gridTemplateColumns:"1fr repeat(3,minmax(110px,auto))",gap:14,alignItems:"center",padding:"12px 14px",marginTop:10,borderRadius:10,background:COLORS.pinkLight,border:`1px solid ${COLORS.pink}55`}}><strong style={{fontSize:13}}>Total {grupo.nombre}</strong><strong style={{textAlign:"right"}}>{grupo.totalTeo.toFixed(1)}h</strong><strong style={{textAlign:"right",color:grupo.totalReal<grupo.totalTeo?COLORS.danger:COLORS.success}}>{grupo.totalReal.toFixed(1)}h</strong><strong style={{textAlign:"right",color:diffColor(grupo.totalReal,grupo.totalTeo)}}>{fmtDiff(grupo.totalReal,grupo.totalTeo)}</strong></div></div>}
         </Card>})}{horasPorLocal.length===0&&<Card><p style={{margin:0,textAlign:"center",color:"var(--color-text-secondary)"}}>Sin datos para los filtros seleccionados.</p></Card>}</div>
       </>}
       {tab==="asistencia"&&<>
         <div style={{ display:"flex",gap:8,marginBottom:16,flexWrap:"wrap",alignItems:"center" }}><span style={{ fontSize:13,color:"var(--color-text-secondary)" }}>Desde</span><input type="date" value={fechaDesde} onChange={e=>{setFechaDesde(e.target.value);setExpandidos({});}} style={{ border:"0.5px solid rgba(120,120,120,0.24)",borderRadius:8,padding:"7px 12px",fontSize:13,background:"var(--color-background-primary)",color:"var(--color-text-primary)" }}/><span style={{ fontSize:13,color:"var(--color-text-secondary)" }}>hasta</span><input type="date" value={fechaHasta} onChange={e=>{setFechaHasta(e.target.value);setExpandidos({});}} style={{ border:"0.5px solid rgba(120,120,120,0.24)",borderRadius:8,padding:"7px 12px",fontSize:13,background:"var(--color-background-primary)",color:"var(--color-text-primary)" }}/></div>
-        <div style={{ display:"flex",flexDirection:"column",gap:10 }}>{mF.map(m=>{ const r=buildAsistenciaReport(m),exp=expandidos[m.id]; return <Card key={m.id} style={{ padding:"0.875rem 1.25rem" }}><div style={{ display:"flex",alignItems:"center",gap:12,flexWrap:"wrap" }}><Avatar nombre={r.nombre}/><div style={{ flex:1 }}><p style={{ margin:0,fontWeight:500,fontSize:14 }}>{r.nombre}</p><p style={{ margin:0,fontSize:12,color:"var(--color-text-secondary)" }}>{r.total} días registrados</p></div><div style={{ display:"flex",gap:6,flexWrap:"wrap",alignItems:"center" }}><Badge color="success">✓ {r.presentes}</Badge><Badge color="amber">⏰ {r.tardes}</Badge><Badge color="danger">✗ {r.ausentes}</Badge><span style={{ fontSize:18,fontWeight:500,color:r.pct>=90?COLORS.success:r.pct>=75?COLORS.amber:COLORS.danger,minWidth:44,textAlign:"right" }}>{r.pct}%</span></div><button onClick={()=>toggleExp(m.id)} style={{ background:COLORS.pinkLight,color:COLORS.pinkDark,border:"none",borderRadius:8,padding:"6px 12px",fontSize:12,fontWeight:500,cursor:"pointer",whiteSpace:"nowrap" }}>{exp?"▲ Ocultar":"▼ Ver detalle"}</button></div>{exp&&<div style={{ marginTop:14,borderTop:"0.5px solid rgba(120,120,120,0.18)",paddingTop:14 }}>{r.asist.length===0?<p style={{ margin:0,fontSize:13,color:"var(--color-text-secondary)",textAlign:"center" }}>Sin registros en este período.</p>:<div style={{ display:"flex",flexDirection:"column",gap:4 }}>{r.asist.map(a=>{const ht=data.horarios.find(h=>h.userId===m.id&&h.fecha===a.fecha);const fmtD=(()=>{const p=a.fecha.split("-");return `${p[2]}/${p[1]}`;})();return <div key={a.fecha} style={{ display:"grid",gridTemplateColumns:"80px 90px 1fr 1fr 100px",gap:8,alignItems:"center",padding:"6px 8px",borderRadius:6,background:"var(--color-background-secondary)" }}><span style={{ fontSize:13,fontWeight:500 }}>{fmtD}</span><Badge color={estadoColor[a.estado]}>{estadoLabel[a.estado]}</Badge><span style={{ fontSize:13,color:"var(--color-text-secondary)" }}>{ht?.entrada&&ht?.salida?`${ht.entrada} – ${ht.salida}`:"—"}</span><span style={{ fontSize:13,color:"var(--color-text-secondary)" }}>{a.estado==="tarde"?`${a.entradaReal} – ${a.salidaReal}`:a.estado==="presente"?"En horario":"—"}</span><span style={{ fontSize:12,color:"var(--color-text-secondary)" }}>{a.estado==="ausente"?a.motivo:a.estado==="tarde"?"Llegada tarde":""}</span></div>;})}</div>}</div>}</Card>;})}{mF.length===0&&<Card><p style={{ margin:0,textAlign:"center",color:"var(--color-text-secondary)" }}>Sin datos para los filtros seleccionados.</p></Card>}</div>
+        <div style={{ display:"flex",flexDirection:"column",gap:10 }}>{asistenciaReportes.map(r=>{ const exp=expandidos[r.reportKey]; return <Card key={r.reportKey} style={{ padding:"0.875rem 1.25rem" }}><div style={{ display:"flex",alignItems:"center",gap:12,flexWrap:"wrap" }}><Avatar nombre={r.nombre}/><div style={{ flex:1 }}><p style={{ margin:0,fontWeight:500,fontSize:14 }}>{r.nombre}</p><p style={{ margin:0,fontSize:12,color:"var(--color-text-secondary)" }}>{r.reportLocalNombre} · {r.total} días registrados</p></div><Badge color="info">🏠 {r.reportLocalNombre}</Badge><div style={{ display:"flex",gap:6,flexWrap:"wrap",alignItems:"center" }}><Badge color="success">✓ {r.presentes}</Badge><Badge color="amber">⏰ {r.tardes}</Badge><Badge color="danger">✗ {r.ausentes}</Badge><span style={{ fontSize:18,fontWeight:500,color:r.pct>=90?COLORS.success:r.pct>=75?COLORS.amber:COLORS.danger,minWidth:44,textAlign:"right" }}>{r.pct}%</span></div><button onClick={()=>toggleExp(r.reportKey)} style={{ background:COLORS.pinkLight,color:COLORS.pinkDark,border:"none",borderRadius:8,padding:"6px 12px",fontSize:12,fontWeight:500,cursor:"pointer",whiteSpace:"nowrap" }}>{exp?"▲ Ocultar":"▼ Ver detalle"}</button></div>{exp&&<div style={{ marginTop:14,borderTop:"0.5px solid rgba(120,120,120,0.18)",paddingTop:14 }}>{r.asist.length===0?<p style={{ margin:0,fontSize:13,color:"var(--color-text-secondary)",textAlign:"center" }}>Sin registros en este período.</p>:<div style={{ display:"flex",flexDirection:"column",gap:4 }}>{r.asist.map(a=>{const ht=(data.horarios||[]).find(h=>Number(h.userId)===Number(r.id)&&h.fecha===a.fecha&&registroEnLocalReporte(h,r.reportLocalId));const fmtD=(()=>{const p=a.fecha.split("-");return `${p[2]}/${p[1]}`;})();return <div key={`${r.reportKey}|${a.fecha}`} style={{ display:"grid",gridTemplateColumns:"70px 120px 90px 1fr 1fr 100px",gap:8,alignItems:"center",padding:"6px 8px",borderRadius:6,background:"var(--color-background-secondary)" }}><span style={{ fontSize:13,fontWeight:500 }}>{fmtD}</span><span style={{fontSize:12,fontWeight:600,color:COLORS.pinkDark}}>{r.reportLocalNombre}</span><Badge color={estadoColor[a.estado]}>{estadoLabel[a.estado]}</Badge><span style={{ fontSize:13,color:"var(--color-text-secondary)" }}>{ht?.entrada&&ht?.salida?`${ht.entrada} – ${ht.salida}`:"—"}</span><span style={{ fontSize:13,color:"var(--color-text-secondary)" }}>{a.estado==="tarde"?`${a.entradaReal} – ${a.salidaReal}`:a.estado==="presente"?"En horario":"—"}</span><span style={{ fontSize:12,color:"var(--color-text-secondary)" }}>{a.estado==="ausente"?a.motivo:a.estado==="tarde"?"Llegada tarde":""}</span></div>;})}</div>}</div>}</Card>;})}{asistenciaReportes.length===0&&<Card><p style={{ margin:0,textAlign:"center",color:"var(--color-text-secondary)" }}>Sin datos para los filtros seleccionados.</p></Card>}</div>
       </>}
       {garantiaDetalleComisiones&&<Modal title="Detalle de garantía" onClose={()=>setGarantiaDetalleComisiones(null)} width={560}>
         {(()=>{
