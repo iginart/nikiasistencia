@@ -79,6 +79,68 @@ if (!document.getElementById("niki-font-global-style")) {
         height: 34px !important;
       }
     }
+    .niki-report-two-col {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 12px;
+      align-items: stretch;
+    }
+    .niki-report-three-col {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 10px;
+    }
+    .niki-report-entry {
+      border: 1px solid rgba(120,120,120,0.18) !important;
+      background-color: rgba(250,250,250,0.72) !important;
+      outline: none !important;
+      transition: border-color .16s ease, box-shadow .16s ease, background-color .16s ease;
+    }
+    .niki-report-entry:hover {
+      border-color: rgba(114,36,62,0.34) !important;
+      background-color: #fff !important;
+    }
+    .niki-report-entry:focus {
+      border-color: rgba(114,36,62,0.72) !important;
+      box-shadow: 0 0 0 3px rgba(225,198,204,0.32) !important;
+      background-color: #fff !important;
+    }
+    .niki-report-lined {
+      line-height: 24px !important;
+      padding-top: 7px !important;
+      background-image: repeating-linear-gradient(to bottom, transparent 0, transparent 23px, rgba(120,120,120,0.11) 24px) !important;
+      background-attachment: local !important;
+    }
+    .niki-report-claims {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr);
+      gap: 10px;
+      align-items: start;
+    }
+    .niki-report-expense-table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 11px;
+    }
+    .niki-report-expense-table th {
+      text-align: left;
+      padding: 7px 8px;
+      border-bottom: 1px solid rgba(120,120,120,0.14);
+      color: var(--color-text-secondary);
+      font-weight: 700;
+      background: rgba(250,250,250,0.78);
+    }
+    .niki-report-expense-table td {
+      padding: 7px 8px;
+      border-bottom: 1px solid rgba(120,120,120,0.10);
+      vertical-align: middle;
+    }
+    .niki-report-expense-table tr:last-child td { border-bottom: none; }
+    @media (max-width: 900px) {
+      .niki-report-two-col, .niki-report-three-col, .niki-report-claims {
+        grid-template-columns: minmax(0, 1fr);
+      }
+    }
     @keyframes nikiToastIn {
       from { opacity: 0; transform: translateY(-8px) scale(0.98); }
       to { opacity: 1; transform: translateY(0) scale(1); }
@@ -254,6 +316,21 @@ const recruitmentEdge = async (action, payload = {}) => {
   return data;
 };
 
+
+const encargadasSueldosEdge = async (action, payload = {}) => {
+  const actor = window.__nikiCurrentUser || null;
+  if (!actor?.id || !actor?.sessionToken) throw new Error("Sesión inválida para información salarial.");
+  const res = await fetch(`${SUPABASE_URL}/functions/v1/encargadas-sueldos-niki`, {
+    method:"POST",
+    headers:{ apikey:SUPABASE_KEY, Authorization:`Bearer ${SUPABASE_KEY}`, "Content-Type":"application/json" },
+    body:JSON.stringify({ action, actor_id:actor.id, session_token:actor.sessionToken, ...payload }),
+  });
+  const txt = await res.text();
+  const data = txt ? JSON.parse(txt) : {};
+  if (!res.ok || data?.ok === false) throw new Error(data?.error || txt || "Error al consultar información salarial.");
+  return data;
+};
+
 const api = {
   getUsers: () => sb("users?select=id,nombre,usuario,email,rol,local_id,activo,codigo_externo,telefono,telefono_codigo_area,telefono_numero,dato_bancario,forma_pago_comision,solo_fin_de_semana,tipo_relacion,foto_perfil_path&order=id"),
   login: async (usuario, password) => {
@@ -376,11 +453,11 @@ const api = {
     return sb("usuario_locales", { method:"POST", body:JSON.stringify(localIds.map(local_id=>({ user_id:userId, local_id:parseInt(local_id) }))) });
   },
   getHorarios: () => sbAll("horarios?select=*&order=id"),
-  upsertHorario: (d) => patchOrPost("horarios", `user_id=eq.${d.user_id}&fecha=eq.${d.fecha}`, d),
-  deleteHorario: (userId, fecha) => sb(`horarios?user_id=eq.${userId}&fecha=eq.${fecha}`, { method: "DELETE", prefer: "" }),
+  upsertHorario: (d) => patchOrPost("horarios", `user_id=eq.${d.user_id}&local_id=eq.${d.local_id}&fecha=eq.${d.fecha}`, d),
+  deleteHorario: (userId, localId, fecha) => sb(`horarios?user_id=eq.${userId}&local_id=eq.${localId}&fecha=eq.${fecha}`, { method: "DELETE", prefer: "" }),
   getAsistencias: () => sbAll("asistencias?select=*&order=id"),
-  upsertAsistencia: (d) => patchOrPost("asistencias", `user_id=eq.${d.user_id}&fecha=eq.${d.fecha}`, d),
-  deleteAsistencia: (userId, fecha) => sb(`asistencias?user_id=eq.${userId}&fecha=eq.${fecha}`, { method: "DELETE", prefer: "" }),
+  upsertAsistencia: (d) => patchOrPost("asistencias", `user_id=eq.${d.user_id}&local_id=eq.${d.local_id}&fecha=eq.${d.fecha}`, d),
+  deleteAsistencia: (userId, localId, fecha) => sb(`asistencias?user_id=eq.${userId}&local_id=eq.${localId}&fecha=eq.${fecha}`, { method: "DELETE", prefer: "" }),
   getPeriodos: () => sb("periodos_bloqueados?select=*"),
   getPeriodosBloqueadosPara: (periodo, userId) => sb(`periodos_bloqueados?select=*&periodo=eq.${encodeURIComponent(periodo)}&user_id=eq.${parseInt(userId)}`),
   createPeriodo: (periodo, userId, localId, creadoPorUserId = null) => sb("periodos_bloqueados", { method: "POST", body: JSON.stringify({ periodo, user_id: parseInt(userId), local_id: localId ? parseInt(localId) : null, creado_por_user_id: creadoPorUserId ? parseInt(creadoPorUserId) : null }) }),
@@ -404,9 +481,26 @@ const api = {
   getConfigCobertura: () => sb("config_cobertura?select=*&order=local_id"),
   upsertConfigCobertura: (d) => patchOrPost("config_cobertura", `local_id=eq.${d.local_id}`, d),
   getEncargadoLocales: () => sb("encargado_locales?select=*"),
+  getEncargadaSemanaTipo: () => sb("encargada_semana_tipo?select=*&order=local_id,dia_semana,user_id,tipo_semana"),
+  upsertEncargadaSemanaTipo: (d) => sb("encargada_semana_tipo?on_conflict=local_id,user_id,dia_semana,tipo_semana", { method:"POST", prefer:"resolution=merge-duplicates,return=representation", body:JSON.stringify(d) }),
+  updateEncargadaSemanaTipo: (id,d) => sb(`encargada_semana_tipo?id=eq.${parseInt(id)}`, { method:"PATCH", body:JSON.stringify(d) }),
+  deleteEncargadaSemanaTipo: (id) => sb(`encargada_semana_tipo?id=eq.${parseInt(id)}`, { method:"DELETE", prefer:"" }),
+  getEncargadaPlanificacionConfig: (localId) => sb(`encargada_planificacion_config?select=*&local_id=eq.${parseInt(localId)}&limit=1`),
+  upsertEncargadaPlanificacionConfig: (d) => sb("encargada_planificacion_config?on_conflict=local_id", { method:"POST", prefer:"resolution=merge-duplicates,return=representation", body:JSON.stringify(d) }),
+  getEncargadaPlanificacion: (localId,desde,hasta) => sb(`encargada_planificacion?select=*&local_id=eq.${parseInt(localId)}&fecha=gte.${desde}&fecha=lte.${hasta}&order=fecha,user_id`),
+  upsertEncargadaPlanificacion: (rows) => sb("encargada_planificacion?on_conflict=local_id,user_id,fecha", { method:"POST", prefer:"resolution=merge-duplicates,return=representation", body:JSON.stringify(rows) }),
+  deleteEncargadaPlanificacionDia: (localId,fecha) => sb(`encargada_planificacion?local_id=eq.${parseInt(localId)}&fecha=eq.${fecha}`, { method:"DELETE", prefer:"" }),
+  deleteEncargadaPlanificacionRango: (localId,desde,hasta) => sb(`encargada_planificacion?local_id=eq.${parseInt(localId)}&fecha=gte.${desde}&fecha=lte.${hasta}`, { method:"DELETE", prefer:"" }),
+  getEncargadaSemanaTipoLocal: (localId) => sb(`encargada_semana_tipo?select=*&local_id=eq.${parseInt(localId)}&order=dia_semana,user_id,tipo_semana`),
+  getEncargadaJornadaReal: (localId,fecha) => sb(`encargada_jornada_real?select=*&local_id=eq.${parseInt(localId)}&fecha=eq.${fecha}&order=user_id`),
+  upsertEncargadaJornadaReal: (rows) => sb("encargada_jornada_real?on_conflict=local_id,user_id,fecha", { method:"POST", prefer:"resolution=merge-duplicates,return=representation", body:JSON.stringify(rows) }),
+  deleteEncargadaJornadaRealDia: (localId,fecha) => sb(`encargada_jornada_real?local_id=eq.${parseInt(localId)}&fecha=eq.${fecha}`, { method:"DELETE", prefer:"" }),
   getComisiones: () => sbAll("comisiones_detalle?select=*&order=fecha_pago.desc,id.desc"),
   getComisionesPeriodo: (periodo) => sbAll(`comisiones_detalle?select=*&periodo=eq.${encodeURIComponent(periodo)}&order=fecha_pago.desc,id.desc`),
   getComisionesRango: (desde,hasta) => sbAll(`comisiones_detalle?select=*&fecha_pago=gte.${encodeURIComponent(desde)}&fecha_pago=lte.${encodeURIComponent(hasta)}&order=fecha_pago.desc,id.desc`),
+  getComisionesFechaLocal: (fecha,localId) => sbAll(`comisiones_detalle?select=*&fecha_pago=eq.${encodeURIComponent(fecha)}&local_id=eq.${parseInt(localId)}&order=id.desc`),
+  buscarClientesComisionesLocal: (localId,query) => sb(`comisiones_detalle?select=cliente,fecha_pago&local_id=eq.${parseInt(localId)}&cliente=ilike.${encodeURIComponent(`*${String(query||"").trim()}*`)}&cliente=not.is.null&order=fecha_pago.desc,id.desc&limit=80`),
+  getUltimosServiciosClienteLocal: (localId,cliente,limit=5) => sb(`comisiones_detalle?select=*&local_id=eq.${parseInt(localId)}&cliente=eq.${encodeURIComponent(cliente)}&order=fecha_pago.desc,id.desc&limit=${parseInt(limit)||5}`),
   reconciliarComisiones: ({ userId=null, periodo=null, localIds=null } = {}) => sb("rpc/reconciliar_comisiones_manicura", { method:"POST", body:JSON.stringify({ p_user_id:userId, p_periodo:periodo, p_local_ids:Array.isArray(localIds)&&localIds.length?localIds:null }) }),
   getComisionesImportaciones: () => sb("comisiones_importaciones?select=*&order=creado_en.desc&limit=10"),
   getComisionesImportacionesPeriodo: (periodo) => sb(`comisiones_importaciones?select=*&periodo=eq.${encodeURIComponent(periodo)}&order=creado_en.desc&limit=10`),
@@ -426,6 +520,36 @@ const api = {
   deleteAdelantosGrupo: (grupoId) => sb(`adelantos_manicuras?grupo_id=eq.${encodeURIComponent(grupoId)}`, { method: "DELETE", prefer: "" }),
   getGarantias: () => sb("garantias_servicios?select=*&order=fecha_reparacion.desc,id.desc"),
   getInformesDiarios: () => sb("informes_diarios?select=*&order=fecha.desc,id.desc"),
+  getInformeReclamos: (informeId) => sb(`informe_diario_reclamos?select=*&informe_diario_id=eq.${parseInt(informeId)}&order=creado_en.asc,id.asc`),
+  createInformeReclamo: (d) => sb("informe_diario_reclamos", { method:"POST", body:JSON.stringify(d) }),
+  updateInformeReclamo: (id,d) => sb(`informe_diario_reclamos?id=eq.${parseInt(id)}`, { method:"PATCH", body:JSON.stringify(d) }),
+  deleteInformeReclamo: (id) => sb(`informe_diario_reclamos?id=eq.${parseInt(id)}`, { method:"DELETE", prefer:"" }),
+  getInformeGastoConceptos: () => sb("informe_diario_gasto_conceptos?select=*&order=orden.asc,nombre.asc,id.asc"),
+  createInformeGastoConcepto: (d) => sb("informe_diario_gasto_conceptos", { method:"POST", body:JSON.stringify(d) }),
+  updateInformeGastoConcepto: (id,d) => sb(`informe_diario_gasto_conceptos?id=eq.${parseInt(id)}`, { method:"PATCH", body:JSON.stringify(d) }),
+  getInformeGastos: (informeId) => sb(`informe_diario_gastos?select=*&informe_diario_id=eq.${parseInt(informeId)}&order=creado_en.asc,id.asc`),
+  createInformeGasto: (d) => sb("informe_diario_gastos", { method:"POST", body:JSON.stringify(d) }),
+  updateInformeGasto: (id,d) => sb(`informe_diario_gastos?id=eq.${parseInt(id)}`, { method:"PATCH", body:JSON.stringify(d) }),
+  deleteInformeGasto: (id) => sb(`informe_diario_gastos?id=eq.${parseInt(id)}`, { method:"DELETE", prefer:"" }),
+  uploadInformeGastoComprobante: async (key, file) => {
+    if (!file) return { path:"", name:"" };
+    if (file.size > 3 * 1024 * 1024) throw new Error("El comprobante no puede superar 3 MB.");
+    const safeName = safeStorageName(file.name || "comprobante");
+    const path = `${String(key || Date.now())}/${Date.now()}_${safeName}`;
+    const res = await fetch(`${SUPABASE_URL}/storage/v1/object/informes-diarios/${path}`, {
+      method:"POST",
+      headers:{ apikey:SUPABASE_KEY, Authorization:`Bearer ${SUPABASE_KEY}`, "Content-Type":file.type || "application/octet-stream", "x-upsert":"true" },
+      body:file,
+    });
+    if(!res.ok) throw new Error(await res.text());
+    return { path, name:file.name || safeName };
+  },
+  deleteInformeGastoComprobante: async (path) => {
+    if(!path) return;
+    const res = await fetch(`${SUPABASE_URL}/storage/v1/object/informes-diarios/${path}`, { method:"DELETE", headers:{ apikey:SUPABASE_KEY, Authorization:`Bearer ${SUPABASE_KEY}` } });
+    if(!res.ok && res.status!==404) throw new Error(await res.text());
+  },
+  informeGastoComprobanteUrl: (path) => path ? `${SUPABASE_URL}/storage/v1/object/public/informes-diarios/${path}` : "",
   createInformeDiario: (d) => sb("informes_diarios", { method: "POST", body: JSON.stringify(d) }),
   upsertInformeDiario: (d) => patchOrPost("informes_diarios", `fecha=eq.${d.fecha}&local_id=eq.${d.local_id}&turno=eq.${encodeURIComponent(d.turno || "dia")}`, d),
   updateInformeDiario: (id, d) => sb(`informes_diarios?id=eq.${id}`, { method: "PATCH", body: JSON.stringify(d) }),
@@ -604,8 +728,8 @@ function passwordSeguraBasica(password) {
   if (p === "niki123") return "La nueva contraseña no puede ser niki123.";
   return "";
 }
-function normalizeHorario(h) { return { id: h.id, userId: h.user_id, fecha: h.fecha, entrada: h.entrada || "", salida: h.salida || "", trabaja: h.trabaja }; }
-function normalizeAsistencia(a) { return { id: a.id, userId: a.user_id, fecha: a.fecha, estado: a.estado, entradaReal: a.entrada_real || "", salidaReal: a.salida_real || "", motivo: a.motivo || "", certificado: a.certificado, tipoDoc: a.tipo_doc || "" }; }
+function normalizeHorario(h) { return { id: h.id, userId: h.user_id, localId:h.local_id ?? null, fecha: h.fecha, entrada: h.entrada || "", salida: h.salida || "", trabaja: h.trabaja }; }
+function normalizeAsistencia(a) { return { id: a.id, userId: a.user_id, localId:a.local_id ?? null, fecha: a.fecha, estado: a.estado, entradaReal: a.entrada_real || "", salidaReal: a.salida_real || "", motivo: a.motivo || "", certificado: a.certificado, tipoDoc: a.tipo_doc || "" }; }
 function normalizePeriodo(p) { return { id: p.id, periodo: p.periodo, userId: p.user_id ?? p.userId ?? null, localId: p.local_id ?? p.localId ?? null, creadoPorUserId: p.creado_por_user_id ?? null, creadoEn: p.creado_en || "" }; }
 function normalizeReglaCobertura(r) { return { id:r.id, localId:r.local_id, diaSemana:r.dia_semana, afluencia:r.afluencia, minimoDiario:r.minimo_diario, maximoDiario:r.maximo_diario, minimoApertura:r.minimo_apertura, minimoCierre:r.minimo_cierre, activo:r.activo }; }
 function normalizeConfigCobertura(c) { return { id:c.id, localId:c.local_id, horaApertura:(c.hora_apertura||"10:00").slice(0,5), horaCierre:(c.hora_cierre||"20:00").slice(0,5), minutosApertura:c.minutos_apertura ?? 60, minutosCierre:c.minutos_cierre ?? 60 }; }
@@ -618,6 +742,8 @@ function normalizeComisionesManicuraConfig(c) { return { id:c.id, userId:c.user_
 function normalizeAdelanto(a) { return { id:a.id, fecha:a.fecha, fechaDescuento:a.fecha_descuento || a.fecha, periodo:a.periodo || (a.fecha_descuento ? String(a.fecha_descuento).slice(0,7) : a.fecha ? String(a.fecha).slice(0,7) : ""), userId:a.user_id, localId:a.local_id, importe:Number(a.importe || 0), importeTotal:Number(a.importe_total || a.importe || 0), concepto:a.concepto || "", observacion:a.observacion || "", creadoPor:a.creado_por, creadoEn:a.creado_en || "", grupoId:a.grupo_id || "", cuotaNum:a.cuota_num || 1, cuotasTotal:a.cuotas_total || 1, tipoDescuento:a.tipo_descuento || "semana" }; }
 function normalizeGarantia(g) { return { id:g.id, fechaServicioOriginal:g.fecha_servicio_original, comisionOriginalId:g.comision_original_id, localId:g.local_id, manicuraOriginalId:g.manicura_original_id, nombreManicuraOriginal:g.nombre_manicura_original || "", cliente:g.cliente || "", servicio:g.servicio || "", importeComision:Number(g.importe_comision || 0), fechaReparacion:g.fecha_reparacion, manicuraReparacionId:g.manicura_reparacion_id, nombreManicuraReparacion:g.nombre_manicura_reparacion || "", servicioReparacionMismo:g.servicio_reparacion_mismo !== false, serviciosReparacion:Array.isArray(g.servicios_reparacion) ? g.servicios_reparacion : [], motivo:g.motivo || "", fotos:Array.isArray(g.fotos) ? g.fotos : [], creadoPor:g.creado_por_user_id, creadoEn:g.creado_en || "", actualizadoEn:g.actualizado_en || "" }; }
 function normalizeInformeDiario(i) { return { id:i.id, fecha:i.fecha, localId:i.local_id, turno:i.turno || "dia", importanteManana:i.importante_manana || "", urgentesGenerales:i.urgentes_generales || "", saldoEfectivoAnterior:Number(i.saldo_efectivo_anterior || 0), coincideEfectivoInicial:i.coincide_efectivo_inicial === true, efectivoCaja:Number(i.efectivo_caja || 0), coincideCaja:i.coincide_caja === true, mercadoPagoTotalReservas:i.mercado_pago_total_reservas || "", pagosRealizados:i.pagos_realizados || "", saldoAnterior:Number(i.saldo_anterior || 0), traspasoCajaGeneral:Number(i.traspaso_caja_general || 0), traspasoCajaEfectivo:Number(i.traspaso_caja_efectivo || 0), reclamos:i.reclamos || "", novedadesSalonManicuras:i.novedades_salon_manicuras || "", observacionesExtras:i.observaciones_extras || "", estado:i.estado || "borrador", creadoPor:i.creado_por_user_id, cerradoPor:i.cerrado_por_user_id, enviadoEn:i.enviado_en || "", cerradoEn:i.cerrado_en || "", creadoEn:i.creado_en || "", actualizadoEn:i.actualizado_en || "" }; }
+function normalizeInformeGastoConcepto(x) { return { id:x.id,codigo:x.codigo||"",nombre:x.nombre||"",activo:x.activo!==false,orden:Number(x.orden||0),creadoEn:x.creado_en||"",actualizadoEn:x.actualizado_en||"" }; }
+function normalizeInformeGasto(x) { return { id:x.id,informeId:x.informe_diario_id,conceptoId:x.concepto_id,detalle:x.detalle||"",importe:Number(x.importe||0),medioPago:x.medio_pago||"efectivo",comprobanteNombre:x.comprobante_nombre||"",comprobantePath:x.comprobante_path||"",creadoPor:x.creado_por_user_id,creadoEn:x.creado_en||"",actualizadoEn:x.actualizado_en||"" }; }
 function normalizeAgendaServicio(s) { return { id:s.id, nombre:s.nombre || "", descripcion:s.descripcion || "", tipo:s.tipo || "otros", duracionMinutos:s.duracion_minutos || 60, admiteCantidad:s.admite_cantidad === true, activo:s.activo !== false }; }
 function normalizeAgendaManicuraServicio(x) { return { userId:x.user_id, servicioId:x.servicio_id, duracionMinutos:x.duracion_minutos || null, activo:x.activo !== false }; }
 function normalizeAgendaListaPrecio(l) { return { id:l.id, localId:l.local_id ?? null, nombre:l.nombre || "", descripcion:l.descripcion || "", activo:l.activo !== false }; }
@@ -981,6 +1107,7 @@ function isAdminLikeRole(role) {
 function roleLabel(role) {
   if (role === "admin") return "Admin";
   if (role === "casa_matriz") return "Casa Matriz";
+  if (role === "franquiciado") return "Franquiciado";
   if (role === "encargada") return "Encargada";
   if (role === "manicura") return "Manicura";
   return role || "";
@@ -988,7 +1115,7 @@ function roleLabel(role) {
 function canManageUserRole(actor, targetRole) {
   if (!actor) return false;
   if (actor.rol === "admin") return true;
-  if (actor.rol === "casa_matriz") return targetRole !== "admin";
+  if (actor.rol === "casa_matriz") return ["franquiciado", "encargada", "manicura"].includes(targetRole);
   return false;
 }
 function getAssignedLocalIds(data, user) {
@@ -999,8 +1126,31 @@ function getAssignedLocalIds(data, user) {
     const franquiciasAsignadas = (data.usuarioLocales || []).filter(x => x.userId === user.id).map(x => x.localId);
     return Array.from(new Set([...propios, ...franquiciasAsignadas]));
   }
+  if (user.rol === "franquiciado") return Array.from(new Set((data.usuarioLocales || []).filter(x => Number(x.userId) === Number(user.id)).map(x => Number(x.localId))));
   if (user.rol === "encargada") return (data.encargadoLocales || []).filter(x => x.userId === user.id).map(x => x.localId);
   return user.localId ? [user.localId] : [];
+}
+function getActiveManicuraLocalIds(data, userId, fecha = null) {
+  const f = fecha ? String(fecha).slice(0,10) : dateKey(new Date());
+  return Array.from(new Set((data.manicuraHistorialLocales || [])
+    .filter(h => Number(h.userId) === Number(userId) && h.fechaInicio && h.fechaInicio <= f && (!h.fechaFin || h.fechaFin >= f))
+    .map(h => Number(h.localId))
+    .filter(Boolean)));
+}
+function getManicuraLocalIdForDate(data, userId, fecha, preferredLocalId = null) {
+  const ids = getActiveManicuraLocalIds(data, userId, fecha);
+  if (preferredLocalId && ids.includes(Number(preferredLocalId))) return Number(preferredLocalId);
+  if (ids.length === 1) return ids[0];
+  const legacy = (data.users || []).find(u => Number(u.id) === Number(userId))?.localId;
+  return preferredLocalId ? Number(preferredLocalId) : (ids.length ? ids[0] : (legacy ? Number(legacy) : null));
+}
+function registroCoincideLocal(data, registro, userId, fecha, localId) {
+  if (!registro || Number(registro.userId) !== Number(userId) || registro.fecha !== fecha) return false;
+  if (registro.localId != null) return Number(registro.localId) === Number(localId);
+  // Compatibilidad con datos históricos anteriores a local_id: solo se asignan implícitamente
+  // cuando para esa fecha la manicura tenía un único local activo.
+  const ids = getActiveManicuraLocalIds(data, userId, fecha);
+  return ids.length === 1 && Number(ids[0]) === Number(localId);
 }
 function canSeeLocal(data, user, localId) {
   if (user?.rol === "admin") return true;
@@ -1010,7 +1160,8 @@ function filterUsersByScope(data, user, users) {
   if (user?.rol === "admin") return users;
   if (user?.rol === "casa_matriz") return users.filter(u => u.rol !== "admin");
   const allowed = new Set(getAssignedLocalIds(data, user));
-  if (user?.rol === "encargada") return users.filter(u => u.rol !== "admin" && u.rol !== "casa_matriz" && allowed.has(u.localId));
+  if (user?.rol === "franquiciado") return users.filter(u => !["admin","casa_matriz","franquiciado"].includes(u.rol) && (u.rol !== "manicura" ? allowed.has(Number(u.localId)) : getActiveManicuraLocalIds(data,u.id).some(id=>allowed.has(Number(id)))));
+  if (user?.rol === "encargada") return users.filter(u => u.rol !== "admin" && u.rol !== "casa_matriz" && u.rol !== "franquiciado" && (u.rol !== "manicura" ? allowed.has(Number(u.localId)) : getActiveManicuraLocalIds(data,u.id).some(id=>allowed.has(Number(id)))));
   return users.filter(u => u.id === user?.id);
 }
 function getConfigForLocal(data, localId) {
@@ -1321,7 +1472,7 @@ function CalendarioHorarios({ data, setData, reloadData, user, agendaRequest, on
   const allowedLocalIds = getAssignedLocalIds(data, user);
   const localesHorarios = (data.locales || []).filter(l => localActivo(l) && (esAdmin || allowedLocalIds.includes(l.id)));
   const isMobile = window.innerWidth < 640;
-  const defaultManicuraId = puedeGestionar ? (data.users.filter(u=>u.rol==="manicura"&&u.activo&&localesHorarios.some(l=>l.id===u.localId))[0]?.id||null) : user.id;
+  const defaultManicuraId = puedeGestionar ? (data.users.filter(u=>u.rol==="manicura"&&u.activo&&getActiveManicuraLocalIds(data,u.id,dateKey(hoy)).some(id=>localesHorarios.some(l=>Number(l.id)===Number(id))))[0]?.id||null) : user.id;
   const parseSavedDate = (value, fallback) => {
     if (!value) return fallback;
     const d = new Date(String(value) + "T12:00:00");
@@ -1335,6 +1486,7 @@ function CalendarioHorarios({ data, setData, reloadData, user, agendaRequest, on
   const [anio, setAnio] = useState(Number.isInteger(savedState?.anio) ? savedState.anio : (hoy.getMonth() === 11 ? hoy.getFullYear() + 1 : hoy.getFullYear()));
   const [miniCursor, setMiniCursor] = useState(() => parseSavedDate(savedState?.miniCursor, new Date(hoy.getFullYear(), hoy.getMonth(), 1)));
   const [manicuraId, setManicuraId] = useState(savedState?.manicuraId ?? defaultManicuraId);
+  const [manicuraLocalId, setManicuraLocalId] = useState(savedState?.manicuraLocalId || "");
   const [manicuraPickerOpen, setManicuraPickerOpen] = useState(false);
   const [navVisible, setNavVisible] = useState(savedState?.navVisible ?? !isMobile);
   const calendarShellMinHeight = vista === "mes" ? (isMobile ? 560 : 620) : (isMobile ? 560 : 620);
@@ -1377,9 +1529,10 @@ function CalendarioHorarios({ data, setData, reloadData, user, agendaRequest, on
       anio,
       miniCursor: dateKey(miniCursor),
       manicuraId,
+      manicuraLocalId,
       navVisible,
     });
-  }, [vista, weekStart, diaVista, localDiaId, mes, anio, miniCursor, manicuraId, navVisible]);
+  }, [vista, weekStart, diaVista, localDiaId, mes, anio, miniCursor, manicuraId, manicuraLocalId, navVisible]);
 
   useEffect(() => {
     if (!agendaRequest?.fecha) return;
@@ -1405,9 +1558,18 @@ function CalendarioHorarios({ data, setData, reloadData, user, agendaRequest, on
       ? new Date(diaVista + "T12:00:00")
       : new Date(anio, mes, 1);
   const periodoActivoLabel = `${MESES[periodoActivoDate.getMonth()]} ${periodoActivoDate.getFullYear()}`;
-  const getLocalIdForManicura = useCallback((uid) => data.users.find(u => parseInt(u.id) === parseInt(uid))?.localId ?? null, [data.users]);
+  // Importante: no referenciar selectedLocalId antes de que se calcule más abajo en el render.
+  // Para la manicura seleccionada usamos la sucursal elegida en el estado como preferencia.
+  const getLocalIdForManicura = useCallback((uid, fechaRef = null, preferred = null) =>
+    getManicuraLocalIdForDate(
+      data,
+      uid,
+      fechaRef || dateKey(weekStart),
+      preferred ?? (Number(uid) === Number(manicuraId) ? (Number(manicuraLocalId) || null) : null)
+    ),
+  [data, weekStart, manicuraId, manicuraLocalId]);
   const periodoBloqueadoParaManicura = useCallback((periodo, uid) => {
-    const localIdManicura = getLocalIdForManicura(uid);
+    const localIdManicura = getLocalIdForManicura(uid, `${periodo}-01`);
     return (data.periodosBloqueados || []).some(p => {
       if (typeof p === "string") return p === periodo;
       const samePeriodo = p.periodo === periodo;
@@ -1421,8 +1583,8 @@ function CalendarioHorarios({ data, setData, reloadData, user, agendaRequest, on
     if (esAdmin) return true;
     if (user.rol === "manicura") return uidNum === parseInt(user.id);
     const m = data.users.find(u => u.id === uidNum);
-    return esEncargada && m?.rol === "manicura" && allowedLocalIds.includes(m.localId);
-  }, [esAdmin, esEncargada, user.rol, user.id, data.users, allowedLocalIds]);
+    return esEncargada && m?.rol === "manicura" && getActiveManicuraLocalIds(data,m.id,dateKey(weekStart)).some(id=>allowedLocalIds.includes(Number(id)));
+  }, [esAdmin, esEncargada, user.rol, user.id, data.users, data.manicuraHistorialLocales, allowedLocalIds, weekStart]);
   const bloqueadoPorFecha = useCallback((f, uid = manicuraId) =>
     (periodoBloqueadoParaManicura(periodoDesdeFecha(f), uid) && !esAdmin) || !puedeEditarManicura(uid),
     [periodoBloqueadoParaManicura, periodoDesdeFecha, manicuraId, esAdmin, puedeEditarManicura]
@@ -1430,7 +1592,7 @@ function CalendarioHorarios({ data, setData, reloadData, user, agendaRequest, on
 
   const periodoBloqueadoActualEnServidor = useCallback(async (f, uid = manicuraId) => {
     const periodo = periodoDesdeFecha(f);
-    const localIdManicura = getLocalIdForManicura(uid);
+    const localIdManicura = getLocalIdForManicura(uid, `${periodo}-01`);
     const rows = await api.getPeriodosBloqueadosPara(periodo, uid);
     return (rows || []).some(p => {
       const rowLocalId = p.local_id ?? p.localId ?? null;
@@ -1456,32 +1618,45 @@ function CalendarioHorarios({ data, setData, reloadData, user, agendaRequest, on
 
   const bloqueado = (periodoBloqueadoParaManicura(periodoActivoKey, manicuraId) && !esAdmin) || !puedeEditarManicura(manicuraId);
   const feriados = new Set((data.feriados||[]).map(f=>f.fecha));
-  const manicuras = data.users.filter(u=>u.rol==="manicura"&&u.activo&&localesHorarios.some(l=>l.id===u.localId)).sort((a,b)=>{
-    const la=localesHorarios.find(l=>l.id===a.localId)?.nombre||"ZZZ";
-    const lb=localesHorarios.find(l=>l.id===b.localId)?.nombre||"ZZZ";
-    return la.localeCompare(lb) || (a.nombre||"").localeCompare(b.nombre||"");
-  });
-  const manicurasPorLocal = useMemo(()=>localesHorarios.map(local=>({local,manicuras:manicuras.filter(m=>m.localId===local.id)})).filter(g=>g.manicuras.length),[localesHorarios,manicuras]);
+  const manicuras = data.users.filter(u=>u.rol==="manicura"&&u.activo&&getActiveManicuraLocalIds(data,u.id,dateKey(hoy)).some(id=>localesHorarios.some(l=>Number(l.id)===Number(id)))).sort((a,b)=>(a.nombre||"").localeCompare(b.nombre||""));
+  const manicurasPorLocal = useMemo(()=>localesHorarios.map(local=>({local,manicuras:manicuras.filter(m=>getActiveManicuraLocalIds(data,m.id,dateKey(hoy)).includes(Number(local.id)))})).filter(g=>g.manicuras.length),[localesHorarios,manicuras,data.manicuraHistorialLocales]);
   const selectedManicura = data.users.find(u=>u.id===parseInt(manicuraId));
-  const getAsistencia = useCallback((f) => (data.asistencias||[]).find(a=>a.userId===parseInt(manicuraId)&&a.fecha===f), [data.asistencias, manicuraId]);
-  const getAsistenciaFor = useCallback((uid, f) => (data.asistencias||[]).find(a=>a.userId===parseInt(uid)&&a.fecha===f), [data.asistencias]);
-  const getBloqueFor = useCallback((uid, f) => {
-    const h = (data.horarios||[]).find(h=>h.userId===parseInt(uid)&&h.fecha===f&&h.trabaja&&h.entrada&&h.salida);
+  const selectedManicuraLocalIds = useMemo(() => {
+    const sampleDate = vista === "semana" ? dateKey(weekStart) : (vista === "dia" ? diaVista : `${anio}-${String(mes+1).padStart(2,"0")}-01`);
+    const ids = getActiveManicuraLocalIds(data, manicuraId, sampleDate).filter(id=>localesHorarios.some(l=>Number(l.id)===Number(id)));
+    return ids.length ? ids : [selectedManicura?.localId].filter(Boolean).map(Number);
+  }, [data.manicuraHistorialLocales, manicuraId, selectedManicura?.localId, vista, weekStart, diaVista, anio, mes, localesHorarios]);
+  const selectedLocalId = Number(manicuraLocalId) && selectedManicuraLocalIds.includes(Number(manicuraLocalId)) ? Number(manicuraLocalId) : (selectedManicuraLocalIds[0] || null);
+  useEffect(()=>{ if(selectedLocalId && String(manicuraLocalId)!==String(selectedLocalId)) setManicuraLocalId(String(selectedLocalId)); },[selectedLocalId]);
+  useEffect(()=>{ setLocalH({}); setLocalHAll({}); },[selectedLocalId,manicuraId]);
+  const getAsistencia = useCallback((f) => (data.asistencias||[]).find(a=>registroCoincideLocal(data,a,parseInt(manicuraId),f,selectedLocalId)), [data, manicuraId, selectedLocalId]);
+  const getAsistenciaFor = useCallback((uid, f, localId = null) => {
+    const lid = Number(localId) || (Number(uid)===Number(manicuraId)?selectedLocalId:getManicuraLocalIdForDate(data,uid,f));
+    return (data.asistencias||[]).find(a=>registroCoincideLocal(data,a,parseInt(uid),f,lid));
+  }, [data, manicuraId, selectedLocalId]);
+  const getBloqueFor = useCallback((uid, f, localId = null) => {
+    const lid = Number(localId) || (Number(uid)===Number(manicuraId)?selectedLocalId:getManicuraLocalIdForDate(data,uid,f));
+    const h = (data.horarios||[]).find(h=>registroCoincideLocal(data,h,parseInt(uid),f,lid)&&h.trabaja&&h.entrada&&h.salida);
     if (!h) return null;
     const [eh,em] = h.entrada.split(":").map(Number);
     const [sh,sm] = h.salida.split(":").map(Number);
     return { startSlot:calToSlot(eh,em), endSlot:calToSlot(sh,sm) };
-  }, [data.horarios]);
+  }, [data, manicuraId, selectedLocalId]);
   const hasAsistencia = useCallback((f) => !!getAsistencia(f), [getAsistencia]);
-  const horarioKey = useCallback((uid, f) => `${parseInt(uid)}|${f}`, []);
-  const hasHorarioPersistidoFor = useCallback((uid, f) => (data.horarios||[]).some(h=>h.userId===parseInt(uid)&&h.fecha===f&&h.trabaja&&h.entrada&&h.salida), [data.horarios]);
+  const horarioKey = useCallback((uid, f, localId = null) => `${parseInt(uid)}|${Number(localId)||(Number(uid)===Number(manicuraId)?selectedLocalId:0)}|${f}`, [manicuraId,selectedLocalId]);
+  const hasHorarioPersistidoFor = useCallback((uid, f, localId = null) => {
+    const lid=Number(localId)||(Number(uid)===Number(manicuraId)?selectedLocalId:getManicuraLocalIdForDate(data,uid,f));
+    return (data.horarios||[]).some(h=>registroCoincideLocal(data,h,parseInt(uid),f,lid)&&h.trabaja&&h.entrada&&h.salida);
+  }, [data, manicuraId, selectedLocalId]);
   const pedirConfirmacion = useCallback((config) => new Promise(resolve => {
     confirmResolver.current = resolve;
     setConfirmDialog(config);
   }), []);
   const confirmarCambioHorario = useCallback(async (uid, f, accion) => {
-    const key = horarioKey(uid, f);
-    if (!hasHorarioPersistidoFor(uid, f)) return true;
+    const localIdRegistro = Number(uid)===Number(manicuraId) ? selectedLocalId : getManicuraLocalIdForDate(data,uid,f);
+    if(!localIdRegistro){ notifyToast("Seleccioná la sucursal del horario.","warning"); return false; }
+    const key = horarioKey(uid, f, localIdRegistro);
+    if (!hasHorarioPersistidoFor(uid, f, localIdRegistro)) return true;
     if (silentEditOnce.current.has(key)) {
       silentEditOnce.current.delete(key);
       return true;
@@ -1497,7 +1672,7 @@ function CalendarioHorarios({ data, setData, reloadData, user, agendaRequest, on
 
   const bloques = useMemo(() => {
     const uid = parseInt(manicuraId); const res = {};
-    (data.horarios||[]).filter(h=>h.userId===uid).forEach(h => {
+    (data.horarios||[]).filter(h=>registroCoincideLocal(data,h,uid,h.fecha,selectedLocalId)).forEach(h => {
       if (h.trabaja && h.entrada && h.salida) {
         const [eh,em] = h.entrada.split(":").map(Number);
         const [sh,sm] = h.salida.split(":").map(Number);
@@ -1505,7 +1680,7 @@ function CalendarioHorarios({ data, setData, reloadData, user, agendaRequest, on
       }
     });
     return res;
-  }, [data.horarios, manicuraId]);
+  }, [data, manicuraId, selectedLocalId]);
 
   const getB = f => localH[f] ?? bloques[f];
   const getBFor = (uid, f) => localHAll[horarioKey(uid, f)] ?? getBloqueFor(uid, f);
@@ -1521,11 +1696,11 @@ function CalendarioHorarios({ data, setData, reloadData, user, agendaRequest, on
       if(bloque){starts.push(bloque.startSlot);ends.push(bloque.endSlot);}
     };
     if(vista==="semana"){
-      const lid=selectedManicura?.localId;
+      const lid=selectedLocalId;
       Array.from({length:6},(_,i)=>{const d=new Date(weekStart);d.setDate(d.getDate()+i);return d;}).forEach(d=>pushHorario(lid,d,getB(dateKey(d))));
     } else if(vista==="dia"){
       const d=new Date(diaVista+"T12:00:00");
-      const lid=parseInt(localDiaId)||selectedManicura?.localId||localesHorarios[0]?.id;
+      const lid=parseInt(localDiaId)||selectedLocalId||localesHorarios[0]?.id;
       const dayMs=(puedeGestionar?manicuras:manicuras.filter(m=>m.id===user.id)).filter(m=>m.localId===Number(lid));
       pushHorario(lid,d,null);
       dayMs.forEach(m=>{const b=getBFor(m.id,diaVista); if(b){starts.push(b.startSlot);ends.push(b.endSlot);}});
@@ -1536,7 +1711,7 @@ function CalendarioHorarios({ data, setData, reloadData, user, agendaRequest, on
     startSlot=Math.floor(startSlot/2)*2; endSlot=Math.ceil(endSlot/2)*2;
     if(endSlot-startSlot<8)endSlot=Math.min(CAL_TOTAL_SLOTS,startSlot+8);
     return {startSlot,endSlot};
-  }, [vista, selectedManicura?.localId, weekStart, diaVista, localDiaId, localHorarios, bloques, localH, localHAll, manicuras]);
+  }, [vista, selectedLocalId, weekStart, diaVista, localDiaId, localHorarios, bloques, localH, localHAll, manicuras]);
   const viewStartSlot=rangoVisual.startSlot, viewEndSlot=rangoVisual.endSlot;
   const viewStartHour=Math.floor(viewStartSlot/2), viewEndHour=Math.ceil(viewEndSlot/2);
   const viewHours=Array.from({length:Math.max(1,viewEndHour-viewStartHour)},(_,i)=>viewStartHour+i);
@@ -1553,7 +1728,7 @@ function CalendarioHorarios({ data, setData, reloadData, user, agendaRequest, on
       accion,
       entidad: "horarios",
       entidad_id: anterior?.id ? String(anterior.id) : null,
-      local_id: manicura?.localId ?? null,
+      local_id: nuevo?.local_id ?? anterior?.localId ?? selectedLocalId ?? manicura?.localId ?? null,
       user_id: uid ? parseInt(uid) : null,
       periodo: fecha ? String(fecha).slice(0, 7) : null,
       datos_anteriores: anterior,
@@ -1600,9 +1775,12 @@ function CalendarioHorarios({ data, setData, reloadData, user, agendaRequest, on
   }, []);
 
   const saveBloqueFor = useCallback(async (uid, f, b, opts = {}) => {
-    if (getAsistenciaFor(uid, f)) return false;
+    const localIdRegistro = Number(uid)===Number(manicuraId) ? selectedLocalId : getManicuraLocalIdForDate(data,uid,f);
+    if(!localIdRegistro){ notifyToast("Seleccioná la sucursal del horario.","warning"); return false; }
+    if (getAsistenciaFor(uid, f, localIdRegistro)) return false;
     if (!(await validarEdicionHorarioActual(uid, f))) return false;
-    const key = horarioKey(uid, f);
+    if(!localIdRegistro){ notifyToast("Seleccioná la sucursal del horario.","warning"); return false; }
+    const key = horarioKey(uid, f, localIdRegistro);
     const bl = b || (parseInt(uid) === parseInt(manicuraId) ? localH[f] || bloques[f] : localHAll[key] || getBloqueFor(uid, f));
     if (!bl) return false;
     const ok = await confirmarCambioHorario(uid, f, "modificarlo");
@@ -1612,16 +1790,16 @@ function CalendarioHorarios({ data, setData, reloadData, user, agendaRequest, on
       return false;
     }
     const s = calFromSlot(bl.startSlot), e = calFromSlot(bl.endSlot);
-    const anterior = (data.horarios || []).find(h => parseInt(h.userId) === parseInt(uid) && h.fecha === f) || null;
-    const nuevo = { user_id:parseInt(uid), fecha:f, entrada:calFmt(s.h,s.m), salida:calFmt(e.h,e.m), trabaja:true };
+    const anterior = (data.horarios || []).find(h => registroCoincideLocal(data,h,uid,f,localIdRegistro)) || null;
+    const nuevo = { user_id:parseInt(uid), local_id:localIdRegistro, fecha:f, entrada:calFmt(s.h,s.m), salida:calFmt(e.h,e.m), trabaja:true };
     try {
       const savedRows = await api.upsertHorario(nuevo);
       const rawSaved = Array.isArray(savedRows) ? savedRows[0] : savedRows;
-      if (!rawSaved?.id || parseInt(rawSaved.user_id) !== parseInt(uid) || rawSaved.fecha !== f) {
+      if (!rawSaved?.id || parseInt(rawSaved.user_id) !== parseInt(uid) || Number(rawSaved.local_id)!==Number(localIdRegistro) || rawSaved.fecha !== f) {
         throw new Error("Supabase no confirmó el horario guardado.");
       }
       const saved = normalizeHorario(rawSaved);
-      setData(prev => ({ ...prev, horarios:[...(prev?.horarios || []).filter(h => !(parseInt(h.userId) === parseInt(uid) && h.fecha === f)), saved] }));
+      setData(prev => ({ ...prev, horarios:[...(prev?.horarios || []).filter(h => !(registroCoincideLocal(prev,h,uid,f,localIdRegistro))), saved] }));
       void auditarHorario({ accion: anterior ? "HORARIO_MODIFICADO" : "HORARIO_CREADO", uid:parseInt(uid), fecha:f, anterior, nuevo });
       if (parseInt(uid) === parseInt(manicuraId)) setLocalH(p => { const n={...p}; delete n[f]; return n; });
       setLocalHAll(p => { const n={...p}; delete n[key]; return n; });
@@ -1638,24 +1816,27 @@ function CalendarioHorarios({ data, setData, reloadData, user, agendaRequest, on
   const saveBloque = useCallback(async (f, b) => saveBloqueFor(parseInt(manicuraId), f, b), [manicuraId, saveBloqueFor]);
 
   const onAddBFor = useCallback(async (uid, f, b) => {
-    if (getAsistenciaFor(uid, f)) return false;
+    const localIdRegistro = Number(uid)===Number(manicuraId) ? selectedLocalId : getManicuraLocalIdForDate(data,uid,f);
+    if(!localIdRegistro){ notifyToast("Seleccioná la sucursal del horario.","warning"); return false; }
+    if (getAsistenciaFor(uid, f, localIdRegistro)) return false;
     if (!(await validarEdicionHorarioActual(uid, f))) return false;
-    const key = horarioKey(uid, f);
-    const alreadyPersisted = hasHorarioPersistidoFor(uid, f);
+    if(!localIdRegistro){ notifyToast("Seleccioná la sucursal del horario.","warning"); return false; }
+    const key = horarioKey(uid, f, localIdRegistro);
+    const alreadyPersisted = hasHorarioPersistidoFor(uid, f, localIdRegistro);
     if (alreadyPersisted && !(await confirmarCambioHorario(uid, f, "modificarlo"))) return false;
     if (parseInt(uid) === parseInt(manicuraId)) setLocalH(p => ({...p,[f]:b}));
     setLocalHAll(p => ({...p,[key]:b}));
     const s = calFromSlot(b.startSlot), e = calFromSlot(b.endSlot);
-    const anterior = (data.horarios || []).find(h => parseInt(h.userId) === parseInt(uid) && h.fecha === f) || null;
-    const nuevo = { user_id:parseInt(uid), fecha:f, entrada:calFmt(s.h,s.m), salida:calFmt(e.h,e.m), trabaja:true };
+    const anterior = (data.horarios || []).find(h => registroCoincideLocal(data,h,uid,f,localIdRegistro)) || null;
+    const nuevo = { user_id:parseInt(uid), local_id:localIdRegistro, fecha:f, entrada:calFmt(s.h,s.m), salida:calFmt(e.h,e.m), trabaja:true };
     try {
       const savedRows = await api.upsertHorario(nuevo);
       const rawSaved = Array.isArray(savedRows) ? savedRows[0] : savedRows;
-      if (!rawSaved?.id || parseInt(rawSaved.user_id) !== parseInt(uid) || rawSaved.fecha !== f) {
+      if (!rawSaved?.id || parseInt(rawSaved.user_id) !== parseInt(uid) || Number(rawSaved.local_id)!==Number(localIdRegistro) || rawSaved.fecha !== f) {
         throw new Error("Supabase no confirmó el horario guardado.");
       }
       const saved = normalizeHorario(rawSaved);
-      setData(prev => ({ ...prev, horarios:[...(prev?.horarios || []).filter(h => !(parseInt(h.userId) === parseInt(uid) && h.fecha === f)), saved] }));
+      setData(prev => ({ ...prev, horarios:[...(prev?.horarios || []).filter(h => !(registroCoincideLocal(prev,h,uid,f,localIdRegistro))), saved] }));
       void auditarHorario({ accion: anterior ? "HORARIO_MODIFICADO" : "HORARIO_CREADO", uid:parseInt(uid), fecha:f, anterior, nuevo });
       if (!alreadyPersisted) silentEditOnce.current.add(key);
       if (parseInt(uid) === parseInt(manicuraId)) setLocalH(p => { const n={...p}; delete n[f]; return n; });
@@ -1673,17 +1854,19 @@ function CalendarioHorarios({ data, setData, reloadData, user, agendaRequest, on
   const onAddB = useCallback(async (f, b) => onAddBFor(parseInt(manicuraId), f, b), [manicuraId, onAddBFor]);
 
   const onDeleteBFor = useCallback(async (uid, f) => {
-    if (getAsistenciaFor(uid, f)) return false;
+    const localIdRegistro = Number(uid)===Number(manicuraId) ? selectedLocalId : getManicuraLocalIdForDate(data,uid,f);
+    if(!localIdRegistro){ notifyToast("Seleccioná la sucursal del horario.","warning"); return false; }
+    if (getAsistenciaFor(uid, f, localIdRegistro)) return false;
     if (!(await validarEdicionHorarioActual(uid, f))) return false;
     if (!(await confirmarCambioHorario(uid, f, "eliminarlo"))) return false;
-    const anterior = (data.horarios || []).find(h => parseInt(h.userId) === parseInt(uid) && h.fecha === f) || null;
-    setData(prev => ({ ...prev, horarios:(prev?.horarios || []).filter(h => !(parseInt(h.userId) === parseInt(uid) && h.fecha === f)) }));
+    const anterior = (data.horarios || []).find(h => registroCoincideLocal(data,h,uid,f,localIdRegistro)) || null;
+    setData(prev => ({ ...prev, horarios:(prev?.horarios || []).filter(h => !(registroCoincideLocal(prev,h,uid,f,localIdRegistro))) }));
     try {
-      await api.deleteHorario(parseInt(uid), f);
+      await api.deleteHorario(parseInt(uid), localIdRegistro, f);
       void auditarHorario({ accion:"HORARIO_ELIMINADO", uid:parseInt(uid), fecha:f, anterior, nuevo:null });
       return true;
     } catch (err) {
-      if (anterior) setData(prev => ({ ...prev, horarios:[...(prev?.horarios || []).filter(h => !(parseInt(h.userId) === parseInt(uid) && h.fecha === f)), anterior] }));
+      if (anterior) setData(prev => ({ ...prev, horarios:[...(prev?.horarios || []).filter(h => !(registroCoincideLocal(prev,h,uid,f,localIdRegistro))), anterior] }));
       notifyToast("No se pudo eliminar el horario. Se restauró el dato anterior.", "error");
       throw err;
     }
@@ -1755,8 +1938,8 @@ function CalendarioHorarios({ data, setData, reloadData, user, agendaRequest, on
     const copia = targetDays.map((targetDay, idx) => {
       const targetFecha = dateKey(targetDay);
       const sourceFecha = dateKey(prevDays[idx]);
-      const bloque = getBloqueFor(uid, sourceFecha);
-      const asistencia = getAsistenciaFor(uid, targetFecha);
+      const bloque = getBloqueFor(uid, sourceFecha, selectedLocalId);
+      const asistencia = getAsistenciaFor(uid, targetFecha, selectedLocalId);
       const bloqueadoDia = bloqueadoPorFecha(targetFecha, uid);
       return { targetFecha, sourceFecha, bloque, asistencia, bloqueadoDia };
     });
@@ -1789,7 +1972,7 @@ function CalendarioHorarios({ data, setData, reloadData, user, agendaRequest, on
       return;
     }
 
-    const existentes = disponibles.filter(x => hasHorarioPersistidoFor(uid, x.targetFecha)).length;
+    const existentes = disponibles.filter(x => hasHorarioPersistidoFor(uid, x.targetFecha, selectedLocalId)).length;
     const ok = await pedirConfirmacion({
       title: "Repetir semana anterior",
       message: `Se copiarán ${disponibles.length} horario${disponibles.length === 1 ? "" : "s"} de la semana anterior. ${existentes ? `Se sobrescribirán ${existentes} horario${existentes === 1 ? "" : "s"} existente${existentes === 1 ? "" : "s"}. ` : ""}${omitidos ? `Se omitirán ${omitidos} día${omitidos === 1 ? "" : "s"} por estar bloqueado${omitidos === 1 ? "" : "s"} o con asistencia. ` : ""}¿Confirmás la copia?`,
@@ -1805,9 +1988,10 @@ function CalendarioHorarios({ data, setData, reloadData, user, agendaRequest, on
       }
       const s = calFromSlot(item.bloque.startSlot);
       const e = calFromSlot(item.bloque.endSlot);
-      const anterior = (data.horarios || []).find(h => parseInt(h.userId) === parseInt(uid) && h.fecha === item.targetFecha) || null;
+      const anterior = (data.horarios || []).find(h => registroCoincideLocal(data,h,uid,item.targetFecha,selectedLocalId)) || null;
       const nuevo = {
         user_id: uid,
+        local_id: selectedLocalId,
         fecha: item.targetFecha,
         entrada: calFmt(s.h, s.m),
         salida: calFmt(e.h, e.m),
@@ -1884,7 +2068,7 @@ function CalendarioHorarios({ data, setData, reloadData, user, agendaRequest, on
     }
     if (v === "dia") {
       const base = vista === "semana" ? weekStart : vista === "mes" ? new Date(anio, mes, 1) : new Date(diaVista + "T12:00:00");
-      if (!localDiaId) setLocalDiaId(String(selectedManicura?.localId || localesHorarios[0]?.id || ""));
+      if (!localDiaId) setLocalDiaId(String(selectedLocalId || localesHorarios[0]?.id || ""));
       setDiaVista(dateKey(base));
       setMes(base.getMonth());
       setAnio(base.getFullYear());
@@ -1941,7 +2125,7 @@ function CalendarioHorarios({ data, setData, reloadData, user, agendaRequest, on
         </div>
         <div style={{ flex:1,display:"grid",gridTemplateColumns:"repeat(6,1fr)" }}>
           {weekDays.map((d,i)=>{
-            const f=dateKey(d),fer=feriados.has(f),b=getB(f),localDay=horarioLocalDia(selectedManicura?.localId,d.getDay()),closedLocal=!localDay.abierto,lockedDay=bloqueadoPorFecha(f)||closedLocal;
+            const f=dateKey(d),fer=feriados.has(f),b=getB(f),localDay=horarioLocalDia(selectedLocalId,d.getDay()),closedLocal=!localDay.abierto,lockedDay=bloqueadoPorFecha(f)||closedLocal;
             return <div key={i}
               onClick={e=>{
                 if (lockedDay || b || hasAsistencia(f)) return;
@@ -1968,7 +2152,7 @@ function CalendarioHorarios({ data, setData, reloadData, user, agendaRequest, on
   // ── DÍA / TODAS LAS MANICURAS ───────────────────────────────────
   const renderDiarioTodos = () => {
     const baseCols = puedeGestionar ? manicuras : manicuras.filter(m => m.id === user.id);
-    const selectedLocalForDay = parseInt(localDiaId) || selectedManicura?.localId || localesHorarios[0]?.id || null;
+    const selectedLocalForDay = parseInt(localDiaId) || selectedLocalId || localesHorarios[0]?.id || null;
     const cols = selectedLocalForDay ? baseCols.filter(m => m.localId === parseInt(selectedLocalForDay)) : [];
     const totalDia = cols.reduce((a,m)=>a+calHoras(getBloqueFor(m.id, diaVista)),0);
     const minColW = isMobile ? 118 : 0;
@@ -2114,7 +2298,7 @@ function CalendarioHorarios({ data, setData, reloadData, user, agendaRequest, on
   const ModalDia = ({ f }) => {
     const b = getB(f);
     const modalDate=new Date(f+"T12:00:00");
-    const modalLocalId=selectedManicura?.localId;
+    const modalLocalId=selectedLocalId;
     const modalLocalHorario=horarioLocalDia(modalLocalId,modalDate.getDay());
     const def = b ? { s:calFmt(calFromSlot(b.startSlot).h,calFromSlot(b.startSlot).m), e:calFmt(calFromSlot(b.endSlot).h,calFromSlot(b.endSlot).m) } : { s:modalLocalHorario.apertura||"10:00", e:modalLocalHorario.cierre||"20:00" };
     const [start,setStart] = useState(def.s);
@@ -2177,12 +2361,13 @@ function CalendarioHorarios({ data, setData, reloadData, user, agendaRequest, on
             <p style={{ margin:"0 0 6px",fontSize:11,fontWeight:500,color:"var(--color-text-secondary)",textTransform:"uppercase",letterSpacing:"0.05em" }}>Manicura</p>
             <div style={{position:"relative"}}>
               <button type="button" onClick={()=>setManicuraPickerOpen(v=>!v)} style={{width:"100%",border:"0.5px solid rgba(120,120,120,0.24)",borderRadius:8,padding:"7px 8px",background:"var(--color-background-primary)",cursor:"pointer",textAlign:"left",display:"flex",alignItems:"center",justifyContent:"space-between",gap:6}}>
-                <span style={{minWidth:0}}><strong style={{display:"block",fontSize:11,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{selectedManicura?.nombre||"Seleccionar manicura"}</strong><span style={{display:"block",fontSize:9,color:"var(--color-text-secondary)",marginTop:2}}>{localesHorarios.find(l=>l.id===selectedManicura?.localId)?.nombre||"Sin local"}</span></span><span>⌄</span>
+                <span style={{minWidth:0}}><strong style={{display:"block",fontSize:11,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{selectedManicura?.nombre||"Seleccionar manicura"}</strong><span style={{display:"block",fontSize:9,color:"var(--color-text-secondary)",marginTop:2}}>{localesHorarios.find(l=>Number(l.id)===Number(selectedLocalId))?.nombre||"Sin local"}</span></span><span>⌄</span>
               </button>
               {manicuraPickerOpen&&<><div onClick={()=>setManicuraPickerOpen(false)} style={{position:"fixed",inset:0,zIndex:1090}}/><div style={{position:"absolute",left:0,right:0,top:"calc(100% + 5px)",zIndex:1100,background:"#fff",border:"1px solid #ddd",borderRadius:10,boxShadow:"0 10px 26px rgba(0,0,0,.16)",maxHeight:360,overflowY:"auto",padding:6}}>
-                {manicurasPorLocal.map(g=><div key={g.local.id} style={{marginBottom:6}}><div style={{fontSize:9,fontWeight:800,textTransform:"uppercase",letterSpacing:".05em",color:COLORS.pinkDark,background:COLORS.pinkLight,borderRadius:6,padding:"5px 7px",position:"sticky",top:0}}>{g.local.nombre}</div>{g.manicuras.map(m=><button key={m.id} type="button" onClick={()=>{setManicuraId(m.id);setManicuraPickerOpen(false);if(vista==="dia")setLocalDiaId(String(m.localId));}} style={{width:"100%",border:"none",background:parseInt(manicuraId)===m.id?"#f7f3f4":"#fff",padding:"7px 8px",textAlign:"left",cursor:"pointer",fontSize:11,borderRadius:6}}>{m.nombre}</button>)}</div>)}
+                {manicurasPorLocal.map(g=><div key={g.local.id} style={{marginBottom:6}}><div style={{fontSize:9,fontWeight:800,textTransform:"uppercase",letterSpacing:".05em",color:COLORS.pinkDark,background:COLORS.pinkLight,borderRadius:6,padding:"5px 7px",position:"sticky",top:0}}>{g.local.nombre}</div>{g.manicuras.map(m=><button key={m.id} type="button" onClick={()=>{setManicuraId(m.id);setManicuraLocalId(String(g.local.id));setManicuraPickerOpen(false);if(vista==="dia")setLocalDiaId(String(g.local.id));}} style={{width:"100%",border:"none",background:parseInt(manicuraId)===m.id?"#f7f3f4":"#fff",padding:"7px 8px",textAlign:"left",cursor:"pointer",fontSize:11,borderRadius:6}}>{m.nombre}</button>)}</div>)}
               </div></>}
             </div>
+            {selectedManicuraLocalIds.length>1 && <div style={{marginTop:7}}><p style={{margin:"0 0 4px",fontSize:9,fontWeight:700,color:"var(--color-text-secondary)",textTransform:"uppercase"}}>Sucursal del horario</p><select value={selectedLocalId||""} onChange={e=>{setManicuraLocalId(e.target.value);if(vista==="dia")setLocalDiaId(e.target.value);}} style={{width:"100%",border:"0.5px solid rgba(120,120,120,0.24)",borderRadius:7,padding:"6px 7px",fontSize:11,background:"var(--color-background-primary)"}}>{selectedManicuraLocalIds.map(id=><option key={id} value={id}>{localesHorarios.find(l=>Number(l.id)===Number(id))?.nombre||`Local ${id}`}</option>)}</select></div>}
           </div>}
           <div style={{ padding:"10px 10px 6px",borderTop:puedeGestionar?"0.5px solid rgba(120,120,120,0.18)":"none" }}>
             <p style={{ margin:"0 0 6px",fontSize:11,fontWeight:500,color:"var(--color-text-secondary)",textTransform:"uppercase",letterSpacing:"0.05em" }}>Vista</p>
@@ -4412,7 +4597,7 @@ function EncargadaEquipoEditor({ encargada, data, setData, user, reloadData, onC
   const hoy=dateKey(new Date());
   const save=async()=>{setErr("");const usuario=normalizeUsuarioValue(form.usuario),email=normalizeEmailValue(form.email);if(!form.nombre?.trim()||!usuario)return setErr("Nombre y usuario son obligatorios.");if(!isValidEmail(email))return setErr("El email debe ser válido.");if(usuarioEnUso(data.users,usuario,form.id)||emailEnUso(data.users,email,form.id))return setErr("El usuario o email ya están en uso.");if(form.password&&form.password!==form.password2)return setErr("Las contraseñas no coinciden.");const te=validarTelefonoArgentino(form.telefonoCodigoArea,form.telefonoNumero);if(te)return setErr(te);const be=validarDatoBancario(form.datoBancario);if(be)return setErr(be);for(const r of hist){if(!r.fechaInicio)return setErr("Todos los períodos laborales deben tener fecha de inicio.");if(r.fechaFin&&r.fechaFin<r.fechaInicio)return setErr("La fecha de fin no puede ser anterior al inicio.");if(r.fechaFin&&!r.motivoFin)return setErr("Indicá el motivo de cada período cerrado.");}if(hist.filter(r=>!r.fechaFin).length>1)return setErr("No puede haber más de un período laboral abierto.");setSaving(true);try{const abierto=hist.find(r=>!r.fechaFin);const payload={nombre:form.nombre.trim(),usuario,email,rol:"encargada",activo:!!abierto,telefono_codigo_area:onlyDigits(form.telefonoCodigoArea)||null,telefono_numero:onlyDigits(form.telefonoNumero)||null,telefono:[onlyDigits(form.telefonoCodigoArea),onlyDigits(form.telefonoNumero)].filter(Boolean).join("")||null,dato_bancario:String(form.datoBancario||"").trim()||null,tipo_relacion:form.tipoRelacion||"a_resolver"};await api.updateUser(form.id,payload);if(form.password)await api.changePassword({mode:"admin_set",actor_id:user.id,session_token:user.sessionToken,target_user_id:form.id,new_password:form.password});await api.setEncargadoLocales(form.id,form.localIds||[]);const old=(data.usuarioHistorialLaboral||[]).filter(x=>Number(x.userId)===Number(form.id)),ids=new Set(hist.filter(x=>x.id).map(x=>x.id));for(const x of old)if(!ids.has(x.id))await api.deleteUsuarioHistorialLaboral(x.id);const saved=[];for(const r of hist){const p={user_id:form.id,fecha_inicio:r.fechaInicio,fecha_fin:r.fechaFin||null,motivo_fin:r.fechaFin?r.motivoFin||null:null,observacion:r.observacion?.trim()||null};const rows=r.id?await api.updateUsuarioHistorialLaboral(r.id,p):await api.createUsuarioHistorialLaboral(p);const raw=Array.isArray(rows)?rows[0]:rows;if(raw)saved.push(normalizeUsuarioHistorialLaboral(raw));}const nextUser={...encargada,...form,nombre:payload.nombre,usuario,email,rol:"encargada",activo:!!abierto,telefonoCodigoArea:onlyDigits(form.telefonoCodigoArea),telefonoNumero:onlyDigits(form.telefonoNumero),datoBancario:String(form.datoBancario||"").trim(),tipoRelacion:form.tipoRelacion||"a_resolver"};setData(prev=>({...prev,users:(prev.users||[]).map(u=>Number(u.id)===Number(form.id)?nextUser:u),encargadoLocales:[...(prev.encargadoLocales||[]).filter(x=>Number(x.userId)!==Number(form.id)),...(form.localIds||[]).map(localId=>({userId:form.id,localId}))],usuarioHistorialLaboral:[...(prev.usuarioHistorialLaboral||[]).filter(x=>Number(x.userId)!==Number(form.id)),...saved]}));notifyToast("Encargada guardada.","success");onClose();}catch(e){setErr("No se pudo guardar: "+(e.message||e));}setSaving(false);};
   const tabStyle=a=>({border:"none",borderRadius:8,padding:"7px 10px",fontSize:11,fontWeight:700,cursor:"pointer",background:a?COLORS.pink:COLORS.pinkLight,color:a?"#fff":COLORS.pinkDark});
-  return <Modal title={`Editar encargada · ${encargada.nombre}`} onClose={onClose} width={800}><div style={{display:"flex",gap:6,flexWrap:"wrap",marginBottom:14}}>{[["general","Datos generales"],["antiguedad","Antigüedad"],["laboral","Datos laborales"],["documentacion","Documentación"]].map(([k,l])=><button key={k} style={tabStyle(tab===k)} onClick={()=>setTab(k)}>{l}</button>)}</div>{tab==="general"?<div style={{display:"flex",flexDirection:"column",gap:11}}><ModalInput label="Nombre completo" value={form.nombre||""} onChange={v=>setForm(f=>({...f,nombre:v}))}/><div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10}}><ModalInput label="Usuario" value={form.usuario||""} onChange={v=>setForm(f=>({...f,usuario:v}))}/><ModalInput label="Email" value={form.email||""} onChange={v=>setForm(f=>({...f,email:v}))}/></div><div style={{display:"grid",gridTemplateColumns:".45fr 1fr",gap:10}}><ModalInput label="Código de área" value={form.telefonoCodigoArea||""} onChange={v=>setForm(f=>({...f,telefonoCodigoArea:onlyDigits(v).slice(0,4)}))}/><ModalInput label="Teléfono" value={form.telefonoNumero||""} onChange={v=>setForm(f=>({...f,telefonoNumero:onlyDigits(v).slice(0,8)}))}/></div><div><p style={{margin:"0 0 7px",fontSize:12,fontWeight:700}}>Locales asignados</p><div style={{display:"flex",gap:6,flexWrap:"wrap"}}>{locales.map(l=>{const on=(form.localIds||[]).includes(l.id);return <button key={l.id} onClick={()=>toggleLocal(l.id)} style={{border:`1px solid ${on?COLORS.pink:"#ddd"}`,background:on?COLORS.pinkLight:"#fff",borderRadius:999,padding:"6px 9px",fontSize:10,cursor:"pointer"}}>{on?"✓ ":""}{l.nombre}</button>})}</div></div><div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10}}><ModalInput label="Nueva contraseña (opcional)" type="password" value={form.password||""} onChange={v=>setForm(f=>({...f,password:v}))}/><ModalInput label="Repetir contraseña" type="password" value={form.password2||""} onChange={v=>setForm(f=>({...f,password2:v}))}/></div></div>:tab==="antiguedad"?<div><div style={{display:"flex",justifyContent:"space-between",marginBottom:9}}><p style={{margin:0,fontSize:12,color:"var(--color-text-secondary)"}}>Relación laboral general de la encargada.</p><Btn size="sm" onClick={()=>setHist(r=>[{tempId:`e-${Date.now()}`,fechaInicio:hoy,fechaFin:"",motivoFin:"",observacion:""},...r])}>+ Período</Btn></div>{hist.map(r=>{const k=r.id||r.tempId;return <div key={k} style={{display:"grid",gridTemplateColumns:"130px 130px 145px 1fr 34px",gap:7,marginBottom:7}}><input type="date" value={r.fechaInicio||""} onChange={e=>updHist(k,"fechaInicio",e.target.value)}/><input type="date" value={r.fechaFin||""} onChange={e=>updHist(k,"fechaFin",e.target.value)}/><select disabled={!r.fechaFin} value={r.motivoFin||""} onChange={e=>updHist(k,"motivoFin",e.target.value)}><option value="">{r.fechaFin?"Motivo":"Activo"}</option>{["Renuncia","Despido","Otro"].map(x=><option key={x}>{x}</option>)}</select><input value={r.observacion||""} placeholder="Observación" onChange={e=>updHist(k,"observacion",e.target.value)}/><button onClick={()=>setHist(a=>a.filter(x=>(x.id||x.tempId)!==k))}>×</button></div>})}</div>:tab==="laboral"?<div style={{display:"flex",flexDirection:"column",gap:11}}><ModalInput label="Alias o CBU" value={form.datoBancario||""} onChange={v=>setForm(f=>({...f,datoBancario:v}))}/><ModalSelect label="Tipo de relación" value={form.tipoRelacion||"a_resolver"} onChange={v=>setForm(f=>({...f,tipoRelacion:v}))}><option value="monotributista">Monotributista</option><option value="dependencia">Relación de Dependencia</option><option value="a_resolver">A resolver</option></ModalSelect></div>:<LegajoDocumentosPanel actor={user} userId={form.id} documentos={data.personaDocumentos||[]} onReload={reloadData} currentPhotoUrl={form.fotoPerfilUrl||""}/>} {err&&<p style={{color:COLORS.danger,background:COLORS.dangerLight,padding:8,borderRadius:8,fontSize:12}}>{err}</p>}<div style={{display:"flex",gap:8,marginTop:15}}><Btn onClick={save} disabled={saving} style={{flex:1,justifyContent:"center"}}>{saving?"Guardando...":"Guardar"}</Btn><Btn variant="secondary" onClick={onClose} style={{flex:1,justifyContent:"center"}}>Cancelar</Btn></div></Modal>;
+  return <Modal title={`Editar encargada · ${encargada.nombre}`} onClose={onClose} width={800}><div style={{display:"flex",gap:6,flexWrap:"wrap",marginBottom:14}}>{[["general","Datos generales"],["antiguedad","Antigüedad"],["laboral","Datos laborales"],["documentacion","Documentación"]].map(([k,l])=><button key={k} style={tabStyle(tab===k)} onClick={()=>setTab(k)}>{l}</button>)}</div>{tab==="general"?<div style={{display:"flex",flexDirection:"column",gap:11}}><ModalInput label="Nombre completo" value={form.nombre||""} onChange={v=>setForm(f=>({...f,nombre:v}))}/><div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10}}><ModalInput label="Usuario" value={form.usuario||""} onChange={v=>setForm(f=>({...f,usuario:v}))}/><ModalInput label="Email" value={form.email||""} onChange={v=>setForm(f=>({...f,email:v}))}/></div><div style={{display:"grid",gridTemplateColumns:".45fr 1fr",gap:10}}><ModalInput label="Código de área" value={form.telefonoCodigoArea||""} onChange={v=>setForm(f=>({...f,telefonoCodigoArea:onlyDigits(v).slice(0,4)}))}/><ModalInput label="Teléfono" value={form.telefonoNumero||""} onChange={v=>setForm(f=>({...f,telefonoNumero:onlyDigits(v).slice(0,8)}))}/></div><div><p style={{margin:"0 0 7px",fontSize:12,fontWeight:700}}>Locales asignados</p><div style={{display:"flex",gap:6,flexWrap:"wrap"}}>{locales.map(l=>{const on=(form.localIds||[]).includes(l.id);return <button key={l.id} onClick={()=>toggleLocal(l.id)} style={{border:`1px solid ${on?COLORS.pink:"#ddd"}`,background:on?COLORS.pinkLight:"#fff",borderRadius:999,padding:"6px 9px",fontSize:10,cursor:"pointer"}}>{on?"✓ ":""}{l.nombre}</button>})}</div></div><div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10}}><ModalInput label="Nueva contraseña (opcional)" type="password" value={form.password||""} onChange={v=>setForm(f=>({...f,password:v}))}/><ModalInput label="Repetir contraseña" type="password" value={form.password2||""} onChange={v=>setForm(f=>({...f,password2:v}))}/></div></div>:tab==="antiguedad"?<div><div style={{display:"flex",justifyContent:"space-between",marginBottom:9}}><p style={{margin:0,fontSize:12,color:"var(--color-text-secondary)"}}>Relación laboral general de la encargada.</p><Btn size="sm" onClick={()=>setHist(r=>[{tempId:`e-${Date.now()}`,fechaInicio:hoy,fechaFin:"",motivoFin:"",observacion:""},...r])}>+ Período</Btn></div>{hist.map(r=>{const k=r.id||r.tempId;return <div key={k} style={{display:"grid",gridTemplateColumns:"130px 130px 145px 1fr 34px",gap:7,marginBottom:7}}><input type="date" value={r.fechaInicio||""} onChange={e=>updHist(k,"fechaInicio",e.target.value)}/><input type="date" value={r.fechaFin||""} onChange={e=>updHist(k,"fechaFin",e.target.value)}/><select disabled={!r.fechaFin} value={r.motivoFin||""} onChange={e=>updHist(k,"motivoFin",e.target.value)}><option value="">{r.fechaFin?"Motivo":"Activo"}</option>{["Renuncia","Despido","Otro"].map(x=><option key={x}>{x}</option>)}</select><input value={r.observacion||""} placeholder="Observación" onChange={e=>updHist(k,"observacion",e.target.value)}/><button onClick={()=>setHist(a=>a.filter(x=>(x.id||x.tempId)!==k))}>×</button></div>})}</div>:tab==="laboral"?<div style={{display:"flex",flexDirection:"column",gap:11}}><ModalInput label="Alias o CBU" value={form.datoBancario||""} onChange={v=>setForm(f=>({...f,datoBancario:v}))}/><ModalSelect label="Tipo de relación" value={form.tipoRelacion||"a_resolver"} onChange={v=>setForm(f=>({...f,tipoRelacion:v}))}><option value="monotributista">Monotributista</option><option value="dependencia">Relación de Dependencia</option><option value="a_resolver">A resolver</option></ModalSelect></div>:<LegajoDocumentosPanel actor={user} userId={form.id} documentos={data.personaDocumentos||[]} onReload={reloadData} currentPhotoUrl={form.fotoPerfilUrl||""}/>} {err&&<p style={{color:COLORS.danger,background:COLORS.dangerLight,padding:8,borderRadius:8,fontSize:12}}>{err}</p>}<div style={{display:"flex",gap:8,marginTop:15}}><Btn onClick={()=>save(false)} disabled={saving} style={{flex:1,justifyContent:"center"}}>{saving?"Guardando...":"Guardar"}</Btn><Btn variant="secondary" onClick={onClose} style={{flex:1,justifyContent:"center"}}>Cancelar</Btn></div></Modal>;
 }
 
 function ABMManicuras({ data, setData, reloadData, user }) {
@@ -4422,6 +4607,7 @@ function ABMManicuras({ data, setData, reloadData, user }) {
   const [saving, setSaving] = useState(false);
   const [modalTab, setModalTab] = useState("general");
   const [historialDraft, setHistorialDraft] = useState([]);
+  const [multiLocalConfirm, setMultiLocalConfirm] = useState(null);
   const documentosPersona=(data.personaDocumentos||[]);
   const [filtroLocal, setFiltroLocal] = useState("todos");
   const [filtroEstado, setFiltroEstado] = useState("activas");
@@ -4469,7 +4655,7 @@ function ABMManicuras({ data, setData, reloadData, user }) {
   const esAdmin = isAdminLikeRole(user.rol);
   const allowedLocalIds = getAssignedLocalIds(data, user);
   const localesPermitidos = esAdmin ? data.locales.filter(localActivo) : data.locales.filter(l => localActivo(l) && allowedLocalIds.includes(l.id));
-  const manicuras = data.users.filter(u => u.rol === "manicura" && (esAdmin || allowedLocalIds.includes(u.localId) || !u.localId));
+  const manicuras = data.users.filter(u => u.rol === "manicura" && (esAdmin || getActiveManicuraLocalIds(data,u.id).some(id=>allowedLocalIds.includes(Number(id))) || (!getActiveManicuraLocalIds(data,u.id).length && allowedLocalIds.includes(Number(u.localId))) || !u.localId));
   const encargadasEquipo = data.users.filter(u => u.rol === "encargada" && u.activo);
   const normalizeSearch = value => String(value || "").toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
   const queryEquipo = normalizeSearch(busqueda.trim());
@@ -4509,7 +4695,7 @@ function ABMManicuras({ data, setData, reloadData, user }) {
   }, 0), [data.horarios, fechaEnPeriodoEquipo, localHistoricoEnFecha]);
 
   const manicurasFiltradas = useMemo(() => manicuras
-    .filter(m => filtroLocal === "todos" || String(m.localId || "") === String(filtroLocal))
+    .filter(m => filtroLocal === "todos" || getActiveManicuraLocalIds(data,m.id).some(id=>String(id)===String(filtroLocal)) || (!getActiveManicuraLocalIds(data,m.id).length && String(m.localId || "") === String(filtroLocal)))
     .filter(m => filtroEstado === "todas" || (filtroEstado === "activas" ? m.activo : !m.activo))
     .filter(coincideBusqueda)
     .sort((a,b) => (a.nombre || "").localeCompare(b.nombre || "")), [manicuras, filtroLocal, filtroEstado]);
@@ -4517,10 +4703,10 @@ function ABMManicuras({ data, setData, reloadData, user }) {
     if (agrupacion !== "local") return [{ key:"todas", label:"Todas las manicuras", items:manicurasFiltradas }];
     const grupos = new Map();
     manicurasFiltradas.forEach(m => {
-      const local = data.locales.find(l => l.id === m.localId);
-      const key = String(m.localId || "sin-local");
-      if (!grupos.has(key)) grupos.set(key, { key, label:local?.nombre || "Sin local asignado", items:[] });
-      grupos.get(key).items.push(m);
+      const activeIds=getActiveManicuraLocalIds(data,m.id);
+      const ids=activeIds.length?activeIds:[m.localId].filter(Boolean);
+      if(!ids.length){ if(!grupos.has("sin-local"))grupos.set("sin-local",{key:"sin-local",label:"Sin local asignado",items:[]}); grupos.get("sin-local").items.push(m); return; }
+      ids.forEach(localId=>{const local=data.locales.find(l=>Number(l.id)===Number(localId));const key=String(localId);if(!grupos.has(key))grupos.set(key,{key,label:local?.nombre||"Sin local asignado",items:[]});grupos.get(key).items.push(m);});
     });
     return Array.from(grupos.values()).sort((a,b) => a.label.localeCompare(b.label));
   }, [manicurasFiltradas, agrupacion, data.locales]);
@@ -4551,17 +4737,19 @@ function ABMManicuras({ data, setData, reloadData, user }) {
       if (r.fechaFin && !r.motivoFin) return "Indicá el motivo de finalización de cada período cerrado.";
       if (!r.fechaFin && r.motivoFin) return "Un período abierto no debe tener motivo de finalización.";
     }
-    if (normalized.filter(r=>!r.fechaFin).length > 1) return "No puede haber más de un período activo sin fecha de fin.";
+    const activeByLocal=new Set();
+    for(const r of normalized.filter(r=>!r.fechaFin)){if(activeByLocal.has(r.localId))return "No puede haber dos períodos activos para la misma sucursal.";activeByLocal.add(r.localId);}
     const ordered=[...normalized].sort((a,b)=>a.fechaInicio.localeCompare(b.fechaInicio));
     for (let i=0;i<ordered.length;i++) for (let j=i+1;j<ordered.length;j++) {
       const a=ordered[i], b=ordered[j];
+      if(Number(a.localId)!==Number(b.localId)) continue;
       const aFin=a.fechaFin||"9999-12-31", bFin=b.fechaFin||"9999-12-31";
-      if (a.fechaInicio<=bFin && b.fechaInicio<=aFin) return "Los períodos de antigüedad no pueden superponerse.";
+      if (a.fechaInicio<=bFin && b.fechaInicio<=aFin) return "Los períodos de una misma sucursal no pueden superponerse.";
     }
     return "";
   };
 
-  const save = async () => {
+  const save = async (forceMultiLocal = false) => {
     setFormErr("");
     if (!String(form.nombre||"").trim()||!String(form.usuario||"").trim()) { setFormErr("Nombre y usuario son obligatorios."); return; }
     const usuarioLimpio = normalizeUsuarioValue(form.usuario);
@@ -4574,17 +4762,27 @@ function ABMManicuras({ data, setData, reloadData, user }) {
     const telErr=validarTelefonoArgentino(form.telefonoCodigoArea,form.telefonoNumero); if(telErr){setFormErr(telErr);setModalTab("general");return;}
     const bancoErr=validarDatoBancario(form.datoBancario); if(bancoErr){setFormErr(bancoErr);setModalTab("laboral");return;}
     const histErr=validarHistorial(historialDraft); if(histErr){setFormErr(histErr);setModalTab("antiguedad");return;}
+    const activosMultilocal=historialDraft.filter(r=>!r.fechaFin);
+    const activosPrevios=modal==="new"?0:new Set((data.manicuraHistorialLocales||[]).filter(h=>Number(h.userId)===Number(form.id)&&!h.fechaFin).map(h=>Number(h.localId))).size;
+    const activosNuevos=new Set(activosMultilocal.map(r=>Number(r.localId))).size;
+    if(activosNuevos>1 && activosNuevos>activosPrevios && !forceMultiLocal){
+      const nombres=Array.from(new Set(activosMultilocal.map(r=>localesPermitidos.find(l=>Number(l.id)===Number(r.localId))?.nombre||`Local ${r.localId}`)));
+      setMultiLocalConfirm({ cantidad:nombres.length, nombres });
+      return;
+    }
     setSaving(true);
     try {
       let targetId=form.id;
       if (modal==="new") {
         const ahora=new Date().toISOString();
-        const abierto=historialDraft.find(r=>!r.fechaFin);
-        const created=await api.createUser({ nombre:form.nombre.trim(),usuario:usuarioLimpio,email:emailLimpio,email_actualizado_en:ahora,codigo_externo:(form.codigoExterno||"").trim()||null,telefono_codigo_area:onlyDigits(form.telefonoCodigoArea)||null,telefono_numero:onlyDigits(form.telefonoNumero)||null,telefono:[onlyDigits(form.telefonoCodigoArea),onlyDigits(form.telefonoNumero)].filter(Boolean).join("")||null,dato_bancario:String(form.datoBancario||"").trim()||null,tipo_relacion:form.tipoRelacion||"a_resolver",password:form.password,password_actualizado_en:form.password==="niki123"?null:ahora,rol:"manicura",local_id:abierto?parseInt(abierto.localId):null,activo:!!abierto });
+        const abiertos=historialDraft.filter(r=>!r.fechaFin).sort((a,b)=>(b.fechaInicio||"").localeCompare(a.fechaInicio||""));
+        const principal=abiertos[0]||null;
+        const created=await api.createUser({ nombre:form.nombre.trim(),usuario:usuarioLimpio,email:emailLimpio,email_actualizado_en:ahora,codigo_externo:(form.codigoExterno||"").trim()||null,telefono_codigo_area:onlyDigits(form.telefonoCodigoArea)||null,telefono_numero:onlyDigits(form.telefonoNumero)||null,telefono:[onlyDigits(form.telefonoCodigoArea),onlyDigits(form.telefonoNumero)].filter(Boolean).join("")||null,dato_bancario:String(form.datoBancario||"").trim()||null,tipo_relacion:form.tipoRelacion||"a_resolver",password:form.password,password_actualizado_en:form.password==="niki123"?null:ahora,rol:"manicura",local_id:principal?parseInt(principal.localId):null,activo:abiertos.length>0 });
         targetId=created?.[0]?.id;
       } else {
-        const abierto=historialDraft.find(r=>!r.fechaFin);
-        await api.updateUser(targetId,{ nombre:form.nombre.trim(),usuario:usuarioLimpio,email:emailLimpio,email_actualizado_en:new Date().toISOString(),codigo_externo:(form.codigoExterno||"").trim()||null,telefono_codigo_area:onlyDigits(form.telefonoCodigoArea)||null,telefono_numero:onlyDigits(form.telefonoNumero)||null,telefono:[onlyDigits(form.telefonoCodigoArea),onlyDigits(form.telefonoNumero)].filter(Boolean).join("")||null,dato_bancario:String(form.datoBancario||"").trim()||null,tipo_relacion:form.tipoRelacion||"a_resolver",local_id:abierto?parseInt(abierto.localId):null,activo:!!abierto });
+        const abiertos=historialDraft.filter(r=>!r.fechaFin).sort((a,b)=>(b.fechaInicio||"").localeCompare(a.fechaInicio||""));
+        const principal=abiertos[0]||null;
+        await api.updateUser(targetId,{ nombre:form.nombre.trim(),usuario:usuarioLimpio,email:emailLimpio,email_actualizado_en:new Date().toISOString(),codigo_externo:(form.codigoExterno||"").trim()||null,telefono_codigo_area:onlyDigits(form.telefonoCodigoArea)||null,telefono_numero:onlyDigits(form.telefonoNumero)||null,telefono:[onlyDigits(form.telefonoCodigoArea),onlyDigits(form.telefonoNumero)].filter(Boolean).join("")||null,dato_bancario:String(form.datoBancario||"").trim()||null,tipo_relacion:form.tipoRelacion||"a_resolver",local_id:principal?parseInt(principal.localId):null,activo:abiertos.length>0 });
         if(form.password){await api.changePassword({mode:"admin_set",actor_id:user.id,session_token:user.sessionToken,target_user_id:targetId,new_password:form.password});}
       }
       const originales=(data.manicuraHistorialLocales||[]).filter(x=>x.userId===targetId);
@@ -4600,21 +4798,24 @@ function ABMManicuras({ data, setData, reloadData, user }) {
         if(raw) historialGuardado.push(normalizeManicuraHistorialLocal(raw));
       }
       if(modal==="new"&&targetId){try{await api.enviarInvitacionUsuario({actor_id:user.id,session_token:user.sessionToken,target_user_id:targetId});}catch(e){notifyToast("La manicura se creó, pero la invitación quedó pendiente.","warning");}}
-      const abierto=historialGuardado.find(r=>!r.fechaFin)||historialDraft.find(r=>!r.fechaFin);
-      const updatedUser={...form,id:targetId,nombre:form.nombre.trim(),usuario:usuarioLimpio,email:emailLimpio,rol:"manicura",localId:abierto?parseInt(abierto.localId):null,activo:!!abierto,codigoExterno:(form.codigoExterno||"").trim(),telefonoCodigoArea:onlyDigits(form.telefonoCodigoArea),telefonoNumero:onlyDigits(form.telefonoNumero),telefono:[onlyDigits(form.telefonoCodigoArea),onlyDigits(form.telefonoNumero)].filter(Boolean).join(""),datoBancario:String(form.datoBancario||"").trim(),tipoRelacion:form.tipoRelacion||"a_resolver"};
+      const abiertosGuardados=historialGuardado.filter(r=>!r.fechaFin).sort((a,b)=>(b.fechaInicio||"").localeCompare(a.fechaInicio||""));
+      const principal=abiertosGuardados[0]||historialDraft.filter(r=>!r.fechaFin).sort((a,b)=>(b.fechaInicio||"").localeCompare(a.fechaInicio||""))[0];
+      const updatedUser={...form,id:targetId,nombre:form.nombre.trim(),usuario:usuarioLimpio,email:emailLimpio,rol:"manicura",localId:principal?parseInt(principal.localId):null,activo:abiertosGuardados.length>0||historialDraft.some(r=>!r.fechaFin),codigoExterno:(form.codigoExterno||"").trim(),telefonoCodigoArea:onlyDigits(form.telefonoCodigoArea),telefonoNumero:onlyDigits(form.telefonoNumero),telefono:[onlyDigits(form.telefonoCodigoArea),onlyDigits(form.telefonoNumero)].filter(Boolean).join(""),datoBancario:String(form.datoBancario||"").trim(),tipoRelacion:form.tipoRelacion||"a_resolver"};
       setData(prev=>({...prev,users:[...(prev.users||[]).filter(u=>parseInt(u.id)!==parseInt(targetId)),updatedUser].sort((a,b)=>(a.nombre||"").localeCompare(b.nombre||"")),manicuraHistorialLocales:[...(prev.manicuraHistorialLocales||[]).filter(h=>parseInt(h.userId)!==parseInt(targetId)),...historialGuardado]}));
       setModal(null); notifyToast("Datos e historial guardados correctamente.","success");
     } catch(e) { setFormErr("Error al guardar: "+e.message); }
     setSaving(false);
   };
 
-  const periodoActivoDe = uid => (data.manicuraHistorialLocales||[]).filter(h=>parseInt(h.userId)===parseInt(uid)&&!h.fechaFin).sort((a,b)=>(b.fechaInicio||"").localeCompare(a.fechaInicio||""))[0] || null;
+  const periodosActivosDe = uid => (data.manicuraHistorialLocales||[]).filter(h=>parseInt(h.userId)===parseInt(uid)&&!h.fechaFin).sort((a,b)=>(b.fechaInicio||"").localeCompare(a.fechaInicio||""));
+  const periodoActivoDe = uid => periodosActivosDe(uid)[0] || null;
   const localActualIdDe = m => {
     const activo = periodoActivoDe(m?.id);
     return activo?.localId ? parseInt(activo.localId) : (m?.localId ? parseInt(m.localId) : null);
   };
+  const localesActivosDe = m => {const ids=periodosActivosDe(m?.id).map(h=>Number(h.localId)).filter(Boolean);return ids.length?Array.from(new Set(ids)):(m?.localId?[Number(m.localId)]:[]);};
   const encargadasDeLocal = localId => encargadasEquipo.filter(e => (data.encargadoLocales||[]).some(x=>parseInt(x.userId)===parseInt(e.id)&&parseInt(x.localId)===parseInt(localId)) && coincideBusqueda(e)).sort((a,b)=>(a.nombre||"").localeCompare(b.nombre||""));
-  const manicurasDeLocal = localId => manicuras.filter(m=>m.activo&&parseInt(localActualIdDe(m))===parseInt(localId)&&coincideBusqueda(m)).sort((a,b)=>(a.nombre||"").localeCompare(b.nombre||""));
+  const manicurasDeLocal = localId => manicuras.filter(m=>m.activo&&localesActivosDe(m).some(id=>Number(id)===Number(localId))&&coincideBusqueda(m)).sort((a,b)=>(a.nombre||"").localeCompare(b.nombre||""));
   const inactivasEquipo = manicuras.filter(m=>!m.activo&&coincideBusqueda(m)).sort((a,b)=>(a.nombre||"").localeCompare(b.nombre||""));
   const candidatasDisponiblesEquipo = (data.reclutamientoCandidatas||[]).filter(c=>c.estado==="disponible"&&c.puesto==="manicura"&&(!queryEquipo||normalizeSearch(`${c.nombre||""} ${c.email||""}`).includes(queryEquipo))).sort((a,b)=>(a.nombre||"").localeCompare(b.nombre||""));
   const abrirIncorporacionCandidata = (c,destinoId) => setCandidateIncorpModal({candidata:c,destinoId:Number(destinoId),fechaInicio:hoy,usuario:String(c.email||"").split("@")[0].replace(/[^a-zA-Z0-9._-]/g,"").toLowerCase(),email:c.email||"",password:"niki123",tipoRelacion:"a_resolver"});
@@ -4702,9 +4903,19 @@ function ABMManicuras({ data, setData, reloadData, user }) {
     {modal&&<Modal title={modal==="new"?"Nueva manicura":"Editar manicura"} onClose={()=>setModal(null)} width={780}>
       <div className="niki-config-tabs" style={{marginBottom:18,borderBottom:"1px solid #eee",paddingBottom:10}}><button style={tabStyle(modalTab==="general")} onClick={()=>setModalTab("general")}>Datos generales</button><button style={tabStyle(modalTab==="antiguedad")} onClick={()=>setModalTab("antiguedad")}>Antigüedad y locales</button><button style={tabStyle(modalTab==="laboral")} onClick={()=>setModalTab("laboral")}>Datos laborales y bancarios</button><button style={tabStyle(modalTab==="documentacion")} onClick={()=>setModalTab("documentacion")}>Documentación</button></div>
       {modalTab==="general"?<div style={{display:"flex",flexDirection:"column",gap:14}}><ModalInput label="Nombre completo" value={form.nombre||""} onChange={v=>setForm(f=>({...f,nombre:v}))}/><ModalInput label="Usuario" value={form.usuario||""} onChange={v=>setForm(f=>({...f,usuario:v}))}/><ModalInput label="Email" type="email" value={form.email||""} onChange={v=>setForm(f=>({...f,email:v}))}/><div className="niki-mobile-one-column" style={{display:"grid",gridTemplateColumns:"minmax(120px,.45fr) 1fr",gap:12}}><ModalInput label="Código de área" value={form.telefonoCodigoArea||""} onChange={v=>setForm(f=>({...f,telefonoCodigoArea:onlyDigits(v).slice(0,4)}))}/><ModalInput label="Número de teléfono" value={form.telefonoNumero||""} onChange={v=>setForm(f=>({...f,telefonoNumero:onlyDigits(v).slice(0,8)}))}/></div><ModalInputWithHelp label="Código externo AgendaPro" value={form.codigoExterno||""} onChange={v=>setForm(f=>({...f,codigoExterno:v}))} help="Vincula la manicura con AgendaPro/Qlik."/><div style={{borderTop:"1px dashed #eee",paddingTop:14}}><p style={{margin:"0 0 10px",fontSize:13,color:"#888"}}>{modal==="edit"?"Dejá en blanco para no cambiar la contraseña":"Contraseña"}</p><div className="niki-mobile-one-column" style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12}}><ModalInput label={modal==="edit"?"Nueva contraseña":"Contraseña"} type="password" value={form.password||""} onChange={v=>setForm(f=>({...f,password:v}))}/><ModalInput label="Repetir contraseña" type="password" value={form.password2||""} onChange={v=>setForm(f=>({...f,password2:v}))}/></div></div><div style={{background:COLORS.infoLight,color:COLORS.info,borderRadius:10,padding:"10px 12px",fontSize:12}}>El local y el estado actual se determinan desde la solapa <strong>Antigüedad y locales</strong>.</div></div>:modalTab==="antiguedad"?
-      <div><div style={{display:"flex",justifyContent:"space-between",alignItems:"center",gap:12,marginBottom:12}}><div><h3 style={{margin:0,fontSize:15}}>Historial por local</h3><p style={{margin:"3px 0 0",fontSize:12,color:"var(--color-text-secondary)"}}>Debe existir un único período abierto para que la manicura quede activa.</p></div><Btn onClick={addHistorial} size="sm">+ Agregar período</Btn></div><div style={{overflowX:"auto",border:"1px solid rgba(120,120,120,0.16)",borderRadius:12}}><div className="niki-history-table" style={{minWidth:760}}><div className="niki-history-header" style={{display:"grid",gridTemplateColumns:"1.25fr 130px 130px 150px 1.2fr 44px",gap:8,padding:"9px 10px",background:"var(--color-background-secondary)",fontSize:11,fontWeight:700,textTransform:"uppercase"}}><span>Local</span><span>Fecha inicio</span><span>Fecha fin</span><span>Motivo</span><span>Observación</span><span></span></div>{historialDraft.length===0?<p style={{padding:16,textAlign:"center",fontSize:13,color:"var(--color-text-secondary)"}}>Sin períodos cargados.</p>:historialDraft.map(r=>{const key=r.id||r.tempId;return <div className="niki-history-row" key={key} style={{display:"grid",gridTemplateColumns:"1.25fr 130px 130px 150px 1.2fr 44px",gap:8,padding:"9px 10px",borderTop:"1px solid rgba(120,120,120,0.12)",alignItems:"center",background:!r.fechaFin?COLORS.successLight:"#fff"}}><select value={r.localId||""} onChange={e=>updateHistorialDraft(key,"localId",e.target.value)} style={{border:"1px solid #ddd",borderRadius:7,padding:"7px 8px",fontSize:12}}>{localesPermitidos.map(l=><option key={l.id} value={l.id}>{l.nombre}</option>)}</select><input type="date" value={r.fechaInicio||""} onChange={e=>updateHistorialDraft(key,"fechaInicio",e.target.value)} style={{border:"1px solid #ddd",borderRadius:7,padding:"7px 8px",fontSize:12}}/><input type="date" value={r.fechaFin||""} onChange={e=>{updateHistorialDraft(key,"fechaFin",e.target.value);if(!e.target.value)updateHistorialDraft(key,"motivoFin","");}} style={{border:"1px solid #ddd",borderRadius:7,padding:"7px 8px",fontSize:12}}/><select value={r.motivoFin||""} disabled={!r.fechaFin} onChange={e=>updateHistorialDraft(key,"motivoFin",e.target.value)} style={{border:"1px solid #ddd",borderRadius:7,padding:"7px 8px",fontSize:12,background:!r.fechaFin?"#f4f4f4":"#fff"}}><option value="">{r.fechaFin?"Seleccionar":"Período activo"}</option>{motivosFin.map(x=><option key={x}>{x}</option>)}</select><input value={r.observacion||""} onChange={e=>updateHistorialDraft(key,"observacion",e.target.value)} placeholder="Opcional" style={{border:"1px solid #ddd",borderRadius:7,padding:"7px 8px",fontSize:12}}/><button onClick={()=>removeHistorialDraft(key)} title="Eliminar período" style={{border:"none",background:COLORS.dangerLight,color:COLORS.danger,borderRadius:7,width:34,height:34,cursor:"pointer"}}>×</button></div>})}</div></div></div>:modalTab==="laboral"?<div style={{display:"flex",flexDirection:"column",gap:14}}><ModalInput label="Alias o CBU bancario" value={form.datoBancario||""} onChange={v=>setForm(f=>({...f,datoBancario:v}))}/><ModalSelect label="Tipo de relación" value={form.tipoRelacion||"a_resolver"} onChange={v=>setForm(f=>({...f,tipoRelacion:v}))}><option value="monotributista">Monotributista</option><option value="dependencia">Relación de Dependencia</option><option value="a_resolver">A resolver</option></ModalSelect></div>:<LegajoDocumentosPanel actor={user} userId={form.id} documentos={documentosPersona} onReload={reloadData} currentPhotoUrl={form.fotoPerfilUrl||""}/>}
+      <div><div style={{display:"flex",justifyContent:"space-between",alignItems:"center",gap:12,marginBottom:12}}><div><h3 style={{margin:0,fontSize:15}}>Historial por local</h3><p style={{margin:"3px 0 0",fontSize:12,color:"var(--color-text-secondary)"}}>Puede haber más de un período activo siempre que correspondan a sucursales distintas.</p></div><Btn onClick={addHistorial} size="sm">+ Agregar período</Btn></div><div style={{overflowX:"auto",border:"1px solid rgba(120,120,120,0.16)",borderRadius:12}}><div className="niki-history-table" style={{minWidth:760}}><div className="niki-history-header" style={{display:"grid",gridTemplateColumns:"1.25fr 130px 130px 150px 1.2fr 44px",gap:8,padding:"9px 10px",background:"var(--color-background-secondary)",fontSize:11,fontWeight:700,textTransform:"uppercase"}}><span>Local</span><span>Fecha inicio</span><span>Fecha fin</span><span>Motivo</span><span>Observación</span><span></span></div>{historialDraft.length===0?<p style={{padding:16,textAlign:"center",fontSize:13,color:"var(--color-text-secondary)"}}>Sin períodos cargados.</p>:historialDraft.map(r=>{const key=r.id||r.tempId;return <div className="niki-history-row" key={key} style={{display:"grid",gridTemplateColumns:"1.25fr 130px 130px 150px 1.2fr 44px",gap:8,padding:"9px 10px",borderTop:"1px solid rgba(120,120,120,0.12)",alignItems:"center",background:!r.fechaFin?COLORS.successLight:"#fff"}}><select value={r.localId||""} onChange={e=>updateHistorialDraft(key,"localId",e.target.value)} style={{border:"1px solid #ddd",borderRadius:7,padding:"7px 8px",fontSize:12}}>{localesPermitidos.map(l=><option key={l.id} value={l.id}>{l.nombre}</option>)}</select><input type="date" value={r.fechaInicio||""} onChange={e=>updateHistorialDraft(key,"fechaInicio",e.target.value)} style={{border:"1px solid #ddd",borderRadius:7,padding:"7px 8px",fontSize:12}}/><input type="date" value={r.fechaFin||""} onChange={e=>{updateHistorialDraft(key,"fechaFin",e.target.value);if(!e.target.value)updateHistorialDraft(key,"motivoFin","");}} style={{border:"1px solid #ddd",borderRadius:7,padding:"7px 8px",fontSize:12}}/><select value={r.motivoFin||""} disabled={!r.fechaFin} onChange={e=>updateHistorialDraft(key,"motivoFin",e.target.value)} style={{border:"1px solid #ddd",borderRadius:7,padding:"7px 8px",fontSize:12,background:!r.fechaFin?"#f4f4f4":"#fff"}}><option value="">{r.fechaFin?"Seleccionar":"Período activo"}</option>{motivosFin.map(x=><option key={x}>{x}</option>)}</select><input value={r.observacion||""} onChange={e=>updateHistorialDraft(key,"observacion",e.target.value)} placeholder="Opcional" style={{border:"1px solid #ddd",borderRadius:7,padding:"7px 8px",fontSize:12}}/><button onClick={()=>removeHistorialDraft(key)} title="Eliminar período" style={{border:"none",background:COLORS.dangerLight,color:COLORS.danger,borderRadius:7,width:34,height:34,cursor:"pointer"}}>×</button></div>})}</div></div></div>:modalTab==="laboral"?<div style={{display:"flex",flexDirection:"column",gap:14}}><ModalInput label="Alias o CBU bancario" value={form.datoBancario||""} onChange={v=>setForm(f=>({...f,datoBancario:v}))}/><ModalSelect label="Tipo de relación" value={form.tipoRelacion||"a_resolver"} onChange={v=>setForm(f=>({...f,tipoRelacion:v}))}><option value="monotributista">Monotributista</option><option value="dependencia">Relación de Dependencia</option><option value="a_resolver">A resolver</option></ModalSelect></div>:<LegajoDocumentosPanel actor={user} userId={form.id} documentos={documentosPersona} onReload={reloadData} currentPhotoUrl={form.fotoPerfilUrl||""}/>}
       {formErr&&<p style={{margin:"14px 0 0",fontSize:13,color:COLORS.danger,background:COLORS.dangerLight,padding:"8px 12px",borderRadius:8}}>{formErr}</p>}<div style={{display:"flex",gap:8,marginTop:18,flexWrap:"wrap"}}><Btn onClick={save} disabled={saving} style={{flex:1,justifyContent:"center"}}>{saving?"Guardando...":"Guardar"}</Btn><Btn onClick={()=>setModal(null)} variant="secondary" style={{flex:1,justifyContent:"center"}}>Cancelar</Btn></div>
     </Modal>}
+    <ConfirmDialog
+      config={multiLocalConfirm ? {
+        title:"Manicura asignada a varios locales",
+        message:`Esta manicura quedará activa simultáneamente en ${multiLocalConfirm.cantidad} sucursales: ${multiLocalConfirm.nombres.join(", ")}. Esto es válido, pero revisá que la asignación sea intencional.`,
+        confirmText:"Guardar igualmente",
+        variant:"primary"
+      } : null}
+      onCancel={()=>setMultiLocalConfirm(null)}
+      onConfirm={()=>{ setMultiLocalConfirm(null); void save(true); }}
+    />
   </div>;
 }
 
@@ -5115,71 +5326,49 @@ function AsistenciaDiaria({ data, setData, reloadData, user }) {
     }
   }, [filtroLocal, localesVisibles]);
 
-  const getA = uid => data.asistencias.find(a=>a.userId===uid&&a.fecha===fecha);
+  const getA = (uid, localId) => (data.asistencias||[]).find(a=>registroCoincideLocal(data,a,uid,fecha,localId));
   const estadoColor = {presente:"success",tarde:"amber",ausente:"danger"};
   const estadoLabel = {presente:"✓ Presente",tarde:"⏰ Tarde",ausente:"✗ Ausente"};
 
-  const manicurasConHorario = useMemo(() => data.users.filter(u => {
-    if (u.rol!=="manicura"||!u.activo) return false;
-    if (user.rol === "encargada" && !allowedLocalIds.includes(u.localId)) return false;
-    if (filtroLocal !== "todos" && u.localId !== parseInt(filtroLocal)) return false;
-    const h = data.horarios.find(h=>h.userId===u.id&&h.fecha===fecha);
-    return h&&h.trabaja&&h.entrada&&h.salida;
-  }).sort((a,b)=>{
-    const la=data.locales.find(l=>l.id===a.localId)?.nombre||"";
-    const lb=data.locales.find(l=>l.id===b.localId)?.nombre||"";
-    return la.localeCompare(lb) || a.nombre.localeCompare(b.nombre);
-  }), [data.users, data.horarios, data.locales, fecha, user.rol, allowedLocalIds, filtroLocal]);
+  const jornadasConHorario = useMemo(() => (data.horarios||[]).filter(h => h.fecha===fecha&&h.trabaja&&h.entrada&&h.salida).map(h=>{
+    const m=data.users.find(u=>Number(u.id)===Number(h.userId)&&u.rol==="manicura"&&u.activo);
+    if(!m)return null;
+    const lid=h.localId ?? getManicuraLocalIdForDate(data,m.id,fecha);
+    if(!lid)return null;
+    if(!isAdminLikeRole(user.rol)&&!allowedLocalIds.includes(Number(lid)))return null;
+    if(filtroLocal!=="todos"&&Number(lid)!==Number(filtroLocal))return null;
+    return { ...m, jornadaLocalId:Number(lid), horario:h };
+  }).filter(Boolean).sort((a,b)=>{
+    const la=data.locales.find(l=>Number(l.id)===Number(a.jornadaLocalId))?.nombre||"";
+    const lb=data.locales.find(l=>Number(l.id)===Number(b.jornadaLocalId))?.nombre||"";
+    return la.localeCompare(lb)||(a.nombre||"").localeCompare(b.nombre||"");
+  }),[data.horarios,data.users,data.locales,data.manicuraHistorialLocales,fecha,user.rol,allowedLocalIds,filtroLocal]);
 
-  const gruposPorLocal = useMemo(() => {
-    const grupos = new Map();
-    manicurasConHorario.forEach(m => {
-      const local = data.locales.find(l=>l.id===m.localId) || { id: "sin", nombre: "Sin local", direccion: "" };
-      if (!grupos.has(local.id)) grupos.set(local.id, { local, manicuras: [] });
-      grupos.get(local.id).manicuras.push(m);
-    });
-    return Array.from(grupos.values()).sort((a,b)=>(a.local.nombre||"").localeCompare(b.local.nombre||""));
-  }, [manicurasConHorario, data.locales]);
+  const gruposPorLocal = useMemo(()=>{const grupos=new Map();jornadasConHorario.forEach(m=>{const local=data.locales.find(l=>Number(l.id)===Number(m.jornadaLocalId))||{id:m.jornadaLocalId,nombre:"Sin local"};if(!grupos.has(local.id))grupos.set(local.id,{local,manicuras:[]});grupos.get(local.id).manicuras.push(m);});return Array.from(grupos.values()).sort((a,b)=>(a.local.nombre||"").localeCompare(b.local.nombre||""));},[jornadasConHorario,data.locales]);
 
-  const resumenLocal = (manicuras) => manicuras.reduce((acc,m)=>{
-    const a=getA(m.id);
-    if (!a) acc.pendientes += 1;
-    else if (a.estado === "presente") acc.presentes += 1;
-    else if (a.estado === "tarde") acc.tardes += 1;
-    else if (a.estado === "ausente") acc.ausentes += 1;
-    return acc;
-  }, { presentes:0, tardes:0, ausentes:0, pendientes:0 });
+  const resumenLocal = (manicuras) => manicuras.reduce((acc,m)=>{const a=getA(m.id,m.jornadaLocalId);if(!a)acc.pendientes++;else if(a.estado==="presente")acc.presentes++;else if(a.estado==="tarde")acc.tardes++;else if(a.estado==="ausente")acc.ausentes++;return acc;},{presentes:0,tardes:0,ausentes:0,pendientes:0});
 
-  const setA = async (uid, datos) => {
-    const payload = {user_id:uid,fecha,estado:datos.estado,entrada_real:datos.entradaReal||null,salida_real:datos.salidaReal||null,motivo:datos.motivo||null,certificado:datos.certificado||false,tipo_doc:datos.tipoDoc||null};
-    const rows = await api.upsertAsistencia(payload);
-    const saved = normalizeAsistencia(Array.isArray(rows) ? rows[0] : rows || payload);
-    setData(prev => ({ ...prev, asistencias:[...(prev?.asistencias || []).filter(a => !(parseInt(a.userId) === parseInt(uid) && a.fecha === fecha)), saved] }));
-    if (datos.estado === "ausente") {
-      const manicura = data.users.find(u=>u.id===uid);
-      const h = data.horarios.find(x=>x.userId===uid&&x.fecha===fecha&&x.trabaja&&x.entrada&&x.salida);
-      const yaBloqueado = (data.agendaBloqueos||[]).some(b=>b.userId===uid&&b.fecha===fecha&&b.tipo==="agenda_bloqueada");
-      if (h && manicura && !yaBloqueado && window.confirm("¿Querés bloquear también la agenda de esta manicura para este día?")) {
-        const blockRows = await api.createAgendaBloqueo({ fecha, local_id:manicura.localId, user_id:uid, inicio:h.entrada, fin:h.salida, tipo:"agenda_bloqueada", motivo:"Agenda bloqueada por inasistencia", creado_por_user_id:null });
-        const block = normalizeAgendaBloqueo(Array.isArray(blockRows) ? blockRows[0] : blockRows);
-        setData(prev => ({ ...prev, agendaBloqueos:[...(prev?.agendaBloqueos || []).filter(b => !(parseInt(b.userId) === parseInt(uid) && b.fecha === fecha && b.tipo === "agenda_bloqueada")), block] }));
+  const setA = async (uid, localId, datos) => {
+    const payload={user_id:uid,local_id:Number(localId),fecha,estado:datos.estado,entrada_real:datos.entradaReal||null,salida_real:datos.salidaReal||null,motivo:datos.motivo||null,certificado:datos.certificado||false,tipo_doc:datos.tipoDoc||null};
+    const rows=await api.upsertAsistencia(payload);const saved=normalizeAsistencia(Array.isArray(rows)?rows[0]:rows||payload);
+    setData(prev=>({...prev,asistencias:[...(prev?.asistencias||[]).filter(a=>!registroCoincideLocal(prev,a,uid,fecha,localId)),saved]}));
+    if(datos.estado==="ausente"){
+      const h=(data.horarios||[]).find(x=>registroCoincideLocal(data,x,uid,fecha,localId)&&x.trabaja&&x.entrada&&x.salida);
+      const yaBloqueado=(data.agendaBloqueos||[]).some(b=>Number(b.userId)===Number(uid)&&Number(b.localId)===Number(localId)&&b.fecha===fecha&&b.tipo==="agenda_bloqueada");
+      if(h&&!yaBloqueado){
+        const ok=await new Promise(resolve=>{notifyToast({title:"Inasistencia registrada",message:"La asistencia quedó registrada. Si también necesitás bloquear su agenda, hacelo desde Agenda para evitar afectar otra sucursal.",type:"warning"});resolve(false);});
       }
     }
   };
-  const limpiar = async (uid) => {
-    const anterior = (data.asistencias || []).find(a => parseInt(a.userId) === parseInt(uid) && a.fecha === fecha);
-    setData(prev => ({ ...prev, asistencias:(prev?.asistencias || []).filter(a => !(parseInt(a.userId) === parseInt(uid) && a.fecha === fecha)) }));
-    try { await api.deleteAsistencia(uid,fecha); }
-    catch (err) {
-      if (anterior) setData(prev => ({ ...prev, asistencias:[...(prev?.asistencias || []), anterior] }));
-      notifyToast("No se pudo limpiar la asistencia. Se restauró el dato anterior.", "error");
-      throw err;
-    }
+  const limpiar = async (uid, localId) => {
+    const anterior=(data.asistencias||[]).find(a=>registroCoincideLocal(data,a,uid,fecha,localId));
+    setData(prev=>({...prev,asistencias:(prev?.asistencias||[]).filter(a=>!registroCoincideLocal(prev,a,uid,fecha,localId))}));
+    try{await api.deleteAsistencia(uid,localId,fecha);}catch(err){if(anterior)setData(prev=>({...prev,asistencias:[...(prev?.asistencias||[]),anterior]}));notifyToast("No se pudo limpiar la asistencia. Se restauró el dato anterior.","error");throw err;}
   };
 
   const renderManicura = (m) => {
-    const h=data.horarios.find(hh=>hh.userId===m.id&&hh.fecha===fecha);
-    const a=getA(m.id);
+    const h=m.horario || data.horarios.find(hh=>registroCoincideLocal(data,hh,m.id,fecha,m.jornadaLocalId));
+    const a=getA(m.id,m.jornadaLocalId);
     return <Card key={m.id} style={{ padding:"0.85rem 1rem",borderColor:a?.estado?"rgba(120,120,120,0.18)":"rgba(120,120,120,0.14)" }}>
       <div style={{ display:"flex",alignItems:"center",gap:12,flexWrap:"wrap" }}>
         <Avatar nombre={m.nombre}/>
@@ -5190,10 +5379,10 @@ function AsistenciaDiaria({ data, setData, reloadData, user }) {
         </div>
         {a?.estado ? <Badge color={estadoColor[a.estado]}>{estadoLabel[a.estado]}</Badge> : <Badge color="gray">Pendiente</Badge>}
         <div style={{ display:"flex",gap:6,flexWrap:"wrap" }}>
-          <Btn onClick={()=>setA(m.id,{estado:"presente"})} variant="success" size="sm">✓</Btn>
-          <Btn onClick={()=>{ const h2=data.horarios.find(h=>h.userId===m.id&&h.fecha===fecha); const a2=getA(m.id); setFormTarde({uid:m.id,entrada:a2?.entradaReal||h2?.entrada||"",salida:a2?.salidaReal||h2?.salida||""}); setModal("tarde"); }} variant="secondary" size="sm">⏰ Tarde</Btn>
-          <Btn onClick={()=>{ const a2=getA(m.id); setFormAus({uid:m.id,motivo:a2?.motivo||MOTIVOS_AUSENCIA[0],certificado:a2?.certificado||false,tipoDoc:a2?.tipoDoc||""}); setModal("ausencia"); }} variant="danger" size="sm">✗ Ausente</Btn>
-          {a&&<Btn onClick={()=>limpiar(m.id)} variant="ghost" size="sm">Limpiar</Btn>}
+          <Btn onClick={()=>setA(m.id,m.jornadaLocalId,{estado:"presente"})} variant="success" size="sm">✓</Btn>
+          <Btn onClick={()=>{ const h2=m.horario; const a2=getA(m.id,m.jornadaLocalId); setFormTarde({uid:m.id,localId:m.jornadaLocalId,entrada:a2?.entradaReal||h2?.entrada||"",salida:a2?.salidaReal||h2?.salida||""}); setModal("tarde"); }} variant="secondary" size="sm">⏰ Tarde</Btn>
+          <Btn onClick={()=>{ const a2=getA(m.id,m.jornadaLocalId); setFormAus({uid:m.id,localId:m.jornadaLocalId,motivo:a2?.motivo||MOTIVOS_AUSENCIA[0],certificado:a2?.certificado||false,tipoDoc:a2?.tipoDoc||""}); setModal("ausencia"); }} variant="danger" size="sm">✗ Ausente</Btn>
+          {a&&<Btn onClick={()=>limpiar(m.id,m.jornadaLocalId)} variant="ghost" size="sm">Limpiar</Btn>}
         </div>
       </div>
     </Card>;
@@ -5215,7 +5404,7 @@ function AsistenciaDiaria({ data, setData, reloadData, user }) {
         </div>
       </div>
 
-      {manicurasConHorario.length===0
+      {jornadasConHorario.length===0
         ? <Card><p style={{ margin:0,color:"var(--color-text-secondary)",fontSize:14,textAlign:"center" }}>No hay manicuras con horario para esta fecha{filtroLocal!=="todos"?" en el local seleccionado":""}.</p></Card>
         : <div style={{ display:"flex",flexDirection:"column",gap:14 }}>
           {gruposPorLocal.map(({ local, manicuras }) => {
@@ -5245,7 +5434,7 @@ function AsistenciaDiaria({ data, setData, reloadData, user }) {
           <ModalInput label="Horario real de entrada" value={formTarde.entrada} onChange={v=>setFormTarde(f=>({...f,entrada:v}))} type="time"/>
           <ModalInput label="Horario real de salida" value={formTarde.salida} onChange={v=>setFormTarde(f=>({...f,salida:v}))} type="time"/>
           <div style={{ display:"flex",gap:8 }}>
-            <Btn onClick={async()=>{ await setA(formTarde.uid,{estado:"tarde",entradaReal:formTarde.entrada,salidaReal:formTarde.salida}); setModal(null); }} style={{ flex:1,justifyContent:"center" }}>Guardar</Btn>
+            <Btn onClick={async()=>{ await setA(formTarde.uid,formTarde.localId,{estado:"tarde",entradaReal:formTarde.entrada,salidaReal:formTarde.salida}); setModal(null); }} style={{ flex:1,justifyContent:"center" }}>Guardar</Btn>
             <Btn onClick={()=>setModal(null)} variant="secondary" style={{ flex:1,justifyContent:"center" }}>Cancelar</Btn>
           </div>
         </div>
@@ -5263,7 +5452,7 @@ function AsistenciaDiaria({ data, setData, reloadData, user }) {
             <option value="Otro">Otro</option>
           </ModalSelect>}
           <div style={{ display:"flex",gap:8 }}>
-            <Btn onClick={async()=>{ await setA(formAus.uid,{estado:"ausente",motivo:formAus.motivo,certificado:formAus.certificado,tipoDoc:formAus.tipoDoc}); setModal(null); }} style={{ flex:1,justifyContent:"center" }}>Guardar</Btn>
+            <Btn onClick={async()=>{ await setA(formAus.uid,formAus.localId,{estado:"ausente",motivo:formAus.motivo,certificado:formAus.certificado,tipoDoc:formAus.tipoDoc}); setModal(null); }} style={{ flex:1,justifyContent:"center" }}>Guardar</Btn>
             <Btn onClick={()=>setModal(null)} variant="secondary" style={{ flex:1,justifyContent:"center" }}>Cancelar</Btn>
           </div>
         </div>
@@ -6696,6 +6885,17 @@ function GarantiasServicios({ data, reloadData, user }) {
   const [err, setErr] = useState("");
   const [saving, setSaving] = useState(false);
   const [files, setFiles] = useState([]);
+  const [comisionesFuente, setComisionesFuente] = useState([]);
+  const [loadingComisionesFuente, setLoadingComisionesFuente] = useState(false);
+  const [comisionesFuenteError, setComisionesFuenteError] = useState("");
+  const [modoBusquedaOriginal, setModoBusquedaOriginal] = useState("cliente");
+  const [clienteQuery, setClienteQuery] = useState("");
+  const [clienteOpciones, setClienteOpciones] = useState([]);
+  const [clienteSeleccionado, setClienteSeleccionado] = useState("");
+  const [serviciosCliente, setServiciosCliente] = useState([]);
+  const [loadingClientes, setLoadingClientes] = useState(false);
+  const [loadingServiciosCliente, setLoadingServiciosCliente] = useState(false);
+  const [clienteSearchError, setClienteSearchError] = useState("");
   const emptyForm = () => ({
     fechaServicioOriginal: dateKey(hoy),
     localId: localFiltro !== "todos" ? parseInt(localFiltro) : (locales[0]?.id || ""),
@@ -6713,9 +6913,98 @@ function GarantiasServicios({ data, reloadData, user }) {
   });
   const [form, setForm] = useState(emptyForm());
 
-  const openNew = () => { setEditing(null); setForm(emptyForm()); setFiles([]); setErr(""); setModal(true); };
+  useEffect(() => {
+    if (!modal || modoBusquedaOriginal !== "fecha" || !form.fechaServicioOriginal || !form.localId) {
+      setComisionesFuente([]);
+      setComisionesFuenteError("");
+      setLoadingComisionesFuente(false);
+      return;
+    }
+    let alive = true;
+    setLoadingComisionesFuente(true);
+    setComisionesFuenteError("");
+    setComisionesFuente([]);
+    api.getComisionesFechaLocal(form.fechaServicioOriginal, form.localId)
+      .then(rows => {
+        if (!alive) return;
+        setComisionesFuente((rows || []).map(normalizeComision));
+      })
+      .catch(e => {
+        if (!alive) return;
+        console.error("No se pudieron cargar los servicios originales para garantía", e);
+        setComisionesFuenteError(e?.message || "No se pudieron consultar los servicios de ese día.");
+      })
+      .finally(() => { if (alive) setLoadingComisionesFuente(false); });
+    return () => { alive = false; };
+  }, [modal, modoBusquedaOriginal, form.fechaServicioOriginal, form.localId]);
+
+  useEffect(() => {
+    if (!modal || modoBusquedaOriginal !== "cliente" || !form.localId || clienteQuery.trim().length < 2 || clienteSeleccionado === clienteQuery.trim()) {
+      setClienteOpciones([]);
+      setLoadingClientes(false);
+      setClienteSearchError("");
+      return;
+    }
+    let alive = true;
+    const timer = setTimeout(() => {
+      setLoadingClientes(true);
+      setClienteSearchError("");
+      api.buscarClientesComisionesLocal(form.localId, clienteQuery.trim())
+        .then(rows => {
+          if (!alive) return;
+          const seen = new Set();
+          const nombres = [];
+          (rows || []).forEach(r => {
+            const nombre = String(r.cliente || "").trim();
+            const key = nombre.toLocaleLowerCase("es");
+            if (nombre && !seen.has(key)) { seen.add(key); nombres.push(nombre); }
+          });
+          setClienteOpciones(nombres.slice(0,20));
+        })
+        .catch(e => { if (alive) setClienteSearchError(e?.message || "No se pudieron buscar clientes."); })
+        .finally(() => { if (alive) setLoadingClientes(false); });
+    }, 280);
+    return () => { alive = false; clearTimeout(timer); };
+  }, [modal, modoBusquedaOriginal, form.localId, clienteQuery, clienteSeleccionado]);
+
+  const elegirClienteGarantia = async (cliente) => {
+    const nombre = String(cliente || "").trim();
+    if (!nombre || !form.localId) return;
+    setClienteSeleccionado(nombre);
+    setClienteQuery(nombre);
+    setClienteOpciones([]);
+    setClienteSearchError("");
+    setServiciosCliente([]);
+    setForm(f => ({ ...f, cliente:nombre, fechaServicioOriginal:"", manicuraOriginalId:"", comisionOriginalId:"", servicio:"", importeComision:"" }));
+    setLoadingServiciosCliente(true);
+    try {
+      const rows = await api.getUltimosServiciosClienteLocal(form.localId, nombre, 5);
+      setServiciosCliente((rows || []).map(normalizeComision));
+    } catch(e) {
+      setClienteSearchError(e?.message || "No se pudieron consultar los últimos servicios del cliente.");
+    } finally {
+      setLoadingServiciosCliente(false);
+    }
+  };
+
+  const resetBusquedaClienteGarantia = () => {
+    setClienteQuery("");
+    setClienteSeleccionado("");
+    setClienteOpciones([]);
+    setServiciosCliente([]);
+    setClienteSearchError("");
+    setForm(f => ({ ...f, fechaServicioOriginal:"", manicuraOriginalId:"", comisionOriginalId:"", cliente:"", servicio:"", importeComision:"" }));
+  };
+
+  const openNew = () => { setEditing(null); setModoBusquedaOriginal("cliente"); setClienteQuery(""); setClienteSeleccionado(""); setClienteOpciones([]); setServiciosCliente([]); setClienteSearchError(""); setForm(emptyForm()); setFiles([]); setErr(""); setModal(true); };
   const openEdit = g => {
     setEditing(g);
+    setModoBusquedaOriginal("fecha");
+    setClienteQuery(g.cliente || "");
+    setClienteSeleccionado("");
+    setClienteOpciones([]);
+    setServiciosCliente([]);
+    setClienteSearchError("");
     setForm({
       fechaServicioOriginal:g.fechaServicioOriginal,
       localId:g.localId || "",
@@ -6734,8 +7023,7 @@ function GarantiasServicios({ data, reloadData, user }) {
     setFiles([]); setErr(""); setModal(true);
   };
   const manicurasLocal = manicuras.filter(m=>!form.localId || m.localId===parseInt(form.localId));
-  const manicuraIdsConServicioOriginal = new Set((data.comisiones||[])
-    .filter(c => c.fechaPago === form.fechaServicioOriginal && (!form.localId || c.localId === parseInt(form.localId)))
+  const manicuraIdsConServicioOriginal = new Set((comisionesFuente||[])
     .map(c => c.userId)
     .filter(Boolean));
   const manicurasOriginalDisponibles = manicurasLocal.filter(m => manicuraIdsConServicioOriginal.has(m.id) || String(m.id) === String(form.manicuraOriginalId || ""));
@@ -6744,9 +7032,7 @@ function GarantiasServicios({ data, reloadData, user }) {
     const tieneAgenda = (data.horarios || []).some(h => h.userId === m.id && h.fecha === form.fechaReparacion && h.trabaja && h.entrada && h.salida);
     return tieneAgenda || String(m.id) === String(form.manicuraReparacionId || "");
   });
-  const comisionesOriginales = (data.comisiones||[]).filter(c =>
-    c.fechaPago === form.fechaServicioOriginal &&
-    (!form.localId || c.localId === parseInt(form.localId)) &&
+  const comisionesOriginales = (comisionesFuente||[]).filter(c =>
     (!form.manicuraOriginalId || c.userId === parseInt(form.manicuraOriginalId))
   );
   const serviciosActivosGarantia = (data.agendaServicios || []).filter(s=>s.activo !== false);
@@ -6770,19 +7056,21 @@ function GarantiasServicios({ data, reloadData, user }) {
   const totalServiciosReparacion = (form.serviciosReparacion || []).reduce((acc,row)=>acc + calcServicioGarantia(row).comision, 0);
   const addServicioReparacion = () => setForm(f=>({ ...f, servicioReparacionMismo:false, serviciosReparacion:[...(f.serviciosReparacion || []), { servicioId:"", cantidad:1 }] }));
 
-  const selectComision = id => {
-    const c = (data.comisiones||[]).find(x=>String(x.id)===String(id));
-    if (!c) { setForm(f=>({...f,comisionOriginalId:"",cliente:"",servicio:"",importeComision:""})); return; }
+  const aplicarComisionOriginal = c => {
+    if (!c) { setForm(f=>({...f,comisionOriginalId:"",servicio:"",importeComision:""})); return; }
     setForm(f=>({
       ...f,
+      fechaServicioOriginal:c.fechaPago || f.fechaServicioOriginal,
       comisionOriginalId:c.id,
       localId:c.localId || f.localId,
       manicuraOriginalId:c.userId || f.manicuraOriginalId,
-      cliente:c.cliente || "",
+      cliente:c.cliente || f.cliente || "",
       servicio:c.servicio || "",
       importeComision:String(Math.abs(c.comision || 0)),
     }));
   };
+  const selectComision = id => aplicarComisionOriginal((comisionesFuente||[]).find(x=>String(x.id)===String(id)));
+  const selectComisionCliente = id => aplicarComisionOriginal((serviciosCliente||[]).find(x=>String(x.id)===String(id)));
   const save = async () => {
     setErr("");
     if (!form.fechaServicioOriginal || !form.localId || !form.manicuraOriginalId || !form.cliente || !form.servicio || !form.fechaReparacion || !form.manicuraReparacionId) { setErr("Completá los datos obligatorios y seleccioná el servicio original."); return; }
@@ -6861,19 +7149,36 @@ function GarantiasServicios({ data, reloadData, user }) {
     </Card>
     {modal&&<Modal title={editing?"Editar garantía":"Nueva garantía"} onClose={()=>setModal(false)} width={620}>
       <div style={{ display:"flex",flexDirection:"column",gap:13 }}>
-        <div style={{ display:"grid",gridTemplateColumns:"1fr 1fr",gap:12 }}>
-          <ModalInput label="Fecha servicio original" type="date" value={form.fechaServicioOriginal} onChange={v=>setForm(f=>({...f,fechaServicioOriginal:v,comisionOriginalId:"",cliente:"",servicio:"",importeComision:""}))}/>
-          <div><label style={{ fontSize:13,fontWeight:500,color:"#555",display:"block",marginBottom:6 }}>Local</label><select value={form.localId||""} onChange={e=>setForm(f=>({...f,localId:e.target.value,manicuraOriginalId:"",comisionOriginalId:"",cliente:"",servicio:"",importeComision:""}))} style={{ width:"100%",border:"1.5px solid #e0e0e0",borderRadius:8,padding:"9px 12px",fontSize:14,background:"#fafafa" }}><option value="">Seleccionar...</option>{locales.map(l=><option key={l.id} value={l.id}>{l.nombre}</option>)}</select></div>
+        <div style={{ display:"flex",gap:6,padding:4,background:"var(--color-background-secondary)",borderRadius:10,alignSelf:"flex-start" }}>
+          <button type="button" onClick={()=>{setModoBusquedaOriginal("cliente");resetBusquedaClienteGarantia();}} style={{ border:"none",borderRadius:8,padding:"7px 12px",fontSize:12,fontWeight:700,cursor:"pointer",background:modoBusquedaOriginal==="cliente"?COLORS.pink:"transparent",color:modoBusquedaOriginal==="cliente"?"#fff":COLORS.pinkDark }}>Buscar por cliente</button>
+          <button type="button" onClick={()=>{setModoBusquedaOriginal("fecha");setClienteOpciones([]);setServiciosCliente([]);setClienteSeleccionado("");}} style={{ border:"none",borderRadius:8,padding:"7px 12px",fontSize:12,fontWeight:700,cursor:"pointer",background:modoBusquedaOriginal==="fecha"?COLORS.pink:"transparent",color:modoBusquedaOriginal==="fecha"?"#fff":COLORS.pinkDark }}>Buscar por fecha y manicura</button>
         </div>
-        <div style={{ display:"grid",gridTemplateColumns:"1fr 1fr",gap:12 }}>
-          <div><label style={{ fontSize:13,fontWeight:500,color:"#555",display:"block",marginBottom:6 }}>Manicura servicio original</label><select value={form.manicuraOriginalId||""} onChange={e=>setForm(f=>({...f,manicuraOriginalId:e.target.value,comisionOriginalId:"",cliente:"",servicio:"",importeComision:""}))} style={{ width:"100%",border:"1.5px solid #e0e0e0",borderRadius:8,padding:"9px 12px",fontSize:14,background:"#fafafa" }}><option value="">Seleccionar...</option>{manicurasOriginalDisponibles.map(m=><option key={m.id} value={m.id}>{m.nombre}</option>)}</select>{form.fechaServicioOriginal && form.localId && manicurasOriginalDisponibles.length===0 && <p style={{ margin:"4px 0 0",fontSize:11,color:"var(--color-text-secondary)" }}>No hay manicuras con servicios registrados ese día.</p>}</div>
-          <div><label style={{ fontSize:13,fontWeight:500,color:"#555",display:"block",marginBottom:6 }}>Servicio realizado</label><select value={form.comisionOriginalId||""} onChange={e=>selectComision(e.target.value)} style={{ width:"100%",border:"1.5px solid #e0e0e0",borderRadius:8,padding:"9px 12px",fontSize:14,background:"#fafafa" }}><option value="">Seleccionar servicio...</option>{comisionesOriginales.map(c=><option key={c.id} value={c.id}>{c.servicio} · {c.cliente} · {fmtMoney(c.comision)}</option>)}</select></div>
-        </div>
-        <div style={{ display:"grid",gridTemplateColumns:"1fr 1fr 150px",gap:12 }}>
-          <ModalInput label="Cliente" value={form.cliente} onChange={()=>{}}/>
-          <ModalInput label="Servicio original" value={form.servicio} onChange={()=>{}}/>
+        {modoBusquedaOriginal==="cliente" ? <>
+          <div style={{ display:"grid",gridTemplateColumns:"220px minmax(0,1fr)",gap:12,alignItems:"end" }}>
+            <div><label style={{ fontSize:13,fontWeight:500,color:"#555",display:"block",marginBottom:6 }}>Local</label><select value={form.localId||""} onChange={e=>{setForm(f=>({...f,localId:e.target.value}));setClienteQuery("");setClienteSeleccionado("");setClienteOpciones([]);setServiciosCliente([]);setClienteSearchError("");}} style={{ width:"100%",border:"1.5px solid #e0e0e0",borderRadius:8,padding:"9px 12px",fontSize:14,background:"#fafafa" }}><option value="">Seleccionar...</option>{locales.map(l=><option key={l.id} value={l.id}>{l.nombre}</option>)}</select></div>
+            <div style={{ position:"relative" }}><label style={{ fontSize:13,fontWeight:500,color:"#555",display:"block",marginBottom:6 }}>Cliente</label><input value={clienteQuery} disabled={!form.localId} onChange={e=>{setClienteQuery(e.target.value);setClienteSeleccionado("");setServiciosCliente([]);setForm(f=>({...f,cliente:"",fechaServicioOriginal:"",manicuraOriginalId:"",comisionOriginalId:"",servicio:"",importeComision:""}));}} placeholder={form.localId?"Escribí al menos 2 letras...":"Primero seleccioná el local"} style={{ width:"100%",boxSizing:"border-box",border:"1.5px solid #e0e0e0",borderRadius:8,padding:"9px 12px",fontSize:14,background:form.localId?"#fafafa":"#f3f3f3" }}/>{loadingClientes&&<span style={{ position:"absolute",right:10,bottom:10,fontSize:11,color:"var(--color-text-secondary)" }}>Buscando...</span>}{clienteOpciones.length>0&&<div style={{ position:"absolute",left:0,right:0,top:"100%",marginTop:4,zIndex:30,background:"#fff",border:"1px solid #ddd",borderRadius:10,boxShadow:"0 8px 24px rgba(0,0,0,.14)",maxHeight:220,overflowY:"auto" }}>{clienteOpciones.map(nombre=><button type="button" key={nombre} onClick={()=>elegirClienteGarantia(nombre)} style={{ display:"block",width:"100%",textAlign:"left",border:"none",borderBottom:"1px solid #f2f2f2",background:"#fff",padding:"9px 11px",fontSize:13,cursor:"pointer",color:"#222" }}>{nombre}</button>)}</div>}</div>
+          </div>
+          {clienteSeleccionado && <div style={{ border:"1px solid rgba(120,120,120,.16)",borderRadius:10,padding:10 }}>
+            <div style={{ display:"flex",alignItems:"center",justifyContent:"space-between",gap:8,marginBottom:8 }}><div><p style={{ margin:0,fontSize:12,fontWeight:800,color:COLORS.pinkDark }}>Últimos servicios de {clienteSeleccionado}</p><p style={{ margin:"2px 0 0",fontSize:11,color:"var(--color-text-secondary)" }}>Se muestran hasta 5 servicios del local, del más reciente al más antiguo.</p></div>{loadingServiciosCliente&&<span style={{ fontSize:11,color:"var(--color-text-secondary)" }}>Cargando...</span>}</div>
+            {!loadingServiciosCliente && serviciosCliente.length===0 ? <p style={{ margin:0,fontSize:12,color:"var(--color-text-secondary)" }}>No encontramos servicios para este cliente en el local seleccionado.</p> : <div style={{ display:"flex",flexDirection:"column",gap:6 }}>{serviciosCliente.map(c=>{const m=data.users.find(u=>u.id===c.userId);const selected=String(form.comisionOriginalId)===String(c.id);return <button type="button" key={c.id} onClick={()=>selectComisionCliente(c.id)} style={{ width:"100%",textAlign:"left",border:selected?`1.5px solid ${COLORS.pink}`:"1px solid rgba(120,120,120,.16)",background:selected?COLORS.pinkLight:"#fff",borderRadius:9,padding:"8px 10px",cursor:"pointer",display:"grid",gridTemplateColumns:"86px minmax(0,1fr) 130px 90px",gap:8,alignItems:"center",fontFamily:"inherit" }}><span style={{ fontSize:11,fontWeight:700 }}>{(c.fechaPago||"").split("-").reverse().join("/")}</span><span style={{ minWidth:0 }}><strong style={{ display:"block",fontSize:12,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap" }}>{c.servicio||"Servicio"}</strong><span style={{ display:"block",fontSize:10,color:"var(--color-text-secondary)" }}>{m?.nombre||c.nombreManicura||"Manicura sin vincular"}</span></span><span style={{ fontSize:10,color:"var(--color-text-secondary)",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap" }}>{c.nombreLocal||""}</span><strong style={{ fontSize:11,textAlign:"right",color:COLORS.pinkDark }}>{fmtMoney(Math.abs(c.comision||0))}</strong></button>;})}</div>}
+          </div>}
+          {clienteSearchError&&<p style={{ margin:0,fontSize:11,color:COLORS.danger }}>{clienteSearchError}</p>}
+        </> : <>
+          <div style={{ display:"grid",gridTemplateColumns:"1fr 1fr",gap:12 }}>
+            <ModalInput label="Fecha servicio original" type="date" value={form.fechaServicioOriginal} onChange={v=>setForm(f=>({...f,fechaServicioOriginal:v,comisionOriginalId:"",cliente:"",servicio:"",importeComision:""}))}/>
+            <div><label style={{ fontSize:13,fontWeight:500,color:"#555",display:"block",marginBottom:6 }}>Local</label><select value={form.localId||""} onChange={e=>setForm(f=>({...f,localId:e.target.value,manicuraOriginalId:"",comisionOriginalId:"",cliente:"",servicio:"",importeComision:""}))} style={{ width:"100%",border:"1.5px solid #e0e0e0",borderRadius:8,padding:"9px 12px",fontSize:14,background:"#fafafa" }}><option value="">Seleccionar...</option>{locales.map(l=><option key={l.id} value={l.id}>{l.nombre}</option>)}</select></div>
+          </div>
+          <div style={{ display:"grid",gridTemplateColumns:"1fr 1fr",gap:12 }}>
+            <div><label style={{ fontSize:13,fontWeight:500,color:"#555",display:"block",marginBottom:6 }}>Manicura servicio original</label><select value={form.manicuraOriginalId||""} disabled={loadingComisionesFuente} onChange={e=>setForm(f=>({...f,manicuraOriginalId:e.target.value,comisionOriginalId:"",cliente:"",servicio:"",importeComision:""}))} style={{ width:"100%",border:"1.5px solid #e0e0e0",borderRadius:8,padding:"9px 12px",fontSize:14,background:loadingComisionesFuente?"#f3f3f3":"#fafafa" }}><option value="">{loadingComisionesFuente?"Buscando servicios...":"Seleccionar..."}</option>{manicurasOriginalDisponibles.map(m=><option key={m.id} value={m.id}>{m.nombre}</option>)}</select>{form.fechaServicioOriginal && form.localId && !loadingComisionesFuente && !comisionesFuenteError && manicurasOriginalDisponibles.length===0 && <p style={{ margin:"4px 0 0",fontSize:11,color:"var(--color-text-secondary)" }}>No hay manicuras con servicios registrados ese día en este local.</p>}{comisionesFuenteError && <p style={{ margin:"4px 0 0",fontSize:11,color:COLORS.danger }}>No se pudieron consultar las comisiones: {comisionesFuenteError}</p>}</div>
+            <div><label style={{ fontSize:13,fontWeight:500,color:"#555",display:"block",marginBottom:6 }}>Servicio realizado</label><select value={form.comisionOriginalId||""} disabled={loadingComisionesFuente || !form.manicuraOriginalId} onChange={e=>selectComision(e.target.value)} style={{ width:"100%",border:"1.5px solid #e0e0e0",borderRadius:8,padding:"9px 12px",fontSize:14,background:(loadingComisionesFuente||!form.manicuraOriginalId)?"#f3f3f3":"#fafafa" }}><option value="">{loadingComisionesFuente?"Buscando servicios...":"Seleccionar servicio..."}</option>{comisionesOriginales.map(c=><option key={c.id} value={c.id}>{c.servicio} · {c.cliente} · {fmtMoney(c.comision)}</option>)}</select></div>
+          </div>
+        </>}
+        {!!form.comisionOriginalId && <div style={{ display:"grid",gridTemplateColumns:"130px 1fr 1fr 150px",gap:12,background:"var(--color-background-secondary)",borderRadius:10,padding:10 }}>
+          <ModalInput label="Fecha original" type="date" value={form.fechaServicioOriginal} onChange={()=>{}} disabled/>
+          <ModalInput label="Cliente" value={form.cliente} onChange={()=>{}} disabled/>
+          <ModalInput label="Servicio original" value={form.servicio} onChange={()=>{}} disabled/>
           <ModalInput label="Importe comisión" type="text" value={form.servicioReparacionMismo ? form.importeComision : fmtMoney(totalServiciosReparacion)} onChange={v=>setForm(f=>({...f,importeComision:v}))}/>
-        </div>
+        </div>}
         <div style={{ border:"1px solid var(--color-border-tertiary)",background:"rgba(236,98,148,0.06)",borderRadius:10,padding:"8px 10px" }}>
           <div style={{ display:"flex",alignItems:"center",justifyContent:"space-between",gap:8,flexWrap:"wrap",marginBottom:6 }}>
             <label style={{ display:"inline-flex",alignItems:"center",gap:6,fontSize:12,fontWeight:700,color:COLORS.pinkDark }}><input type="checkbox" checked={form.servicioReparacionMismo !== false} onChange={e=>setForm(f=>({...f,servicioReparacionMismo:e.target.checked,serviciosReparacion:e.target.checked?[]:f.serviciosReparacion}))}/> La reparación realiza el mismo servicio</label>
@@ -7328,26 +7633,117 @@ function AdelantosManicuras({ data, reloadData, user }) {
 // ── ABM ENCARGADAS ────────────────────────────────────────────────
 function ABMEncargadas({ data, reloadData, user }) {
   const [modal,setModal]=useState(null),[form,setForm]=useState({}),[formErr,setFormErr]=useState(""),[saving,setSaving]=useState(false),[modalTab,setModalTab]=useState("general"),[historialDraft,setHistorialDraft]=useState([]);
+  const [salaryTarget,setSalaryTarget]=useState(null);
   const [filtroRol,setFiltroRol]=useState("todos"),[filtroLocal,setFiltroLocal]=useState("todos"),[filtroEstado,setFiltroEstado]=useState("activas"),[agrupacion,setAgrupacion]=useState("rol");
-  const actorEsAdmin=user.rol==="admin"; const rolesGestionables=actorEsAdmin?["admin","casa_matriz","encargada"]:["casa_matriz","encargada"];
+  const actorEsAdmin=user.rol==="admin"; const actorEsFranquiciado=user.rol==="franquiciado"; const rolesGestionables=actorEsAdmin?["admin","casa_matriz","franquiciado","encargada"]:user.rol==="casa_matriz"?["franquiciado","encargada"]:[];
   const localesDeEncargada=uid=>(data.encargadoLocales||[]).filter(x=>x.userId===uid).map(x=>x.localId);
-  const franquiciasDeCasaMatriz=uid=>(data.usuarioLocales||[]).filter(x=>x.userId===uid).map(x=>x.localId);
+  const localesDeUsuario=uid=>(data.usuarioLocales||[]).filter(x=>Number(x.userId)===Number(uid)).map(x=>Number(x.localId));
+  const franquiciasDeCasaMatriz=uid=>localesDeUsuario(uid);
   const localesGestionables=actorEsAdmin?(data.locales||[]):(data.locales||[]).filter(l=>getAssignedLocalIds(data,user).includes(l.id));
-  const franquiciasDisponibles=(data.locales||[]).filter(l=>(l.tipoLocal||l.tipo_local||"propio")==="franquicia");
-  const localesEfectivosUsuario=useCallback(u=>u.rol==="admin"?(data.locales||[]).map(l=>l.id):u.rol==="casa_matriz"?Array.from(new Set([...(data.locales||[]).filter(l=>(l.tipoLocal||l.tipo_local||"propio")==="propio").map(l=>l.id),...franquiciasDeCasaMatriz(u.id)])):localesDeEncargada(u.id),[data.locales,data.usuarioLocales,data.encargadoLocales]);
-  const usuarios=(data.users||[]).filter(u=>["admin","casa_matriz","encargada"].includes(u.rol)).filter(u=>actorEsAdmin||u.rol!=="admin");
+  const franquiciasDisponibles=localesGestionables.filter(l=>(l.tipoLocal||l.tipo_local||"propio")==="franquicia");
+  const localesEfectivosUsuario=useCallback(u=>u.rol==="admin"?(data.locales||[]).map(l=>l.id):u.rol==="casa_matriz"?Array.from(new Set([...(data.locales||[]).filter(l=>(l.tipoLocal||l.tipo_local||"propio")==="propio").map(l=>l.id),...localesDeUsuario(u.id)])):u.rol==="franquiciado"?localesDeUsuario(u.id):localesDeEncargada(u.id),[data.locales,data.usuarioLocales,data.encargadoLocales]);
+  const usuarios=(data.users||[]).filter(u=>actorEsFranquiciado?u.rol==="encargada":["admin","casa_matriz","franquiciado","encargada"].includes(u.rol)).filter(u=>actorEsAdmin||u.rol!=="admin").filter(u=>!actorEsFranquiciado||localesDeEncargada(u.id).some(id=>getAssignedLocalIds(data,user).includes(Number(id))));
   const filtrados=usuarios.filter(u=>(filtroRol==="todos"||u.rol===filtroRol)&&(filtroEstado==="todas"||(filtroEstado==="activas"?u.activo:!u.activo))&&(filtroLocal==="todos"||localesEfectivosUsuario(u).some(id=>String(id)===String(filtroLocal))));
   const grupos=useMemo(()=>{if(agrupacion==="ninguna")return[{key:"todos",label:"Todos",items:filtrados}];const map=new Map();filtrados.forEach(u=>{const keys=agrupacion==="rol"?[u.rol]:(localesEfectivosUsuario(u).length?localesEfectivosUsuario(u):["sin-local"]);keys.forEach(k=>{const label=agrupacion==="rol"?roleLabel(k):(data.locales.find(l=>l.id===k)?.nombre||"Sin sucursal asignada");if(!map.has(String(k)))map.set(String(k),{key:String(k),label,items:[]});map.get(String(k)).items.push(u);});});return Array.from(map.values()).sort((a,b)=>a.label.localeCompare(b.label));},[filtrados,agrupacion,data.locales,localesEfectivosUsuario]);
   const hoy=dateKey(new Date()), motivos=["Renuncia","Despido","Otro"];
   const openNew=()=>{setForm({nombre:"",usuario:"",email:"",telefonoCodigoArea:"",telefonoNumero:"",datoBancario:"",tipoRelacion:"a_resolver",password:"",password2:"",rol:"encargada",localIds:[]});setHistorialDraft([{tempId:`n-${Date.now()}`,fechaInicio:hoy,fechaFin:"",motivoFin:"",observacion:""}]);setModalTab("general");setFormErr("");setModal("new");};
-  const openEdit=u=>{if(!canManageUserRole(user,u.rol))return notifyToast("No tenés permiso para modificar este usuario.","warning");setForm({...u,password:"",password2:"",localIds:u.rol==="encargada"?localesDeEncargada(u.id):u.rol==="casa_matriz"?franquiciasDeCasaMatriz(u.id):[]});setHistorialDraft((data.usuarioHistorialLaboral||[]).filter(x=>x.userId===u.id).map(x=>({...x})));setModalTab("general");setFormErr("");setModal("edit");};
+  const openEdit=u=>{if(!canManageUserRole(user,u.rol))return notifyToast("No tenés permiso para modificar este usuario.","warning");setForm({...u,password:"",password2:"",localIds:u.rol==="encargada"?localesDeEncargada(u.id):["casa_matriz","franquiciado"].includes(u.rol)?localesDeUsuario(u.id):[]});setHistorialDraft((data.usuarioHistorialLaboral||[]).filter(x=>x.userId===u.id).map(x=>({...x})));setModalTab("general");setFormErr("");setModal("edit");};
   const toggleLocal=id=>setForm(f=>({...f,localIds:(f.localIds||[]).includes(id)?f.localIds.filter(x=>x!==id):[...(f.localIds||[]),id]}));
   const updHist=(key,field,value)=>setHistorialDraft(rows=>rows.map(r=>(r.id||r.tempId)===key?{...r,[field]:value}:r));
   const validateHist=()=>{if(!historialDraft.length)return "Debe existir al menos un período laboral.";for(const r of historialDraft){if(!r.fechaInicio)return "Todos los períodos deben tener fecha de inicio.";if(r.fechaFin&&r.fechaFin<r.fechaInicio)return "La fecha de fin no puede ser anterior al inicio.";if(r.fechaFin&&!r.motivoFin)return "Indicá el motivo del período cerrado.";}if(historialDraft.filter(r=>!r.fechaFin).length>1)return "No puede haber más de un período abierto.";const a=[...historialDraft].sort((x,y)=>x.fechaInicio.localeCompare(y.fechaInicio));for(let i=0;i<a.length;i++)for(let j=i+1;j<a.length;j++){if(a[i].fechaInicio<=(a[j].fechaFin||"9999-12-31")&&a[j].fechaInicio<=(a[i].fechaFin||"9999-12-31"))return "Los períodos no pueden superponerse.";}return "";};
-  const save=async()=>{setFormErr("");const usuario=normalizeUsuarioValue(form.usuario),email=normalizeEmailValue(form.email);if(!form.nombre?.trim()||!usuario)return setFormErr("Nombre y usuario son obligatorios.");if(!isValidEmail(email))return setFormErr("El email es obligatorio y debe ser válido.");if(usuarioEnUso(data.users,usuario,form.id)||emailEnUso(data.users,email,form.id))return setFormErr("El usuario o el email ya están en uso.");if(modal==="new"&&!form.password)return setFormErr("Ingresá una contraseña.");if(form.password&&form.password!==form.password2)return setFormErr("Las contraseñas no coinciden.");const te=validarTelefonoArgentino(form.telefonoCodigoArea,form.telefonoNumero);if(te){setModalTab("general");return setFormErr(te);}const be=validarDatoBancario(form.datoBancario);if(be){setModalTab("laboral");return setFormErr(be);}const he=validateHist();if(he){setModalTab("antiguedad");return setFormErr(he);}setSaving(true);try{const abierto=historialDraft.find(r=>!r.fechaFin),payload={nombre:form.nombre.trim(),usuario,email,rol:form.rol,activo:!!abierto,telefono_codigo_area:onlyDigits(form.telefonoCodigoArea)||null,telefono_numero:onlyDigits(form.telefonoNumero)||null,telefono:[onlyDigits(form.telefonoCodigoArea),onlyDigits(form.telefonoNumero)].join("")||null,dato_bancario:String(form.datoBancario||"").trim()||null,tipo_relacion:form.tipoRelacion||"a_resolver"};let uid=form.id;if(modal==="new"){const c=await api.createUser({...payload,password:form.password});uid=c?.[0]?.id;if(!uid)throw new Error("No se obtuvo el usuario creado.");}else{await api.updateUser(uid,payload);if(form.password)await api.changePassword({mode:"admin_set",actor_id:user.id,session_token:user.sessionToken,target_user_id:uid,new_password:form.password});}await api.setEncargadoLocales(uid,form.rol==="encargada"?(form.localIds||[]):[]);await api.setUsuarioLocales(uid,form.rol==="casa_matriz"?(form.localIds||[]):[]);const old=(data.usuarioHistorialLaboral||[]).filter(x=>x.userId===uid),ids=new Set(historialDraft.filter(x=>x.id).map(x=>x.id));for(const x of old)if(!ids.has(x.id))await api.deleteUsuarioHistorialLaboral(x.id);for(const r of historialDraft){const p={user_id:uid,fecha_inicio:r.fechaInicio,fecha_fin:r.fechaFin||null,motivo_fin:r.fechaFin?r.motivoFin||null:null,observacion:r.observacion?.trim()||null};if(r.id)await api.updateUsuarioHistorialLaboral(r.id,p);else await api.createUsuarioHistorialLaboral(p);}if(modal==="new"){try{await api.enviarInvitacionUsuario({actor_id:user.id,session_token:user.sessionToken,target_user_id:uid});notifyToast(`Usuario creado e invitación enviada a ${email}.`,"success",{title:"Invitación enviada"});}catch(invErr){notifyToast("El usuario se creó, pero no se pudo enviar la invitación: "+(invErr.message||invErr),"warning",{title:"Invitación pendiente"});}}else{notifyToast("Usuario guardado correctamente.","success");}setModal(null);void reloadData();}catch(e){setFormErr("Error al guardar: "+e.message);}setSaving(false);};
+  const save=async()=>{setFormErr("");const usuario=normalizeUsuarioValue(form.usuario),email=normalizeEmailValue(form.email);if(!form.nombre?.trim()||!usuario)return setFormErr("Nombre y usuario son obligatorios.");if(!isValidEmail(email))return setFormErr("El email es obligatorio y debe ser válido.");if(usuarioEnUso(data.users,usuario,form.id)||emailEnUso(data.users,email,form.id))return setFormErr("El usuario o el email ya están en uso.");if(modal==="new"&&!form.password)return setFormErr("Ingresá una contraseña.");if(form.password&&form.password!==form.password2)return setFormErr("Las contraseñas no coinciden.");const te=validarTelefonoArgentino(form.telefonoCodigoArea,form.telefonoNumero);if(te){setModalTab("general");return setFormErr(te);}const be=validarDatoBancario(form.datoBancario);if(be){setModalTab("laboral");return setFormErr(be);}if(form.rol==="franquiciado"&&!(form.localIds||[]).length){setModalTab("general");return setFormErr("Asigná al menos una sucursal al franquiciado.");}if(form.rol!=="franquiciado"){const he=validateHist();if(he){setModalTab("antiguedad");return setFormErr(he);}}setSaving(true);try{const abierto=historialDraft.find(r=>!r.fechaFin),payload={nombre:form.nombre.trim(),usuario,email,rol:form.rol,activo:form.rol==="franquiciado"?true:!!abierto,telefono_codigo_area:onlyDigits(form.telefonoCodigoArea)||null,telefono_numero:onlyDigits(form.telefonoNumero)||null,telefono:[onlyDigits(form.telefonoCodigoArea),onlyDigits(form.telefonoNumero)].join("")||null,dato_bancario:String(form.datoBancario||"").trim()||null,tipo_relacion:form.tipoRelacion||"a_resolver"};let uid=form.id;if(modal==="new"){const c=await api.createUser({...payload,password:form.password});uid=c?.[0]?.id;if(!uid)throw new Error("No se obtuvo el usuario creado.");}else{await api.updateUser(uid,payload);if(form.password)await api.changePassword({mode:"admin_set",actor_id:user.id,session_token:user.sessionToken,target_user_id:uid,new_password:form.password});}await api.setEncargadoLocales(uid,form.rol==="encargada"?(form.localIds||[]):[]);await api.setUsuarioLocales(uid,["casa_matriz","franquiciado"].includes(form.rol)?(form.localIds||[]):[]);if(form.rol!=="franquiciado"){const old=(data.usuarioHistorialLaboral||[]).filter(x=>x.userId===uid),ids=new Set(historialDraft.filter(x=>x.id).map(x=>x.id));for(const x of old)if(!ids.has(x.id))await api.deleteUsuarioHistorialLaboral(x.id);for(const r of historialDraft){const p={user_id:uid,fecha_inicio:r.fechaInicio,fecha_fin:r.fechaFin||null,motivo_fin:r.fechaFin?r.motivoFin||null:null,observacion:r.observacion?.trim()||null};if(r.id)await api.updateUsuarioHistorialLaboral(r.id,p);else await api.createUsuarioHistorialLaboral(p);}}if(modal==="new"){try{await api.enviarInvitacionUsuario({actor_id:user.id,session_token:user.sessionToken,target_user_id:uid});notifyToast(`Usuario creado e invitación enviada a ${email}.`,"success",{title:"Invitación enviada"});}catch(invErr){notifyToast("El usuario se creó, pero no se pudo enviar la invitación: "+(invErr.message||invErr),"warning",{title:"Invitación pendiente"});}}else{notifyToast("Usuario guardado correctamente.","success");}setModal(null);void reloadData();}catch(e){setFormErr("Error al guardar: "+e.message);}setSaving(false);};
   const reenviarInvitacion=async(u)=>{if(!canManageUserRole(user,u.rol))return notifyToast("No tenés permiso para invitar este usuario.","warning");if(!u?.email)return notifyToast("El usuario no tiene email cargado.","warning");try{await api.enviarInvitacionUsuario({actor_id:user.id,session_token:user.sessionToken,target_user_id:u.id});notifyToast(`Invitación enviada a ${u.email}.`,"success",{title:"Invitación enviada"});}catch(e){notifyToast("No se pudo enviar la invitación: "+(e.message||e),"error");}};
   const tabStyle=a=>({border:"none",borderRadius:8,padding:"8px 12px",fontSize:12,fontWeight:600,cursor:"pointer",background:a?COLORS.pink:COLORS.pinkLight,color:a?"#fff":COLORS.pinkDark});
-  return <div><div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:16}}><h2 style={{margin:0,fontSize:18}}>Usuarios internos</h2><Btn size="sm" onClick={openNew}>+ Nuevo</Btn></div><Card style={{marginBottom:14}}><div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(180px,1fr))",gap:10}}><Select value={filtroRol} onChange={setFiltroRol}><option value="todos">Todos los tipos</option>{actorEsAdmin&&<option value="admin">Admin</option>}<option value="casa_matriz">Casa Matriz</option><option value="encargada">Encargada</option></Select><Select value={filtroLocal} onChange={setFiltroLocal}><option value="todos">Todas las sucursales</option>{localesGestionables.map(l=><option key={l.id} value={l.id}>{l.nombre}</option>)}</Select><Select value={filtroEstado} onChange={setFiltroEstado}><option value="activas">Activas</option><option value="inactivas">Inactivas</option><option value="todas">Todas</option></Select><Select value={agrupacion} onChange={setAgrupacion}><option value="rol">Agrupar por tipo</option><option value="local">Agrupar por sucursal</option><option value="ninguna">Sin agrupar</option></Select></div></Card><div style={{display:"flex",flexDirection:"column",gap:14}}>{grupos.map(g=><div key={g.key}>{agrupacion!=="ninguna"&&<h3 style={{fontSize:14,margin:"0 0 7px 4px"}}>{g.label} <Badge color="info">{g.items.length}</Badge></h3>}{g.items.map(e=><Card key={`${g.key}-${e.id}`} style={{display:"flex",alignItems:"center",gap:12,marginBottom:8,flexWrap:"wrap"}}><Avatar nombre={e.nombre} userId={e.id} photoUrl={e.fotoPerfilUrl}/><div style={{flex:1}}><p style={{margin:0,fontWeight:600}}>{e.nombre}</p><p style={{margin:0,fontSize:12,color:"var(--color-text-secondary)"}}>{e.usuario} · {e.email} · {roleLabel(e.rol)}</p></div><Badge color={e.activo?"success":"gray"}>{e.activo?"Activa":"Inactiva"}</Badge><Btn size="sm" variant="ghost" onClick={()=>openEdit(e)}>Editar</Btn><Btn size="sm" variant="ghost" onClick={()=>reenviarInvitacion(e)} disabled={!e.email||!canManageUserRole(user,e.rol)}>Reenviar invitación</Btn></Card>)}</div>)}</div>{modal&&<Modal title={modal==="new"?"Nuevo usuario":"Editar usuario"} width={800} onClose={()=>setModal(null)}><div className="niki-config-tabs" style={{marginBottom:16}}>{[["general","Datos generales"],["antiguedad","Antigüedad"],["laboral","Datos laborales y bancarios"],["documentacion","Documentación"]].map(([k,l])=><button key={k} style={tabStyle(modalTab===k)} onClick={()=>setModalTab(k)}>{l}</button>)}</div>{modalTab==="general"?<div style={{display:"flex",flexDirection:"column",gap:12}}><ModalInput label="Nombre completo" value={form.nombre||""} onChange={v=>setForm(f=>({...f,nombre:v}))}/><ModalInput label="Usuario" value={form.usuario||""} onChange={v=>setForm(f=>({...f,usuario:v}))}/><ModalInput label="Email" value={form.email||""} onChange={v=>setForm(f=>({...f,email:v}))}/><div className="niki-mobile-one-column" style={{display:"grid",gridTemplateColumns:".45fr 1fr",gap:12}}><ModalInput label="Código de área" value={form.telefonoCodigoArea||""} onChange={v=>setForm(f=>({...f,telefonoCodigoArea:onlyDigits(v).slice(0,4)}))}/><ModalInput label="Número de teléfono" value={form.telefonoNumero||""} onChange={v=>setForm(f=>({...f,telefonoNumero:onlyDigits(v).slice(0,8)}))}/></div><ModalSelect label="Tipo de usuario" value={form.rol||"encargada"} onChange={v=>setForm(f=>({...f,rol:v}))}>{rolesGestionables.map(r=><option key={r} value={r}>{roleLabel(r)}</option>)}</ModalSelect>{form.rol==="encargada"&&<div>{localesGestionables.map(l=><label key={l.id} style={{display:"block",fontSize:13}}><input type="checkbox" checked={(form.localIds||[]).includes(l.id)} onChange={()=>toggleLocal(l.id)}/> {l.nombre}</label>)}</div>}{form.rol==="casa_matriz"&&<div>{franquiciasDisponibles.map(l=><label key={l.id} style={{display:"block",fontSize:13}}><input type="checkbox" checked={(form.localIds||[]).includes(l.id)} onChange={()=>toggleLocal(l.id)}/> {l.nombre}</label>)}</div>}<ModalInput label={modal==="new"?"Contraseña":"Nueva contraseña (opcional)"} type="password" value={form.password||""} onChange={v=>setForm(f=>({...f,password:v}))}/><ModalInput label="Repetir contraseña" type="password" value={form.password2||""} onChange={v=>setForm(f=>({...f,password2:v}))}/></div>:modalTab==="antiguedad"?<div><div style={{display:"flex",justifyContent:"space-between",marginBottom:10}}><p style={{fontSize:12,color:"var(--color-text-secondary)"}}>Sin local: registra la relación laboral general.</p><Btn size="sm" onClick={()=>setHistorialDraft(r=>[{tempId:`n-${Date.now()}`,fechaInicio:hoy,fechaFin:"",motivoFin:"",observacion:""},...r])}>+ Período</Btn></div>{historialDraft.map(r=>{const k=r.id||r.tempId;return <div className="niki-history-row" key={k} style={{display:"grid",gridTemplateColumns:"130px 130px 150px 1fr 36px",gap:8,marginBottom:8}}><input type="date" value={r.fechaInicio||""} onChange={e=>updHist(k,"fechaInicio",e.target.value)}/><input type="date" value={r.fechaFin||""} onChange={e=>updHist(k,"fechaFin",e.target.value)}/><select disabled={!r.fechaFin} value={r.motivoFin||""} onChange={e=>updHist(k,"motivoFin",e.target.value)}><option value="">{r.fechaFin?"Motivo":"Activo"}</option>{motivos.map(x=><option key={x}>{x}</option>)}</select><input value={r.observacion||""} placeholder="Observación" onChange={e=>updHist(k,"observacion",e.target.value)}/><button onClick={()=>setHistorialDraft(a=>a.filter(x=>(x.id||x.tempId)!==k))}>×</button></div>})}</div>:modalTab==="laboral"?<div style={{display:"flex",flexDirection:"column",gap:12}}><ModalInput label="Alias o CBU bancario" value={form.datoBancario||""} onChange={v=>setForm(f=>({...f,datoBancario:v}))}/><ModalSelect label="Tipo de relación" value={form.tipoRelacion||"a_resolver"} onChange={v=>setForm(f=>({...f,tipoRelacion:v}))}><option value="monotributista">Monotributista</option><option value="dependencia">Relación de Dependencia</option><option value="a_resolver">A resolver</option></ModalSelect></div>:<LegajoDocumentosPanel actor={user} userId={form.id} documentos={data.personaDocumentos||[]} onReload={reloadData} currentPhotoUrl={form.fotoPerfilUrl||""}/>} {formErr&&<p style={{color:COLORS.danger,background:COLORS.dangerLight,padding:8,borderRadius:8}}>{formErr}</p>}<div style={{display:"flex",gap:8,marginTop:16,flexWrap:"wrap"}}><Btn onClick={save} disabled={saving} style={{flex:1,justifyContent:"center"}}>{saving?"Guardando...":"Guardar"}</Btn><Btn variant="secondary" onClick={()=>setModal(null)} style={{flex:1,justifyContent:"center"}}>Cancelar</Btn></div></Modal>}</div>;
+  return <div><div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:16}}><h2 style={{margin:0,fontSize:18}}>Usuarios internos</h2>{!actorEsFranquiciado&&<Btn size="sm" onClick={openNew}>+ Nuevo</Btn>}</div><Card style={{marginBottom:14}}><div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(180px,1fr))",gap:10}}><Select value={filtroRol} onChange={setFiltroRol}><option value="todos">Todos los tipos</option>{actorEsAdmin&&<option value="admin">Admin</option>}<option value="casa_matriz">Casa Matriz</option><option value="franquiciado">Franquiciado</option><option value="encargada">Encargada</option></Select><Select value={filtroLocal} onChange={setFiltroLocal}><option value="todos">Todas las sucursales</option>{localesGestionables.map(l=><option key={l.id} value={l.id}>{l.nombre}</option>)}</Select><Select value={filtroEstado} onChange={setFiltroEstado}><option value="activas">Activas</option><option value="inactivas">Inactivas</option><option value="todas">Todas</option></Select><Select value={agrupacion} onChange={setAgrupacion}><option value="rol">Agrupar por tipo</option><option value="local">Agrupar por sucursal</option><option value="ninguna">Sin agrupar</option></Select></div></Card><div style={{display:"flex",flexDirection:"column",gap:14}}>{grupos.map(g=><div key={g.key}>{agrupacion!=="ninguna"&&<h3 style={{fontSize:14,margin:"0 0 7px 4px"}}>{g.label} <Badge color="info">{g.items.length}</Badge></h3>}{g.items.map(e=><Card key={`${g.key}-${e.id}`} style={{display:"flex",alignItems:"center",gap:12,marginBottom:8,flexWrap:"wrap"}}><Avatar nombre={e.nombre} userId={e.id} photoUrl={e.fotoPerfilUrl}/><div style={{flex:1}}><p style={{margin:0,fontWeight:600}}>{e.nombre}</p><p style={{margin:0,fontSize:12,color:"var(--color-text-secondary)"}}>{e.usuario} · {e.email} · {roleLabel(e.rol)}</p></div><Badge color={e.activo?"success":"gray"}>{e.activo?"Activa":"Inactiva"}</Badge>{!actorEsFranquiciado&&<Btn size="sm" variant="ghost" onClick={()=>openEdit(e)}>Editar</Btn>}{e.rol==="encargada"&&["admin","casa_matriz","franquiciado"].includes(user.rol)&&<Btn size="sm" variant="ghost" onClick={()=>setSalaryTarget({id:e.id,nombre:e.nombre})}>Sueldo</Btn>}{!actorEsFranquiciado&&<Btn size="sm" variant="ghost" onClick={()=>reenviarInvitacion(e)} disabled={!e.email||!canManageUserRole(user,e.rol)}>Reenviar invitación</Btn>}</Card>)}</div>)}</div>{modal&&<Modal title={modal==="new"?"Nuevo usuario":"Editar usuario"} width={800} onClose={()=>setModal(null)}><div className="niki-config-tabs" style={{marginBottom:16}}>{[["general","Datos generales"],["antiguedad","Antigüedad"],["laboral","Datos laborales y bancarios"],["documentacion","Documentación"]].map(([k,l])=><button key={k} style={tabStyle(modalTab===k)} onClick={()=>setModalTab(k)}>{l}</button>)}</div>{modalTab==="general"?<div style={{display:"flex",flexDirection:"column",gap:12}}><ModalInput label="Nombre completo" value={form.nombre||""} onChange={v=>setForm(f=>({...f,nombre:v}))}/><ModalInput label="Usuario" value={form.usuario||""} onChange={v=>setForm(f=>({...f,usuario:v}))}/><ModalInput label="Email" value={form.email||""} onChange={v=>setForm(f=>({...f,email:v}))}/><div className="niki-mobile-one-column" style={{display:"grid",gridTemplateColumns:".45fr 1fr",gap:12}}><ModalInput label="Código de área" value={form.telefonoCodigoArea||""} onChange={v=>setForm(f=>({...f,telefonoCodigoArea:onlyDigits(v).slice(0,4)}))}/><ModalInput label="Número de teléfono" value={form.telefonoNumero||""} onChange={v=>setForm(f=>({...f,telefonoNumero:onlyDigits(v).slice(0,8)}))}/></div><ModalSelect label="Tipo de usuario" value={form.rol||"encargada"} onChange={v=>setForm(f=>({...f,rol:v}))}>{rolesGestionables.map(r=><option key={r} value={r}>{roleLabel(r)}</option>)}</ModalSelect>{form.rol==="encargada"&&<div>{localesGestionables.map(l=><label key={l.id} style={{display:"block",fontSize:13}}><input type="checkbox" checked={(form.localIds||[]).includes(l.id)} onChange={()=>toggleLocal(l.id)}/> {l.nombre}</label>)}</div>}{["casa_matriz","franquiciado"].includes(form.rol)&&<div><p style={{margin:"0 0 7px",fontSize:12,fontWeight:700}}>{form.rol==="franquiciado"?"Sucursales asignadas":"Franquicias adicionales"}</p>{franquiciasDisponibles.map(l=><label key={l.id} style={{display:"block",fontSize:13,marginBottom:5}}><input type="checkbox" checked={(form.localIds||[]).includes(l.id)} onChange={()=>toggleLocal(l.id)}/> {l.nombre}</label>)}{form.rol==="franquiciado"&&!franquiciasDisponibles.length&&<p style={{fontSize:12,color:"var(--color-text-secondary)"}}>No hay franquicias disponibles dentro de tu alcance.</p>}</div>}<ModalInput label={modal==="new"?"Contraseña":"Nueva contraseña (opcional)"} type="password" value={form.password||""} onChange={v=>setForm(f=>({...f,password:v}))}/><ModalInput label="Repetir contraseña" type="password" value={form.password2||""} onChange={v=>setForm(f=>({...f,password2:v}))}/></div>:modalTab==="antiguedad"?<div><div style={{display:"flex",justifyContent:"space-between",marginBottom:10}}><p style={{fontSize:12,color:"var(--color-text-secondary)"}}>Sin local: registra la relación laboral general.</p><Btn size="sm" onClick={()=>setHistorialDraft(r=>[{tempId:`n-${Date.now()}`,fechaInicio:hoy,fechaFin:"",motivoFin:"",observacion:""},...r])}>+ Período</Btn></div>{historialDraft.map(r=>{const k=r.id||r.tempId;return <div className="niki-history-row" key={k} style={{display:"grid",gridTemplateColumns:"130px 130px 150px 1fr 36px",gap:8,marginBottom:8}}><input type="date" value={r.fechaInicio||""} onChange={e=>updHist(k,"fechaInicio",e.target.value)}/><input type="date" value={r.fechaFin||""} onChange={e=>updHist(k,"fechaFin",e.target.value)}/><select disabled={!r.fechaFin} value={r.motivoFin||""} onChange={e=>updHist(k,"motivoFin",e.target.value)}><option value="">{r.fechaFin?"Motivo":"Activo"}</option>{motivos.map(x=><option key={x}>{x}</option>)}</select><input value={r.observacion||""} placeholder="Observación" onChange={e=>updHist(k,"observacion",e.target.value)}/><button onClick={()=>setHistorialDraft(a=>a.filter(x=>(x.id||x.tempId)!==k))}>×</button></div>})}</div>:modalTab==="laboral"?<div style={{display:"flex",flexDirection:"column",gap:12}}><ModalInput label="Alias o CBU bancario" value={form.datoBancario||""} onChange={v=>setForm(f=>({...f,datoBancario:v}))}/><ModalSelect label="Tipo de relación" value={form.tipoRelacion||"a_resolver"} onChange={v=>setForm(f=>({...f,tipoRelacion:v}))}><option value="monotributista">Monotributista</option><option value="dependencia">Relación de Dependencia</option><option value="a_resolver">A resolver</option></ModalSelect></div>:<LegajoDocumentosPanel actor={user} userId={form.id} documentos={data.personaDocumentos||[]} onReload={reloadData} currentPhotoUrl={form.fotoPerfilUrl||""}/>} {formErr&&<p style={{color:COLORS.danger,background:COLORS.dangerLight,padding:8,borderRadius:8}}>{formErr}</p>}<div style={{display:"flex",gap:8,marginTop:16,flexWrap:"wrap"}}><Btn onClick={save} disabled={saving} style={{flex:1,justifyContent:"center"}}>{saving?"Guardando...":"Guardar"}</Btn><Btn variant="secondary" onClick={()=>setModal(null)} style={{flex:1,justifyContent:"center"}}>Cancelar</Btn></div></Modal>}{salaryTarget&&<SueldoEncargadaModal target={salaryTarget} user={user} onClose={()=>setSalaryTarget(null)}/>}</div>;
+}
+
+
+function SueldoEncargadaModal({ target, user, onClose }) {
+  const hoy = dateKey(new Date());
+  const canEdit = ["admin","casa_matriz","franquiciado"].includes(user.rol);
+  const [rows,setRows]=useState([]);
+  const [loading,setLoading]=useState(true);
+  const [saving,setSaving]=useState(false);
+  const [err,setErr]=useState("");
+  const [form,setForm]=useState({ vigenciaDesde:hoy, sueldoBase:"", horasDiarias:"8", observacion:"" });
+  const load=useCallback(async()=>{
+    setLoading(true);setErr("");
+    try{
+      const r=await encargadasSueldosEdge("salary_history",{target_user_id:target.id});
+      setRows(r.rows||[]);
+      const current=(r.rows||[])[0];
+      if(current) setForm({vigenciaDesde:hoy,sueldoBase:String(current.sueldo_base||""),horasDiarias:String(current.horas_diarias_habituales||""),observacion:""});
+    }catch(e){setErr(e.message||String(e));}
+    setLoading(false);
+  },[target.id]);
+  useEffect(()=>{load();},[load]);
+  const save=async()=>{
+    setErr("");
+    const sueldo=Number(String(form.sueldoBase||"").replace(/\./g,"").replace(",","."));
+    const horas=Number(String(form.horasDiarias||"").replace(",","."));
+    if(!form.vigenciaDesde) return setErr("Indicá la fecha de vigencia.");
+    if(!(sueldo>0)) return setErr("Ingresá un sueldo base válido.");
+    if(!(horas>0&&horas<=24)) return setErr("Ingresá las horas diarias habituales.");
+    setSaving(true);
+    try{
+      await encargadasSueldosEdge("salary_save",{target_user_id:target.id,vigencia_desde:form.vigenciaDesde,sueldo_base:sueldo,horas_diarias_habituales:horas,observacion:form.observacion||null});
+      notifyToast("Configuración salarial guardada.","success");
+      await load();
+    }catch(e){setErr(e.message||String(e));}
+    setSaving(false);
+  };
+  return <Modal title={`Datos salariales · ${target.nombre}`} onClose={onClose} width={680}>
+    {loading?<p style={{fontSize:13,color:"var(--color-text-secondary)"}}>Cargando información salarial...</p>:<>
+      <div style={{padding:"10px 12px",borderRadius:10,background:COLORS.pinkLight,marginBottom:14,fontSize:12,color:COLORS.pinkDark}}>
+        {canEdit?"Los cambios generan una nueva vigencia y conservan el historial.":"Vista de solo lectura de tus datos salariales."}
+      </div>
+      {canEdit&&<Card style={{marginBottom:14,padding:14}}>
+        <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(150px,1fr))",gap:10,alignItems:"end"}}>
+          <div><label style={{fontSize:12,color:"var(--color-text-secondary)",display:"block",marginBottom:4}}>Vigente desde</label><input type="date" value={form.vigenciaDesde} onChange={e=>setForm(f=>({...f,vigenciaDesde:e.target.value}))} style={{width:"100%",border:"1px solid rgba(120,120,120,.24)",borderRadius:8,padding:"8px 10px"}}/></div>
+          <ModalInput label="Sueldo base" value={form.sueldoBase} onChange={v=>setForm(f=>({...f,sueldoBase:v}))}/>
+          <ModalInput label="Horas diarias habituales" value={form.horasDiarias} onChange={v=>setForm(f=>({...f,horasDiarias:v}))}/>
+          <div style={{gridColumn:"1 / -1"}}><ModalInput label="Observación" value={form.observacion} onChange={v=>setForm(f=>({...f,observacion:v}))}/></div>
+        </div>
+        <div style={{display:"flex",justifyContent:"flex-end",marginTop:10}}><Btn onClick={save} disabled={saving}>{saving?"Guardando...":"Guardar nueva vigencia"}</Btn></div>
+      </Card>}
+      <h4 style={{margin:"0 0 8px",fontSize:13}}>Historial</h4>
+      {!rows.length?<p style={{fontSize:12,color:"var(--color-text-secondary)"}}>Todavía no hay datos salariales cargados.</p>:<div style={{display:"flex",flexDirection:"column",gap:7}}>{rows.map(r=><div key={r.id} style={{display:"grid",gridTemplateColumns:"110px 1fr 1fr",gap:10,padding:"9px 10px",border:"1px solid rgba(120,120,120,.14)",borderRadius:9,alignItems:"center"}}><span style={{fontSize:12}}>{String(r.vigencia_desde||"").split("-").reverse().join("/")}</span><strong style={{fontSize:13}}>{fmtMoney(r.sueldo_base)}</strong><span style={{fontSize:12,color:"var(--color-text-secondary)"}}>{Number(r.horas_diarias_habituales||0)} h/día</span>{r.observacion&&<span style={{gridColumn:"1/-1",fontSize:11,color:"var(--color-text-secondary)"}}>{r.observacion}</span>}</div>)}</div>}
+      {err&&<p style={{color:COLORS.danger,background:COLORS.dangerLight,padding:8,borderRadius:8,fontSize:12}}>{err}</p>}
+    </>}
+  </Modal>;
+}
+
+function PreliquidacionEncargadas({ data, user }) {
+  const hoy=new Date();
+  const [periodo,setPeriodo]=useState(`${hoy.getFullYear()}-${String(hoy.getMonth()+1).padStart(2,"0")}`);
+  const allowedLocalIds=useMemo(()=>getAssignedLocalIds(data,user),[data,user]);
+  const locales=useMemo(()=>data.locales.filter(l=>allowedLocalIds.includes(Number(l.id))),[data.locales,allowedLocalIds]);
+  const [localId,setLocalId]=useState("");
+  const [rows,setRows]=useState([]),[loading,setLoading]=useState(false),[err,setErr]=useState("");
+  const [expanded,setExpanded]=useState(new Set());
+  const [salaryTarget,setSalaryTarget]=useState(null);
+  const canEditSalary=["admin","casa_matriz","franquiciado"].includes(user.rol);
+  useEffect(()=>{ if(localId && !allowedLocalIds.includes(Number(localId))) setLocalId(""); },[localId,allowedLocalIds]);
+  const load=useCallback(async()=>{
+    setLoading(true);setErr("");
+    try{
+      const r=await encargadasSueldosEdge("preliquidacion",{periodo,local_id:localId||null,target_user_id:user.rol==="encargada"?user.id:null});
+      setRows(r.rows||[]);
+    }catch(e){setErr(e.message||String(e));setRows([]);}
+    setLoading(false);
+  },[periodo,localId,user.id,user.rol]);
+  useEffect(()=>{load();},[load]);
+  const toggle=id=>setExpanded(prev=>{const n=new Set(prev);n.has(id)?n.delete(id):n.add(id);return n;});
+  const totals=useMemo(()=>rows.reduce((a,r)=>({base:a.base+Number(r.sueldo_base||0),extras:a.extras+Number(r.monto_horas_extra||0),feriados:a.feriados+Number(r.monto_feriados||0),aguinaldo:a.aguinaldo+Number(r.aguinaldo||0),total:a.total+Number(r.total_estimado||0)}),{base:0,extras:0,feriados:0,aguinaldo:0,total:0}),[rows]);
+  return <div>
+    <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",gap:12,marginBottom:14,flexWrap:"wrap"}}><div><h2 style={{margin:0,fontSize:19}}>Preliquidación de encargadas</h2><p style={{margin:"4px 0 0",fontSize:12,color:"var(--color-text-secondary)"}}>Base mensual para control de sueldos. Los importes todavía no cierran una liquidación definitiva. Usá el botón <strong>Sueldo</strong> de cada encargada para configurar sueldo base y horas diarias habituales.</p></div><div style={{display:"flex",gap:8,flexWrap:"wrap"}}><input type="month" value={periodo} onChange={e=>setPeriodo(e.target.value)} style={{border:"1px solid rgba(120,120,120,.24)",borderRadius:8,padding:"7px 10px"}}/>{user.rol!=="encargada"&&<Select value={localId} onChange={setLocalId} style={{minWidth:190}}><option value="">Todos mis locales</option>{locales.map(l=><option key={l.id} value={l.id}>{l.nombre}</option>)}</Select>}<Btn variant="secondary" onClick={load} disabled={loading}>{loading?"Actualizando...":"Actualizar"}</Btn></div></div>
+    {err&&<p style={{color:COLORS.danger,background:COLORS.dangerLight,padding:10,borderRadius:9,fontSize:12}}>{err}</p>}
+    <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(150px,1fr))",gap:10,marginBottom:12}}>
+      {[['Base',totals.base],['Horas extra',totals.extras],['Feriados',totals.feriados],['Aguinaldo',totals.aguinaldo],['Total estimado',totals.total]].map(([l,v],i)=><Card key={l} style={{padding:"12px 14px"}}><p style={{margin:0,fontSize:10,textTransform:"uppercase",letterSpacing:'.04em',color:"var(--color-text-secondary)"}}>{l}</p><p style={{margin:"4px 0 0",fontSize:i===4?21:18,fontWeight:700,color:i===4?COLORS.pinkDark:"var(--color-text-primary)"}}>{fmtMoney(v)}</p></Card>)}
+    </div>
+    {!loading&&!rows.length?<Card><p style={{margin:0,fontSize:13,color:"var(--color-text-secondary)"}}>No hay encargadas o datos disponibles para este período.</p></Card>:<div style={{display:"flex",flexDirection:"column",gap:10}}>{rows.map(r=>{const open=expanded.has(r.user_id);return <Card key={r.user_id} style={{padding:0,overflow:"hidden"}}><div style={{padding:"12px 14px",display:"grid",gridTemplateColumns:"minmax(170px,1.4fr) repeat(5,minmax(80px,.7fr)) auto",gap:10,alignItems:"center"}}><div style={{display:"flex",alignItems:"center",gap:9,minWidth:0}}><Avatar nombre={r.nombre} userId={r.user_id} size={34}/><div style={{minWidth:0}}><strong style={{fontSize:13,display:"block",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{r.nombre}</strong><span style={{fontSize:10,color:r.sueldo_base>0?"var(--color-text-secondary)":COLORS.danger}}>{r.sueldo_base>0?`${fmtMoney(r.sueldo_base)} · ${r.horas_diarias_habituales} h/día`:"Falta configuración salarial"}</span></div></div><div><small style={{display:"block",color:"var(--color-text-secondary)"}}>Días</small><strong>{r.dias_trabajados}/{r.dias_agendados}</strong></div><div><small style={{display:"block",color:"var(--color-text-secondary)"}}>Ausencias</small><strong>{r.ausencias}</strong></div><div><small style={{display:"block",color:"var(--color-text-secondary)"}}>Extras</small><strong>{Number(r.horas_extra||0).toFixed(1)} h</strong></div><div><small style={{display:"block",color:"var(--color-text-secondary)"}}>Feriados</small><strong>{r.feriados_trabajados}</strong></div><div><small style={{display:"block",color:"var(--color-text-secondary)"}}>Total</small><strong style={{color:COLORS.pinkDark}}>{fmtMoney(r.total_estimado)}</strong></div><div style={{display:"flex",gap:6}}>{(canEditSalary||user.rol==="encargada")&&<Btn size="sm" variant="ghost" onClick={()=>setSalaryTarget({id:r.user_id,nombre:r.nombre})}>Sueldo</Btn>}<Btn size="sm" variant="secondary" onClick={()=>toggle(r.user_id)}>{open?"Cerrar":"Detalle"}</Btn></div></div>{open&&<div style={{borderTop:"1px solid rgba(120,120,120,.14)",padding:"10px 14px",background:"var(--color-background-secondary)"}}><div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(150px,1fr))",gap:8,marginBottom:10}}><div><small>Valor hora extra</small><strong style={{display:"block"}}>{fmtMoney(r.valor_hora_extra)}</strong></div><div><small>Monto horas extra</small><strong style={{display:"block"}}>{fmtMoney(r.monto_horas_extra)}</strong></div><div><small>Monto feriados</small><strong style={{display:"block"}}>{fmtMoney(r.monto_feriados)}</strong></div><div><small>Aguinaldo estimado</small><strong style={{display:"block"}}>{fmtMoney(r.aguinaldo)}</strong>{Number(r.aguinaldo||0)>0&&<span style={{fontSize:10,color:"var(--color-text-secondary)"}}>{r.meses_trabajados_semestre}/6 meses · mejor base {fmtMoney(r.mejor_sueldo_base_semestre)}</span>}</div></div><div style={{overflowX:"auto"}}><div style={{minWidth:700}}><div style={{display:"grid",gridTemplateColumns:"90px 90px 90px 90px 90px 1fr",gap:8,fontSize:10,fontWeight:700,color:"var(--color-text-secondary)",padding:"0 6px 5px"}}><span>Fecha</span><span>Agendado</span><span>Trabajó</span><span>Ausencia</span><span>Extra</span><span>Novedad</span></div>{(r.detalle||[]).map(d=><div key={d.fecha} style={{display:"grid",gridTemplateColumns:"90px 90px 90px 90px 90px 1fr",gap:8,padding:"6px",borderTop:"1px solid rgba(120,120,120,.10)",fontSize:11}}><span>{String(d.fecha).split("-").reverse().join("/")}{d.feriado?" · F":""}</span><span>{d.agendado?"Sí":"—"}</span><span>{d.trabajado?"Sí":"—"}</span><span>{d.ausencia?"Sí":"—"}</span><span>{Number(d.horas_extra||0).toFixed(1)} h</span><span>{d.cambio_turno?"Cambio de turno":d.ausencia?"Ausencia":d.trabajado&&!d.agendado?"Cobertura / reemplazo":""}</span></div>)}</div></div></div>}</Card>})}</div>}
+    {salaryTarget&&<SueldoEncargadaModal target={salaryTarget} user={user} onClose={()=>{setSalaryTarget(null);load();}}/>}
+  </div>;
 }
 
 // ── INFORME DIARIO ─────────────────────────────────────────────────
@@ -7368,6 +7764,22 @@ function InformeDiario({ data, reloadData, user }) {
   const [saving, setSaving] = useState(false);
   const [preview, setPreview] = useState(null);
   const [deleteTarget, setDeleteTarget] = useState(null);
+  const [encCoberturaLoading, setEncCoberturaLoading] = useState(false);
+  const [encCoberturaSaving, setEncCoberturaSaving] = useState(false);
+  const [encPlanFuente, setEncPlanFuente] = useState("sin_plan");
+  const [encPlanSemana, setEncPlanSemana] = useState("");
+  const [encCobertura, setEncCobertura] = useState([]);
+  const [encCoberturaLoadedKey, setEncCoberturaLoadedKey] = useState("");
+  const [reclamosRows, setReclamosRows] = useState([]);
+  const [reclamosLoading, setReclamosLoading] = useState(false);
+  const [reclamoModal, setReclamoModal] = useState(null);
+  const [gastosRows, setGastosRows] = useState([]);
+  const [gastosLoading, setGastosLoading] = useState(false);
+  const [gastoModal, setGastoModal] = useState(null);
+  const [gastoConceptos, setGastoConceptos] = useState([]);
+  const [conceptosModal, setConceptosModal] = useState(false);
+  const [conceptoDraft, setConceptoDraft] = useState({ codigo:"", nombre:"", activo:true });
+  const [conceptosSaving, setConceptosSaving] = useState(false);
 
   useEffect(() => {
     if (!localId && locales[0]?.id) setLocalId(locales[0].id);
@@ -7531,6 +7943,327 @@ function InformeDiario({ data, reloadData, user }) {
     return lines.join("\n");
   }, [getAsistenciaInforme, userLabel]);
 
+  const encMinutes = useCallback((t) => {
+    if (!t) return null;
+    const [h,m] = String(t).slice(0,5).split(":").map(Number);
+    return Number.isFinite(h) && Number.isFinite(m) ? h*60+m : null;
+  }, []);
+  const encHoursDiff = useCallback((row) => {
+    const pd=encMinutes(row.horaPlanDesde), ph=encMinutes(row.horaPlanHasta), rd=encMinutes(row.horaRealDesde), rh=encMinutes(row.horaRealHasta);
+    const plan=(pd!=null&&ph!=null&&ph>pd)?ph-pd:0;
+    const real=(rd!=null&&rh!=null&&rh>rd)?rh-rd:0;
+    return (real-plan)/60;
+  }, [encMinutes]);
+  const encUserName = useCallback((id) => data.users.find(u=>Number(u.id)===Number(id))?.nombre || "Encargada", [data.users]);
+  const loadEncCobertura = useCallback(async (f = fecha, lid = localId) => {
+    const localNum=parseInt(lid);
+    if(!editorOpen || !f || !localNum) return;
+    const key=`${localNum}|${f}`;
+    setEncCoberturaLoading(true);
+    try {
+      const [confirmed, realRows, cfgRows, templateRows] = await Promise.all([
+        api.getEncargadaPlanificacion(localNum,f,f),
+        api.getEncargadaJornadaReal(localNum,f),
+        api.getEncargadaPlanificacionConfig(localNum),
+        api.getEncargadaSemanaTipoLocal(localNum),
+      ]);
+      const cfg=Array.isArray(cfgRows)?cfgRows[0]:cfgRows;
+      const date=parseDateLocal(f);
+      const jsDay=date?.getDay() ?? 0;
+      const diaSemana=jsDay===0?7:jsDay;
+      let weekType="a";
+      if(date){
+        const monday=getMon(date);
+        const ref=cfg?.fecha_referencia_a ? getMon(parseDateLocal(cfg.fecha_referencia_a)) : monday;
+        const weeks=Math.round((monday-ref)/(7*86400000));
+        weekType=Math.abs(weeks)%2===0?"a":"b";
+      }
+      setEncPlanSemana(weekType);
+      let plan=[];
+      if((confirmed||[]).length){
+        setEncPlanFuente("confirmado");
+        plan=(confirmed||[]).map(r=>({userId:Number(r.user_id),horaPlanDesde:String(r.hora_desde||"").slice(0,5),horaPlanHasta:String(r.hora_hasta||"").slice(0,5),planObservacion:r.observacion||""}));
+      } else {
+        const dayRows=(templateRows||[]).filter(r=>Number(r.dia_semana)===Number(diaSemana));
+        const users=new Set(dayRows.map(r=>Number(r.user_id)));
+        plan=[...users].map(uid=>{
+          const specific=dayRows.find(r=>Number(r.user_id)===uid && r.tipo_semana===weekType);
+          const common=dayRows.find(r=>Number(r.user_id)===uid && r.tipo_semana==="todas");
+          const r=specific||common;
+          return r?{userId:uid,horaPlanDesde:String(r.hora_desde||"").slice(0,5),horaPlanHasta:String(r.hora_hasta||"").slice(0,5),planObservacion:r.observacion||""}:null;
+        }).filter(Boolean);
+        setEncPlanFuente(plan.length?"semana_tipo":"sin_plan");
+      }
+      const realByUser=new Map((realRows||[]).map(r=>[Number(r.user_id),r]));
+      const allIds=new Set([...plan.map(p=>p.userId),...(realRows||[]).map(r=>Number(r.user_id))]);
+      const merged=[...allIds].map(uid=>{
+        const p=plan.find(x=>x.userId===uid)||{};
+        const r=realByUser.get(uid);
+        return {
+          id:r?.id||null,userId:uid,
+          horaPlanDesde:String(r?.hora_plan_desde||p.horaPlanDesde||"").slice(0,5),
+          horaPlanHasta:String(r?.hora_plan_hasta||p.horaPlanHasta||"").slice(0,5),
+          horaRealDesde:String(r?.hora_real_desde||p.horaPlanDesde||"").slice(0,5),
+          horaRealHasta:String(r?.hora_real_hasta||p.horaPlanHasta||"").slice(0,5),
+          estado:r?.estado||"normal",reemplazaUserId:r?.reemplaza_user_id||null,
+          comentario:r?.comentario||"",planObservacion:p.planObservacion||"",saved:!!r,
+        };
+      }).sort((a,b)=>(a.horaPlanDesde||a.horaRealDesde||"99:99").localeCompare(b.horaPlanDesde||b.horaRealDesde||"99:99") || encUserName(a.userId).localeCompare(encUserName(b.userId)));
+      setEncCobertura(merged);
+      setEncCoberturaLoadedKey(key);
+    } catch(e) {
+      notifyToast("No se pudo cargar la cobertura de encargadas: "+(e.message||e),"error");
+      setEncCobertura([]);setEncPlanFuente("sin_plan");
+    }
+    setEncCoberturaLoading(false);
+  }, [editorOpen, fecha, localId, encUserName]);
+
+  useEffect(()=>{ if(editorOpen&&fecha&&localId) loadEncCobertura(fecha,localId); },[editorOpen,fecha,localId,loadEncCobertura]);
+
+  const persistEncCobertura = useCallback(async (informeId = form?.id || null, rowsOverride = null) => {
+    const rows=rowsOverride||encCobertura;
+    if(!fecha||!localId) return;
+    setEncCoberturaSaving(true);
+    try {
+      await api.deleteEncargadaJornadaRealDia(localId,fecha);
+      const payload=(rows||[]).filter(r=>r.userId).map(r=>({
+        fecha,local_id:parseInt(localId),user_id:Number(r.userId),
+        hora_plan_desde:r.horaPlanDesde||null,hora_plan_hasta:r.horaPlanHasta||null,
+        hora_real_desde:r.estado==="ausencia"||r.estado==="vacaciones"?null:(r.horaRealDesde||null),
+        hora_real_hasta:r.estado==="ausencia"||r.estado==="vacaciones"?null:(r.horaRealHasta||null),
+        estado:r.estado||"normal",reemplaza_user_id:r.reemplazaUserId?Number(r.reemplazaUserId):null,
+        comentario:String(r.comentario||"").trim()||null,informe_diario_id:informeId?Number(informeId):null,
+        creado_por_user_id:user.id,actualizado_por_user_id:user.id,actualizado_en:new Date().toISOString(),
+      }));
+      if(payload.length) await api.upsertEncargadaJornadaReal(payload);
+      setEncCobertura(prev=>prev.map(r=>({...r,saved:true})));
+      return true;
+    } catch(e) {
+      notifyToast("No se pudo guardar la cobertura real: "+(e.message||e),"error");
+      return false;
+    } finally { setEncCoberturaSaving(false); }
+  }, [encCobertura,fecha,localId,form?.id,user.id]);
+
+  const markAllEncAccordingPlan = useCallback(async()=>{
+    const next=encCobertura.map(r=>({...r,estado:"normal",horaRealDesde:r.horaPlanDesde||r.horaRealDesde,horaRealHasta:r.horaPlanHasta||r.horaRealHasta,reemplazaUserId:null,comentario:r.comentario||""}));
+    setEncCobertura(next);
+    const ok=await persistEncCobertura(form?.id||null,next);
+    if(ok) notifyToast("Cobertura de encargadas confirmada según planificación.","success");
+  },[encCobertura,persistEncCobertura,form?.id]);
+
+  const addEncReplacement = useCallback(()=>{
+    const current=new Set(encCobertura.map(r=>Number(r.userId)));
+    const candidate=(data.users||[]).filter(u=>u.rol==="encargada"&&u.activo!==false&&!current.has(Number(u.id)))[0];
+    if(!candidate) return notifyToast("No hay otra encargada activa disponible para agregar.","warning");
+    setEncCobertura(prev=>[...prev,{id:null,userId:candidate.id,horaPlanDesde:"",horaPlanHasta:"",horaRealDesde:"10:00",horaRealHasta:"20:00",estado:"reemplazo",reemplazaUserId:null,comentario:"",planObservacion:"",saved:false}]);
+  },[encCobertura,data.users]);
+
+  const buildEncargadasRealText = useCallback((inf) => {
+    if(!encCobertura.length) return "Sin cobertura real registrada.";
+    return encCobertura.map(r=>{
+      const diff=encHoursDiff(r);
+      const plan=r.horaPlanDesde&&r.horaPlanHasta?`${r.horaPlanDesde}-${r.horaPlanHasta}`:"sin plan";
+      const real=r.estado==="ausencia"||r.estado==="vacaciones"?"sin trabajo":(r.horaRealDesde&&r.horaRealHasta?`${r.horaRealDesde}-${r.horaRealHasta}`:"sin dato");
+      const repl=r.reemplazaUserId?` · reemplaza a ${encUserName(r.reemplazaUserId)}`:"";
+      const delta=Math.abs(diff)>0.001?` · ${diff>0?"+":""}${diff.toFixed(1)} h vs plan`:"";
+      return `${encUserName(r.userId)} · Plan ${plan} · Real ${real} · ${r.estado}${repl}${delta}${r.comentario?` · ${r.comentario}`:""}`;
+    }).join("\n");
+  },[encCobertura,encHoursDiff,encUserName]);
+
+  const normalizeInformeReclamo = useCallback((r) => ({
+    id:r.id ?? null,
+    tempId:r.tempId || null,
+    informeId:r.informe_diario_id ?? r.informeId ?? null,
+    cliente:r.cliente || "",
+    motivo:r.motivo || "",
+    resuelto:r.resuelto === true,
+    acciones:r.acciones_realizar || r.acciones || "",
+    creadoEn:r.creado_en || "",
+    _temp:r._temp === true,
+  }), []);
+
+  const loadReclamos = useCallback(async (informeId) => {
+    if(!informeId){ setReclamosRows([]); return; }
+    setReclamosLoading(true);
+    try {
+      const rows=await api.getInformeReclamos(informeId);
+      setReclamosRows((rows||[]).map(normalizeInformeReclamo));
+    } catch(e){
+      notifyToast("No se pudieron cargar los reclamos: "+(e.message||e),"error");
+      setReclamosRows([]);
+    } finally { setReclamosLoading(false); }
+  }, [normalizeInformeReclamo]);
+
+  useEffect(()=>{
+    if(!editorOpen){ setReclamosRows([]); return; }
+    if(form?.id) loadReclamos(form.id);
+    else setReclamosRows([]);
+  }, [editorOpen, form?.id, loadReclamos]);
+
+  const openNuevoReclamo = useCallback(() => setReclamoModal({
+    id:null,tempId:null,cliente:"",motivo:"",resuelto:false,acciones:""
+  }), []);
+
+  const saveReclamoModal = useCallback(async () => {
+    if(!reclamoModal) return;
+    const cliente=String(reclamoModal.cliente||"").trim();
+    const motivo=String(reclamoModal.motivo||"").trim();
+    if(!cliente) return notifyToast("Ingresá el cliente del reclamo.","warning");
+    if(!motivo) return notifyToast("Ingresá el motivo del reclamo.","warning");
+    const base={cliente,motivo,resuelto:reclamoModal.resuelto===true,acciones:String(reclamoModal.acciones||"").trim()};
+    try {
+      if(form?.id){
+        const payload={informe_diario_id:Number(form.id),local_id:Number(form.localId),fecha:form.fecha,turno:form.turno||"manana",cliente:base.cliente,motivo:base.motivo,resuelto:base.resuelto,acciones_realizar:base.acciones||null,actualizado_en:new Date().toISOString()};
+        if(reclamoModal.id){
+          const rows=await api.updateInformeReclamo(reclamoModal.id,payload);
+          const saved=normalizeInformeReclamo(Array.isArray(rows)?rows[0]:rows);
+          setReclamosRows(prev=>prev.map(r=>r.id===reclamoModal.id?saved:r));
+        } else {
+          const rows=await api.createInformeReclamo({...payload,creado_por_user_id:user.id});
+          const saved=normalizeInformeReclamo(Array.isArray(rows)?rows[0]:rows);
+          setReclamosRows(prev=>[...prev,saved]);
+        }
+      } else {
+        const tempId=reclamoModal.tempId || `tmp-${Date.now()}-${Math.random().toString(36).slice(2,7)}`;
+        const row={...base,id:null,tempId,_temp:true};
+        setReclamosRows(prev=>{
+          const exists=prev.some(r=>r.tempId===tempId);
+          return exists?prev.map(r=>r.tempId===tempId?row:r):[...prev,row];
+        });
+      }
+      setReclamoModal(null);
+    } catch(e){ notifyToast("No se pudo guardar el reclamo: "+(e.message||e),"error"); }
+  }, [reclamoModal,form?.id,form?.localId,form?.fecha,form?.turno,user.id,normalizeInformeReclamo]);
+
+  const deleteReclamo = useCallback(async (row) => {
+    if(row?._temp || !row?.id){
+      setReclamosRows(prev=>prev.filter(r=>r.tempId!==row?.tempId));
+      return;
+    }
+    try { await api.deleteInformeReclamo(row.id); setReclamosRows(prev=>prev.filter(r=>r.id!==row.id)); }
+    catch(e){ notifyToast("No se pudo eliminar el reclamo: "+(e.message||e),"error"); }
+  }, []);
+
+  const persistTempReclamos = useCallback(async (informeId) => {
+    const temps=reclamosRows.filter(r=>r._temp);
+    if(!informeId || !temps.length) return;
+    const saved=[];
+    for(const r of temps){
+      const rows=await api.createInformeReclamo({informe_diario_id:Number(informeId),local_id:Number(form.localId),fecha:form.fecha,turno:form.turno||"manana",cliente:r.cliente,motivo:r.motivo,resuelto:r.resuelto===true,acciones_realizar:r.acciones||null,creado_por_user_id:user.id,actualizado_en:new Date().toISOString()});
+      saved.push(normalizeInformeReclamo(Array.isArray(rows)?rows[0]:rows));
+    }
+    setReclamosRows(prev=>[...prev.filter(r=>!r._temp),...saved]);
+  }, [reclamosRows,form?.localId,form?.fecha,form?.turno,user.id,normalizeInformeReclamo]);
+
+  const reclamosText = useCallback((inf) => {
+    const same=inf?.id && form?.id && Number(inf.id)===Number(form.id);
+    const rows=same?reclamosRows:[];
+    if(rows.length) return rows.map(r=>`${r.resuelto?"[Resuelto]":"[Pendiente]"} ${r.cliente}: ${r.motivo}${r.acciones?` · Acciones: ${r.acciones}`:""}`).join("\n");
+    return inf?.reclamos || "-";
+  }, [reclamosRows,form?.id]);
+
+  const loadGastoConceptos = useCallback(async () => {
+    try {
+      const rows=await api.getInformeGastoConceptos();
+      setGastoConceptos((rows||[]).map(normalizeInformeGastoConcepto));
+    } catch(e){ console.warn("Conceptos de gastos",e); }
+  }, []);
+
+  const loadGastosInforme = useCallback(async (informeId) => {
+    if(!informeId){ setGastosRows([]); return; }
+    setGastosLoading(true);
+    try {
+      const rows=await api.getInformeGastos(informeId);
+      setGastosRows((rows||[]).map(normalizeInformeGasto));
+    } catch(e){ notifyToast("No se pudieron cargar los pagos realizados: "+(e.message||e),"error"); }
+    setGastosLoading(false);
+  }, []);
+
+  useEffect(()=>{ if(editorOpen) void loadGastoConceptos(); },[editorOpen,loadGastoConceptos]);
+  useEffect(()=>{ if(editorOpen) void loadGastosInforme(form?.id); },[editorOpen,form?.id,loadGastosInforme]);
+
+  const gastoConceptoLabel = useCallback((id) => {
+    const c=gastoConceptos.find(x=>Number(x.id)===Number(id));
+    return c ? `${c.codigo?c.codigo+" · ":""}${c.nombre}` : "Concepto";
+  }, [gastoConceptos]);
+
+  const openNuevoGasto = useCallback(() => {
+    const first=gastoConceptos.find(c=>c.activo);
+    if(!first) return notifyToast("Primero el administrador debe configurar al menos un concepto de gasto.","warning",{title:"Sin conceptos de gasto"});
+    setGastoModal({ conceptoId:first.id,detalle:"",importe:"",medioPago:"efectivo",comprobanteNombre:"",comprobantePath:"",comprobanteFile:null });
+  }, [gastoConceptos]);
+
+  const saveGastoModal = useCallback(async () => {
+    if(!gastoModal) return;
+    if(!gastoModal.conceptoId) return notifyToast("Seleccioná un concepto.","warning");
+    const importe=parseMoneyInforme(gastoModal.importe);
+    if(!(importe>0)) return notifyToast("Ingresá un importe mayor a cero.","warning");
+    try {
+      let comprobantePath=gastoModal.comprobantePath||"", comprobanteNombre=gastoModal.comprobanteNombre||"";
+      if(gastoModal.comprobanteFile){
+        const uploaded=await api.uploadInformeGastoComprobante(gastoModal.id||gastoModal.tempId||`tmp-${Date.now()}`,gastoModal.comprobanteFile);
+        comprobantePath=uploaded.path; comprobanteNombre=uploaded.name;
+      }
+      const base={ concepto_id:Number(gastoModal.conceptoId),detalle:String(gastoModal.detalle||"").trim()||null,importe,medio_pago:gastoModal.medioPago||"efectivo",comprobante_nombre:comprobanteNombre||null,comprobante_path:comprobantePath||null,creado_por_user_id:user.id,actualizado_en:new Date().toISOString() };
+      if(form?.id){
+        if(gastoModal.id){
+          const rows=await api.updateInformeGasto(gastoModal.id,{...base,informe_diario_id:Number(form.id)});
+          const saved=normalizeInformeGasto(Array.isArray(rows)?rows[0]:rows);
+          setGastosRows(prev=>prev.map(r=>r.id===saved.id?saved:r));
+        } else {
+          const rows=await api.createInformeGasto({...base,informe_diario_id:Number(form.id)});
+          const saved=normalizeInformeGasto(Array.isArray(rows)?rows[0]:rows);
+          setGastosRows(prev=>[...prev,saved]);
+        }
+      } else {
+        const tempId=gastoModal.tempId||`tmp-${Date.now()}-${Math.random().toString(36).slice(2,7)}`;
+        const row={id:null,tempId,_temp:true,conceptoId:Number(gastoModal.conceptoId),detalle:String(gastoModal.detalle||"").trim(),importe,medioPago:gastoModal.medioPago||"efectivo",comprobanteNombre,comprobantePath,creadoPor:user.id};
+        setGastosRows(prev=>prev.some(r=>r.tempId===tempId)?prev.map(r=>r.tempId===tempId?row:r):[...prev,row]);
+      }
+      setGastoModal(null);
+    } catch(e){ notifyToast("No se pudo guardar el pago: "+(e.message||e),"error"); }
+  }, [gastoModal,form?.id,user.id,parseMoneyInforme]);
+
+  const deleteGasto = useCallback(async (row) => {
+    try {
+      if(row?.comprobantePath) await api.deleteInformeGastoComprobante(row.comprobantePath).catch(()=>{});
+      if(row?._temp || !row?.id) setGastosRows(prev=>prev.filter(r=>r.tempId!==row?.tempId));
+      else { await api.deleteInformeGasto(row.id); setGastosRows(prev=>prev.filter(r=>r.id!==row.id)); }
+    } catch(e){ notifyToast("No se pudo eliminar el pago: "+(e.message||e),"error"); }
+  }, []);
+
+  const persistTempGastos = useCallback(async (informeId) => {
+    const temps=gastosRows.filter(r=>r._temp);
+    if(!informeId || !temps.length) return;
+    const saved=[];
+    for(const r of temps){
+      const rows=await api.createInformeGasto({informe_diario_id:Number(informeId),concepto_id:Number(r.conceptoId),detalle:r.detalle||null,importe:Number(r.importe||0),medio_pago:r.medioPago||"efectivo",comprobante_nombre:r.comprobanteNombre||null,comprobante_path:r.comprobantePath||null,creado_por_user_id:user.id,actualizado_en:new Date().toISOString()});
+      saved.push(normalizeInformeGasto(Array.isArray(rows)?rows[0]:rows));
+    }
+    setGastosRows(prev=>[...prev.filter(r=>!r._temp),...saved]);
+  }, [gastosRows,user.id]);
+
+  const gastosText = useCallback((inf) => {
+    const same=inf?.id && form?.id && Number(inf.id)===Number(form.id);
+    const rows=same?gastosRows:[];
+    if(rows.length) return rows.map(r=>`${gastoConceptoLabel(r.conceptoId)} · ${r.detalle||"Sin detalle"} · ${fmtMoney(r.importe)} · ${String(r.medioPago||"otro").charAt(0).toUpperCase()+String(r.medioPago||"otro").slice(1)}${r.comprobanteNombre?` · Comprobante: ${r.comprobanteNombre}`:""}`).join("\n");
+    return inf?.pagosRealizados || "-";
+  }, [gastosRows,form?.id,gastoConceptoLabel]);
+
+  const saveConceptoGasto = useCallback(async () => {
+    if(user.rol!=="admin") return;
+    const nombre=String(conceptoDraft.nombre||"").trim();
+    if(!nombre) return notifyToast("Ingresá el nombre del concepto.","warning");
+    setConceptosSaving(true);
+    try {
+      const payload={codigo:String(conceptoDraft.codigo||"").trim()||null,nombre,activo:conceptoDraft.activo!==false,orden:Number(conceptoDraft.orden||0),actualizado_en:new Date().toISOString()};
+      if(conceptoDraft.id) await api.updateInformeGastoConcepto(conceptoDraft.id,payload); else await api.createInformeGastoConcepto(payload);
+      setConceptoDraft({codigo:"",nombre:"",activo:true,orden:0});
+      await loadGastoConceptos();
+    } catch(e){ notifyToast("No se pudo guardar el concepto: "+(e.message||e),"error"); }
+    setConceptosSaving(false);
+  }, [user.rol,conceptoDraft,loadGastoConceptos]);
+
   const garantiasDelDia = useMemo(() => getGarantiasDelDia(form), [getGarantiasDelDia, form]);
 
   const buildTextReport = (inf) => {
@@ -7555,7 +8288,7 @@ function InformeDiario({ data, reloadData, user }) {
       inf.mercadoPagoTotalReservas || "-",
       ``,
       `PAGOS REALIZADOS:`,
-      inf.pagosRealizados || "-",
+      gastosText(inf),
       ``,
       `CAJA GENERAL:`,
       `Saldo anterior: ${fmtMoney(inf.saldoAnterior)}`,
@@ -7566,11 +8299,14 @@ function InformeDiario({ data, reloadData, user }) {
       `ASISTENCIA DE MANICURAS:`,
       buildAsistenciaText(inf),
       ``,
+      `HORARIOS ENCARGADAS:`,
+      buildEncargadasRealText(inf),
+      ``,
       `GARANTÍAS DEL DÍA:`,
       buildGarantiasText(inf),
       ``,
       `RECLAMOS:`,
-      inf.reclamos || "-",
+      reclamosText(inf),
       ``,
       `NOVEDADES SALÓN / MANICURAS:`,
       inf.novedadesSalonManicuras || "-",
@@ -7615,6 +8351,9 @@ function InformeDiario({ data, reloadData, user }) {
       const savedRaw = Array.isArray(savedRows) ? savedRows[0] : null;
       const savedNormalized = savedRaw ? normalizeInformeDiario(savedRaw) : { ...form, ...payload, localId: payload.local_id, estado: payload.estado, enviadoEn: payload.enviado_en };
       setForm(savedNormalized);
+      await persistEncCobertura(savedNormalized?.id || form?.id || null);
+      await persistTempReclamos(savedNormalized?.id || form?.id || null);
+      await persistTempGastos(savedNormalized?.id || form?.id || null);
       await reloadData();
       notifyToast(markSent ? "Informe guardado como enviado." : "Informe guardado.", "success", { title:"Informe diario" });
       if (markSent) setPreview(savedNormalized);
@@ -7638,11 +8377,12 @@ function InformeDiario({ data, reloadData, user }) {
       ["URGENTES GENERALES", inf.urgentesGenerales, "danger"],
       ["CAJA EN EFECTIVO", `Saldo inicial: ${fmtMoney(inf.saldoEfectivoAnterior)} · Coincide: ${inf.coincideEfectivoInicial ? "Sí" : "No"}\nSaldo final: ${fmtMoney(inf.efectivoCaja)} · Coincide: ${inf.coincideCaja ? "Sí" : "No"}`],
       ["MERCADO PAGO / TOTAL / RESERVAS", inf.mercadoPagoTotalReservas],
-      ["PAGOS REALIZADOS", inf.pagosRealizados],
+      ["PAGOS REALIZADOS", gastosText(inf)],
       ["CAJA GENERAL", `Saldo anterior: ${fmtMoney(inf.saldoAnterior)}\n+ Traspaso a Caja General: ${fmtMoney(inf.traspasoCajaGeneral)}\n- Traspaso a Caja Efectivo: ${fmtMoney(inf.traspasoCajaEfectivo)}\nSALDO FINAL: ${fmtMoney(calcTotalCaja(inf))}`],
       ["ASISTENCIA DE MANICURAS", buildAsistenciaText(inf)],
+      ["HORARIOS ENCARGADAS", buildEncargadasRealText(inf)],
       ["GARANTÍAS DEL DÍA", buildGarantiasText(inf)],
-      ["RECLAMOS", inf.reclamos],
+      ["RECLAMOS", reclamosText(inf)],
       ["NOVEDADES SALÓN / MANICURAS", inf.novedadesSalonManicuras],
       ["OBSERVACIONES / EXTRAS", inf.observacionesExtras],
     ].map(([l,v,c]) => `<div class="row"><div class="label ${c||""}">${l}</div><div class="value">${String(v || "-").replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;")}</div></div>`).join("")}</body></html>`;
@@ -7678,8 +8418,25 @@ function InformeDiario({ data, reloadData, user }) {
   const asistenciaInforme = useMemo(() => getAsistenciaInforme(form), [getAsistenciaInforme, form]);
 
   const Field = useCallback(({ label, children, style }) => <div style={style}><label style={{ fontSize:12,fontWeight:600,color:"var(--color-text-secondary)",display:"block",marginBottom:5 }}>{label}</label>{children}</div>, []);
-  const TextArea = useCallback(({ value, onChange, rows=3, placeholder }) => <textarea value={value||""} onChange={e=>onChange(e.target.value)} rows={rows} placeholder={placeholder} style={{ width:"100%",boxSizing:"border-box",border:"0.5px solid var(--color-border-secondary)",borderRadius:8,padding:"8px 12px",fontSize:14,background:"var(--color-background-primary)",color:"var(--color-text-primary)",resize:"vertical",fontFamily:"inherit" }}/>, []);
-  const MoneyInput = useCallback(({ value, onChange, readOnly=false }) => <input type="text" inputMode="decimal" value={value ?? ""} readOnly={readOnly} onChange={e=>onChange(e.target.value)} onBlur={()=>{ if (!readOnly) onChange(formatMoneyInput(value)); }} style={{ border:"0.5px solid var(--color-border-secondary)",borderRadius:8,padding:"8px 12px",fontSize:14,width:"100%",background:readOnly?"var(--color-background-secondary)":"var(--color-background-primary)",color:"var(--color-text-primary)",boxSizing:"border-box",fontFamily:"inherit",textAlign:"right" }}/>, [formatMoneyInput]);
+  const TextArea = useCallback(({ value, onChange, rows=3, placeholder, listMode=false }) => {
+    const handleKeyDown=(e)=>{
+      if(!listMode || e.key!=="Enter" || e.shiftKey) return;
+      const el=e.currentTarget;
+      const start=el.selectionStart,end=el.selectionEnd;
+      const current=String(value||"");
+      const before=current.slice(0,start),after=current.slice(end);
+      const line=before.split("\n").pop()||"";
+      if(!line.trim()){ e.preventDefault(); const next=before+"\n• "+after; onChange(next); setTimeout(()=>{el.selectionStart=el.selectionEnd=start+3;},0); return; }
+      e.preventDefault();
+      const next=before+"\n• "+after;
+      onChange(next);
+      setTimeout(()=>{el.selectionStart=el.selectionEnd=start+3;},0);
+    };
+    const normalized=listMode && value && !String(value).startsWith("• ") && !String(value).startsWith("- ") ? value : (value||"");
+    const autoSize=(el)=>{ if(!el) return; el.style.height="auto"; el.style.height=`${Math.max(44,el.scrollHeight)}px`; };
+    return <textarea ref={autoSize} className={`niki-report-entry ${listMode?"niki-report-lined":""}`} value={normalized} onChange={e=>{onChange(e.target.value);autoSize(e.currentTarget);}} onInput={e=>autoSize(e.currentTarget)} onFocus={e=>{ autoSize(e.currentTarget); if(listMode && !String(value||"").trim()){ onChange("• "); setTimeout(()=>{autoSize(e.currentTarget);e.currentTarget.selectionStart=e.currentTarget.selectionEnd=2;},0); } }} onKeyDown={handleKeyDown} rows={rows} placeholder={placeholder} style={{ width:"100%",boxSizing:"border-box",borderRadius:8,padding:"8px 12px",fontSize:14,color:"var(--color-text-primary)",resize:"none",overflow:"hidden",fontFamily:"inherit" }}/>;
+  }, []);
+  const MoneyInput = useCallback(({ value, onChange, readOnly=false }) => <input className={readOnly?"":"niki-report-entry"} type="text" inputMode="decimal" value={value ?? ""} readOnly={readOnly} onChange={e=>onChange(e.target.value)} onBlur={()=>{ if (!readOnly) onChange(formatMoneyInput(value)); }} style={{ border:"1px solid rgba(120,120,120,0.16)",borderRadius:8,padding:"8px 12px",fontSize:14,width:"100%",background:readOnly?"var(--color-background-secondary)":undefined,color:"var(--color-text-primary)",boxSizing:"border-box",fontFamily:"inherit",textAlign:"right" }}/>, [formatMoneyInput]);
 
   const openInformeEditor = useCallback((inf) => {
     if (!inf) return;
@@ -7695,12 +8452,31 @@ function InformeDiario({ data, reloadData, user }) {
     setEditorOpen(true);
   }, [getSaldoAnterior, getSaldoEfectivoAnterior]);
 
+  const findPreviousDraft = useCallback((f,lid,turno="manana") => {
+    const targetKey=`${f}|${String(turnoOrden(turno)).padStart(2,"0")}`;
+    return (data.informesDiarios||[])
+      .filter(i=>i.localId===parseInt(lid) && i.estado!=="enviado")
+      .filter(i=>`${i.fecha}|${String(turnoOrden(i.turno||"dia")).padStart(2,"0")}` < targetKey)
+      .sort((a,b)=>`${a.fecha}|${turnoOrden(a.turno||"dia")}`.localeCompare(`${b.fecha}|${turnoOrden(b.turno||"dia")}`))[0] || null;
+  }, [data.informesDiarios,turnoOrden]);
+
   const startNewInforme = useCallback(() => {
     const f = dateKey(new Date());
     const lid = parseInt(localFiltro || localId || locales[0]?.id);
     const turno = "manana";
     if (!lid) return notifyToast("Seleccioná un local para generar el informe.", "warning");
     const existing = findInforme(f, lid, turno);
+    const previousDraft = !existing ? findPreviousDraft(f,lid,turno) : null;
+    if(previousDraft){
+      setFecha(previousDraft.fecha);
+      setLocalId(String(previousDraft.localId));
+      setLocalFiltro(String(previousDraft.localId));
+      setMesFiltro(String(previousDraft.fecha||"").slice(0,7));
+      setForm({...previousDraft,saldoAnterior:getSaldoAnterior(previousDraft.fecha,previousDraft.localId,previousDraft.turno||"manana",previousDraft.id),saldoEfectivoAnterior:getSaldoEfectivoAnterior(previousDraft.fecha,previousDraft.localId,previousDraft.turno||"manana",previousDraft.id)});
+      setEditorOpen(true);
+      notifyToast(`Hay un borrador anterior pendiente del ${parseDateLabel(previousDraft.fecha)}. Debe completarse antes de generar un informe nuevo.`,"warning",{title:"Borrador pendiente"});
+      return;
+    }
     setFecha(f);
     setLocalId(String(lid));
     setLocalFiltro(String(lid));
@@ -7716,7 +8492,7 @@ function InformeDiario({ data, reloadData, user }) {
       setForm(emptyForm(f, lid, turno));
     }
     setEditorOpen(true);
-  }, [localFiltro, localId, locales, findInforme, emptyForm, getSaldoAnterior, getSaldoEfectivoAnterior]);
+  }, [localFiltro, localId, locales, findInforme, findPreviousDraft, emptyForm, getSaldoAnterior, getSaldoEfectivoAnterior,parseDateLabel]);
 
   if (!locales.length) return <Card><p style={{ margin:0,color:COLORS.danger }}>No tenés locales asignados para cargar informes diarios.</p></Card>;
 
@@ -7757,145 +8533,180 @@ function InformeDiario({ data, reloadData, user }) {
       </div>}
     </Card>}
 
-    {editorOpen && <Card style={{ marginTop:14,marginBottom:14 }}>
-      <div style={{ display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(180px,1fr))",gap:12,marginBottom:14 }}>
-        <Field label="Local"><Select value={localId} onChange={v=>{setLocalId(v); setLocalFiltro(v);}}>{locales.map(l=><option key={l.id} value={l.id}>{l.nombre}</option>)}</Select></Field>
-        <Field label="Fecha"><input type="date" value={fecha} onChange={e=>{setFecha(e.target.value); setMesFiltro(String(e.target.value).slice(0,7));}} style={{ width:"100%",border:`1.5px solid ${COLORS.pink}`,borderRadius:10,padding:"10px 12px",fontSize:17,fontWeight:700,background:COLORS.pinkLight,color:COLORS.pinkDark,boxSizing:"border-box",fontFamily:"inherit" }}/></Field>
-        <Field label="Turno"><Select value={form?.turno || "manana"} onChange={v=>loadForDateLocal(fecha, localId, v)}><option value="manana">Mañana</option><option value="tarde">Tarde</option></Select></Field>
-        <Field label="Estado"><div style={{ padding:"8px 12px",borderRadius:8,background:form?.estado==="enviado"?COLORS.successLight:COLORS.grayLight,color:form?.estado==="enviado"?COLORS.success:"#555",fontWeight:600 }}>{form?.estado==="enviado"?"Enviado":"Borrador"}</div></Field>
+    {editorOpen && <div style={{ marginTop:10,marginBottom:14 }}>
+      <div style={{ border:"1px solid var(--color-border-tertiary)",borderRadius:14,padding:"10px 12px",background:"var(--color-background-primary)",marginBottom:10 }}>
+        <div style={{ display:"grid",gridTemplateColumns:"repeat(4,minmax(0,1fr))",gap:10 }} className="niki-mobile-one-column">
+          <Field label="Local"><Select value={localId} onChange={v=>{setLocalId(v); setLocalFiltro(v);}}>{locales.map(l=><option key={l.id} value={l.id}>{l.nombre}</option>)}</Select></Field>
+          <Field label="Fecha"><input type="date" value={fecha} onChange={e=>{setFecha(e.target.value); setMesFiltro(String(e.target.value).slice(0,7));}} style={{ width:"100%",border:`1px solid ${COLORS.pink}`,borderRadius:8,padding:"8px 10px",fontSize:14,fontWeight:700,background:COLORS.pinkLight,color:COLORS.pinkDark,boxSizing:"border-box",fontFamily:"inherit" }}/></Field>
+          <Field label="Turno"><Select value={form?.turno || "manana"} onChange={v=>loadForDateLocal(fecha, localId, v)}><option value="manana">Mañana</option><option value="tarde">Tarde</option></Select></Field>
+          <Field label="Estado"><div style={{ minHeight:36,display:"flex",alignItems:"center",padding:"7px 10px",borderRadius:8,background:form?.estado==="enviado"?COLORS.successLight:COLORS.grayLight,color:form?.estado==="enviado"?COLORS.success:"#555",fontWeight:700,fontSize:13 }}>{form?.estado==="enviado"?"● Enviado":"● Borrador"}</div></Field>
+        </div>
       </div>
-      {form && <div style={{ display:"flex",flexDirection:"column",gap:16 }}>
-        <div style={{ background:turnoVisual.heroBackground,border:"1px solid rgba(255,255,255,0.45)",borderRadius:16,padding:"14px 16px",display:"flex",alignItems:"center",justifyContent:"space-between",gap:12,flexWrap:"wrap",boxShadow:"0 10px 26px rgba(114,36,62,0.10)" }}>
-          <div style={{ display:"flex",alignItems:"center",gap:12 }}>
-            <div style={{ width:46,height:46,borderRadius:"50%",background:"rgba(255,255,255,0.72)",display:"flex",alignItems:"center",justifyContent:"center",fontSize:25,boxShadow:"0 4px 16px rgba(0,0,0,0.10)" }}>{turnoVisual.icon}</div>
-            <div>
-              <p style={{ margin:0,fontSize:12,fontWeight:800,color:turnoVisual.heroColor,textTransform:"uppercase",letterSpacing:"0.04em" }}>Fecha del informe</p>
-              <p style={{ margin:"3px 0 0",fontSize:24,fontWeight:800,color:turnoVisual.heroColor }}>{parseDateLabel(form.fecha)}</p><p style={{ margin:"2px 0 0",fontSize:12,color:turnoVisual.heroColor,fontWeight:800 }}>{turnoVisual.label}</p>
+
+      {form && <div style={{ display:"flex",flexDirection:"column",gap:10 }}>
+        <div style={{ background:turnoVisual.background,border:turnoVisual.border,borderRadius:16,padding:"12px 16px",display:"grid",gridTemplateColumns:"1.25fr 0.75fr 0.9fr",gap:14,alignItems:"center",boxShadow:"0 8px 22px rgba(114,36,62,0.07)" }} className="niki-mobile-one-column">
+          <div style={{ display:"flex",alignItems:"center",gap:12,minWidth:0 }}>
+            <div style={{ width:44,height:44,borderRadius:"50%",background:"rgba(255,255,255,0.78)",display:"flex",alignItems:"center",justifyContent:"center",fontSize:23,boxShadow:"0 3px 12px rgba(0,0,0,0.08)",flexShrink:0 }}>{turnoVisual.icon}</div>
+            <div style={{ minWidth:0 }}>
+              <p style={{ margin:0,fontSize:10,fontWeight:800,color:COLORS.pinkDark,textTransform:"uppercase",letterSpacing:"0.07em" }}>Informe del día</p>
+              <p style={{ margin:"2px 0 0",fontSize:22,fontWeight:800,color:COLORS.pinkDark,lineHeight:1.05 }}>{parseDateLabel(form.fecha)}</p>
+              <p style={{ margin:"3px 0 0",fontSize:11,color:COLORS.pinkDark,fontWeight:700 }}>{turnoVisual.label}</p>
             </div>
           </div>
-          <div style={{ textAlign:"right" }}>
-            <p style={{ margin:0,fontSize:12,color:turnoVisual.heroColor,fontWeight:700 }}>Local</p>
-            <p style={{ margin:"2px 0 0",fontSize:16,fontWeight:700,color:"var(--color-text-primary)" }}>{selectedLocal?.nombre || "-"}</p><p style={{ margin:"3px 0 0",fontSize:12,color:"var(--color-text-secondary)" }}>Responsable cierre: {userLabel(form.cerradoPor || form.creadoPor || user.id)}</p>
+          <div style={{ borderLeft:"1px solid rgba(114,36,62,0.13)",paddingLeft:14 }}>
+            <p style={{ margin:0,fontSize:10,color:"var(--color-text-secondary)",fontWeight:700,textTransform:"uppercase" }}>Local</p>
+            <p style={{ margin:"3px 0 0",fontSize:15,fontWeight:800 }}>{selectedLocal?.nombre || "-"}</p>
+          </div>
+          <div style={{ borderLeft:"1px solid rgba(114,36,62,0.13)",paddingLeft:14 }}>
+            <p style={{ margin:0,fontSize:10,color:"var(--color-text-secondary)",fontWeight:700,textTransform:"uppercase" }}>Responsable de cierre</p>
+            <p style={{ margin:"3px 0 0",fontSize:14,fontWeight:800 }}>{userLabel(form.cerradoPor || form.creadoPor || user.id)}</p>
           </div>
         </div>
 
-        <div style={{ display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(260px,1fr))",gap:14 }}>
-          <Field label="Importante para mañana"><TextArea value={form.importanteManana} onChange={v=>setForm(f=>({...f,importanteManana:v}))} placeholder="Ej: Ver si llegan tapas"/></Field>
-          <Field label="Urgentes generales"><TextArea value={form.urgentesGenerales} onChange={v=>setForm(f=>({...f,urgentesGenerales:v}))}/></Field>
+        <div className="niki-report-two-col">
+          <div style={{ border:"1px solid var(--color-border-tertiary)",borderRadius:13,overflow:"hidden",background:"var(--color-background-primary)" }}>
+            <div style={{ padding:"9px 11px",borderBottom:"1px solid var(--color-border-tertiary)",background:"linear-gradient(90deg, rgba(247,237,240,.95), rgba(255,255,255,.85))" }}>
+              <div style={{ display:"flex",alignItems:"center",gap:8 }}><span style={{ width:28,height:28,borderRadius:"50%",background:COLORS.pinkLight,color:COLORS.pinkDark,display:"inline-flex",alignItems:"center",justifyContent:"center" }}>📝</span><div><h3 style={{ margin:0,fontSize:13,fontWeight:800 }}>Información importante para mañana</h3><p style={{ margin:"1px 0 0",fontSize:10,color:"var(--color-text-secondary)" }}>Notas o recordatorios para el próximo turno.</p></div></div>
+            </div>
+            <div style={{ padding:10 }}><TextArea listMode rows={2} value={form.importanteManana} onChange={v=>setForm(f=>({...f,importanteManana:v}))} placeholder="Ej: Ver si llegan tapas"/></div>
+          </div>
+          <div style={{ border:"1px solid var(--color-border-tertiary)",borderRadius:13,overflow:"hidden",background:"var(--color-background-primary)" }}>
+            <div style={{ padding:"9px 11px",borderBottom:"1px solid var(--color-border-tertiary)",background:"linear-gradient(90deg, rgba(252,235,235,.72), rgba(255,255,255,.85))" }}>
+              <div style={{ display:"flex",alignItems:"center",gap:8 }}><span style={{ width:28,height:28,borderRadius:"50%",background:COLORS.dangerLight,color:COLORS.danger,display:"inline-flex",alignItems:"center",justifyContent:"center" }}>📣</span><div><h3 style={{ margin:0,fontSize:13,fontWeight:800 }}>Urgentes generales</h3><p style={{ margin:"1px 0 0",fontSize:10,color:"var(--color-text-secondary)" }}>Situaciones importantes o pendientes del día.</p></div></div>
+            </div>
+            <div style={{ padding:10 }}><TextArea listMode rows={2} value={form.urgentesGenerales} onChange={v=>setForm(f=>({...f,urgentesGenerales:v}))} placeholder="Agregar una nota..."/></div>
+          </div>
         </div>
 
-        <div style={{ border:"1px solid var(--color-border-tertiary)",borderRadius:14,overflow:"hidden",background:"var(--color-background-primary)" }}>
-          <div style={{ background:asistenciaInforme.ok ? COLORS.successLight : COLORS.amberLight,padding:"10px 12px",borderBottom:"1px solid var(--color-border-tertiary)",display:"flex",justifyContent:"space-between",alignItems:"center",gap:8,flexWrap:"wrap" }}>
-            <div>
-              <h3 style={{ margin:0,fontSize:15,fontWeight:700,color:asistenciaInforme.ok ? COLORS.success : COLORS.amber }}>Asistencia de manicuras</h3>
-              <p style={{ margin:"2px 0 0",fontSize:12,color:asistenciaInforme.ok ? COLORS.success : COLORS.amber }}>Resumen automático según horarios y asistencia registrada para este local y fecha.</p>
+        <div className="niki-report-two-col">
+          <div style={{ border:"1px solid var(--color-border-tertiary)",borderRadius:14,overflow:"hidden",background:"var(--color-background-primary)",minWidth:0 }}>
+            <div style={{ background:asistenciaInforme.ok ? COLORS.successLight : COLORS.amberLight,padding:"9px 11px",borderBottom:"1px solid var(--color-border-tertiary)",display:"flex",justifyContent:"space-between",alignItems:"center",gap:8 }}>
+              <div style={{ display:"flex",alignItems:"center",gap:8,minWidth:0 }}><span style={{ width:30,height:30,borderRadius:"50%",background:"rgba(255,255,255,.72)",display:"inline-flex",alignItems:"center",justifyContent:"center",fontSize:15 }}>👥</span><div><h3 style={{ margin:0,fontSize:14,fontWeight:800,color:asistenciaInforme.ok ? COLORS.success : COLORS.amber }}>Asistencia de manicuras</h3><p style={{ margin:"1px 0 0",fontSize:10,color:asistenciaInforme.ok ? COLORS.success : COLORS.amber }}>Resumen del equipo con horario para el día.</p></div></div>
+              <Badge color={asistenciaInforme.ok ? "success" : "amber"}>{asistenciaInforme.total} programada{asistenciaInforme.total!==1?"s":""}</Badge>
             </div>
-            <Badge color={asistenciaInforme.ok ? "success" : "amber"}>{asistenciaInforme.total} con horario</Badge>
-          </div>
-          <div style={{ padding:12 }}>
-            {asistenciaInforme.total === 0 ? <p style={{ margin:0,fontSize:13,color:"var(--color-text-secondary)" }}>No hay manicuras con horario cargado para este día.</p> : asistenciaInforme.ok ? <div style={{ display:"flex",gap:8,alignItems:"center",flexWrap:"wrap" }}><Badge color="success">✓ Todas llegaron a tiempo</Badge><span style={{ fontSize:13,color:"var(--color-text-secondary)" }}>No hay faltas ni llegadas tarde registradas.</span></div> : <div style={{ display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(240px,1fr))",gap:10 }}>
-              {asistenciaInforme.tarde.length > 0 && <div style={{ border:"1px solid rgba(186,117,23,0.25)",borderRadius:10,padding:"8px 10px",background:COLORS.amberLight }}>
-                <p style={{ margin:"0 0 6px",fontSize:13,fontWeight:700,color:COLORS.amber }}>Llegaron tarde</p>
-                {asistenciaInforme.tarde.map(({ manicura, asistencia }) => <p key={manicura.id} style={{ margin:"4px 0",fontSize:12,color:"var(--color-text-primary)" }}><strong>{userLabel(manicura.id, manicura.nombre)}</strong>{asistencia?.entradaReal ? ` · entrada ${asistencia.entradaReal}` : ""}{asistencia?.motivo ? ` · ${asistencia.motivo}` : ""}</p>)}
+            <div style={{ padding:10 }}>
+              <div style={{ display:"grid",gridTemplateColumns:"repeat(4,minmax(0,1fr))",gap:6,marginBottom:9 }}>
+                <div style={{ borderRadius:9,padding:"7px 6px",background:COLORS.successLight,textAlign:"center" }}><strong style={{ display:"block",fontSize:17,color:COLORS.success }}>{Math.max(0,asistenciaInforme.total-asistenciaInforme.ausente.length)}</strong><span style={{ fontSize:9,color:"var(--color-text-secondary)" }}>Asistieron</span></div>
+                <div style={{ borderRadius:9,padding:"7px 6px",background:COLORS.amberLight,textAlign:"center" }}><strong style={{ display:"block",fontSize:17,color:COLORS.amber }}>{asistenciaInforme.tarde.length}</strong><span style={{ fontSize:9,color:"var(--color-text-secondary)" }}>Llegadas tarde</span></div>
+                <div style={{ borderRadius:9,padding:"7px 6px",background:COLORS.dangerLight,textAlign:"center" }}><strong style={{ display:"block",fontSize:17,color:COLORS.danger }}>{asistenciaInforme.ausente.length}</strong><span style={{ fontSize:9,color:"var(--color-text-secondary)" }}>Ausentes</span></div>
+                <div style={{ borderRadius:9,padding:"7px 6px",background:COLORS.infoLight,textAlign:"center" }}><strong style={{ display:"block",fontSize:17,color:COLORS.info }}>{asistenciaInforme.total}</strong><span style={{ fontSize:9,color:"var(--color-text-secondary)" }}>Programadas</span></div>
+              </div>
+              {asistenciaInforme.total===0 ? <p style={{ margin:0,fontSize:12,color:"var(--color-text-secondary)" }}>No hay manicuras con horario cargado para este día.</p> : asistenciaInforme.ok ? <div style={{ display:"flex",alignItems:"center",gap:7,flexWrap:"wrap",borderTop:"1px solid var(--color-border-tertiary)",paddingTop:8 }}><Badge color="success">✓ Todas llegaron a tiempo</Badge>{asistenciaInforme.sinRegistro.length>0&&<span style={{fontSize:10,color:"var(--color-text-secondary)"}}>{asistenciaInforme.sinRegistro.length} sin asistencia registrada</span>}</div> : <div style={{ borderTop:"1px solid var(--color-border-tertiary)",paddingTop:8,display:"flex",flexDirection:"column",gap:5 }}>
+                {asistenciaInforme.tarde.map(({manicura,asistencia})=><div key={`t-${manicura.id}`} style={{fontSize:11}}><Badge color="amber">Tarde</Badge> <strong>{userLabel(manicura.id,manicura.nombre)}</strong>{asistencia?.entradaReal?` · ${asistencia.entradaReal}`:""}{asistencia?.motivo?` · ${asistencia.motivo}`:""}</div>)}
+                {asistenciaInforme.ausente.map(({manicura,asistencia})=><div key={`a-${manicura.id}`} style={{fontSize:11}}><Badge color="danger">Ausente</Badge> <strong>{userLabel(manicura.id,manicura.nombre)}</strong>{asistencia?.motivo?` · ${asistencia.motivo}`:""}</div>)}
               </div>}
-              {asistenciaInforme.ausente.length > 0 && <div style={{ border:"1px solid rgba(226,75,74,0.25)",borderRadius:10,padding:"8px 10px",background:COLORS.dangerLight }}>
-                <p style={{ margin:"0 0 6px",fontSize:13,fontWeight:700,color:COLORS.danger }}>Faltaron</p>
-                {asistenciaInforme.ausente.map(({ manicura, asistencia }) => <p key={manicura.id} style={{ margin:"4px 0",fontSize:12,color:"var(--color-text-primary)" }}><strong>{userLabel(manicura.id, manicura.nombre)}</strong>{asistencia?.motivo ? ` · ${asistencia.motivo}` : ""}{asistencia?.certificado ? " · con certificado" : ""}</p>)}
-              </div>}
-            </div>}
-          </div>
-        </div>
-
-        <div style={{ display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(360px,1fr))",gap:14 }}>
-          <div style={{ border:"1px solid var(--color-border-tertiary)",borderRadius:14,overflow:"hidden",background:"var(--color-background-primary)" }}>
-            <div style={{ background:COLORS.infoLight,padding:"10px 12px",borderBottom:"1px solid var(--color-border-tertiary)" }}>
-              <h3 style={{ margin:0,fontSize:15,fontWeight:700,color:COLORS.info }}>Caja efectivo</h3>
-            </div>
-            <div style={{ padding:12,display:"flex",flexDirection:"column",gap:10 }}>
-              <div style={{ display:"grid",gridTemplateColumns:"minmax(120px,1fr) minmax(130px,170px) minmax(92px,110px) minmax(90px,150px)",gap:10,alignItems:"center" }}>
-                <label style={{ fontSize:13,fontWeight:700,color:"var(--color-text-primary)" }}>Saldo inicial</label>
-                <MoneyInput readOnly value={formatMoneyInput(form.saldoEfectivoAnterior)} onChange={()=>{}}/>
-                <label style={{ fontSize:13,fontWeight:700,color:"var(--color-text-primary)",textAlign:"right" }}>¿Coincide?</label>
-                <Select value={form.coincideEfectivoInicial?"si":"no"} onChange={v=>setForm(f=>({...f,coincideEfectivoInicial:v==="si"}))}><option value="si">Sí</option><option value="no">No</option></Select>
-              </div>
-              <div style={{ display:"grid",gridTemplateColumns:"minmax(120px,1fr) minmax(130px,170px) minmax(92px,110px) minmax(90px,150px)",gap:10,alignItems:"center" }}>
-                <label style={{ fontSize:13,fontWeight:700,color:"var(--color-text-primary)" }}>Saldo final</label>
-                <MoneyInput value={form.efectivoCaja} onChange={v=>setForm(f=>({...f,efectivoCaja:v}))}/>
-                <label style={{ fontSize:13,fontWeight:700,color:"var(--color-text-primary)",textAlign:"right" }}>¿Coincide?</label>
-                <Select value={form.coincideCaja?"si":"no"} onChange={v=>setForm(f=>({...f,coincideCaja:v==="si"}))}><option value="si">Sí</option><option value="no">No</option></Select>
-              </div>
             </div>
           </div>
 
-          <div style={{ border:"1px solid var(--color-border-tertiary)",borderRadius:14,overflow:"hidden",background:"var(--color-background-primary)" }}>
-            <div style={{ background:COLORS.pinkLight,padding:"10px 12px",borderBottom:"1px solid var(--color-border-tertiary)" }}>
-              <h3 style={{ margin:0,fontSize:15,fontWeight:700,color:COLORS.pinkDark }}>Caja general</h3>
+          <div style={{ border:"1px solid var(--color-border-tertiary)",borderRadius:14,overflow:"hidden",background:"var(--color-background-primary)",minWidth:0 }}>
+            <div style={{ background:COLORS.infoLight,padding:"9px 11px",borderBottom:"1px solid var(--color-border-tertiary)",display:"flex",justifyContent:"space-between",alignItems:"center",gap:8,flexWrap:"wrap" }}>
+              <div style={{ display:"flex",alignItems:"center",gap:8,minWidth:0 }}><span style={{ width:30,height:30,borderRadius:"50%",background:"rgba(255,255,255,.72)",display:"inline-flex",alignItems:"center",justifyContent:"center",fontSize:15 }}>🕒</span><div><h3 style={{ margin:0,fontSize:14,fontWeight:800,color:COLORS.info }}>Horarios encargadas</h3><p style={{ margin:"1px 0 0",fontSize:10,color:COLORS.info }}>{encPlanFuente==="confirmado"?"Planificación confirmada":encPlanFuente==="semana_tipo"?`Semana ${String(encPlanSemana||"a").toUpperCase()} como referencia`:"Sin planificación previa"}</p></div></div>
+              <div style={{display:"flex",gap:5,flexWrap:"wrap"}}><Btn size="sm" variant="secondary" onClick={()=>loadEncCobertura(fecha,localId)} disabled={encCoberturaLoading||encCoberturaSaving}>↻</Btn><Btn size="sm" variant="success" onClick={markAllEncAccordingPlan} disabled={encCoberturaLoading||encCoberturaSaving||!encCobertura.length}>✓ Todo según planificación</Btn></div>
             </div>
-            <div style={{ padding:12,display:"flex",flexDirection:"column",gap:10 }}>
-              <div style={{ display:"grid",gridTemplateColumns:"minmax(180px,1fr) minmax(140px,180px)",gap:10,alignItems:"center" }}>
-                <label style={{ fontSize:13,fontWeight:700,color:"var(--color-text-primary)" }}>Saldo inicial</label>
-                <MoneyInput readOnly value={formatMoneyInput(form.saldoAnterior)} onChange={()=>{}}/>
-              </div>
-              <div style={{ display:"grid",gridTemplateColumns:"minmax(180px,1fr) minmax(140px,180px)",gap:10,alignItems:"center" }}>
-                <label style={{ fontSize:13,fontWeight:700,color:"var(--color-text-primary)" }}>+ Traspaso a caja general</label>
-                <MoneyInput value={form.traspasoCajaGeneral} onChange={v=>setForm(f=>({...f,traspasoCajaGeneral:v}))}/>
-              </div>
-              <div style={{ display:"grid",gridTemplateColumns:"minmax(180px,1fr) minmax(140px,180px)",gap:10,alignItems:"center" }}>
-                <label style={{ fontSize:13,fontWeight:700,color:"var(--color-text-primary)" }}>- Traspaso a caja efectivo</label>
-                <MoneyInput value={form.traspasoCajaEfectivo} onChange={v=>setForm(f=>({...f,traspasoCajaEfectivo:v}))}/>
-              </div>
-              <div style={{ display:"grid",gridTemplateColumns:"minmax(180px,1fr) minmax(140px,180px)",gap:10,alignItems:"center" }}>
-                <label style={{ fontSize:13,fontWeight:800,color:"var(--color-text-primary)" }}>Saldo final</label>
-                <div style={{ padding:"8px 12px",borderRadius:8,background:COLORS.pinkLight,color:COLORS.pinkDark,fontWeight:800,fontSize:16,textAlign:"right" }}>{fmtMoney(calcTotalCaja(form))}</div>
-              </div>
-            </div>
-          </div>
-        </div>
-
-        <div style={{ border:"1px solid var(--color-border-tertiary)",borderRadius:14,overflow:"hidden",background:"var(--color-background-primary)" }}>
-          <div style={{ background:"var(--color-background-secondary)",padding:"10px 12px",borderBottom:"1px solid var(--color-border-tertiary)" }}>
-            <h3 style={{ margin:0,fontSize:15,fontWeight:700 }}>Pagos y medios electrónicos</h3>
-          </div>
-          <div style={{ padding:12,display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(260px,1fr))",gap:12 }}>
-            <Field label="Mercado Pago / Total / Reservas"><TextArea value={form.mercadoPagoTotalReservas} onChange={v=>setForm(f=>({...f,mercadoPagoTotalReservas:v}))}/></Field>
-            <Field label="Pagos realizados"><TextArea value={form.pagosRealizados} onChange={v=>setForm(f=>({...f,pagosRealizados:v}))}/></Field>
-          </div>
-        </div>
-
-        <div style={{ border:"1px solid var(--color-border-tertiary)",borderRadius:14,overflow:"hidden",background:"var(--color-background-primary)" }}>
-          <div style={{ background:COLORS.amberLight,padding:"10px 12px",borderBottom:"1px solid var(--color-border-tertiary)",display:"flex",justifyContent:"space-between",alignItems:"center",gap:8,flexWrap:"wrap" }}>
-            <div>
-              <h3 style={{ margin:0,fontSize:15,fontWeight:700,color:COLORS.amber }}>Garantías del día</h3>
-              <p style={{ margin:"2px 0 0",fontSize:12,color:COLORS.amber }}>Detalle informativo de reparaciones registradas para este local y fecha.</p>
-            </div>
-            <Badge color={garantiasDelDia.length ? "amber" : "gray"}>{garantiasDelDia.length} garantía{garantiasDelDia.length!==1?"s":""}</Badge>
-          </div>
-          <div style={{ padding:12 }}>
-            {garantiasDelDia.length === 0 ? <p style={{ margin:0,fontSize:13,color:"var(--color-text-secondary)" }}>No hay garantías registradas para este día.</p> :
-              <div style={{ display:"flex",flexDirection:"column",gap:8 }}>
-                {garantiasDelDia.map(g => <div key={g.id} style={{ border:"1px solid var(--color-border-tertiary)",borderRadius:10,padding:"8px 10px",background:"var(--color-background-secondary)" }}>
-                  <div style={{ display:"flex",justifyContent:"space-between",gap:8,flexWrap:"wrap",alignItems:"center" }}>
-                    <div>
-                      <p style={{ margin:0,fontSize:13,fontWeight:700 }}>{g.cliente || "Cliente sin informar"}</p>
-                      <p style={{ margin:"2px 0 0",fontSize:12,color:"var(--color-text-secondary)" }}>{g.servicio || "Servicio sin informar"}</p>
+            <div style={{ padding:10 }}>
+              {encCoberturaLoading ? <p style={{margin:0,fontSize:12,color:"var(--color-text-secondary)"}}>Cargando horarios...</p> : <>
+                {encPlanFuente==="semana_tipo"&&<div style={{padding:"5px 7px",borderRadius:7,background:COLORS.amberLight,color:COLORS.amber,fontSize:9,marginBottom:7}}>⚠ Plan no confirmado; se usa Semana Tipo.</div>}
+                {encCobertura.length===0 ? <p style={{margin:0,fontSize:12,color:"var(--color-text-secondary)"}}>No hay encargadas planificadas ni jornadas reales registradas.</p> : <div style={{display:"flex",flexDirection:"column",gap:7}}>
+                  {encCobertura.map((r,idx)=>{const diff=encHoursDiff(r);const absent=r.estado==="ausencia"||r.estado==="vacaciones";const extraRow=!r.horaPlanDesde&&!r.horaPlanHasta;return <div key={`${r.userId}-${idx}`} style={{borderBottom:idx===encCobertura.length-1?"none":"1px solid var(--color-border-tertiary)",paddingBottom:7}}>
+                    <div style={{display:"flex",justifyContent:"space-between",gap:6,alignItems:"center",marginBottom:5}}><div style={{display:"flex",alignItems:"center",gap:7,minWidth:0}}><Avatar nombre={encUserName(r.userId)} userId={r.userId} size={26}/><div style={{minWidth:0}}><strong style={{fontSize:12}}>{encUserName(r.userId)}</strong><p style={{margin:0,fontSize:9,color:"var(--color-text-secondary)"}}>Plan {r.horaPlanDesde&&r.horaPlanHasta?`${r.horaPlanDesde}–${r.horaPlanHasta}`:"sin horario"}</p></div></div><Badge color={r.estado==="normal"&&Math.abs(diff)<0.001?"success":r.estado==="reemplazo"?"info":"amber"}>{r.estado==="normal"&&Math.abs(diff)<0.001?"Según plan":r.estado==="normal"?"Modificado":r.estado.replace("_"," ")}</Badge></div>
+                    <div style={{display:"grid",gridTemplateColumns:extraRow?"1.2fr 1fr .8fr .8fr":"1.1fr .8fr .8fr",gap:6,alignItems:"end"}} className="niki-mobile-one-column">
+                      {extraRow&&<Field label="Encargada"><Select value={r.userId||""} onChange={v=>setEncCobertura(prev=>prev.map((x,i)=>i===idx?{...x,userId:Number(v)}:x))}>{(data.users||[]).filter(u=>u.rol==="encargada"&&u.activo!==false).map(u=><option key={u.id} value={u.id}>{u.nombre}</option>)}</Select></Field>}
+                      <Field label="Estado"><Select value={r.estado} onChange={v=>setEncCobertura(prev=>prev.map((x,i)=>i===idx?{...x,estado:v,...((v==="ausencia"||v==="vacaciones")?{horaRealDesde:"",horaRealHasta:""}:{})}:x))}><option value="normal">Normal</option><option value="ausencia">Ausencia</option><option value="vacaciones">Vacaciones</option><option value="reemplazo">Reemplazo</option><option value="cambio_turno">Cambio de turno</option><option value="otro">Otro</option></Select></Field>
+                      <Field label="Entrada real"><input type="time" disabled={absent} value={r.horaRealDesde||""} onChange={e=>setEncCobertura(prev=>prev.map((x,i)=>i===idx?{...x,horaRealDesde:e.target.value}:x))} style={{width:"100%",border:"0.5px solid var(--color-border-secondary)",borderRadius:7,padding:"7px 7px",fontSize:11,boxSizing:"border-box"}}/></Field>
+                      <Field label="Salida real"><input type="time" disabled={absent} value={r.horaRealHasta||""} onChange={e=>setEncCobertura(prev=>prev.map((x,i)=>i===idx?{...x,horaRealHasta:e.target.value}:x))} style={{width:"100%",border:"0.5px solid var(--color-border-secondary)",borderRadius:7,padding:"7px 7px",fontSize:11,boxSizing:"border-box"}}/></Field>
                     </div>
-                    <Badge color="amber">{fmtMoney(g.importeComision)}</Badge>
-                  </div>
-                  <p style={{ margin:"6px 0 0",fontSize:12,color:"var(--color-text-secondary)" }}>Original: <strong>{userLabel(g.manicuraOriginalId, g.nombreManicuraOriginal)}</strong> · Reparación: <strong>{userLabel(g.manicuraReparacionId, g.nombreManicuraReparacion)}</strong></p>
-                  {g.motivo && <p style={{ margin:"4px 0 0",fontSize:12,color:"var(--color-text-secondary)" }}>{g.motivo}</p>}
-                </div>)}
-              </div>
-            }
+                    {r.estado==="reemplazo"&&<div style={{marginTop:5}}><Field label="Reemplaza a"><Select value={r.reemplazaUserId||""} onChange={v=>setEncCobertura(prev=>prev.map((x,i)=>i===idx?{...x,reemplazaUserId:v?Number(v):null}:x))}><option value="">Seleccionar...</option>{(data.users||[]).filter(u=>u.rol==="encargada"&&Number(u.id)!==Number(r.userId)).map(u=><option key={u.id} value={u.id}>{u.nombre}</option>)}</Select></Field></div>}
+                    <div style={{display:"grid",gridTemplateColumns:"1fr auto",gap:6,alignItems:"center",marginTop:5}}><input placeholder="Comentario / motivo" value={r.comentario||""} onChange={e=>setEncCobertura(prev=>prev.map((x,i)=>i===idx?{...x,comentario:e.target.value}:x))} style={{width:"100%",border:"0.5px solid var(--color-border-secondary)",borderRadius:7,padding:"6px 8px",fontSize:10,boxSizing:"border-box"}}/><span style={{fontSize:10,fontWeight:800,color:diff>0?COLORS.amber:diff<0?COLORS.danger:COLORS.success,whiteSpace:"nowrap"}}>{Math.abs(diff)<0.001?"Sin diferencia":`${diff>0?"+":""}${diff.toFixed(1)} h`}</span></div>
+                    {extraRow&&<div style={{marginTop:4}}><Btn size="sm" variant="ghost" onClick={()=>setEncCobertura(prev=>prev.filter((_,i)=>i!==idx))}>Quitar cobertura</Btn></div>}
+                  </div>})}
+                </div>}
+                <div style={{display:"flex",justifyContent:"space-between",gap:6,flexWrap:"wrap",marginTop:8,borderTop:"1px solid var(--color-border-tertiary)",paddingTop:7}}><Btn size="sm" variant="secondary" onClick={addEncReplacement}>+ Reemplazo / cobertura</Btn><Btn size="sm" onClick={()=>persistEncCobertura(form?.id||null)} disabled={encCoberturaSaving}>{encCoberturaSaving?"Guardando...":"Guardar horarios"}</Btn></div>
+              </>}
+            </div>
           </div>
         </div>
 
-        <div style={{ display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(260px,1fr))",gap:14 }}>
-          <Field label="Reclamos"><TextArea value={form.reclamos} onChange={v=>setForm(f=>({...f,reclamos:v}))}/></Field>
-          <Field label="Novedades salón / manicuras"><TextArea value={form.novedadesSalonManicuras} onChange={v=>setForm(f=>({...f,novedadesSalonManicuras:v}))}/></Field>
-          <Field label="Observaciones / extras"><TextArea value={form.observacionesExtras} onChange={v=>setForm(f=>({...f,observacionesExtras:v}))} rows={4}/></Field>
+        <div style={{ border:"1px solid var(--color-border-tertiary)",borderRadius:14,overflow:"hidden",background:"var(--color-background-primary)" }}>
+          <div style={{ padding:"9px 11px",borderBottom:"1px solid var(--color-border-tertiary)",background:"linear-gradient(90deg, rgba(247,237,240,.95), rgba(255,255,255,.9))" }}><div style={{display:"flex",alignItems:"center",gap:8}}><span style={{width:30,height:30,borderRadius:"50%",background:COLORS.pinkLight,color:COLORS.pinkDark,display:"inline-flex",alignItems:"center",justifyContent:"center"}}>💰</span><div><h3 style={{margin:0,fontSize:14,fontWeight:800,color:COLORS.pinkDark}}>Cajas del día</h3><p style={{margin:"1px 0 0",fontSize:10,color:"var(--color-text-secondary)"}}>Movimientos de efectivo, caja general y medios electrónicos.</p></div></div></div>
+          <div style={{padding:10}}>
+            <div className="niki-report-two-col">
+              <div style={{border:"1px solid rgba(24,95,165,.14)",borderRadius:11,overflow:"hidden"}}><div style={{background:COLORS.infoLight,padding:"7px 9px",fontWeight:800,fontSize:12,color:COLORS.info}}>Caja de efectivo</div><div style={{padding:9,display:"flex",flexDirection:"column",gap:7}}>
+                <div style={{display:"grid",gridTemplateColumns:"1fr 130px 84px 78px",gap:7,alignItems:"center"}}><span style={{fontSize:11,fontWeight:700}}>Saldo inicial</span><MoneyInput readOnly value={formatMoneyInput(form.saldoEfectivoAnterior)} onChange={()=>{}}/><span style={{fontSize:10,fontWeight:700,textAlign:"right"}}>¿Coincide?</span><Select value={form.coincideEfectivoInicial?"si":"no"} onChange={v=>setForm(f=>({...f,coincideEfectivoInicial:v==="si"}))}><option value="si">Sí</option><option value="no">No</option></Select></div>
+                <div style={{display:"grid",gridTemplateColumns:"1fr 130px 84px 78px",gap:7,alignItems:"center"}}><span style={{fontSize:11,fontWeight:800}}>Saldo final</span><MoneyInput value={form.efectivoCaja} onChange={v=>setForm(f=>({...f,efectivoCaja:v}))}/><span style={{fontSize:10,fontWeight:700,textAlign:"right"}}>¿Coincide?</span><Select value={form.coincideCaja?"si":"no"} onChange={v=>setForm(f=>({...f,coincideCaja:v==="si"}))}><option value="si">Sí</option><option value="no">No</option></Select></div>
+              </div></div>
+              <div style={{border:"1px solid rgba(114,36,62,.13)",borderRadius:11,overflow:"hidden"}}><div style={{background:COLORS.pinkLight,padding:"7px 9px",fontWeight:800,fontSize:12,color:COLORS.pinkDark}}>Caja general</div><div style={{padding:9,display:"grid",gridTemplateColumns:"1fr 145px",gap:7,alignItems:"center"}}>
+                <span style={{fontSize:11,fontWeight:700}}>Saldo inicial</span><MoneyInput readOnly value={formatMoneyInput(form.saldoAnterior)} onChange={()=>{}}/>
+                <span style={{fontSize:11,fontWeight:700}}>+ Traspaso a caja general</span><MoneyInput value={form.traspasoCajaGeneral} onChange={v=>setForm(f=>({...f,traspasoCajaGeneral:v}))}/>
+                <span style={{fontSize:11,fontWeight:700}}>- Traspaso a caja efectivo</span><MoneyInput value={form.traspasoCajaEfectivo} onChange={v=>setForm(f=>({...f,traspasoCajaEfectivo:v}))}/>
+                <span style={{fontSize:11,fontWeight:800,borderTop:"1px solid var(--color-border-tertiary)",paddingTop:7}}>Saldo final</span><div style={{padding:"7px 9px",borderRadius:7,background:COLORS.pinkLight,color:COLORS.pinkDark,fontWeight:800,fontSize:14,textAlign:"right"}}>{fmtMoney(calcTotalCaja(form))}</div>
+              </div></div>
+            </div>
+            <div style={{marginTop:9}}>
+              <Field label="Mercado Pago / Total / Reservas"><TextArea listMode rows={2} value={form.mercadoPagoTotalReservas} onChange={v=>setForm(f=>({...f,mercadoPagoTotalReservas:v}))}/></Field>
+              <div style={{marginTop:10,border:"1px solid rgba(120,120,120,.16)",borderRadius:10,overflow:"hidden",background:"#fff"}}>
+                <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",gap:8,padding:"8px 10px",background:"rgba(250,250,250,.72)",borderBottom:"1px solid rgba(120,120,120,.12)",flexWrap:"wrap"}}>
+                  <div><strong style={{fontSize:12}}>Pagos realizados</strong><p style={{margin:"1px 0 0",fontSize:10,color:"var(--color-text-secondary)"}}>Concepto, detalle, importe, medio y comprobante.</p></div>
+                  <div style={{display:"flex",gap:6,alignItems:"center"}}>{user.rol==="admin"&&<Btn size="sm" variant="ghost" onClick={()=>setConceptosModal(true)}>⚙ Conceptos</Btn>}<Btn size="sm" onClick={openNuevoGasto}>+ Agregar pago</Btn></div>
+                </div>
+                {gastosLoading?<div style={{padding:10,fontSize:11,color:"var(--color-text-secondary)"}}>Cargando pagos...</div>:gastosRows.length===0?<div style={{padding:11,fontSize:11,color:"var(--color-text-secondary)"}}>No hay pagos registrados.</div>:<div style={{overflowX:"auto"}}><table className="niki-report-expense-table"><thead><tr><th>Concepto</th><th>Detalle</th><th style={{textAlign:"right"}}>Importe</th><th>Medio</th><th>Comprobante</th><th></th></tr></thead><tbody>{gastosRows.map(r=><tr key={r.id||r.tempId}><td><strong>{gastoConceptoLabel(r.conceptoId)}</strong></td><td>{r.detalle||"—"}</td><td style={{textAlign:"right",fontWeight:700}}>{fmtMoney(r.importe)}</td><td>{String(r.medioPago||"otro").charAt(0).toUpperCase()+String(r.medioPago||"otro").slice(1)}</td><td>{r.comprobantePath?<a href={api.informeGastoComprobanteUrl(r.comprobantePath)} target="_blank" rel="noreferrer" style={{color:COLORS.pinkDark,fontWeight:700,textDecoration:"none"}}>📎 {r.comprobanteNombre||"Ver"}</a>:"—"}</td><td><div style={{display:"flex",gap:5}}><button type="button" onClick={()=>setGastoModal({...r,importe:String(r.importe),comprobanteFile:null})} style={{border:"none",background:"transparent",color:COLORS.pinkDark,fontSize:10,fontWeight:700,cursor:"pointer"}}>Editar</button><button type="button" onClick={()=>deleteGasto(r)} style={{border:"none",background:"transparent",color:COLORS.danger,fontSize:10,fontWeight:700,cursor:"pointer"}}>Eliminar</button></div></td></tr>)}</tbody></table></div>}
+                <div style={{display:"flex",justifyContent:"flex-end",padding:"7px 10px",borderTop:"1px solid rgba(120,120,120,.10)",background:"rgba(250,250,250,.55)",fontSize:12}}>Total pagos: <strong style={{marginLeft:6}}>{fmtMoney(gastosRows.reduce((a,r)=>a+Number(r.importe||0),0))}</strong></div>
+                {form.pagosRealizados&&!gastosRows.length&&<div style={{padding:"7px 10px",fontSize:10,color:COLORS.amber,background:COLORS.amberLight}}>Este informe tiene pagos históricos cargados como texto: {form.pagosRealizados}</div>}
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div className="niki-report-two-col">
+          <div style={{ border:"1px solid var(--color-border-tertiary)",borderRadius:14,overflow:"hidden",background:"var(--color-background-primary)" }}>
+            <div style={{ background:COLORS.amberLight,padding:"9px 11px",borderBottom:"1px solid var(--color-border-tertiary)",display:"flex",justifyContent:"space-between",alignItems:"center",gap:8 }}><div style={{display:"flex",alignItems:"center",gap:8}}><span style={{width:29,height:29,borderRadius:"50%",background:"rgba(255,255,255,.75)",display:"inline-flex",alignItems:"center",justifyContent:"center"}}>🛡️</span><div><h3 style={{ margin:0,fontSize:14,fontWeight:800,color:COLORS.amber }}>Garantías del día</h3><p style={{ margin:"1px 0 0",fontSize:10,color:COLORS.amber }}>Reparaciones registradas para este local y fecha.</p></div></div><Badge color={garantiasDelDia.length ? "amber" : "gray"}>{garantiasDelDia.length} garantía{garantiasDelDia.length!==1?"s":""}</Badge></div>
+            <div style={{ padding:10,maxHeight:180,overflowY:garantiasDelDia.length>3?"auto":"visible" }}>{garantiasDelDia.length===0?<p style={{margin:0,fontSize:11,color:"var(--color-text-secondary)"}}>No hay garantías registradas para este día.</p>:<div style={{display:"flex",flexDirection:"column",gap:6}}>{garantiasDelDia.map(g=><div key={g.id} style={{border:"1px solid var(--color-border-tertiary)",borderRadius:8,padding:"6px 8px",background:"var(--color-background-secondary)"}}><div style={{display:"flex",justifyContent:"space-between",gap:6}}><div><strong style={{fontSize:11}}>{g.cliente||"Cliente sin informar"}</strong><p style={{margin:"1px 0 0",fontSize:10,color:"var(--color-text-secondary)"}}>{g.servicio||"Servicio sin informar"} · {userLabel(g.manicuraReparacionId,g.nombreManicuraReparacion)}</p></div><Badge color="amber">{fmtMoney(g.importeComision)}</Badge></div></div>)}</div>}</div>
+          </div>
+          <div style={{ border:"1px solid var(--color-border-tertiary)",borderRadius:14,overflow:"hidden",background:"var(--color-background-primary)" }}>
+            <div style={{ background:COLORS.infoLight,padding:"9px 11px",borderBottom:"1px solid var(--color-border-tertiary)",display:"flex",justifyContent:"space-between",alignItems:"center",gap:8 }}><div style={{display:"flex",alignItems:"center",gap:8}}><span style={{width:29,height:29,borderRadius:"50%",background:"rgba(255,255,255,.75)",display:"inline-flex",alignItems:"center",justifyContent:"center"}}>💬</span><div><h3 style={{margin:0,fontSize:14,fontWeight:800,color:COLORS.info}}>Reclamos</h3><p style={{margin:"1px 0 0",fontSize:10,color:COLORS.info}}>Seguimiento de reclamos de clientas.</p></div></div><Btn size="sm" variant="secondary" onClick={openNuevoReclamo}>+ Nuevo reclamo</Btn></div>
+            <div style={{padding:10}}>{reclamosLoading?<div style={{fontSize:11,color:"var(--color-text-secondary)",padding:"8px 0"}}>Cargando reclamos...</div>:reclamosRows.length===0?<div style={{border:"1px dashed rgba(120,120,120,.22)",borderRadius:9,padding:"10px 11px",fontSize:11,color:"var(--color-text-secondary)",background:"rgba(250,250,250,.55)"}}>No hay reclamos registrados.</div>:<div style={{display:"flex",flexDirection:"column",gap:6,maxHeight:180,overflowY:reclamosRows.length>3?"auto":"visible"}}>{reclamosRows.map(r=><div key={r.id||r.tempId} style={{border:"1px solid rgba(120,120,120,.16)",borderRadius:9,padding:"7px 8px",background:"#fff"}}>
+              <div style={{display:"flex",justifyContent:"space-between",gap:7,alignItems:"flex-start"}}><div style={{minWidth:0}}><strong style={{fontSize:11}}>{r.cliente}</strong><p style={{margin:"2px 0 0",fontSize:10,color:"var(--color-text-secondary)"}}>{r.motivo}</p>{r.acciones&&<p style={{margin:"2px 0 0",fontSize:10,color:COLORS.info}}>Acción: {r.acciones}</p>}</div><Badge color={r.resuelto?"success":"amber"}>{r.resuelto?"Resuelto":"Pendiente"}</Badge></div>
+              <div style={{display:"flex",gap:5,marginTop:5}}><button type="button" onClick={()=>setReclamoModal({...r})} style={{border:"none",background:"transparent",color:COLORS.pinkDark,fontSize:10,fontWeight:700,cursor:"pointer",padding:0}}>Editar</button><span style={{color:"#bbb"}}>·</span><button type="button" onClick={()=>deleteReclamo(r)} style={{border:"none",background:"transparent",color:COLORS.danger,fontSize:10,fontWeight:700,cursor:"pointer",padding:0}}>Eliminar</button></div>
+            </div>)}</div>}</div>
+          </div>
+        </div>
+
+        <div style={{ border:"1px solid var(--color-border-tertiary)",borderRadius:14,overflow:"hidden",background:"var(--color-background-primary)" }}>
+          <div style={{ background:"rgba(248,244,247,.86)",padding:"8px 11px",borderBottom:"1px solid var(--color-border-tertiary)" }}><h3 style={{margin:0,fontSize:13,fontWeight:800,color:COLORS.pinkDark}}>Novedades y observaciones</h3></div>
+          <div className="niki-report-two-col" style={{padding:10}}>
+            <Field label="Novedades salón / manicuras"><TextArea listMode rows={3} value={form.novedadesSalonManicuras} onChange={v=>setForm(f=>({...f,novedadesSalonManicuras:v}))}/></Field>
+            <Field label="Observaciones / extras"><TextArea listMode rows={3} value={form.observacionesExtras} onChange={v=>setForm(f=>({...f,observacionesExtras:v}))}/></Field>
+          </div>
         </div>
       </div>}
-    </Card>}
+    </div>}
+
+    {gastoModal && <Modal title={gastoModal.id||gastoModal.tempId?"Editar pago":"Agregar pago"} onClose={()=>setGastoModal(null)} width={620}>
+      <div style={{display:"grid",gap:12}}>
+        <ModalSelect label="Concepto" value={gastoModal.conceptoId||""} onChange={v=>setGastoModal(r=>({...r,conceptoId:Number(v)}))}>{gastoConceptos.filter(c=>c.activo||Number(c.id)===Number(gastoModal.conceptoId)).map(c=><option key={c.id} value={c.id}>{c.codigo?`${c.codigo} · `:""}{c.nombre}</option>)}</ModalSelect>
+        <ModalInput label="Detalle" value={gastoModal.detalle||""} onChange={v=>setGastoModal(r=>({...r,detalle:v}))}/>
+        <div className="niki-report-two-col"><ModalInput label="Importe" value={gastoModal.importe||""} onChange={v=>setGastoModal(r=>({...r,importe:v}))}/><ModalSelect label="Medio de pago" value={gastoModal.medioPago||"efectivo"} onChange={v=>setGastoModal(r=>({...r,medioPago:v}))}><option value="efectivo">Efectivo</option><option value="transferencia">Transferencia</option><option value="tarjeta">Tarjeta</option><option value="otro">Otro</option></ModalSelect></div>
+        <div><label style={{fontSize:12,fontWeight:700,display:"block",marginBottom:5}}>Comprobante</label><input type="file" accept="image/*,application/pdf" onChange={e=>setGastoModal(r=>({...r,comprobanteFile:e.target.files?.[0]||null}))} style={{width:"100%",fontSize:12}}/>{gastoModal.comprobanteNombre&&<p style={{margin:"5px 0 0",fontSize:11,color:"var(--color-text-secondary)"}}>Actual: {gastoModal.comprobanteNombre}</p>}</div>
+        <div style={{display:"flex",justifyContent:"flex-end",gap:8}}><Btn variant="secondary" onClick={()=>setGastoModal(null)}>Cancelar</Btn><Btn onClick={saveGastoModal}>Guardar pago</Btn></div>
+      </div>
+    </Modal>}
+
+    {conceptosModal && user.rol==="admin" && <Modal title="Conceptos de gastos" onClose={()=>setConceptosModal(false)} width={680}>
+      <div style={{display:"grid",gap:12}}>
+        <p style={{margin:0,fontSize:12,color:"var(--color-text-secondary)"}}>Solo los usuarios Admin pueden modificar este listado. Los conceptos inactivos dejan de ofrecerse en nuevos pagos pero conservan el historial.</p>
+        <div style={{display:"grid",gridTemplateColumns:"120px 1fr 80px auto",gap:8,alignItems:"end"}} className="niki-mobile-one-column"><ModalInput label="Código" value={conceptoDraft.codigo||""} onChange={v=>setConceptoDraft(d=>({...d,codigo:v}))}/><ModalInput label="Concepto" value={conceptoDraft.nombre||""} onChange={v=>setConceptoDraft(d=>({...d,nombre:v}))}/><ModalInput label="Orden" value={conceptoDraft.orden??0} onChange={v=>setConceptoDraft(d=>({...d,orden:v}))}/><Btn onClick={saveConceptoGasto} disabled={conceptosSaving}>{conceptoDraft.id?"Guardar":"Agregar"}</Btn></div>
+        <div style={{display:"flex",flexDirection:"column",gap:6}}>{gastoConceptos.length===0?<p style={{margin:0,fontSize:12,color:"var(--color-text-secondary)"}}>Todavía no hay conceptos configurados.</p>:gastoConceptos.map(c=><div key={c.id} style={{display:"flex",alignItems:"center",gap:8,border:"1px solid var(--color-border-tertiary)",borderRadius:9,padding:"8px 9px"}}><div style={{flex:1}}><strong style={{fontSize:12}}>{c.codigo?`${c.codigo} · `:""}{c.nombre}</strong></div><Badge color={c.activo?"success":"gray"}>{c.activo?"Activo":"Inactivo"}</Badge><button type="button" onClick={()=>setConceptoDraft({...c})} style={{border:"none",background:"transparent",color:COLORS.pinkDark,fontSize:11,fontWeight:700,cursor:"pointer"}}>Editar</button><button type="button" onClick={async()=>{await api.updateInformeGastoConcepto(c.id,{activo:!c.activo,actualizado_en:new Date().toISOString()});await loadGastoConceptos();}} style={{border:"none",background:"transparent",color:c.activo?COLORS.danger:COLORS.success,fontSize:11,fontWeight:700,cursor:"pointer"}}>{c.activo?"Desactivar":"Activar"}</button></div>)}</div>
+      </div>
+    </Modal>}
+
+    {reclamoModal && <Modal title={reclamoModal.id||reclamoModal.tempId?"Editar reclamo":"Nuevo reclamo"} onClose={()=>setReclamoModal(null)} width={560}>
+      <div style={{display:"grid",gap:12}}>
+        <div><label style={{fontSize:12,fontWeight:700,display:"block",marginBottom:5}}>Cliente</label><input className="niki-report-entry" list="niki-clientes-reclamo" value={reclamoModal.cliente||""} onChange={e=>setReclamoModal(r=>({...r,cliente:e.target.value}))} placeholder="Nombre de la clienta" style={{width:"100%",boxSizing:"border-box",borderRadius:8,padding:"9px 11px",fontSize:14}}/><datalist id="niki-clientes-reclamo">{(data.agendaClientes||[]).slice(0,500).map(c=><option key={c.id} value={`${c.nombre||""} ${c.apellido||""}`.trim()}/>)}</datalist></div>
+        <Field label="Motivo"><TextArea listMode rows={3} value={reclamoModal.motivo} onChange={v=>setReclamoModal(r=>({...r,motivo:v}))} placeholder="Qué ocurrió..."/></Field>
+        <div><label style={{fontSize:12,fontWeight:700,display:"block",marginBottom:5}}>¿Resuelto?</label><Select value={reclamoModal.resuelto?"si":"no"} onChange={v=>setReclamoModal(r=>({...r,resuelto:v==="si"}))}><option value="no">No</option><option value="si">Sí</option></Select></div>
+        <Field label="Acciones a realizar"><TextArea listMode rows={3} value={reclamoModal.acciones} onChange={v=>setReclamoModal(r=>({...r,acciones:v}))} placeholder="Próximos pasos, seguimiento, compensación..."/></Field>
+        <div style={{display:"flex",justifyContent:"flex-end",gap:8}}><Btn variant="secondary" onClick={()=>setReclamoModal(null)}>Cancelar</Btn><Btn onClick={saveReclamoModal}>Guardar reclamo</Btn></div>
+      </div>
+    </Modal>}
 
     {preview && <Modal title="Informe diario" onClose={()=>setPreview(null)} width={720}>
       <div style={{ display:"flex",justifyContent:"space-between",alignItems:"center",gap:8,flexWrap:"wrap",marginBottom:12 }}>
@@ -8923,7 +9734,7 @@ function AgendaTurnos({ data, reloadData, user, agendaOpenRequest, onAgendaOpenR
         {bloqueoAusenciaModal.certificado&&<ModalSelect label="Tipo de documentación" value={bloqueoAusenciaModal.tipoDoc||""} onChange={v=>setBloqueoAusenciaModal(d=>({...d,tipoDoc:v}))}><option value="">Seleccionar...</option><option value="Certificado médico">Certificado médico</option><option value="Certificado por examen">Certificado por examen</option><option value="Otro">Otro</option></ModalSelect>}
         <div style={{ display:"flex",gap:8,justifyContent:"flex-end",flexWrap:"wrap" }}>
           <Btn variant="secondary" onClick={async()=>{ await createFullDayAgendaBlock(bloqueoAusenciaModal.userId,"Agenda bloqueada"); await reloadData(); setBloqueoAusenciaModal(null); setManicuraAgendaModal(null); }}>Solo bloquear agenda</Btn>
-          <Btn onClick={async()=>{ const uid=bloqueoAusenciaModal.userId; await api.upsertAsistencia({ user_id:parseInt(uid), fecha, estado:"ausente", entrada_real:null, salida_real:null, motivo:bloqueoAusenciaModal.motivo||MOTIVOS_AUSENCIA[0], certificado:!!bloqueoAusenciaModal.certificado, tipo_doc:bloqueoAusenciaModal.tipoDoc||null }); await createFullDayAgendaBlock(uid,"Agenda bloqueada por inasistencia"); await reloadData(); setBloqueoAusenciaModal(null); setManicuraAgendaModal(null); }}>Bloquear y registrar inasistencia</Btn>
+          <Btn onClick={async()=>{ const uid=bloqueoAusenciaModal.userId; await api.upsertAsistencia({ user_id:parseInt(uid), local_id:parseInt(manicuraAgendaModal?.localId || data.users.find(u=>Number(u.id)===Number(uid))?.localId), fecha, estado:"ausente", entrada_real:null, salida_real:null, motivo:bloqueoAusenciaModal.motivo||MOTIVOS_AUSENCIA[0], certificado:!!bloqueoAusenciaModal.certificado, tipo_doc:bloqueoAusenciaModal.tipoDoc||null }); await createFullDayAgendaBlock(uid,"Agenda bloqueada por inasistencia"); await reloadData(); setBloqueoAusenciaModal(null); setManicuraAgendaModal(null); }}>Bloquear y registrar inasistencia</Btn>
           <Btn variant="ghost" onClick={()=>setBloqueoAusenciaModal(null)}>Cancelar</Btn>
         </div>
       </div>
@@ -10663,6 +11474,175 @@ function ReporteAntiguedadPersonal({ data, setData, user }) {
   </div>;
 }
 
+
+// ── HORARIOS DE ENCARGADAS POR LOCAL ──────────────────────────────
+const ENCARGADA_COLOR_PALETTE = [
+  {bg:"#f5d9df",fg:"#72243e",border:"#d89aaa"},
+  {bg:"#dceee6",fg:"#245b45",border:"#8fc7ae"},
+  {bg:"#dfeaf8",fg:"#24527a",border:"#9bbde2"},
+  {bg:"#eee3f6",fg:"#604276",border:"#c0a0d8"},
+  {bg:"#fae9d4",fg:"#7b4d15",border:"#dfb878"},
+  {bg:"#e8e6dc",fg:"#555041",border:"#c8c1a5"},
+];
+function encTimeToMinutes(v){ const [h,m]=String(v||"00:00").slice(0,5).split(":").map(Number); return (h||0)*60+(m||0); }
+function encMinutesToTime(v){ const n=Math.max(0,Math.min(1439,Math.round(Number(v||0)/30)*30)); return `${String(Math.floor(n/60)).padStart(2,"0")}:${String(n%60).padStart(2,"0")}`; }
+function encHoursLabel(mins){ const h=Math.max(0,mins)/60; return Number.isInteger(h)?`${h} h`:`${h.toFixed(1).replace(".0","")} h`; }
+function encDayLabel(day){ return ["","Lunes","Martes","Miércoles","Jueves","Viernes","Sábado","Domingo"][Number(day)]||""; }
+function encWeekTypeLabel(v){ return v==="a"?"Semana A":v==="b"?"Semana B":"Todas las semanas"; }
+
+function EncargadaTimelineBlock({ row, color, rangeStart, rangeEnd, editable, onDraft, onCommit, onOpen }) {
+  const start=encTimeToMinutes(row.hora_desde), end=encTimeToMinutes(row.hora_hasta);
+  const span=Math.max(30,rangeEnd-rangeStart);
+  const left=((start-rangeStart)/span)*100, width=((end-start)/span)*100;
+  const dragRef=useRef(null);
+  const begin=(ev,mode)=>{
+    if(!editable)return;
+    ev.preventDefault();ev.stopPropagation();
+    const lane=ev.currentTarget.closest('[data-enc-lane="1"]'); if(!lane)return;
+    const rect=lane.getBoundingClientRect();
+    const originX=ev.clientX, os=start, oe=end;
+    dragRef.current={moved:false,last:null};
+    const move=e=>{
+      const delta=Math.round(((e.clientX-originX)/rect.width)*span/30)*30;
+      if(Math.abs(e.clientX-originX)>3)dragRef.current.moved=true;
+      let ns=os,ne=oe;
+      if(mode==="move") { const dur=oe-os; ns=Math.max(rangeStart,Math.min(rangeEnd-dur,os+delta)); ne=ns+dur; }
+      if(mode==="left") ns=Math.max(rangeStart,Math.min(oe-30,os+delta));
+      if(mode==="right") ne=Math.min(rangeEnd,Math.max(os+30,oe+delta));
+      const next={...row,hora_desde:encMinutesToTime(ns),hora_hasta:encMinutesToTime(ne)};
+      dragRef.current.last=next; onDraft(next);
+    };
+    const up=()=>{window.removeEventListener("pointermove",move);window.removeEventListener("pointerup",up);if(dragRef.current?.moved&&dragRef.current.last)onCommit(dragRef.current.last);};
+    window.addEventListener("pointermove",move,{passive:false});window.addEventListener("pointerup",up);
+  };
+  return <div onClick={e=>{e.stopPropagation();if(!dragRef.current?.moved)onOpen(row);}} style={{position:"absolute",left:`${Math.max(0,left)}%`,width:`${Math.max(2,Math.min(100-left,width))}%`,top:8,bottom:8,borderRadius:10,background:color.bg,border:`1.5px solid ${color.border}`,color:color.fg,boxShadow:"0 2px 7px rgba(0,0,0,.07)",display:"flex",alignItems:"center",minWidth:58,overflow:"hidden",cursor:editable?"grab":"pointer",userSelect:"none",touchAction:"none",zIndex:3}}>
+    {editable&&<div onPointerDown={e=>begin(e,"left")} title="Estirar inicio" style={{width:9,alignSelf:"stretch",cursor:"ew-resize",background:`${color.border}88`,flexShrink:0}}/>}
+    <div onPointerDown={editable?e=>begin(e,"move"):undefined} style={{flex:1,minWidth:0,padding:"0 7px",textAlign:"center"}}>
+      <div style={{fontSize:12,fontWeight:800,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{row.hora_desde?.slice(0,5)}–{row.hora_hasta?.slice(0,5)}</div>
+      {(end-start)>=120&&<div style={{fontSize:10,opacity:.78,marginTop:1}}>{encHoursLabel(end-start)}{row.observacion?" · 💬":""}</div>}
+    </div>
+    {editable&&<div onPointerDown={e=>begin(e,"right")} title="Estirar fin" style={{width:9,alignSelf:"stretch",cursor:"ew-resize",background:`${color.border}88`,flexShrink:0}}/>}
+  </div>;
+}
+
+function HorariosEncargadasLocal({ data, user }) {
+  const allowedIds=new Set(getAssignedLocalIds(data,user).map(Number));
+  const canEdit=["admin","casa_matriz"].includes(user.rol);
+  const [rows,setRows]=useState([]),[localHours,setLocalHours]=useState([]),[loading,setLoading]=useState(true);
+  const [selectedLocal,setSelectedLocal]=useState(null);
+  const [search,setSearch]=useState(""),[tipoLocal,setTipoLocal]=useState("todos"),[draftRows,setDraftRows]=useState({});
+  const [editRow,setEditRow]=useState(null),[saving,setSaving]=useState(false);
+  const now=new Date();
+  const [monthCursor,setMonthCursor]=useState(()=>new Date(now.getFullYear(),now.getMonth(),1,12,0,0,0));
+  const [referenceA,setReferenceA]=useState("");
+  const [planRows,setPlanRows]=useState([]),[planLoading,setPlanLoading]=useState(false),[confirming,setConfirming]=useState(false);
+  const [dayDetail,setDayDetail]=useState(null);
+  const [planModalOpen,setPlanModalOpen]=useState(false);
+
+  const locales=useMemo(()=> (data.locales||[]).filter(l=>localActivo(l)&&(user.rol==="admin"||allowedIds.has(Number(l.id)))).filter(l=>tipoLocal==="todos"||(l.tipoLocal||l.tipo_local||"propio")===tipoLocal).filter(l=>!search.trim()||String(l.nombre||"").toLowerCase().includes(search.trim().toLowerCase())).sort((a,b)=>(a.nombre||"").localeCompare(b.nombre||"")),[data.locales,user.rol,tipoLocal,search]);
+  const encargadas=useMemo(()=> (data.users||[]).filter(u=>u.activo&&u.rol==="encargada").sort((a,b)=>(a.nombre||"").localeCompare(b.nombre||"")),[data.users]);
+  const assignedToLocal=useCallback(localId=>encargadas.filter(e=>(data.encargadoLocales||[]).some(x=>Number(x.userId)===Number(e.id)&&Number(x.localId)===Number(localId))),[encargadas,data.encargadoLocales]);
+
+  const load=useCallback(async()=>{setLoading(true);try{const [r,h]=await Promise.all([api.getEncargadaSemanaTipo(),api.getLocalHorarios()]);setRows(r||[]);setLocalHours(h||[]);}catch(e){notifyToast("No se pudieron cargar los horarios de encargadas. "+(e.message||e),"error");}finally{setLoading(false);}},[]);
+  useEffect(()=>{load();},[load]);
+
+  const localDay=useCallback((localId,day)=>{const r=(localHours||[]).find(x=>Number(x.local_id)===Number(localId)&&Number(x.dia_semana)===Number(day));if(r)return{open:r.abierto!==false,start:String(r.hora_apertura||"10:00").slice(0,5),end:String(r.hora_cierre||"20:00").slice(0,5)};return day===7?{open:false,start:"10:00",end:"20:00"}:{open:true,start:"10:00",end:"20:00"};},[localHours]);
+  const effectiveRowForWeek=useCallback((localId,userId,day,weekType)=>{const list=(rows||[]).filter(r=>Number(r.local_id)===Number(localId)&&Number(r.user_id)===Number(userId)&&Number(r.dia_semana)===Number(day));return list.find(r=>r.tipo_semana===weekType)||list.find(r=>r.tipo_semana==="todas")||null;},[rows]);
+  const rowKey=r=>`${r.id||"new"}|${r.local_id}|${r.user_id}|${r.dia_semana}|${r.tipo_semana}`;
+  const displayRow=(localId,userId,day,weekType)=>{const r=effectiveRowForWeek(localId,userId,day,weekType);if(!r)return null;return draftRows[rowKey(r)]||r;};
+  const colorFor=(uid,list)=>ENCARGADA_COLOR_PALETTE[Math.max(0,list.findIndex(x=>Number(x.id)===Number(uid)))%ENCARGADA_COLOR_PALETTE.length];
+
+  const coverageForDay=useCallback((localId,day,weekType)=>{const h=localDay(localId,day);if(!h.open)return{status:"closed",gap:0};const emps=assignedToLocal(localId);const intervals=emps.map(e=>effectiveRowForWeek(localId,e.id,day,weekType)).filter(Boolean).map(r=>[encTimeToMinutes(r.hora_desde),encTimeToMinutes(r.hora_hasta)]).sort((a,b)=>a[0]-b[0]);let cursor=encTimeToMinutes(h.start),gap=0;const end=encTimeToMinutes(h.end);for(const [a,b] of intervals){if(b<=cursor||a>=end)continue;if(a>cursor)gap+=a-cursor;cursor=Math.max(cursor,Math.min(end,b));}if(cursor<end)gap+=end-cursor;return{status:gap===0?"ok":"gap",gap};},[localDay,assignedToLocal,effectiveRowForWeek]);
+
+  const saveRow=async row=>{setSaving(true);try{const payload={local_id:Number(row.local_id),user_id:Number(row.user_id),dia_semana:Number(row.dia_semana),tipo_semana:row.tipo_semana||"todas",hora_desde:String(row.hora_desde).slice(0,5),hora_hasta:String(row.hora_hasta).slice(0,5),observacion:String(row.observacion||"").trim()||null,actualizado_por_user_id:user.id,actualizado_en:new Date().toISOString()};if(encTimeToMinutes(payload.hora_hasta)<=encTimeToMinutes(payload.hora_desde))throw new Error("La hora de fin debe ser posterior a la hora de inicio.");let saved;if(row.id){saved=await api.updateEncargadaSemanaTipo(row.id,payload);}else{saved=await api.upsertEncargadaSemanaTipo(payload);}const sr=Array.isArray(saved)?saved[0]:saved;if(sr){setRows(prev=>[...prev.filter(x=>Number(x.id)!==Number(sr.id)&&!(Number(x.local_id)===Number(sr.local_id)&&Number(x.user_id)===Number(sr.user_id)&&Number(x.dia_semana)===Number(sr.dia_semana)&&x.tipo_semana===sr.tipo_semana)),sr]);}setDraftRows({});setEditRow(null);notifyToast("Horario guardado.","success");}catch(e){notifyToast("No se pudo guardar el horario. "+(e.message||e),"error");await load();}finally{setSaving(false);}};
+  const deleteRow=async row=>{if(!row?.id)return;setSaving(true);try{await api.deleteEncargadaSemanaTipo(row.id);setRows(prev=>prev.filter(x=>Number(x.id)!==Number(row.id)));setEditRow(null);notifyToast("Horario eliminado.","success");}catch(e){notifyToast("No se pudo eliminar el horario. "+(e.message||e),"error");}finally{setSaving(false);}};
+
+  const monthRange=useMemo(()=>{
+    const first=new Date(monthCursor.getFullYear(),monthCursor.getMonth(),1,12,0,0,0);
+    const firstDay=first.getDay();
+    const start=new Date(first);start.setDate(start.getDate()-(firstDay===0?6:firstDay-1));
+    const last=new Date(monthCursor.getFullYear(),monthCursor.getMonth()+1,0,12,0,0,0);
+    const lastDay=last.getDay();
+    const end=new Date(last);end.setDate(end.getDate()+(lastDay===0?6:6-lastDay));
+    const days=[];for(let d=new Date(start);d<=end;d.setDate(d.getDate()+1)){if(d.getDay()!==0)days.push(new Date(d));}
+    const weeks=[];for(let i=0;i<days.length;i+=6)weeks.push(days.slice(i,i+6));
+    return{start,end,startKey:dateKey(start),endKey:dateKey(end),weeks};
+  },[monthCursor]);
+
+  const normalizeMondayKey=value=>{const d=parseDateLocal(value);if(!d)return"";return dateKey(getMon(d));};
+  const weekTypeForDate=useCallback((d)=>{
+    const mon=getMon(d);
+    const ref=parseDateLocal(referenceA);
+    if(!ref)return"a";
+    const refMon=getMon(ref);
+    const diff=Math.round((mon-refMon)/(7*86400000));
+    return Math.abs(diff)%2===0?"a":"b";
+  },[referenceA]);
+
+  const theoreticalForDate=useCallback((d)=>{
+    if(!selectedLocal)return[];
+    const day=d.getDay();if(day===0)return[];
+    const h=localDay(selectedLocal,day);if(!h.open)return[];
+    const wt=weekTypeForDate(d);
+    return assignedToLocal(selectedLocal).map(emp=>{const r=effectiveRowForWeek(selectedLocal,emp.id,day,wt);return r?{local_id:Number(selectedLocal),user_id:Number(emp.id),fecha:dateKey(d),hora_desde:String(r.hora_desde).slice(0,5),hora_hasta:String(r.hora_hasta).slice(0,5),estado:"confirmado",origen:"semana_tipo",observacion:r.observacion||null,semana_tipo:wt}:null;}).filter(Boolean);
+  },[selectedLocal,localDay,weekTypeForDate,assignedToLocal,effectiveRowForWeek]);
+
+  const loadPlan=useCallback(async(localId=selectedLocal)=>{if(!localId)return;setPlanLoading(true);try{const [cfg,plan]=await Promise.all([api.getEncargadaPlanificacionConfig(localId),api.getEncargadaPlanificacion(localId,monthRange.startKey,monthRange.endKey)]);const c=Array.isArray(cfg)?cfg[0]:null;setReferenceA(c?.fecha_referencia_a?normalizeMondayKey(c.fecha_referencia_a):monthRange.startKey);setPlanRows(plan||[]);}catch(e){notifyToast("No se pudo cargar la planificación mensual. "+(e.message||e),"error");}finally{setPlanLoading(false);}},[selectedLocal,monthRange.startKey,monthRange.endKey]);
+  useEffect(()=>{if(selectedLocal&&planModalOpen)loadPlan(selectedLocal);},[selectedLocal,planModalOpen,monthRange.startKey,monthRange.endKey]);
+
+  const saveReferenceA=async value=>{const monday=normalizeMondayKey(value);if(!monday)return;setReferenceA(monday);try{await api.upsertEncargadaPlanificacionConfig({local_id:Number(selectedLocal),fecha_referencia_a:monday,actualizado_por_user_id:user.id,actualizado_en:new Date().toISOString()});notifyToast("Semana A de referencia guardada.","success");}catch(e){notifyToast("No se pudo guardar la semana A de referencia. "+(e.message||e),"error");}};
+
+  const confirmedForDate=useCallback(dk=>(planRows||[]).filter(r=>String(r.fecha).slice(0,10)===dk),[planRows]);
+  const confirmDay=async d=>{if(!canEdit)return;const dk=dateKey(d),theory=theoreticalForDate(d);setConfirming(true);try{await api.deleteEncargadaPlanificacionDia(selectedLocal,dk);if(theory.length){const payload=theory.map(r=>({...r,confirmado_por_user_id:user.id,confirmado_en:new Date().toISOString(),actualizado_en:new Date().toISOString()}));await api.upsertEncargadaPlanificacion(payload);}await loadPlan();notifyToast(`Asignaciones del ${fmtFecha(d)} confirmadas.`,"success");}catch(e){notifyToast("No se pudo confirmar el día. "+(e.message||e),"error");}finally{setConfirming(false);}};
+  const unconfirmDay=async d=>{if(!canEdit)return;setConfirming(true);try{await api.deleteEncargadaPlanificacionDia(selectedLocal,dateKey(d));await loadPlan();notifyToast("El día volvió a planificación teórica.","success");}catch(e){notifyToast("No se pudo quitar la confirmación. "+(e.message||e),"error");}finally{setConfirming(false);}};
+  const confirmMonth=async()=>{if(!canEdit)return false;const payload=monthRange.weeks.flatMap(w=>w.flatMap(d=>theoreticalForDate(d))).map(r=>({...r,confirmado_por_user_id:user.id,confirmado_en:new Date().toISOString(),actualizado_en:new Date().toISOString()}));setConfirming(true);try{await api.deleteEncargadaPlanificacionRango(selectedLocal,monthRange.startKey,monthRange.endKey);if(payload.length)await api.upsertEncargadaPlanificacion(payload);await loadPlan();notifyToast("Planificación visible confirmada.","success");return true;}catch(e){notifyToast("No se pudo confirmar la planificación. "+(e.message||e),"error");return false;}finally{setConfirming(false);}};
+
+  const renderLocalCard=local=>{const emps=assignedToLocal(local.id);let gaps=0;for(const wt of ["a","b"])for(const d of [1,2,3,4,5,6])if(coverageForDay(local.id,d,wt).status==="gap")gaps++;return <Card key={local.id} onClick={()=>setSelectedLocal(Number(local.id))} style={{cursor:"pointer",padding:16,minHeight:142}}><div style={{display:"flex",justifyContent:"space-between",gap:10,alignItems:"flex-start"}}><div><h3 style={{margin:0,fontSize:15}}>{local.nombre}</h3><p style={{margin:"3px 0 0",fontSize:10,color:"var(--color-text-secondary)"}}>{(local.tipoLocal||local.tipo_local||"propio")==="franquicia"?"Franquicia":"Local propio"}</p></div><Badge color={gaps?"amber":"success"}>{gaps?`${gaps} hueco${gaps===1?"":"s"} A/B`:"Cobertura completa"}</Badge></div><div style={{display:"flex",alignItems:"center",gap:6,marginTop:13,minHeight:34,flexWrap:"wrap"}}>{emps.map(e=><div key={e.id} style={{display:"flex",alignItems:"center",gap:5,background:colorFor(e.id,emps).bg,color:colorFor(e.id,emps).fg,borderRadius:999,padding:"4px 8px 4px 4px",fontSize:10,fontWeight:700}}><Avatar nombre={e.nombre} userId={e.id} size={23}/>{e.nombre}</div>)}{!emps.length&&<span style={{fontSize:11,color:"var(--color-text-secondary)"}}>Sin encargadas asignadas</span>}</div></Card>};
+
+  if(!selectedLocal)return <div><div style={{display:"flex",justifyContent:"space-between",gap:12,alignItems:"flex-start",flexWrap:"wrap",marginBottom:14}}><div><h2 style={{margin:0,fontSize:18}}>Horarios de encargadas</h2><p style={{margin:"3px 0 0",fontSize:12,color:"var(--color-text-secondary)"}}>Definí la semana tipo y confirmá la planificación mensual desde cada local.</p></div><Btn size="sm" variant="secondary" onClick={load} disabled={loading}>↻ Actualizar</Btn></div><Card style={{padding:12,marginBottom:13}}><div style={{display:"grid",gridTemplateColumns:"minmax(220px,1fr) 190px",gap:10}}><Input value={search} onChange={setSearch} placeholder="Buscar local..."/><Select value={tipoLocal} onChange={setTipoLocal}><option value="todos">Todos los locales</option><option value="propio">Propios</option><option value="franquicia">Franquicias</option></Select></div></Card>{loading?<Card><p style={{margin:0,fontSize:12}}>Cargando horarios...</p></Card>:<div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(280px,1fr))",gap:12}}>{locales.map(renderLocalCard)}</div>}</div>;
+
+  const local=(data.locales||[]).find(l=>Number(l.id)===Number(selectedLocal));
+  const emps=assignedToLocal(selectedLocal);
+  const openDays=[1,2,3,4,5,6].map(day=>({day,...localDay(selectedLocal,day)}));
+  const opens=openDays.filter(x=>x.open);let rangeStart=opens.length?Math.min(...opens.map(x=>encTimeToMinutes(x.start))):600;let rangeEnd=opens.length?Math.max(...opens.map(x=>encTimeToMinutes(x.end))):1200;rangeStart=Math.floor(rangeStart/60)*60;rangeEnd=Math.ceil(rangeEnd/60)*60;if(rangeEnd-rangeStart<240)rangeEnd=rangeStart+240;
+  const pct=(m)=>Math.max(0,Math.min(100,((m-rangeStart)/(rangeEnd-rangeStart))*100));
+  const monthLabel=`${MESES[monthCursor.getMonth()]} ${monthCursor.getFullYear()}`;
+  const shownMonth=monthCursor.getMonth();
+
+  const openCellEditor=(emp,day,wt,r)=>{if(r){setEditRow({...r});return;}const h=localDay(selectedLocal,day);if(!h.open||!canEdit)return;setEditRow({local_id:Number(selectedLocal),user_id:Number(emp.id),dia_semana:Number(day),tipo_semana:wt,hora_desde:h.start,hora_hasta:h.end,observacion:""});};
+
+  const renderMiniLane=(emp,day,wt)=>{const h=localDay(selectedLocal,day),r=displayRow(selectedLocal,emp.id,day,wt),c=colorFor(emp.id,emps);if(!h.open)return <div style={{height:56,borderRadius:10,background:"#f4f4f4",display:"flex",alignItems:"center",justifyContent:"center",fontSize:10,color:"#aaa"}}>Cerrado</div>;return <div data-enc-lane="1" onClick={()=>!r&&openCellEditor(emp,day,wt,null)} style={{position:"relative",height:58,borderRadius:10,background:"#fafafa",border:"1px solid #e8e8e8",overflow:"hidden",cursor:canEdit&&!r?"crosshair":"default"}}><div style={{position:"absolute",left:`${pct(encTimeToMinutes(h.start))}%`,width:`${Math.max(2,pct(encTimeToMinutes(h.end))-pct(encTimeToMinutes(h.start)))}%`,top:27,height:5,borderRadius:4,background:"#e4e4e4"}}/>{r&&<EncargadaTimelineBlock row={r} color={c} rangeStart={rangeStart} rangeEnd={rangeEnd} editable={canEdit} onDraft={nr=>setDraftRows(p=>({...p,[rowKey(r)]:nr}))} onCommit={saveRow} onOpen={setEditRow}/>}</div>};
+
+  return <div>
+    <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",gap:10,flexWrap:"wrap",marginBottom:12}}><div style={{display:"flex",gap:10,alignItems:"center"}}><Btn size="sm" variant="ghost" onClick={()=>setSelectedLocal(null)}>← Locales</Btn><div><h2 style={{margin:0,fontSize:18}}>{local?.nombre||"Local"}</h2><p style={{margin:"3px 0 0",fontSize:11,color:"var(--color-text-secondary)"}}>Semana tipo compacta + planificación mensual teórica/confirmada.</p></div></div><div style={{display:"flex",gap:6,alignItems:"center",flexWrap:"wrap"}}>{emps.map(e=>{const c=colorFor(e.id,emps);return <span key={e.id} style={{padding:"5px 8px",borderRadius:999,background:c.bg,color:c.fg,fontSize:10,fontWeight:750}}>{e.nombre}</span>})}</div></div>
+
+    <Card style={{padding:18,marginBottom:14}}>
+      <div style={{display:"flex",justifyContent:"space-between",gap:12,alignItems:"center",flexWrap:"wrap",marginBottom:16}}>
+        <div><strong style={{fontSize:16}}>Semana tipo</strong><p style={{margin:"4px 0 0",fontSize:11,color:"var(--color-text-secondary)"}}>Semana A y Semana B se configuran juntas. Arrastrá los bloques o estirá sus extremos para ajustar horarios.</p></div>
+        <Btn variant="secondary" onClick={()=>{setPlanModalOpen(true);setDayDetail(null);}}>📅 Ver planificación mensual</Btn>
+      </div>
+      <div style={{overflowX:"auto",paddingBottom:4}}><div style={{minWidth:1080}}>
+        <div style={{display:"grid",gridTemplateColumns:"105px 180px repeat(6,minmax(120px,1fr))",gap:9,alignItems:"end",marginBottom:9}}><div/><div style={{fontSize:10,fontWeight:800,color:"var(--color-text-secondary)"}}>ENCARGADA</div>{[1,2,3,4,5,6].map(d=><div key={d} style={{textAlign:"center",fontSize:12,fontWeight:800}}>{encDayLabel(d).slice(0,3)}<div style={{fontSize:9,fontWeight:550,color:"var(--color-text-secondary)",marginTop:2}}>{localDay(selectedLocal,d).open?`${localDay(selectedLocal,d).start}–${localDay(selectedLocal,d).end}`:"Cerrado"}</div></div>)}</div>
+        {["a","b"].map(wt=><div key={wt} style={{marginBottom:wt==="a"?14:0,padding:"13px 12px",borderRadius:13,background:wt==="a"?"rgba(225,198,204,.16)":"rgba(220,238,230,.22)",border:`1px solid ${wt==="a"?"rgba(114,36,62,.13)":"rgba(99,153,34,.16)"}`}}>{emps.map((emp,idx)=><div key={emp.id} style={{display:"grid",gridTemplateColumns:"93px 180px repeat(6,minmax(120px,1fr))",gap:9,alignItems:"center",marginTop:idx?9:0}}>{idx===0?<div><strong style={{fontSize:13,color:wt==="a"?COLORS.pinkDark:COLORS.success}}>Semana {wt.toUpperCase()}</strong><div style={{fontSize:9,color:"var(--color-text-secondary)",marginTop:3}}>Patrón habitual</div></div>:<span/>}<div style={{display:"flex",alignItems:"center",gap:8,minWidth:0}}><span style={{width:9,height:36,borderRadius:8,background:colorFor(emp.id,emps).border,flexShrink:0}}/><Avatar nombre={emp.nombre} userId={emp.id} size={30}/><span style={{fontSize:12,fontWeight:750,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{emp.nombre}</span></div>{[1,2,3,4,5,6].map(day=><div key={day}>{renderMiniLane(emp,day,wt)}</div>)}</div>)}{!emps.length&&<p style={{fontSize:12,color:"var(--color-text-secondary)"}}>Este local no tiene encargadas asignadas.</p>}</div>)}
+      </div></div>
+      <div style={{display:"flex",justifyContent:"space-between",gap:10,alignItems:"center",flexWrap:"wrap",marginTop:15,paddingTop:13,borderTop:"1px solid rgba(120,120,120,.12)"}}><div style={{fontSize:10,color:"var(--color-text-secondary)"}}>La planificación mensual se genera automáticamente a partir de estas dos semanas y se abre solo cuando necesitás revisarla o confirmarla.</div><Btn size="sm" variant="secondary" onClick={()=>{setPlanModalOpen(true);setDayDetail(null);}}>Abrir calendario →</Btn></div>
+    </Card>
+
+    {planModalOpen&&<Modal title={`Planificación mensual · ${local?.nombre||"Local"}`} onClose={()=>{setPlanModalOpen(false);setDayDetail(null);}} width={1240}>
+      <div style={{display:"flex",flexDirection:"column",gap:12}}>
+        <div style={{display:"flex",justifyContent:"space-between",gap:12,alignItems:"center",flexWrap:"wrap"}}><div><strong style={{fontSize:14}}>Calendario teórico / confirmado</strong><p style={{margin:"3px 0 0",fontSize:10,color:"var(--color-text-secondary)"}}>Incluye completas la primera y la última semana aunque tengan días de otro mes.</p></div><div style={{display:"flex",gap:7,alignItems:"center",flexWrap:"wrap"}}><Btn size="sm" variant="secondary" onClick={()=>setMonthCursor(d=>new Date(d.getFullYear(),d.getMonth()-1,1,12))}>‹</Btn><strong style={{minWidth:145,textAlign:"center",fontSize:13}}>{monthLabel}</strong><Btn size="sm" variant="secondary" onClick={()=>setMonthCursor(d=>new Date(d.getFullYear(),d.getMonth()+1,1,12))}>›</Btn></div></div>
+        <div style={{display:"flex",gap:9,alignItems:"center",flexWrap:"wrap",padding:"10px 11px",borderRadius:10,background:"var(--color-background-secondary)"}}><span style={{fontSize:11,fontWeight:700}}>Semana A de referencia</span><input type="date" value={referenceA||""} onChange={e=>saveReferenceA(e.target.value)} disabled={!canEdit} style={{border:"1px solid #ddd",borderRadius:8,padding:"6px 8px",fontSize:11,background:"#fff"}}/><span style={{fontSize:10,color:"var(--color-text-secondary)"}}>La siguiente será B y luego alternan automáticamente.</span></div>
+        {planLoading?<div style={{padding:"28px 0",textAlign:"center",fontSize:12}}>Cargando planificación...</div>:<div style={{overflowX:"auto"}}><div style={{minWidth:930}}><div style={{display:"grid",gridTemplateColumns:"repeat(6,minmax(145px,1fr))",gap:7,marginBottom:7}}>{["Lun","Mar","Mié","Jue","Vie","Sáb"].map(x=><div key={x} style={{fontSize:10,fontWeight:800,color:"var(--color-text-secondary)",textAlign:"center"}}>{x}</div>)}</div>{monthRange.weeks.map((week,wi)=><div key={wi} style={{display:"grid",gridTemplateColumns:"repeat(6,minmax(145px,1fr))",gap:7,marginBottom:7}}>{week.map(d=>{const dk=dateKey(d),confirmed=confirmedForDate(dk),theory=theoreticalForDate(d),used=confirmed.length?confirmed:theory,isConfirmed=confirmed.length>0,outMonth=d.getMonth()!==shownMonth,wt=weekTypeForDate(d);return <button key={dk} type="button" onClick={()=>setDayDetail({date:d,confirmed,theory})} style={{minHeight:112,textAlign:"left",border:`1px solid ${isConfirmed?"#b9d5aa":"#e3e3e3"}`,borderRadius:11,padding:9,background:outMonth?"#f7f7f7":"#fff",cursor:"pointer",opacity:outMonth?.72:1}}><div style={{display:"flex",justifyContent:"space-between",alignItems:"center",gap:6,marginBottom:7}}><strong style={{fontSize:10}}>{d.getDate()} {MESES[d.getMonth()].slice(0,3).toUpperCase()}</strong><span style={{fontSize:8,fontWeight:800,padding:"2px 6px",borderRadius:999,background:wt==="a"?COLORS.pinkLight:COLORS.successLight,color:wt==="a"?COLORS.pinkDark:COLORS.success}}>SEM {wt.toUpperCase()}</span></div><div style={{display:"flex",flexDirection:"column",gap:5}}>{used.map(r=>{const emp=emps.find(e=>Number(e.id)===Number(r.user_id)),c=colorFor(r.user_id,emps);return <div key={`${r.user_id}-${r.fecha}`} style={{padding:"5px 6px",borderRadius:7,background:c.bg,color:c.fg,fontSize:9,border:`1px solid ${isConfirmed?c.border:"transparent"}`}}><strong>{emp?.nombre||"Encargada"}</strong> · {String(r.hora_desde).slice(0,5)}–{String(r.hora_hasta).slice(0,5)}</div>})}{!used.length&&<span style={{fontSize:9,color:"#aaa"}}>Sin asignación</span>}</div><div style={{marginTop:7,fontSize:8,fontWeight:700,color:isConfirmed?COLORS.success:"var(--color-text-secondary)"}}>{isConfirmed?"✓ Confirmado":"○ Teórico"}</div></button>})}</div>)}</div></div>}
+        <div style={{display:"flex",justifyContent:"space-between",gap:10,alignItems:"center",flexWrap:"wrap",paddingTop:11,borderTop:"1px solid #eee"}}><span style={{fontSize:10,color:"var(--color-text-secondary)"}}>Al confirmar la vista se guarda una copia del calendario visible y volvés a la Semana Tipo.</span><div style={{display:"flex",gap:8}}><Btn variant="secondary" onClick={()=>{setPlanModalOpen(false);setDayDetail(null);}}>Cancelar</Btn>{canEdit&&<Btn onClick={async()=>{const ok=await confirmMonth();if(ok){setPlanModalOpen(false);setDayDetail(null);}}} disabled={confirming||planLoading}>{confirming?"Confirmando...":"✓ Confirmar y volver"}</Btn>}</div></div>
+      </div>
+    </Modal>}
+
+    {editRow&&<Modal title={`${encDayLabel(editRow.dia_semana)} · ${emps.find(e=>Number(e.id)===Number(editRow.user_id))?.nombre||"Encargada"}`} onClose={()=>{setEditRow(null);setDraftRows({});}} width={520}><div style={{display:"flex",flexDirection:"column",gap:12}}><div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10}}><ModalInput label="Desde" type="time" value={String(editRow.hora_desde||"").slice(0,5)} onChange={v=>setEditRow(r=>({...r,hora_desde:v}))}/><ModalInput label="Hasta" type="time" value={String(editRow.hora_hasta||"").slice(0,5)} onChange={v=>setEditRow(r=>({...r,hora_hasta:v}))}/></div><ModalSelect label="Aplicar a" value={editRow.tipo_semana||"todas"} onChange={v=>setEditRow(r=>({...r,tipo_semana:v}))}><option value="todas">Todas las semanas</option><option value="a">Solo Semana A</option><option value="b">Solo Semana B</option></ModalSelect><div><label style={{fontSize:13,fontWeight:500,color:"#555",display:"block",marginBottom:6}}>Comentario habitual</label><textarea value={editRow.observacion||""} onChange={e=>setEditRow(r=>({...r,observacion:e.target.value}))} style={{width:"100%",minHeight:72,border:"1.5px solid #e0e0e0",borderRadius:8,padding:"9px 12px",fontSize:13,boxSizing:"border-box"}}/></div><div style={{display:"flex",justifyContent:"space-between",gap:8}}><div>{editRow.id&&<Btn variant="danger" onClick={()=>deleteRow(editRow)} disabled={saving}>Eliminar</Btn>}</div><div style={{display:"flex",gap:8}}><Btn variant="secondary" onClick={()=>{setEditRow(null);setDraftRows({});}}>Cancelar</Btn><Btn onClick={()=>saveRow(editRow)} disabled={saving}>{saving?"Guardando...":"Guardar"}</Btn></div></div></div></Modal>}
+
+    {dayDetail&&<Modal title={`${encDayLabel(dayDetail.date.getDay())} ${fmtFecha(dayDetail.date)} · ${weekTypeForDate(dayDetail.date)==="a"?"Semana A":"Semana B"}`} onClose={()=>setDayDetail(null)} width={560}><div style={{display:"flex",flexDirection:"column",gap:10}}><div style={{padding:9,borderRadius:9,background:dayDetail.confirmed.length?COLORS.successLight:"var(--color-background-secondary)",fontSize:11}}>{dayDetail.confirmed.length?"✓ Las asignaciones de este día están confirmadas.":"○ Este día todavía muestra la planificación teórica derivada de la Semana Tipo."}</div>{(dayDetail.confirmed.length?dayDetail.confirmed:dayDetail.theory).map(r=>{const emp=emps.find(e=>Number(e.id)===Number(r.user_id)),c=colorFor(r.user_id,emps);return <div key={r.user_id} style={{display:"flex",justifyContent:"space-between",alignItems:"center",gap:8,padding:"9px 10px",border:`1px solid ${c.border}`,borderRadius:9,background:c.bg,color:c.fg}}><strong style={{fontSize:12}}>{emp?.nombre||"Encargada"}</strong><span style={{fontSize:11,fontWeight:700}}>{String(r.hora_desde).slice(0,5)}–{String(r.hora_hasta).slice(0,5)}</span></div>})}{!(dayDetail.confirmed.length?dayDetail.confirmed:dayDetail.theory).length&&<p style={{fontSize:11,color:"var(--color-text-secondary)"}}>Sin asignaciones para este día.</p>}<div style={{display:"flex",justifyContent:"flex-end",gap:8,marginTop:4}}>{canEdit&&dayDetail.confirmed.length>0&&<Btn variant="secondary" onClick={async()=>{await unconfirmDay(dayDetail.date);setDayDetail(null);}} disabled={confirming}>Volver a teórico</Btn>}{canEdit&&dayDetail.confirmed.length===0&&<Btn onClick={async()=>{await confirmDay(dayDetail.date);setDayDetail(null);}} disabled={confirming}>✓ Confirmar día</Btn>}<Btn variant="secondary" onClick={()=>setDayDetail(null)}>Cerrar</Btn></div></div></Modal>}
+  </div>;
+}
+
 // ── APP PRINCIPAL ──────────────────────────────────────────────────
 function readSectionHash() {
   const h = (window.location.hash || "").replace(/^#\/?/, "").trim();
@@ -10673,11 +11653,12 @@ function defaultSectionForRole(role) {
 }
 function sectionAllowedForRole(section, role) {
   const reportesOperativos = ["reportes","reportes_horas","reportes_cobertura","reportes_comisiones","reporte_pago_comisiones"];
-  const admin = ["inicio","ayuda","roadmap","asistencia","horarios","bloqueo_horarios",...reportesOperativos,"turnos","adelantos","garantias","informes","manicuras","encargadas","reclutamiento_candidatas","reclutamiento_calendario","reclutamiento_aprobaciones","reclutamiento_antiguedad","reclutamiento_config","locales","cobertura_config","perfil"];
-  const casaMatriz = ["inicio","ayuda","roadmap","asistencia","horarios","bloqueo_horarios",...reportesOperativos,"adelantos","garantias","informes","manicuras","encargadas","reclutamiento_candidatas","reclutamiento_calendario","reclutamiento_aprobaciones","reclutamiento_antiguedad","reclutamiento_config","locales","cobertura_config","perfil"];
-  const encargada = ["inicio","ayuda","asistencia","horarios","bloqueo_horarios",...reportesOperativos,"adelantos","garantias","informes","manicuras","cobertura_config","perfil"];
+  const admin = ["inicio","ayuda","roadmap","asistencia","horarios","horarios_encargadas","bloqueo_horarios",...reportesOperativos,"preliquidacion_encargadas","turnos","adelantos","garantias","informes","manicuras","encargadas","reclutamiento_candidatas","reclutamiento_calendario","reclutamiento_aprobaciones","reclutamiento_antiguedad","reclutamiento_config","locales","cobertura_config","perfil"];
+  const casaMatriz = ["inicio","ayuda","roadmap","asistencia","horarios","horarios_encargadas","bloqueo_horarios",...reportesOperativos,"preliquidacion_encargadas","adelantos","garantias","informes","manicuras","encargadas","reclutamiento_candidatas","reclutamiento_calendario","reclutamiento_aprobaciones","reclutamiento_antiguedad","reclutamiento_config","locales","cobertura_config","perfil"];
+  const franquiciado = ["inicio","ayuda","asistencia","horarios","horarios_encargadas","bloqueo_horarios",...reportesOperativos,"preliquidacion_encargadas","adelantos","garantias","informes","manicuras","encargadas","cobertura_config","perfil"];
+  const encargada = ["inicio","ayuda","asistencia","horarios","bloqueo_horarios",...reportesOperativos,"preliquidacion_encargadas","adelantos","garantias","informes","manicuras","cobertura_config","perfil"];
   const manicura = ["inicio","ayuda","horarios","reportes","reportes_horas","reportes_comisiones","perfil"];
-  const allowed = role === "admin" ? admin : role === "casa_matriz" ? casaMatriz : role === "encargada" ? encargada : manicura;
+  const allowed = role === "admin" ? admin : role === "casa_matriz" ? casaMatriz : role === "franquiciado" ? franquiciado : role === "encargada" ? encargada : manicura;
   return allowed.includes(section);
 }
 
@@ -10965,6 +11946,7 @@ export default function App() {
       items: [
         { id: "asistencia", label: "Registro de asistencia", icon: "📋" },
         { id: "horarios", label: "Horarios", icon: "🗓️" },
+        { id: "horarios_encargadas", label: "Horarios de encargadas", icon: "🧭" },
         { id: "bloqueo_horarios", label: "Bloqueos", icon: "🔐" },
         { id: "reportes_horas", label: "Horas y asistencia", icon: "⏱️" },
         { id: "reportes_cobertura", label: "Cobertura", icon: "📈" },
@@ -10995,6 +11977,7 @@ export default function App() {
       icon: "📝",
       items: [
         { id: "informes", label: "Informe diario", icon: "📝" },
+        { id: "preliquidacion_encargadas", label: "Liquidación encargadas", icon: "💵" },
       ],
     },
     {
@@ -11310,18 +12293,20 @@ export default function App() {
     if (seccion==="asistencia") return <AsistenciaDiaria data={data} setData={setData} reloadData={reloadData} user={user}/>;
     if (seccion==="turnos") return user.rol==="admin" ? <AgendaTurnos data={data} reloadData={reloadData} user={user} agendaOpenRequest={agendaOpenRequest} onAgendaOpenRequestDone={() => setAgendaOpenRequest(null)}/> : null;
     if (seccion==="horarios") return <CalendarioHorarios data={data} setData={setData} reloadData={reloadData} user={user} agendaRequest={agendaRequest} savedState={screenState.horarios} onStateChange={(state)=>saveScreenState("horarios", state)} onBackToReport={()=>{ setSeccion("reportes_cobertura"); setMenuOpen(false); setMobileMenuGroup(null); }}/>;
+    if (seccion==="horarios_encargadas") return ["admin","casa_matriz","franquiciado"].includes(user.rol) ? <HorariosEncargadasLocal data={data} user={user}/> : null;
     if (seccion==="bloqueo_horarios") return <BloqueoHorarios data={data} setData={setData} reloadData={reloadData} user={user} savedState={screenState.bloqueoHorarios} onStateChange={(state)=>saveScreenState("bloqueoHorarios", state)}/>;
     if (seccion==="reportes_horas") return renderReportes("horas", "reportes_horas");
     if (seccion==="reportes_cobertura") return user.rol!=="manicura" ? renderReportes("cobertura", "reportes_cobertura") : null;
     if (seccion==="reportes_comisiones") return renderReportes("comisiones", "reportes_comisiones");
     if (seccion==="reporte_pago_comisiones") return <ReportePagoComisiones data={data} setData={setData} user={user}/>;
     if (seccion==="reportes") return renderReportes("horas", "reportes");
+    if (seccion==="preliquidacion_encargadas") return ["admin","casa_matriz","franquiciado","encargada"].includes(user.rol) ? <PreliquidacionEncargadas data={data} user={user}/> : null;
     if (seccion==="adelantos") return user.rol!=="manicura" ? <AdelantosManicuras data={data} reloadData={reloadData} user={user}/> : null;
     if (seccion==="garantias") return user.rol!=="manicura" ? <GarantiasServicios data={data} reloadData={reloadData} user={user}/> : null;
     if (seccion==="informes") return user.rol!=="manicura" ? <InformeDiario data={data} reloadData={reloadData} user={user}/> : null;
     if (seccion==="manicuras") return <ABMManicuras data={data} setData={setData} reloadData={reloadData} user={user}/>;
     if (seccion==="locales") return ["admin", "casa_matriz"].includes(user.rol) ? <ABMLocales data={data} setData={setData} reloadData={reloadData} user={user}/> : null;
-    if (seccion==="encargadas") return ["admin", "casa_matriz"].includes(user.rol) ? <ABMEncargadas data={data} reloadData={reloadData} user={user}/> : null;
+    if (seccion==="encargadas") return ["admin", "casa_matriz", "franquiciado"].includes(user.rol) ? <ABMEncargadas data={data} reloadData={reloadData} user={user}/> : null;
     if (seccion==="reclutamiento_candidatas") return ["admin", "casa_matriz"].includes(user.rol) ? <ReclutamientoPage data={data} setData={setData} user={user} fixedView="tablero"/> : null;
     if (seccion==="reclutamiento_calendario") return ["admin", "casa_matriz"].includes(user.rol) ? <ReclutamientoCalendarioPage data={data} user={user}/> : null;
     if (seccion==="reclutamiento_aprobaciones") return ["admin", "casa_matriz"].includes(user.rol) ? <ReclutamientoAprobacionesPage data={data} user={user}/> : null;
