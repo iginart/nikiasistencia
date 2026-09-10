@@ -305,7 +305,7 @@ Deno.serve(async (req) => {
         if (error) throw error;
         return json({ ok:true,candidatas:data || [] });
       }
-      const [circuitos,plantillas,candidatas,locales,servicios,instancias,evaluadores,pruebas,archivos,aprobaciones,autorizadores] = await Promise.all([
+      const [circuitos,plantillas,candidatas,locales,servicios,instancias,evaluadores,pruebas,archivos,aprobaciones,autorizadores,busquedas,busquedaLocales,busquedaServicios,busquedaCandidatas] = await Promise.all([
         admin.from("reclutamiento_circuitos").select("*").order("puesto").order("nombre"),
         admin.from("reclutamiento_etapas_plantilla").select("*").order("circuito_id").order("orden"),
         admin.from("reclutamiento_candidatas").select("*").order("actualizado_en",{ascending:false}),
@@ -317,10 +317,14 @@ Deno.serve(async (req) => {
         admin.from("reclutamiento_archivos").select("*").order("creado_en",{ascending:false}),
         admin.from("reclutamiento_aprobaciones").select("*").order("actualizado_en",{ascending:false}),
         admin.from("reclutamiento_autorizadores").select("*"),
+        admin.from("reclutamiento_busquedas").select("*").order("actualizado_en",{ascending:false}),
+        admin.from("reclutamiento_busqueda_locales").select("*"),
+        admin.from("reclutamiento_busqueda_servicios").select("*"),
+        admin.from("reclutamiento_busqueda_candidatas").select("*"),
       ]);
-      const error = [circuitos,plantillas,candidatas,locales,servicios,instancias,evaluadores,pruebas,archivos,aprobaciones,autorizadores].find(x=>x.error)?.error;
+      const error = [circuitos,plantillas,candidatas,locales,servicios,instancias,evaluadores,pruebas,archivos,aprobaciones,autorizadores,busquedas,busquedaLocales,busquedaServicios,busquedaCandidatas].find(x=>x.error)?.error;
       if (error) throw error;
-      return json({ ok:true,data:{ circuitos:circuitos.data||[],plantillas:plantillas.data||[],candidatas:candidatas.data||[],locales:locales.data||[],servicios:servicios.data||[],instancias:instancias.data||[],evaluadores:evaluadores.data||[],pruebas:pruebas.data||[],archivos:archivos.data||[],aprobaciones:aprobaciones.data||[],autorizadores:autorizadores.data||[] } });
+      return json({ ok:true,data:{ circuitos:circuitos.data||[],plantillas:plantillas.data||[],candidatas:candidatas.data||[],locales:locales.data||[],servicios:servicios.data||[],instancias:instancias.data||[],evaluadores:evaluadores.data||[],pruebas:pruebas.data||[],archivos:archivos.data||[],aprobaciones:aprobaciones.data||[],autorizadores:autorizadores.data||[],busquedas:busquedas.data||[],busquedaLocales:busquedaLocales.data||[],busquedaServicios:busquedaServicios.data||[],busquedaCandidatas:busquedaCandidatas.data||[] } });
     }
 
     if (action === "save_candidate") {
@@ -344,8 +348,61 @@ Deno.serve(async (req) => {
       await admin.from("reclutamiento_candidata_servicios").delete().eq("candidata_id",id);
       const svcs = Array.isArray(body.servicios) ? body.servicios : [];
       if (svcs.length) { const { error } = await admin.from("reclutamiento_candidata_servicios").insert(svcs.map((x:any)=>({candidata_id:id,servicio_id:Number(x.servicioId),realiza:!!x.realiza,observacion:x.observacion||null}))); if (error) throw error; }
+      if (Array.isArray(body.busqueda_ids)) {
+        await admin.from("reclutamiento_busqueda_candidatas").delete().eq("candidata_id",id);
+        const searchIds=Array.from(new Set(body.busqueda_ids.map(Number).filter(Boolean)));
+        if(searchIds.length){const {error}=await admin.from("reclutamiento_busqueda_candidatas").insert(searchIds.map((busqueda_id:number)=>({busqueda_id,candidata_id:id,creado_por_user_id:actor.id})));if(error)throw error;}
+      }
       await audit(id,p.id?"CANDIDATA_EDITADA":"CANDIDATA_CREADA",payload.nombre,{puesto:p.puesto});
       return json({ ok:true,id });
+    }
+
+
+    if (action === "search_save") {
+      const p=body.search||{};
+      if(!String(p.titulo||"").trim()) throw new Error("El título de la búsqueda es obligatorio.");
+      if(!["manicura","encargada"].includes(String(p.puesto||""))) throw new Error("Puesto inválido.");
+      let id=Number(p.id||0);
+      const payload={
+        titulo:String(p.titulo).trim(),pedido_original:String(p.pedido_original||"").trim()||null,puesto:String(p.puesto),
+        cantidad_vacantes:Math.max(1,Number(p.cantidad_vacantes||1)),prioridad:String(p.prioridad||"media"),estado:String(p.estado||"abierta"),
+        turno:String(p.turno||"indistinto"),hora_desde:p.hora_desde||null,hora_hasta:p.hora_hasta||null,sabados:String(p.sabados||"indistinto"),
+        fin_semana_completo:p.fin_semana_completo===true,trabaja_feriados:p.trabaja_feriados===null||p.trabaja_feriados===undefined?null:p.trabaja_feriados===true,
+        zona_residencia:String(p.zona_residencia||"").trim()||null,experiencia_min_meses:p.experiencia_min_meses?Number(p.experiencia_min_meses):null,
+        fecha_necesidad:p.fecha_necesidad||null,observaciones:String(p.observaciones||"").trim()||null,actualizado_por_user_id:actor.id,actualizado_en:new Date().toISOString(),
+      };
+      if(id){const {error}=await admin.from("reclutamiento_busquedas").update(payload).eq("id",id);if(error)throw error;}
+      else{const {data,error}=await admin.from("reclutamiento_busquedas").insert({...payload,creado_por_user_id:actor.id}).select("id").single();if(error)throw error;id=Number(data.id);}
+      await admin.from("reclutamiento_busqueda_locales").delete().eq("busqueda_id",id);
+      const localIds=Array.from(new Set((Array.isArray(body.local_ids)?body.local_ids:[]).map(Number).filter(Boolean)));
+      if(localIds.length){const {error}=await admin.from("reclutamiento_busqueda_locales").insert(localIds.map((local_id:number)=>({busqueda_id:id,local_id})));if(error)throw error;}
+      await admin.from("reclutamiento_busqueda_servicios").delete().eq("busqueda_id",id);
+      const reqs=Array.isArray(body.servicios)?body.servicios:[];
+      if(reqs.length){const {error}=await admin.from("reclutamiento_busqueda_servicios").insert(reqs.map((x:any)=>({busqueda_id:id,servicio_id:Number(x.servicioId||x.servicio_id),nivel:String(x.nivel||"preferente")})));if(error)throw error;}
+      if(Array.isArray(body.candidata_ids)){
+        await admin.from("reclutamiento_busqueda_candidatas").delete().eq("busqueda_id",id);
+        const cids=Array.from(new Set(body.candidata_ids.map(Number).filter(Boolean)));
+        if(cids.length){const {error}=await admin.from("reclutamiento_busqueda_candidatas").insert(cids.map((candidata_id:number)=>({busqueda_id:id,candidata_id,creado_por_user_id:actor.id})));if(error)throw error;}
+      }
+      return json({ok:true,id});
+    }
+
+    if (action === "search_candidate_set") {
+      const busquedaId=Number(body.busqueda_id||0),candidataId=Number(body.candidata_id||0),activo=body.activo!==false;
+      if(!busquedaId||!candidataId) throw new Error("Búsqueda o candidata inválida.");
+      if(activo){
+        const {data:exists,error:findError}=await admin.from("reclutamiento_busqueda_candidatas").select("busqueda_id").eq("busqueda_id",busquedaId).eq("candidata_id",candidataId).maybeSingle();
+        if(findError)throw findError;
+        if(!exists){const {error}=await admin.from("reclutamiento_busqueda_candidatas").insert({busqueda_id:busquedaId,candidata_id:candidataId,creado_por_user_id:actor.id});if(error)throw error;}
+      }else{const {error}=await admin.from("reclutamiento_busqueda_candidatas").delete().eq("busqueda_id",busquedaId).eq("candidata_id",candidataId);if(error)throw error;}
+      return json({ok:true});
+    }
+
+    if (action === "search_status") {
+      const id=Number(body.id||0),estado=String(body.estado||"");
+      if(!id||!["abierta","en_proceso","pausada","cubierta","cerrada"].includes(estado)) throw new Error("Estado de búsqueda inválido.");
+      const {error}=await admin.from("reclutamiento_busquedas").update({estado,actualizado_por_user_id:actor.id,actualizado_en:new Date().toISOString()}).eq("id",id);if(error)throw error;
+      return json({ok:true});
     }
 
     if (action === "save_stage") {
@@ -428,7 +485,7 @@ Deno.serve(async (req) => {
       if(action==="config_circuit"){const{error}=await admin.from("reclutamiento_circuitos").update({aprobaciones_requeridas:Number(body.aprobaciones_requeridas||2)}).eq("id",Number(body.id));if(error)throw error;}
       if(action==="config_authorizer"){const uid=Number(body.user_id),puesto=String(body.puesto),activo=!!body.activo;const{data:r}=await admin.from("reclutamiento_autorizadores").select("user_id").eq("user_id",uid).eq("puesto",puesto).maybeSingle();if(r){const{error}=await admin.from("reclutamiento_autorizadores").update({activo}).eq("user_id",uid).eq("puesto",puesto);if(error)throw error;}else{const{error}=await admin.from("reclutamiento_autorizadores").insert({user_id:uid,puesto,activo});if(error)throw error;}}
       if(action==="config_stage_create"){const{error}=await admin.from("reclutamiento_etapas_plantilla").insert(body.stage);if(error)throw error;}
-      if(action==="config_stage_delete"){const{error}=await admin.from("reclutamiento_etapas_plantilla").delete().eq("id",Number(body.id));if(error)throw error;}
+      if(action==="config_stage_delete"){const id=Number(body.id||0);if(!id)throw new Error("Etapa inválida.");const{data:row,error:findError}=await admin.from("reclutamiento_etapas_plantilla").select("id,nombre,activa").eq("id",id).maybeSingle();if(findError)throw findError;if(!row)throw new Error("La etapa ya no existe.");const{error}=await admin.from("reclutamiento_etapas_plantilla").update({activa:false}).eq("id",id);if(error)throw error;}
       return json({ok:true});
     }
 
