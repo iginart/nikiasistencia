@@ -302,10 +302,105 @@ const patchOrPost = async (table, matchQuery, data) => {
   return patchResult;
 };
 
+const NIKI_SESSION_REFRESHED_EVENT = "niki-session-refreshed";
+const NIKI_SESSION_EXPIRED_EVENT = "niki-session-expired";
+let nikiRefreshPromise = null;
+
+function decodeNikiSessionPayload(token) {
+  try {
+    const body = String(token || "").split(".")[0];
+    if (!body) return null;
+    const normalized = body.replace(/-/g, "+").replace(/_/g, "/");
+    const padded = normalized + "=".repeat((4 - normalized.length % 4) % 4);
+    return JSON.parse(atob(padded));
+  } catch { return null; }
+}
+
+function currentNikiActor() {
+  if (window.__nikiCurrentUser?.id) return window.__nikiCurrentUser;
+  try { return JSON.parse(localStorage.getItem("niki_user") || "null"); }
+  catch { return null; }
+}
+
+async function refreshNikiSession() {
+  if (nikiRefreshPromise) return nikiRefreshPromise;
+  nikiRefreshPromise = (async () => {
+    const actor = currentNikiActor();
+    if (!actor?.id || !actor?.sessionToken) throw new Error("No hay una sesión para renovar.");
+    const res = await fetch(`${SUPABASE_URL}/functions/v1/renovar-sesion-niki`, {
+      method:"POST",
+      headers:{ apikey:SUPABASE_KEY, Authorization:`Bearer ${SUPABASE_KEY}`, "Content-Type":"application/json" },
+      body:JSON.stringify({ actor_id:actor.id, session_token:actor.sessionToken }),
+    });
+    const txt = await res.text();
+    const data = txt ? JSON.parse(txt) : {};
+    if (!res.ok || data?.ok === false || !data?.session_token) {
+      const err = new Error(data?.error || txt || "No se pudo renovar la sesión.");
+      err.status = res.status;
+      throw err;
+    }
+    const updated = { ...actor, sessionToken:data.session_token, session_token:data.session_token };
+    window.__nikiCurrentUser = updated;
+    localStorage.setItem("niki_user", JSON.stringify(updated));
+    window.dispatchEvent(new CustomEvent(NIKI_SESSION_REFRESHED_EVENT, { detail:{ user:updated } }));
+    return updated;
+  })();
+  try { return await nikiRefreshPromise; }
+  catch (err) {
+    window.dispatchEvent(new CustomEvent(NIKI_SESSION_EXPIRED_EVENT, { detail:{ error:err?.message || "Sesión vencida" } }));
+    throw err;
+  } finally { nikiRefreshPromise = null; }
+}
+
+async function ensureNikiSessionFresh(minSeconds = 15 * 60) {
+  const actor = currentNikiActor();
+  if (!actor?.id || !actor?.sessionToken) return actor;
+  const payload = decodeNikiSessionPayload(actor.sessionToken);
+  const now = Math.floor(Date.now()/1000);
+  if (payload?.exp && Number(payload.exp) > now + minSeconds) return actor;
+  return refreshNikiSession();
+}
+
+function optionsWithCurrentNikiSession(options = {}) {
+  const actor = currentNikiActor();
+  const next = { ...options, headers:{ ...(options.headers || {}) } };
+  if (!actor?.id || !actor?.sessionToken || !next.body) return next;
+  if (next.body instanceof FormData) {
+    if (next.body.has("actor_id")) next.body.set("actor_id", String(actor.id));
+    if (next.body.has("session_token")) next.body.set("session_token", String(actor.sessionToken));
+    return next;
+  }
+  if (typeof next.body === "string") {
+    try {
+      const data = JSON.parse(next.body);
+      if (Object.prototype.hasOwnProperty.call(data, "actor_id")) data.actor_id = actor.id;
+      if (Object.prototype.hasOwnProperty.call(data, "session_token")) data.session_token = actor.sessionToken;
+      next.body = JSON.stringify(data);
+    } catch {}
+  }
+  return next;
+}
+
+async function nikiProtectedFetch(url, options = {}) {
+  await ensureNikiSessionFresh().catch(() => null);
+  let res = await fetch(url, optionsWithCurrentNikiSession(options));
+  let sessionExpired = res.status === 401;
+  if (!sessionExpired) {
+    try {
+      const txt = await res.clone().text();
+      sessionExpired = /sesión inválida|sesion invalida|sesión vencida|sesion vencida/i.test(txt);
+    } catch {}
+  }
+  if (!sessionExpired) return res;
+  await refreshNikiSession();
+  res = await fetch(url, optionsWithCurrentNikiSession(options));
+  return res;
+}
+
 const recruitmentEdge = async (action, payload = {}) => {
   const actor = window.__nikiCurrentUser || null;
   if (!actor?.id || !actor?.sessionToken) throw new Error("Sesión inválida para Reclutamiento.");
-  const res = await fetch(`${SUPABASE_URL}/functions/v1/reclutamiento-niki`, {
+  const res = await nikiProtectedFetch(`${SUPABASE_URL}/functions/v1/reclutamiento-niki`, {
     method:"POST",
     headers:{ apikey:SUPABASE_KEY, Authorization:`Bearer ${SUPABASE_KEY}`, "Content-Type":"application/json" },
     body:JSON.stringify({ action, actor_id:actor.id, session_token:actor.sessionToken, ...payload }),
@@ -320,7 +415,7 @@ const recruitmentEdge = async (action, payload = {}) => {
 const encargadasSueldosEdge = async (action, payload = {}) => {
   const actor = window.__nikiCurrentUser || null;
   if (!actor?.id || !actor?.sessionToken) throw new Error("Sesión inválida para información salarial.");
-  const res = await fetch(`${SUPABASE_URL}/functions/v1/encargadas-sueldos-niki`, {
+  const res = await nikiProtectedFetch(`${SUPABASE_URL}/functions/v1/encargadas-sueldos-niki`, {
     method:"POST",
     headers:{ apikey:SUPABASE_KEY, Authorization:`Bearer ${SUPABASE_KEY}`, "Content-Type":"application/json" },
     body:JSON.stringify({ action, actor_id:actor.id, session_token:actor.sessionToken, ...payload }),
@@ -345,7 +440,7 @@ const api = {
     return data;
   },
   changePassword: async (payload) => {
-    const res = await fetch(`${SUPABASE_URL}/functions/v1/cambiar-password-niki`, {
+    const res = await nikiProtectedFetch(`${SUPABASE_URL}/functions/v1/cambiar-password-niki`, {
       method: "POST",
       headers: { apikey: SUPABASE_KEY, Authorization: `Bearer ${SUPABASE_KEY}`, "Content-Type": "application/json" },
       body: JSON.stringify(payload),
@@ -367,7 +462,7 @@ const api = {
     return data;
   },
   solicitarVerificacionEmail: async (payload) => {
-    const res = await fetch(`${SUPABASE_URL}/functions/v1/login-niki`, {
+    const res = await nikiProtectedFetch(`${SUPABASE_URL}/functions/v1/login-niki`, {
       method: "POST",
       headers: { apikey: SUPABASE_KEY, Authorization: `Bearer ${SUPABASE_KEY}`, "Content-Type": "application/json" },
       body: JSON.stringify({ action:"send_email_verification", ...payload }),
@@ -378,7 +473,7 @@ const api = {
     return data;
   },
   confirmarVerificacionEmail: async (payload) => {
-    const res = await fetch(`${SUPABASE_URL}/functions/v1/login-niki`, {
+    const res = await nikiProtectedFetch(`${SUPABASE_URL}/functions/v1/login-niki`, {
       method: "POST",
       headers: { apikey: SUPABASE_KEY, Authorization: `Bearer ${SUPABASE_KEY}`, "Content-Type": "application/json" },
       body: JSON.stringify({ action:"confirm_email_verification", ...payload }),
@@ -389,7 +484,7 @@ const api = {
     return data;
   },
   enviarInvitacionUsuario: async (payload) => {
-    const res = await fetch(`${SUPABASE_URL}/functions/v1/enviar-invitacion-niki`, {
+    const res = await nikiProtectedFetch(`${SUPABASE_URL}/functions/v1/enviar-invitacion-niki`, {
       method: "POST",
       headers: { apikey: SUPABASE_KEY, Authorization: `Bearer ${SUPABASE_KEY}`, "Content-Type": "application/json" },
       body: JSON.stringify(payload),
@@ -428,7 +523,7 @@ const api = {
     if (path) fd.append("path", path);
     if (expiresIn) fd.append("expires_in", String(expiresIn));
     if (file) fd.append("file", file, file.name);
-    const res = await fetch(`${SUPABASE_URL}/functions/v1/legajos-personal-niki`, { method:"POST", headers:{ apikey:SUPABASE_KEY, Authorization:`Bearer ${SUPABASE_KEY}` }, body:fd });
+    const res = await nikiProtectedFetch(`${SUPABASE_URL}/functions/v1/legajos-personal-niki`, { method:"POST", headers:{ apikey:SUPABASE_KEY, Authorization:`Bearer ${SUPABASE_KEY}` }, body:fd });
     const txt = await res.text();
     const data = txt ? JSON.parse(txt) : {};
     if(!res.ok || data?.ok===false) throw new Error(data?.error || txt || "Error al gestionar el archivo");
@@ -469,7 +564,7 @@ const api = {
     if (path) fd.append("path", path);
     if (expiresIn) fd.append("expires_in", String(expiresIn));
     if (file) fd.append("file", file, file.name);
-    const res = await fetch(`${SUPABASE_URL}/functions/v1/asistencia-documentos-niki`, { method:"POST", headers:{ apikey:SUPABASE_KEY, Authorization:`Bearer ${SUPABASE_KEY}` }, body:fd });
+    const res = await nikiProtectedFetch(`${SUPABASE_URL}/functions/v1/asistencia-documentos-niki`, { method:"POST", headers:{ apikey:SUPABASE_KEY, Authorization:`Bearer ${SUPABASE_KEY}` }, body:fd });
     const txt = await res.text();
     const data = txt ? JSON.parse(txt) : {};
     if (!res.ok || data?.ok === false) throw new Error(data?.error || txt || "Error al gestionar documentación de asistencia");
@@ -682,7 +777,7 @@ const api = {
   deleteReclutamientoEtapaPlantilla: id => recruitmentEdge("config_stage_delete",{id}),
   marcarReclutamientoIncorporada: (candidataId,userId) => recruitmentEdge("candidate_incorporated",{candidata_id:candidataId,user_id:userId}),
   createReclutamientoAuditoria: async () => null,
-  reclutamientoStorageRequest: async ({action,actor,candidataId,instanciaId=null,tipo="otro",file=null,path="",expiresIn=600}) => { const fd=new FormData();fd.append("action",action);fd.append("actor_id",String(actor?.id||""));fd.append("session_token",String(actor?.sessionToken||""));fd.append("candidata_id",String(candidataId||""));if(instanciaId)fd.append("instancia_id",String(instanciaId));if(tipo)fd.append("tipo",tipo);if(path)fd.append("path",path);fd.append("expires_in",String(expiresIn));if(file)fd.append("file",file,file.name);const res=await fetch(`${SUPABASE_URL}/functions/v1/reclutamiento-archivos-niki`,{method:"POST",headers:{apikey:SUPABASE_KEY,Authorization:`Bearer ${SUPABASE_KEY}`},body:fd});const txt=await res.text();const data=txt?JSON.parse(txt):{};if(!res.ok||data?.ok===false)throw new Error(data?.error||txt||"Error al gestionar archivo de reclutamiento");return data; },
+  reclutamientoStorageRequest: async ({action,actor,candidataId,instanciaId=null,tipo="otro",file=null,path="",expiresIn=600}) => { const fd=new FormData();fd.append("action",action);fd.append("actor_id",String(actor?.id||""));fd.append("session_token",String(actor?.sessionToken||""));fd.append("candidata_id",String(candidataId||""));if(instanciaId)fd.append("instancia_id",String(instanciaId));if(tipo)fd.append("tipo",tipo);if(path)fd.append("path",path);fd.append("expires_in",String(expiresIn));if(file)fd.append("file",file,file.name);const res=await nikiProtectedFetch(`${SUPABASE_URL}/functions/v1/reclutamiento-archivos-niki`,{method:"POST",headers:{apikey:SUPABASE_KEY,Authorization:`Bearer ${SUPABASE_KEY}`},body:fd});const txt=await res.text();const data=txt?JSON.parse(txt):{};if(!res.ok||data?.ok===false)throw new Error(data?.error||txt||"Error al gestionar archivo de reclutamiento");return data; },
 
   moverManicuraLocal: (payload) => sb("rpc/mover_manicura_local", { method:"POST", body:JSON.stringify(payload), prefer:"" }),
   desactivarManicura: (payload) => sb("rpc/desactivar_manicura", { method:"POST", body:JSON.stringify(payload), prefer:"" }),
@@ -1202,7 +1297,7 @@ function Avatar({ nombre, size = 36, photoUrl = "", userId = null }) {
   const matched = registry.find(u => (userId && parseInt(u.id)===parseInt(userId)) || (!userId && String(u.nombre||"").trim().toLowerCase()===String(nombre||"").trim().toLowerCase()));
   const src = photoUrl || matched?.fotoPerfilUrl || "";
   const i = String(nombre||"?").split(" ").filter(Boolean).map(p=>p[0]).slice(0,2).join("").toUpperCase();
-  return src ? <img src={src} alt={nombre||"Foto de perfil"} style={{width:size,height:size,borderRadius:"50%",objectFit:"cover",border:"2px solid #fff",boxShadow:"0 1px 5px rgba(0,0,0,.12)",flexShrink:0}}/> : <div style={{width:size,height:size,borderRadius:"50%",background:COLORS.pinkLight,color:COLORS.pinkDark,display:"flex",alignItems:"center",justifyContent:"center",fontWeight:500,fontSize:size*.35,flexShrink:0}}>{i}</div>;
+  return src ? <img src={src} alt={nombre||"Foto de perfil"} onError={()=>{ if(userId && window.__nikiRefreshPhoto) window.__nikiRefreshPhoto(userId); }} style={{width:size,height:size,borderRadius:"50%",objectFit:"cover",border:"2px solid #fff",boxShadow:"0 1px 5px rgba(0,0,0,.12)",flexShrink:0}}/> : <div style={{width:size,height:size,borderRadius:"50%",background:COLORS.pinkLight,color:COLORS.pinkDark,display:"flex",alignItems:"center",justifyContent:"center",fontWeight:500,fontSize:size*.35,flexShrink:0}}>{i}</div>;
 }
 function Badge({ children, color = "pink" }) { const map = { pink:[COLORS.pinkLight,COLORS.pinkDark],success:[COLORS.successLight,COLORS.success],danger:[COLORS.dangerLight,COLORS.danger],amber:[COLORS.amberLight,COLORS.amber],info:[COLORS.infoLight,COLORS.info],gray:[COLORS.grayLight,"#444"] }; const [bg,fg] = map[color]||map.pink; return <span style={{ background:bg,color:fg,fontSize:11,fontWeight:500,padding:"2px 8px",borderRadius:20,whiteSpace:"nowrap" }}>{children}</span>; }
 function Card({ children, style, ...props }) { return <div {...props} style={{ background:"var(--color-background-primary)",border:"0.5px solid rgba(120,120,120,0.18)",borderRadius:12,padding:"1rem 1.25rem",...style }}>{children}</div>; }
@@ -11761,6 +11856,39 @@ export default function App() {
     userRef.current = user;
     window.__nikiCurrentUser = user || null;
   }, [user]);
+  useEffect(() => {
+    const onRefreshed = (ev) => {
+      const next = ev?.detail?.user;
+      if (next?.id) setUser(prev => prev && Number(prev.id)===Number(next.id) ? { ...prev, ...next } : next);
+    };
+    const onExpired = (ev) => {
+      localStorage.removeItem("niki_user");
+      window.__nikiCurrentUser = null;
+      setUser(null);
+      notifyToast(ev?.detail?.error || "Tu sesión venció. Iniciá sesión nuevamente.", "warning", { title:"Sesión vencida", duration:6500 });
+    };
+    window.addEventListener(NIKI_SESSION_REFRESHED_EVENT, onRefreshed);
+    window.addEventListener(NIKI_SESSION_EXPIRED_EVENT, onExpired);
+    return () => {
+      window.removeEventListener(NIKI_SESSION_REFRESHED_EVENT, onRefreshed);
+      window.removeEventListener(NIKI_SESSION_EXPIRED_EVENT, onExpired);
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!user?.id) return undefined;
+    const check = () => ensureNikiSessionFresh().catch(() => {});
+    const timer = window.setInterval(check, 10 * 60 * 1000);
+    const onVisible = () => { if (document.visibilityState === "visible") check(); };
+    window.addEventListener("focus", check);
+    document.addEventListener("visibilitychange", onVisible);
+    check();
+    return () => {
+      window.clearInterval(timer);
+      window.removeEventListener("focus", check);
+      document.removeEventListener("visibilitychange", onVisible);
+    };
+  }, [user?.id]);
   const [seccion, setSeccion] = useState(null);
   const [publicHash, setPublicHash] = useState(() => readSectionHash());
   const [menuOpen, setMenuOpen] = useState(false);
@@ -11900,6 +12028,21 @@ export default function App() {
     setData(nextData);
     return nextData;
   }, []);
+
+  useEffect(() => {
+    window.__nikiRefreshPhoto = async (userId) => {
+      const actor = userRef.current;
+      const target = (data?.users || []).find(u => Number(u.id)===Number(userId));
+      if (!actor?.id || !target?.fotoPerfilPath) return;
+      try {
+        const url = await api.signPersonaArchivo(actor, target.id, target.fotoPerfilPath, 3600);
+        if (url) setData(prev => prev ? ({ ...prev, users:(prev.users||[]).map(u => Number(u.id)===Number(target.id) ? { ...u, fotoPerfilUrl:url } : u) }) : prev);
+      } catch (err) {
+        console.warn("No se pudo renovar la foto de perfil", err);
+      }
+    };
+    return () => { delete window.__nikiRefreshPhoto; };
+  }, [data?.users, user?.id]);
 
   const applyPeriodoRealtime = useCallback((payload) => {
     const raw = payload.eventType === "DELETE" ? payload.old : payload.new;
