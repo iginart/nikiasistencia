@@ -304,7 +304,80 @@ const patchOrPost = async (table, matchQuery, data) => {
 
 const NIKI_SESSION_REFRESHED_EVENT = "niki-session-refreshed";
 const NIKI_SESSION_EXPIRED_EVENT = "niki-session-expired";
+const NIKI_LAST_ACTIVITY_KEY = "niki_last_activity_at";
+const NIKI_SESSION_STARTED_KEY = "niki_session_started_at";
+const NIKI_MAX_INACTIVITY_MS = 8 * 60 * 60 * 1000;
+const NIKI_MAX_SESSION_MS = 24 * 60 * 60 * 1000;
 let nikiRefreshPromise = null;
+
+function readNikiTimestamp(key) {
+  const value = Number(localStorage.getItem(key) || 0);
+  return Number.isFinite(value) && value > 0 ? value : 0;
+}
+
+function clearNikiSessionClock() {
+  localStorage.removeItem(NIKI_LAST_ACTIVITY_KEY);
+  localStorage.removeItem(NIKI_SESSION_STARTED_KEY);
+}
+
+function initializeNikiSessionClock(actor, force = false) {
+  const now = Date.now();
+  if (force || !readNikiTimestamp(NIKI_LAST_ACTIVITY_KEY)) localStorage.setItem(NIKI_LAST_ACTIVITY_KEY, String(now));
+  if (force || !readNikiTimestamp(NIKI_SESSION_STARTED_KEY)) {
+    const payload = decodeNikiSessionPayload(actor?.sessionToken);
+    const issuedAt = Number(payload?.iat || 0) * 1000;
+    localStorage.setItem(NIKI_SESSION_STARTED_KEY, String(issuedAt > 0 && issuedAt <= now ? issuedAt : now));
+  }
+}
+
+function markNikiActivity() {
+  if (!currentNikiActor()?.id) return;
+  localStorage.setItem(NIKI_LAST_ACTIVITY_KEY, String(Date.now()));
+}
+
+function getNikiSessionLimitMessage(actor = currentNikiActor()) {
+  if (!actor?.id) return "";
+  initializeNikiSessionClock(actor);
+  const now = Date.now();
+  const lastActivity = readNikiTimestamp(NIKI_LAST_ACTIVITY_KEY);
+  const startedAt = readNikiTimestamp(NIKI_SESSION_STARTED_KEY);
+  if (lastActivity && now - lastActivity >= NIKI_MAX_INACTIVITY_MS) return "Tu sesión se cerró por 8 horas de inactividad. Iniciá sesión nuevamente.";
+  if (startedAt && now - startedAt >= NIKI_MAX_SESSION_MS) return "Por seguridad, Niki OS solicita volver a ingresar al menos una vez cada 24 horas.";
+  return "";
+}
+
+function expireNikiClientSession(message) {
+  window.dispatchEvent(new CustomEvent(NIKI_SESSION_EXPIRED_EVENT, { detail:{ error:message || "Tu sesión venció. Iniciá sesión nuevamente." } }));
+}
+
+function currentNikiBundlePath() {
+  try {
+    const scripts = Array.from(document.querySelectorAll('script[type="module"][src]'));
+    const script = scripts[scripts.length - 1];
+    return script?.src ? new URL(script.src, window.location.href).pathname : "";
+  } catch { return ""; }
+}
+
+async function hasNewNikiVersion() {
+  try {
+    if (import.meta.env.DEV) return false;
+    const current = currentNikiBundlePath();
+    if (!current || current.includes("/src/")) return false;
+    const url = new URL(window.location.href);
+    url.hash = "";
+    url.searchParams.set("niki_version_check", String(Date.now()));
+    const res = await fetch(url.toString(), { cache:"no-store", headers:{ "Cache-Control":"no-cache" } });
+    if (!res.ok) return false;
+    const html = await res.text();
+    const doc = new DOMParser().parseFromString(html, "text/html");
+    const scripts = Array.from(doc.querySelectorAll('script[type="module"][src]'));
+    const latestScript = scripts[scripts.length - 1];
+    const latest = latestScript?.getAttribute("src") || "";
+    if (!latest) return false;
+    const latestPath = new URL(latest, url).pathname;
+    return latestPath !== current;
+  } catch { return false; }
+}
 
 function decodeNikiSessionPayload(token) {
   try {
@@ -327,6 +400,8 @@ async function refreshNikiSession() {
   nikiRefreshPromise = (async () => {
     const actor = currentNikiActor();
     if (!actor?.id || !actor?.sessionToken) throw new Error("No hay una sesión para renovar.");
+    const clientLimitMessage = getNikiSessionLimitMessage(actor);
+    if (clientLimitMessage) throw new Error(clientLimitMessage);
     const res = await fetch(`${SUPABASE_URL}/functions/v1/renovar-sesion-niki`, {
       method:"POST",
       headers:{ apikey:SUPABASE_KEY, Authorization:`Bearer ${SUPABASE_KEY}`, "Content-Type":"application/json" },
@@ -7933,10 +8008,7 @@ function PreliquidacionEncargadas({ data, user }) {
 function InformeDiario({ data, reloadData, user }) {
   const hoy = new Date();
   const esAdmin = isAdminLikeRole(user.rol);
-  const allowedLocalIds = useMemo(() => {
-    if (esAdmin) return data.locales.map(l => l.id);
-    return (data.encargadoLocales || []).filter(x => x.userId === user.id).map(x => x.localId);
-  }, [data.locales, data.encargadoLocales, user.id, esAdmin]);
+  const allowedLocalIds = useMemo(() => getAssignedLocalIds(data, user), [data, user]);
   const locales = data.locales.filter(l => allowedLocalIds.includes(l.id));
   const [fecha, setFecha] = useState(dateKey(hoy));
   const [localId, setLocalId] = useState(locales[0]?.id || "");
@@ -7963,6 +8035,9 @@ function InformeDiario({ data, reloadData, user }) {
   const [conceptosModal, setConceptosModal] = useState(false);
   const [conceptoDraft, setConceptoDraft] = useState({ codigo:"", nombre:"", activo:true });
   const [conceptosSaving, setConceptosSaving] = useState(false);
+  const [vistaListado, setVistaListado] = useState("mes");
+  const [fechaFiltroDia, setFechaFiltroDia] = useState(dateKey(hoy));
+  const [localDiaAbierto, setLocalDiaAbierto] = useState(null);
 
   useEffect(() => {
     if (!localId && locales[0]?.id) setLocalId(locales[0].id);
@@ -8041,6 +8116,18 @@ function InformeDiario({ data, reloadData, user }) {
       .filter(i => !localFiltro || i.localId === parseInt(localFiltro))
       .sort((a,b) => (b.fecha || "").localeCompare(a.fecha || ""));
   }, [data.informesDiarios, allowedLocalIds, mesFiltro, localFiltro]);
+
+  const informesPorLocalDia = useMemo(() => {
+    const map = new Map();
+    locales.forEach(l => map.set(Number(l.id), []));
+    (data.informesDiarios || []).forEach(i => {
+      if (i.fecha !== fechaFiltroDia || !allowedLocalIds.includes(i.localId)) return;
+      if (!map.has(Number(i.localId))) map.set(Number(i.localId), []);
+      map.get(Number(i.localId)).push(i);
+    });
+    map.forEach(rows => rows.sort((a,b)=>turnoOrden(a.turno||"dia")-turnoOrden(b.turno||"dia")));
+    return map;
+  }, [data.informesDiarios, locales, fechaFiltroDia, allowedLocalIds, turnoOrden]);
 
   const selectedLocal = data.locales.find(l => l.id === parseInt(form?.localId || localId));
   const parseDateLabel = (f) => {
@@ -8697,27 +8784,60 @@ function InformeDiario({ data, reloadData, user }) {
       </div>
     </div>
 
-    {!editorOpen && <Card>
-      <div style={{ display:"flex",justifyContent:"space-between",gap:8,alignItems:"center",flexWrap:"wrap",marginBottom:12 }}>
-        <h3 style={{ margin:0,fontSize:17,fontWeight:700 }}>Informes existentes</h3>
-        <div style={{ display:"flex",gap:8,flexWrap:"wrap" }}>
-          <input type="month" value={mesFiltro} onChange={e=>setMesFiltro(e.target.value)} style={{ border:"0.5px solid var(--color-border-secondary)",borderRadius:8,padding:"7px 10px",fontSize:13,background:"var(--color-background-primary)",color:"var(--color-text-primary)" }}/>
-          <Select value={localFiltro} onChange={setLocalFiltro} style={{ width:180 }}>{locales.map(l=><option key={l.id} value={l.id}>{l.nombre}</option>)}</Select>
-        </div>
+    {!editorOpen && <div>
+      <div style={{display:"flex",gap:7,marginBottom:12,flexWrap:"wrap"}}>
+        <button onClick={()=>setVistaListado("mes")} style={{border:`1px solid ${vistaListado==="mes"?COLORS.pink:"var(--color-border-secondary)"}`,background:vistaListado==="mes"?COLORS.pinkLight:"var(--color-background-primary)",color:vistaListado==="mes"?COLORS.pinkDark:"var(--color-text-primary)",borderRadius:999,padding:"8px 14px",fontSize:12,fontWeight:800,cursor:"pointer"}}>Por mes y local</button>
+        <button onClick={()=>setVistaListado("dia")} style={{border:`1px solid ${vistaListado==="dia"?COLORS.pink:"var(--color-border-secondary)"}`,background:vistaListado==="dia"?COLORS.pinkLight:"var(--color-background-primary)",color:vistaListado==="dia"?COLORS.pinkDark:"var(--color-text-primary)",borderRadius:999,padding:"8px 14px",fontSize:12,fontWeight:800,cursor:"pointer"}}>Vista del día</button>
       </div>
-      {informesFiltrados.length===0 ? <div style={{ border:"1px dashed var(--color-border-secondary)",borderRadius:12,padding:18,background:"var(--color-background-secondary)" }}>
-        <p style={{ margin:0,color:"var(--color-text-secondary)",fontSize:14 }}>No hay informes para los filtros seleccionados.</p>
-      </div> : <div style={{ display:"flex",flexDirection:"column",gap:8 }}>
-        {informesFiltrados.map(inf=>{ const loc=data.locales.find(l=>l.id===inf.localId); return <div key={inf.id} style={{ border:"0.5px solid var(--color-border-tertiary)",borderRadius:12,padding:12,display:"flex",gap:10,alignItems:"center",flexWrap:"wrap",background:"var(--color-background-primary)" }}>
-          <div style={{ flex:1,minWidth:220 }}><p style={{ margin:0,fontWeight:800 }}>{parseDateLabel(inf.fecha)} · {loc?.nombre} · {inf.turno === "manana" ? "Mañana" : inf.turno === "tarde" ? "Tarde" : "Día"}</p><p style={{ margin:"2px 0 0",fontSize:12,color:"var(--color-text-secondary)" }}>Cierre: {userLabel(inf.cerradoPor || inf.creadoPor)} · {inf.importanteManana || inf.novedadesSalonManicuras || "Sin observaciones principales"}</p></div>
-          <Badge color={inf.estado==="enviado"?"success":"gray"}>{inf.estado==="enviado"?"Enviado":"Borrador"}</Badge>
-          <Btn size="sm" variant="ghost" onClick={()=>openInformeEditor(inf)}>Editar</Btn>
-          <Btn size="sm" variant="secondary" onClick={()=>setPreview(inf)}>Ver</Btn>
-          <Btn size="sm" variant="ghost" onClick={()=>printInforme(inf)}>Imprimir</Btn>
-          <Btn size="sm" variant="danger" onClick={()=>setDeleteTarget(inf)}>Eliminar</Btn>
-        </div>;})}
+
+      {vistaListado==="mes" ? <Card>
+        <div style={{ display:"flex",justifyContent:"space-between",gap:8,alignItems:"center",flexWrap:"wrap",marginBottom:12 }}>
+          <h3 style={{ margin:0,fontSize:17,fontWeight:700 }}>Informes existentes</h3>
+          <div style={{ display:"flex",gap:8,flexWrap:"wrap" }}>
+            <input type="month" value={mesFiltro} onChange={e=>setMesFiltro(e.target.value)} style={{ border:"0.5px solid var(--color-border-secondary)",borderRadius:8,padding:"7px 10px",fontSize:13,background:"var(--color-background-primary)",color:"var(--color-text-primary)" }}/>
+            <Select value={localFiltro} onChange={setLocalFiltro} style={{ width:180 }}>{locales.map(l=><option key={l.id} value={l.id}>{l.nombre}</option>)}</Select>
+          </div>
+        </div>
+        {informesFiltrados.length===0 ? <div style={{ border:"1px dashed var(--color-border-secondary)",borderRadius:12,padding:18,background:"var(--color-background-secondary)" }}>
+          <p style={{ margin:0,color:"var(--color-text-secondary)",fontSize:14 }}>No hay informes para los filtros seleccionados.</p>
+        </div> : <div style={{ display:"flex",flexDirection:"column",gap:8 }}>
+          {informesFiltrados.map(inf=>{ const loc=data.locales.find(l=>l.id===inf.localId); return <div key={inf.id} style={{ border:"0.5px solid var(--color-border-tertiary)",borderRadius:12,padding:12,display:"flex",gap:10,alignItems:"center",flexWrap:"wrap",background:"var(--color-background-primary)" }}>
+            <div style={{ flex:1,minWidth:220 }}><p style={{ margin:0,fontWeight:800 }}>{parseDateLabel(inf.fecha)} · {loc?.nombre} · {inf.turno === "manana" ? "Mañana" : inf.turno === "tarde" ? "Tarde" : "Día"}</p><p style={{ margin:"2px 0 0",fontSize:12,color:"var(--color-text-secondary)" }}>Cierre: {userLabel(inf.cerradoPor || inf.creadoPor)} · {inf.importanteManana || inf.novedadesSalonManicuras || "Sin observaciones principales"}</p></div>
+            <Badge color={inf.estado==="enviado"?"success":"gray"}>{inf.estado==="enviado"?"Enviado":"Borrador"}</Badge>
+            <Btn size="sm" variant="ghost" onClick={()=>openInformeEditor(inf)}>Editar</Btn>
+            <Btn size="sm" variant="secondary" onClick={()=>setPreview(inf)}>Ver</Btn>
+            <Btn size="sm" variant="ghost" onClick={()=>printInforme(inf)}>Imprimir</Btn>
+            <Btn size="sm" variant="danger" onClick={()=>setDeleteTarget(inf)}>Eliminar</Btn>
+          </div>;})}
+        </div>}
+      </Card> : <div>
+        <Card style={{padding:12,marginBottom:12}}>
+          <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",gap:10,flexWrap:"wrap"}}>
+            <div><h3 style={{margin:0,fontSize:17}}>Informes por día</h3><p style={{margin:"3px 0 0",fontSize:12,color:"var(--color-text-secondary)"}}>Todos los locales habilitados para tu usuario. Elegí un local para ver sus informes del día.</p></div>
+            <input type="date" value={fechaFiltroDia} onChange={e=>{setFechaFiltroDia(e.target.value);setLocalDiaAbierto(null);}} style={{border:`1px solid ${COLORS.pink}`,borderRadius:9,padding:"8px 11px",fontSize:13,background:"var(--color-background-primary)",color:"var(--color-text-primary)"}}/>
+          </div>
+        </Card>
+        <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(250px,1fr))",gap:12}}>
+          {locales.map((loc,idx)=>{
+            const rows=informesPorLocalDia.get(Number(loc.id))||[];
+            const enviados=rows.filter(x=>x.estado==="enviado").length;
+            const borradores=rows.length-enviados;
+            const active=Number(localDiaAbierto)===Number(loc.id);
+            return <button key={loc.id} onClick={()=>setLocalDiaAbierto(active?null:loc.id)} style={{textAlign:"left",border:`${active?2:1}px solid ${active?COLORS.pink:`rgba(212,83,126,${rows.length?0.28:0.14})`}`,borderRadius:17,padding:16,background:rows.length?"linear-gradient(145deg, rgba(255,247,250,.98), rgba(255,255,255,1))":"var(--color-background-primary)",boxShadow:active?"0 12px 30px rgba(114,36,62,.13)":"0 7px 20px rgba(0,0,0,.055)",cursor:"pointer",minHeight:138,transition:"all .18s ease",position:"relative",overflow:"hidden"}}>
+              <span style={{position:"absolute",right:13,top:11,fontSize:22,opacity:.72}}>{rows.length?"📝":"🏠"}</span>
+              <div style={{fontSize:10,fontWeight:800,textTransform:"uppercase",letterSpacing:".08em",color:COLORS.pink,marginBottom:7}}>LOCAL {String(idx+1).padStart(2,"0")}</div>
+              <strong style={{display:"block",fontSize:18,color:COLORS.pinkDark,marginBottom:7,paddingRight:28}}>{loc.nombre}</strong>
+              <div style={{fontSize:12,color:"var(--color-text-secondary)",marginBottom:10}}>{rows.length?`${rows.length} informe${rows.length===1?"":"s"} el ${parseDateLabel(fechaFiltroDia)}`:`Sin informes el ${parseDateLabel(fechaFiltroDia)}`}</div>
+              <div style={{display:"flex",gap:6,flexWrap:"wrap"}}>{enviados>0&&<Badge color="success">{enviados} enviado{enviados===1?"":"s"}</Badge>}{borradores>0&&<Badge color="gray">{borradores} borrador{borradores===1?"":"es"}</Badge>}{rows.length===0&&<Badge color="gray">Sin carga</Badge>}</div>
+            </button>;
+          })}
+        </div>
+        {localDiaAbierto&&(()=>{const loc=locales.find(l=>Number(l.id)===Number(localDiaAbierto));const rows=informesPorLocalDia.get(Number(localDiaAbierto))||[];return <Card style={{marginTop:13,padding:14}}>
+          <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",gap:8,flexWrap:"wrap",marginBottom:10}}><div><h3 style={{margin:0,fontSize:16}}>{loc?.nombre} · {parseDateLabel(fechaFiltroDia)}</h3><p style={{margin:"2px 0 0",fontSize:11,color:"var(--color-text-secondary)"}}>Elegí el informe que querés consultar.</p></div></div>
+          {rows.length===0?<div style={{border:"1px dashed var(--color-border-secondary)",borderRadius:11,padding:14,color:"var(--color-text-secondary)",fontSize:12}}>No hay informes cargados para este local en la fecha seleccionada.</div>:<div style={{display:"flex",flexDirection:"column",gap:7}}>{rows.map(inf=><div key={inf.id} style={{display:"flex",alignItems:"center",gap:8,flexWrap:"wrap",padding:"10px 11px",border:"1px solid rgba(120,120,120,.12)",borderRadius:11,background:"var(--color-background-primary)"}}><div style={{flex:1,minWidth:180}}><strong style={{fontSize:13}}>{inf.turno==="manana"?"Mañana":inf.turno==="tarde"?"Tarde":"Día"}</strong><div style={{fontSize:10,color:"var(--color-text-secondary)",marginTop:2}}>{inf.importanteManana||inf.novedadesSalonManicuras||"Sin observaciones principales"}</div></div><Badge color={inf.estado==="enviado"?"success":"gray"}>{inf.estado==="enviado"?"Enviado":"Borrador"}</Badge><Btn size="sm" variant="ghost" onClick={()=>openInformeEditor(inf)}>Editar</Btn><Btn size="sm" variant="secondary" onClick={()=>setPreview(inf)}>Ver</Btn><Btn size="sm" variant="ghost" onClick={()=>printInforme(inf)}>Imprimir</Btn></div>)}</div>}
+        </Card>})()}
       </div>}
-    </Card>}
+    </div>}
 
     {editorOpen && <div style={{ marginTop:10,marginBottom:14 }}>
       <div style={{ border:"1px solid var(--color-border-tertiary)",borderRadius:14,padding:"10px 12px",background:"var(--color-background-primary)",marginBottom:10 }}>
@@ -11905,6 +12025,106 @@ function HorariosEncargadasLocal({ data, user }) {
   </div>;
 }
 
+
+// ── PIZARRA SEMANAL DE HORARIOS ───────────────────────────────────
+function PizarraSemanal({ data, user }) {
+  const today = new Date();
+  const [weekStart, setWeekStart] = useState(dateKey(getMon(today)));
+  const [localId, setLocalId] = useState("");
+  const [rows, setRows] = useState([]);
+  const [loading, setLoading] = useState(false);
+  const [editCell, setEditCell] = useState(null);
+  const [saving, setSaving] = useState(false);
+
+  const weekDays = useMemo(() => {
+    const mon = parseDateLocal(weekStart) || getMon(today);
+    return Array.from({length:7},(_,i)=>{const d=new Date(mon);d.setDate(mon.getDate()+i);return d;});
+  }, [weekStart]);
+  const weekKeys = useMemo(()=>weekDays.map(dateKey),[weekDays]);
+  const desde=weekKeys[0], hasta=weekKeys[6];
+
+  const accessibleLocalIds = useMemo(() => {
+    if (user.rol !== "manicura") return getAssignedLocalIds(data,user).map(Number);
+    const ids=new Set();
+    weekKeys.forEach(f=>getActiveManicuraLocalIds(data,user.id,f).forEach(id=>ids.add(Number(id))));
+    if(!ids.size && user.localId) ids.add(Number(user.localId));
+    return Array.from(ids);
+  }, [data,user,weekKeys]);
+  const locales = useMemo(() => (data.locales||[]).filter(l=>localActivo(l)&&accessibleLocalIds.includes(Number(l.id))).sort((a,b)=>(a.nombre||"").localeCompare(b.nombre||"")), [data.locales,accessibleLocalIds]);
+
+  useEffect(()=>{
+    if(!locales.length){setLocalId("");return;}
+    if(!localId || !locales.some(l=>Number(l.id)===Number(localId))) setLocalId(String(locales[0].id));
+  },[locales,localId]);
+
+  const load=useCallback(async()=>{
+    setLoading(true);
+    try{const raw=await api.getHorariosRango(desde,hasta);setRows((raw||[]).map(normalizeHorario));}
+    catch(e){notifyToast("No se pudo cargar la pizarra semanal. "+(e.message||e),"error");}
+    finally{setLoading(false);}
+  },[desde,hasta]);
+  useEffect(()=>{load();},[load]);
+
+  const localNum=Number(localId)||null;
+  const manicuras=useMemo(()=>{
+    if(!localNum)return [];
+    return (data.users||[]).filter(u=>u.rol==="manicura"&&u.activo&&weekKeys.some(f=>getActiveManicuraLocalIds(data,u.id,f).includes(localNum))).sort((a,b)=>(a.nombre||"").localeCompare(b.nombre||""));
+  },[data.users,data.manicuraHistorialLocales,weekKeys,localNum]);
+  const scheduleMap=useMemo(()=>{const m=new Map();rows.forEach(h=>m.set(`${Number(h.userId)}|${Number(h.localId)}|${h.fecha}`,h));return m;},[rows]);
+  const dayNames=["Lun","Mar","Mié","Jue","Vie","Sáb","Dom"];
+  const fmt=(v)=>String(v||"").slice(0,5);
+  const canEdit=(uid)=>user.rol==="manicura"&&Number(uid)===Number(user.id);
+
+  const moveWeek=(delta)=>{const d=parseDateLocal(weekStart)||getMon(today);d.setDate(d.getDate()+delta*7);setWeekStart(dateKey(d));setEditCell(null);};
+  const openCell=(m,f)=>{
+    if(!canEdit(m.id))return;
+    const h=scheduleMap.get(`${Number(m.id)}|${localNum}|${f}`);
+    setEditCell({userId:m.id,nombre:m.nombre,fecha:f,localId:localNum,entrada:fmt(h?.entrada),salida:fmt(h?.salida),exists:!!h});
+  };
+  const saveCell=async()=>{
+    if(!editCell||!canEdit(editCell.userId))return;
+    if(!editCell.entrada||!editCell.salida)return notifyToast("Completá horario de ingreso y salida.","warning");
+    if(editCell.entrada>=editCell.salida)return notifyToast("La hora de salida debe ser posterior al ingreso.","warning");
+    const conflict=rows.find(h=>Number(h.userId)===Number(editCell.userId)&&h.fecha===editCell.fecha&&Number(h.localId)!==Number(editCell.localId)&&h.trabaja!==false&&h.entrada&&h.salida&&editCell.entrada<h.salida&&editCell.salida>h.entrada);
+    if(conflict){const loc=data.locales.find(l=>Number(l.id)===Number(conflict.localId));return notifyToast(`Ese horario se superpone con ${loc?.nombre||"otro local"} (${fmt(conflict.entrada)} a ${fmt(conflict.salida)}).`,"error",{title:"Horarios superpuestos"});}
+    setSaving(true);
+    try{
+      const payload={user_id:Number(editCell.userId),local_id:Number(editCell.localId),fecha:editCell.fecha,entrada:editCell.entrada,salida:editCell.salida,trabaja:true};
+      const saved=await api.upsertHorario(payload);const nh=normalizeHorario(Array.isArray(saved)?saved[0]:saved||payload);
+      setRows(prev=>[...prev.filter(h=>!(Number(h.userId)===Number(editCell.userId)&&Number(h.localId)===Number(editCell.localId)&&h.fecha===editCell.fecha)),nh]);
+      setEditCell(null);notifyToast("Horario actualizado.","success");
+    }catch(e){notifyToast(e.message||"No se pudo guardar el horario.","error");}finally{setSaving(false);}
+  };
+  const removeCell=async()=>{
+    if(!editCell||!canEdit(editCell.userId)) return;
+    setSaving(true);
+    try{
+      await api.deleteHorario(editCell.userId,editCell.localId,editCell.fecha);
+      setRows(prev=>prev.filter(h=>!(
+        Number(h.userId)===Number(editCell.userId) &&
+        Number(h.localId)===Number(editCell.localId) &&
+        h.fecha===editCell.fecha
+      )));
+      setEditCell(null);
+      notifyToast("Horario quitado.","success");
+    }catch(e){
+      notifyToast(e.message||"No se pudo quitar el horario.","error");
+    }finally{
+      setSaving(false);
+    }
+  };
+
+  return <div>
+    <div style={{display:"flex",justifyContent:"space-between",gap:12,alignItems:"flex-start",flexWrap:"wrap",marginBottom:14}}><div><h2 style={{margin:0,fontSize:22}}>Pizarra semanal</h2><p style={{margin:"4px 0 0",fontSize:12,color:"var(--color-text-secondary)"}}>Vista completa del equipo por local. Cada manicura puede editar únicamente sus propios horarios.</p></div><Btn size="sm" variant="secondary" onClick={load} disabled={loading}>↻ Actualizar</Btn></div>
+    <Card style={{padding:12,marginBottom:12}}><div style={{display:"flex",alignItems:"end",gap:9,flexWrap:"wrap"}}><div style={{minWidth:220,flex:"1 1 240px"}}><label style={{display:"block",fontSize:10,fontWeight:800,color:"var(--color-text-secondary)",marginBottom:4,textTransform:"uppercase"}}>Local</label><Select value={localId} onChange={setLocalId}>{locales.map(l=><option key={l.id} value={l.id}>{l.nombre}</option>)}</Select></div><div style={{display:"flex",gap:6,alignItems:"center"}}><Btn size="sm" variant="ghost" onClick={()=>moveWeek(-1)}>←</Btn><input type="date" value={weekStart} onChange={e=>setWeekStart(dateKey(getMon(parseDateLocal(e.target.value)||today)))} style={{border:"1px solid var(--color-border-secondary)",borderRadius:8,padding:"7px 9px",fontSize:12,background:"var(--color-background-primary)",color:"var(--color-text-primary)"}}/><Btn size="sm" variant="ghost" onClick={()=>moveWeek(1)}>→</Btn><Btn size="sm" variant="secondary" onClick={()=>setWeekStart(dateKey(getMon(today)))}>Esta semana</Btn></div></div></Card>
+    {!locales.length?<Card><p style={{margin:0,fontSize:12,color:"var(--color-text-secondary)"}}>No tenés locales habilitados para esta semana.</p></Card>:loading?<Card><p style={{margin:0,fontSize:12}}>Cargando pizarra...</p></Card>:<Card style={{padding:0,overflow:"hidden"}}><div style={{overflowX:"auto"}}><div style={{minWidth:980}}>
+      <div style={{display:"grid",gridTemplateColumns:"190px repeat(7,minmax(105px,1fr))",background:"rgba(225,198,204,.34)",borderBottom:"1px solid rgba(120,120,120,.12)"}}><div style={{padding:"11px 12px",fontSize:10,fontWeight:800,textTransform:"uppercase",color:COLORS.pinkDark}}>Manicura</div>{weekDays.map((d,i)=><div key={dateKey(d)} style={{padding:"9px 7px",textAlign:"center",borderLeft:"1px solid rgba(120,120,120,.1)"}}><strong style={{display:"block",fontSize:11}}>{dayNames[i]}</strong><span style={{fontSize:10,color:"var(--color-text-secondary)"}}>{String(d.getDate()).padStart(2,"0")}/{String(d.getMonth()+1).padStart(2,"0")}</span></div>)}</div>
+      {manicuras.length===0?<div style={{padding:18,fontSize:12,color:"var(--color-text-secondary)"}}>No hay manicuras asignadas a este local durante la semana.</div>:manicuras.map((m,ri)=><div key={m.id} style={{display:"grid",gridTemplateColumns:"190px repeat(7,minmax(105px,1fr))",borderBottom:"1px solid rgba(120,120,120,.09)",background:ri%2?"rgba(120,120,120,.018)":"var(--color-background-primary)"}}><div style={{padding:"10px 11px",display:"flex",alignItems:"center",gap:8,minWidth:0}}><Avatar nombre={m.nombre} userId={m.id} size={28}/><div style={{minWidth:0}}><strong style={{display:"block",fontSize:11,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{m.nombre}</strong>{canEdit(m.id)&&<span style={{fontSize:9,color:COLORS.pink,fontWeight:700}}>Tu horario · editable</span>}</div></div>{weekKeys.map(f=>{const h=scheduleMap.get(`${Number(m.id)}|${localNum}|${f}`);const own=canEdit(m.id);return <button key={f} disabled={!own} onClick={()=>openCell(m,f)} title={own?"Editar mi horario":"Solo la manicura puede editar su propio horario"} style={{border:0,borderLeft:"1px solid rgba(120,120,120,.09)",background:own?"rgba(212,83,126,.035)":"transparent",padding:"8px 5px",cursor:own?"pointer":"default",minHeight:54,color:"var(--color-text-primary)"}}>{h?.trabaja!==false&&h?.entrada&&h?.salida?<><strong style={{display:"block",fontSize:12,color:own?COLORS.pinkDark:"var(--color-text-primary)"}}>{fmt(h.entrada)}</strong><span style={{fontSize:9,color:"var(--color-text-secondary)"}}>a</span><strong style={{display:"block",fontSize:12,color:own?COLORS.pinkDark:"var(--color-text-primary)"}}>{fmt(h.salida)}</strong></>:<span style={{fontSize:14,color:"var(--color-text-secondary)",opacity:.55}}>—</span>}</button>})}</div>)}
+    </div></div></Card>}
+    {editCell&&<Modal title={`Mi horario · ${editCell.nombre}`} onClose={()=>!saving&&setEditCell(null)} width={440}><div style={{display:"flex",flexDirection:"column",gap:11}}><div style={{padding:"9px 10px",borderRadius:10,background:COLORS.pinkLight,fontSize:12,color:COLORS.pinkDark,fontWeight:700}}>{editCell.fecha.split("-").reverse().join("/")} · {data.locales.find(l=>Number(l.id)===Number(editCell.localId))?.nombre}</div><div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:9}}><div><label style={{fontSize:10,fontWeight:800,color:"var(--color-text-secondary)"}}>INGRESO</label><input type="time" value={editCell.entrada} onChange={e=>setEditCell(x=>({...x,entrada:e.target.value}))} style={{width:"100%",marginTop:4,border:"1px solid var(--color-border-secondary)",borderRadius:8,padding:"8px"}}/></div><div><label style={{fontSize:10,fontWeight:800,color:"var(--color-text-secondary)"}}>SALIDA</label><input type="time" value={editCell.salida} onChange={e=>setEditCell(x=>({...x,salida:e.target.value}))} style={{width:"100%",marginTop:4,border:"1px solid var(--color-border-secondary)",borderRadius:8,padding:"8px"}}/></div></div><div style={{display:"flex",gap:7,justifyContent:"space-between",flexWrap:"wrap"}}><div>{editCell.exists&&<Btn variant="danger" size="sm" onClick={removeCell} disabled={saving}>Quitar horario</Btn>}</div><div style={{display:"flex",gap:7}}><Btn variant="secondary" onClick={()=>setEditCell(null)} disabled={saving}>Cancelar</Btn><Btn onClick={saveCell} disabled={saving}>{saving?"Guardando...":"Guardar"}</Btn></div></div></div></Modal>}
+  </div>;
+}
+
 // ── APP PRINCIPAL ──────────────────────────────────────────────────
 function readSectionHash() {
   const h = (window.location.hash || "").replace(/^#\/?/, "").trim();
@@ -11915,11 +12135,11 @@ function defaultSectionForRole(role) {
 }
 function sectionAllowedForRole(section, role) {
   const reportesOperativos = ["reportes","reportes_horas","reportes_cobertura","reportes_comisiones","reporte_pago_comisiones"];
-  const admin = ["inicio","ayuda","roadmap","asistencia","horarios","horarios_encargadas","bloqueo_horarios",...reportesOperativos,"preliquidacion_encargadas","turnos","adelantos","garantias","informes","manicuras","encargadas","reclutamiento_busquedas","reclutamiento_candidatas","reclutamiento_calendario","reclutamiento_aprobaciones","reclutamiento_antiguedad","reclutamiento_config","locales","cobertura_config","perfil"];
-  const casaMatriz = ["inicio","ayuda","roadmap","asistencia","horarios","horarios_encargadas","bloqueo_horarios",...reportesOperativos,"preliquidacion_encargadas","adelantos","garantias","informes","manicuras","encargadas","reclutamiento_busquedas","reclutamiento_candidatas","reclutamiento_calendario","reclutamiento_aprobaciones","reclutamiento_antiguedad","reclutamiento_config","locales","cobertura_config","perfil"];
-  const franquiciado = ["inicio","ayuda","asistencia","horarios","horarios_encargadas","bloqueo_horarios",...reportesOperativos,"preliquidacion_encargadas","adelantos","garantias","informes","manicuras","encargadas","cobertura_config","perfil"];
-  const encargada = ["inicio","ayuda","asistencia","horarios","bloqueo_horarios",...reportesOperativos,"preliquidacion_encargadas","adelantos","garantias","informes","manicuras","cobertura_config","perfil"];
-  const manicura = ["inicio","ayuda","horarios","reportes","reportes_horas","reportes_comisiones","perfil"];
+  const admin = ["inicio","ayuda","roadmap","asistencia","horarios","pizarra_semanal","horarios_encargadas","bloqueo_horarios",...reportesOperativos,"preliquidacion_encargadas","turnos","adelantos","garantias","informes","manicuras","encargadas","reclutamiento_busquedas","reclutamiento_candidatas","reclutamiento_calendario","reclutamiento_aprobaciones","reclutamiento_antiguedad","reclutamiento_config","locales","cobertura_config","perfil"];
+  const casaMatriz = ["inicio","ayuda","roadmap","asistencia","horarios","pizarra_semanal","horarios_encargadas","bloqueo_horarios",...reportesOperativos,"preliquidacion_encargadas","adelantos","garantias","informes","manicuras","encargadas","reclutamiento_busquedas","reclutamiento_candidatas","reclutamiento_calendario","reclutamiento_aprobaciones","reclutamiento_antiguedad","reclutamiento_config","locales","cobertura_config","perfil"];
+  const franquiciado = ["inicio","ayuda","asistencia","horarios","pizarra_semanal","horarios_encargadas","bloqueo_horarios",...reportesOperativos,"preliquidacion_encargadas","adelantos","garantias","informes","manicuras","encargadas","cobertura_config","perfil"];
+  const encargada = ["inicio","ayuda","asistencia","horarios","pizarra_semanal","bloqueo_horarios",...reportesOperativos,"preliquidacion_encargadas","adelantos","garantias","informes","manicuras","cobertura_config","perfil"];
+  const manicura = ["inicio","ayuda","horarios","pizarra_semanal","reportes","reportes_horas","reportes_comisiones","perfil"];
   const allowed = role === "admin" ? admin : role === "casa_matriz" ? casaMatriz : role === "franquiciado" ? franquiciado : role === "encargada" ? encargada : manicura;
   return allowed.includes(section);
 }
@@ -11930,6 +12150,7 @@ export default function App() {
     try { return JSON.parse(localStorage.getItem("niki_user") || "null"); }
     catch { return null; }
   });
+  const [updateAvailable, setUpdateAvailable] = useState(false);
   const userRef = useRef(user);
   useEffect(() => {
     userRef.current = user;
@@ -11942,6 +12163,7 @@ export default function App() {
     };
     const onExpired = (ev) => {
       localStorage.removeItem("niki_user");
+      clearNikiSessionClock();
       window.__nikiCurrentUser = null;
       setUser(null);
       notifyToast(ev?.detail?.error || "Tu sesión venció. Iniciá sesión nuevamente.", "warning", { title:"Sesión vencida", duration:6500 });
@@ -11956,18 +12178,60 @@ export default function App() {
 
   useEffect(() => {
     if (!user?.id) return undefined;
-    const check = () => ensureNikiSessionFresh().catch(() => {});
-    const timer = window.setInterval(check, 10 * 60 * 1000);
+    initializeNikiSessionClock(user);
+
+    const check = () => {
+      const limitMessage = getNikiSessionLimitMessage();
+      if (limitMessage) { expireNikiClientSession(limitMessage); return; }
+      ensureNikiSessionFresh().catch(() => {});
+    };
+
+    let lastActivityWrite = 0;
+    const onActivity = () => {
+      const now = Date.now();
+      if (now - lastActivityWrite < 30 * 1000) return;
+      lastActivityWrite = now;
+      markNikiActivity();
+    };
+    const activityEvents = ["pointerdown", "keydown", "touchstart"];
+    activityEvents.forEach(eventName => window.addEventListener(eventName, onActivity, { passive:true }));
+
+    const timer = window.setInterval(check, 60 * 1000);
+    const refreshTimer = window.setInterval(check, 10 * 60 * 1000);
     const onVisible = () => { if (document.visibilityState === "visible") check(); };
     window.addEventListener("focus", check);
     document.addEventListener("visibilitychange", onVisible);
     check();
     return () => {
       window.clearInterval(timer);
+      window.clearInterval(refreshTimer);
+      activityEvents.forEach(eventName => window.removeEventListener(eventName, onActivity));
       window.removeEventListener("focus", check);
       document.removeEventListener("visibilitychange", onVisible);
     };
   }, [user?.id]);
+
+  useEffect(() => {
+    if (!user?.id) { setUpdateAvailable(false); return undefined; }
+    let active = true;
+    const checkVersion = async () => {
+      const changed = await hasNewNikiVersion();
+      if (active && changed) setUpdateAvailable(true);
+    };
+    const timer = window.setInterval(checkVersion, 5 * 60 * 1000);
+    const onFocus = () => { void checkVersion(); };
+    const onVisible = () => { if (document.visibilityState === "visible") void checkVersion(); };
+    window.addEventListener("focus", onFocus);
+    document.addEventListener("visibilitychange", onVisible);
+    void checkVersion();
+    return () => {
+      active = false;
+      window.clearInterval(timer);
+      window.removeEventListener("focus", onFocus);
+      document.removeEventListener("visibilitychange", onVisible);
+    };
+  }, [user?.id]);
+
   const [seccion, setSeccion] = useState(null);
   const [publicHash, setPublicHash] = useState(() => readSectionHash());
   const [menuOpen, setMenuOpen] = useState(false);
@@ -12234,6 +12498,7 @@ export default function App() {
   if (loading) return <NikiSplash text="" />;
   if (!user) return <Login onLogin={u=>{
     localStorage.setItem("niki_user", JSON.stringify(u));
+    initializeNikiSessionClock(u, true);
     setUser(u);
 
     window.history.replaceState(null, "", "#inicio");
@@ -12256,6 +12521,7 @@ export default function App() {
       items: [
         { id: "asistencia", label: "Registro de asistencia", icon: "📋" },
         { id: "horarios", label: "Horarios", icon: "🗓️" },
+        { id: "pizarra_semanal", label: "Pizarra semanal", icon: "▦" },
         { id: "horarios_encargadas", label: "Horarios de encargadas", icon: "🧭" },
         { id: "bloqueo_horarios", label: "Bloqueos", icon: "🔐" },
         { id: "reportes_horas", label: "Horas y asistencia", icon: "⏱️" },
@@ -12604,6 +12870,7 @@ export default function App() {
     if (seccion==="asistencia") return <AsistenciaDiaria data={data} setData={setData} reloadData={reloadData} user={user}/>;
     if (seccion==="turnos") return user.rol==="admin" ? <AgendaTurnos data={data} reloadData={reloadData} user={user} agendaOpenRequest={agendaOpenRequest} onAgendaOpenRequestDone={() => setAgendaOpenRequest(null)}/> : null;
     if (seccion==="horarios") return <CalendarioHorarios data={data} setData={setData} reloadData={reloadData} user={user} agendaRequest={agendaRequest} savedState={screenState.horarios} onStateChange={(state)=>saveScreenState("horarios", state)} onBackToReport={()=>{ setSeccion("reportes_cobertura"); setMenuOpen(false); setMobileMenuGroup(null); }}/>;
+    if (seccion==="pizarra_semanal") return <PizarraSemanal data={data} user={user}/>;
     if (seccion==="horarios_encargadas") return ["admin","casa_matriz","franquiciado"].includes(user.rol) ? <HorariosEncargadasLocal data={data} user={user}/> : null;
     if (seccion==="bloqueo_horarios") return <BloqueoHorarios data={data} setData={setData} reloadData={reloadData} user={user} savedState={screenState.bloqueoHorarios} onStateChange={(state)=>saveScreenState("bloqueoHorarios", state)}/>;
     if (seccion==="reportes_horas") return renderReportes("horas", "reportes_horas");
@@ -12634,6 +12901,16 @@ export default function App() {
   return (
     <div style={{ minHeight:"100vh",background:"var(--color-background-tertiary)",display:"flex",flexDirection:"column",maxWidth:"100vw",overflowX:"hidden" }}>
       <ToastStack toasts={toasts} onDismiss={dismissToast} onAction={handleNotificationAction}/>
+      {updateAvailable && (
+        <div style={{ position:"fixed",top:isDesktopMenu?76:74,right:isDesktopMenu?20:12,left:isDesktopMenu?"auto":12,zIndex:5000,width:isDesktopMenu?390:"auto",background:"#fff",border:`1px solid ${COLORS.pinkSoft || "#e8c6d1"}`,borderRadius:16,boxShadow:"0 14px 34px rgba(79,31,49,0.18)",padding:"14px 15px",display:"flex",alignItems:"center",gap:12 }}>
+          <div style={{ width:38,height:38,borderRadius:12,background:"#f8e9ee",display:"grid",placeItems:"center",fontSize:19,flexShrink:0 }}>✨</div>
+          <div style={{ minWidth:0,flex:1 }}>
+            <div style={{ fontWeight:800,color:COLORS.pinkDark,fontSize:14 }}>Nueva versión disponible</div>
+            <div style={{ marginTop:2,fontSize:12.5,color:"#6f6267",lineHeight:1.35 }}>Actualizá Niki OS para aplicar las últimas mejoras.</div>
+          </div>
+          <button type="button" onClick={()=>window.location.reload()} style={{ border:"none",borderRadius:10,background:COLORS.pinkDark,color:"#fff",fontWeight:700,fontSize:12.5,padding:"9px 11px",cursor:"pointer",whiteSpace:"nowrap" }}>Actualizar ahora</button>
+        </div>
+      )}
       {screenTransition && <NikiSplash text="" fullScreen={false} compact />}
       <header style={{ background:"#e1c6cc",color:COLORS.pinkDark,padding:"0 16px",height:66,display:"flex",alignItems:"center",justifyContent:"space-between",position:isDesktopMenu?"fixed":"sticky",top:0,left:0,right:0,width:"100%",maxWidth:"100vw",boxSizing:"border-box",zIndex:1200,overflow:"visible",flexShrink:0,boxShadow:isDesktopMenu?"0 6px 18px rgba(0,0,0,0.06)":"none" }}>
         <button
@@ -12649,7 +12926,7 @@ export default function App() {
         <div style={{ display:"flex",alignItems:"center",gap:8,flexShrink:0 }}>
           {isDesktopMenu && <><Avatar nombre={user.nombre} userId={user.id} photoUrl={(data.users||[]).find(u=>u.id===user.id)?.fotoPerfilUrl||user.fotoPerfilUrl} size={34}/><span style={{ fontSize:13,opacity:0.9 }}>{user.nombre}</span></>}
           <NotificationBell history={notificationHistory} open={notificationOpen} setOpen={setNotificationOpen} onClear={() => setNotificationHistory([])} onAction={handleNotificationAction}/>
-          <button onClick={()=>{ localStorage.removeItem("niki_user"); setUser(null); setMenuOpen(false); setMobileMenuGroup(null); }} style={{ background:"rgba(114,36,62,0.12)",border:"none",color:COLORS.pinkDark,borderRadius:6,padding:"4px 10px",fontSize:12,cursor:"pointer" }}>Salir</button>
+          <button onClick={()=>{ localStorage.removeItem("niki_user"); clearNikiSessionClock(); setUser(null); setMenuOpen(false); setMobileMenuGroup(null); }} style={{ background:"rgba(114,36,62,0.12)",border:"none",color:COLORS.pinkDark,borderRadius:6,padding:"4px 10px",fontSize:12,cursor:"pointer" }}>Salir</button>
         </div>
       </header>
 
