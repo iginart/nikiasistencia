@@ -1298,6 +1298,12 @@ function isCasaMatrizRole(role) {
 function isAdminLikeRole(role) {
   return role === "admin" || role === "casa_matriz";
 }
+function isLocalManagerRole(role) {
+  return ["admin", "casa_matriz", "franquiciado", "encargada"].includes(role);
+}
+function isScopedLocalManagerRole(role) {
+  return role === "franquiciado" || role === "encargada";
+}
 function roleLabel(role) {
   if (role === "admin") return "Admin";
   if (role === "casa_matriz") return "Casa Matriz";
@@ -1669,8 +1675,8 @@ function BloqueCalendario({ fecha, bloque, onChange, onCommit, onDelete, bloquea
 function CalendarioHorarios({ data, setData, reloadData, user, agendaRequest, onBackToReport, savedState = null, onStateChange = null }) {
   const hoy = new Date();
   const esAdmin = isAdminLikeRole(user.rol);
-  const esEncargada = user.rol === "encargada";
-  const puedeGestionar = esAdmin || esEncargada;
+  const esGestorLocal = isScopedLocalManagerRole(user.rol);
+  const puedeGestionar = isLocalManagerRole(user.rol);
   const allowedLocalIds = getAssignedLocalIds(data, user);
   const localesHorarios = (data.locales || []).filter(l => localActivo(l) && (esAdmin || allowedLocalIds.includes(l.id)));
   const isMobile = window.innerWidth < 640;
@@ -1785,8 +1791,8 @@ function CalendarioHorarios({ data, setData, reloadData, user, agendaRequest, on
     if (esAdmin) return true;
     if (user.rol === "manicura") return uidNum === parseInt(user.id);
     const m = data.users.find(u => u.id === uidNum);
-    return esEncargada && m?.rol === "manicura" && getActiveManicuraLocalIds(data,m.id,dateKey(weekStart)).some(id=>allowedLocalIds.includes(Number(id)));
-  }, [esAdmin, esEncargada, user.rol, user.id, data.users, data.manicuraHistorialLocales, allowedLocalIds, weekStart]);
+    return esGestorLocal && m?.rol === "manicura" && getActiveManicuraLocalIds(data,m.id,dateKey(weekStart)).some(id=>allowedLocalIds.includes(Number(id)));
+  }, [esAdmin, esGestorLocal, user.rol, user.id, data.users, data.manicuraHistorialLocales, allowedLocalIds, weekStart]);
   const bloqueadoPorFecha = useCallback((f, uid = manicuraId) =>
     (periodoBloqueadoParaManicura(periodoDesdeFecha(f), uid) && !esAdmin) || !puedeEditarManicura(uid),
     [periodoBloqueadoParaManicura, periodoDesdeFecha, manicuraId, esAdmin, puedeEditarManicura]
@@ -4378,7 +4384,7 @@ No se borra información histórica: si está guardada en Supabase se marcará c
 }
 
 function CentroAyuda({ user = null, onBack = null }) {
-  const [perfil, setPerfil] = useState(user?.rol === "casa_matriz" ? "casa_matriz" : user?.rol === "encargada" ? "encargada" : user?.rol === "manicura" ? "manicura" : "todos");
+  const [perfil, setPerfil] = useState(user?.rol === "casa_matriz" ? "casa_matriz" : ["encargada", "franquiciado"].includes(user?.rol) ? "encargada" : user?.rol === "manicura" ? "manicura" : "todos");
   const [query, setQuery] = useState("");
   const [selectedId, setSelectedId] = useState(null);
   const q = query.trim().toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
@@ -5678,8 +5684,8 @@ function AsistenciaDiaria({ data, setData, reloadData, user }) {
 function Reportes({ data, setData, user, onOpenAgenda, reportRestore, reloadData, savedState = null, onStateChange = null }) {
   const hoy = new Date();
   const esAdmin = isAdminLikeRole(user.rol);
-  const esEncargada = user.rol === "encargada";
-  const puedeGestionar = esAdmin || esEncargada;
+  const esGestorLocal = isScopedLocalManagerRole(user.rol);
+  const puedeGestionar = isLocalManagerRole(user.rol);
   const puedeVerCobertura = puedeGestionar;
   const allowedLocalIds = getAssignedLocalIds(data, user);
   const localesVisibles = esAdmin ? data.locales : data.locales.filter(l => allowedLocalIds.includes(l.id));
@@ -6046,7 +6052,7 @@ function Reportes({ data, setData, user, onOpenAgenda, reportRestore, reloadData
     const displayManicuraComision = (u, fallback="") => (u?.codigoExterno || fallback || u?.nombre || "").trim();
     const puedeVerComision = (c) => {
       if (esAdmin) return true;
-      if (esEncargada) return (c.localId && allowedLocalIds.includes(c.localId)) || allowedLocalNames.has(normalize(c.nombreLocal));
+      if (esGestorLocal) return (c.localId && allowedLocalIds.includes(c.localId)) || allowedLocalNames.has(normalize(c.nombreLocal));
       const localOk = !c.localId || c.localId === user.localId || normalize(c.nombreLocal) === normalize(localNameById.get(user.localId));
       return (c.userId === user.id || normalize(c.nombreManicura) === normalize(user.nombre)) && localOk;
     };
@@ -6081,7 +6087,7 @@ function Reportes({ data, setData, user, onOpenAgenda, reportRestore, reloadData
     const garantiaVisible = (g, tipo) => {
       const uid = tipo === "reparacion" ? g.manicuraReparacionId : g.manicuraOriginalId;
       if (esAdmin) return true;
-      if (esEncargada) return g.localId && allowedLocalIds.includes(g.localId);
+      if (esGestorLocal) return g.localId && allowedLocalIds.includes(g.localId);
       return uid === user.id;
     };
     const ajustesGarantias = (data.garantias||[]).flatMap(g => {
@@ -6133,7 +6139,7 @@ function Reportes({ data, setData, user, onOpenAgenda, reportRestore, reloadData
     });
     const puedeVerAdelanto = (a) => {
       if (esAdmin) return true;
-      if (esEncargada) return a.localId && allowedLocalIds.includes(a.localId);
+      if (esGestorLocal) return a.localId && allowedLocalIds.includes(a.localId);
       return a.userId === user.id;
     };
     const baseAdelantos = (data.adelantos||[])
@@ -7131,8 +7137,7 @@ function ConfiguracionCobertura({ data, reloadData, user }) {
 function GarantiasServicios({ data, reloadData, user }) {
   const hoy = new Date();
   const esAdmin = isAdminLikeRole(user.rol);
-  const esEncargada = user.rol === "encargada";
-  const allowedLocalIds = esAdmin ? data.locales.map(l=>l.id) : (data.encargadoLocales||[]).filter(x=>x.userId===user.id).map(x=>x.localId);
+  const allowedLocalIds = esAdmin ? data.locales.map(l=>l.id) : getAssignedLocalIds(data, user);
   const locales = data.locales.filter(l=>allowedLocalIds.includes(l.id));
   const manicuras = data.users.filter(u=>u.rol==="manicura" && u.activo && allowedLocalIds.includes(u.localId));
   const [periodo, setPeriodo] = useState(fmtPeriodo(hoy));
@@ -7483,7 +7488,7 @@ function GarantiasServicios({ data, reloadData, user }) {
 function AdelantosManicuras({ data, reloadData, user }) {
   const hoy = new Date();
   const esAdmin = isAdminLikeRole(user.rol);
-  const esEncargada = user.rol === "encargada";
+  const esGestorLocal = isScopedLocalManagerRole(user.rol);
   const allowedLocalIds = getAssignedLocalIds(data, user);
   const localesPermitidos = esAdmin ? data.locales : data.locales.filter(l => allowedLocalIds.includes(l.id));
   const [periodo, setPeriodo] = useState(fmtPeriodo(hoy));
@@ -7764,7 +7769,7 @@ function AdelantosManicuras({ data, reloadData, user }) {
 
   const planPreview = buildCuotasFromForm();
 
-  if (!esAdmin && !esEncargada) return null;
+  if (!esAdmin && !esGestorLocal) return null;
 
   return <div>
     <div style={{ display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:16,flexWrap:"wrap",gap:8 }}>
@@ -10253,7 +10258,7 @@ function buildTurnoToastPayload(appData, rawTurno, eventType, currentUser) {
 
 function BloqueoHorarios({ data, setData, reloadData, user, savedState = null, onStateChange = null }) {
   const esAdmin = isAdminLikeRole(user.rol);
-  const puedeGestionar = esAdmin || user.rol === "encargada";
+  const puedeGestionar = isLocalManagerRole(user.rol);
   const allowedLocalIds = getAssignedLocalIds(data, user);
   const localesVisibles = (data.locales || []).filter(l => esAdmin || allowedLocalIds.includes(l.id));
   const hoy = new Date();
@@ -10409,7 +10414,7 @@ function BloqueoHorarios({ data, setData, reloadData, user, savedState = null, o
 function puedeVerReportePagoComisiones(data, user) {
   if (!user) return false;
   if (user.rol === "admin" || user.rol === "casa_matriz") return true;
-  if (user.rol === "encargada") return getAssignedLocalIds(data || { locales:[], encargadoLocales:[] }, user).length > 1;
+  if (isScopedLocalManagerRole(user.rol)) return getAssignedLocalIds(data || { locales:[], encargadoLocales:[], usuarioLocales:[] }, user).length > 1;
   return false;
 }
 
@@ -10507,7 +10512,7 @@ function DetalleComisionesPago({ rows = [], title = "Detalle" }) {
 
 function ReportePagoComisiones({ data, setData, user }) {
   if (!puedeVerReportePagoComisiones(data, user)) {
-    return <Card><h2 style={{ marginTop:0 }}>Reporte de pago de comisiones</h2><p style={{ margin:0,color:"var(--color-text-secondary)" }}>Este reporte está disponible para Admin, Casa Matriz y encargadas con más de un local asignado.</p></Card>;
+    return <Card><h2 style={{ marginTop:0 }}>Reporte de pago de comisiones</h2><p style={{ margin:0,color:"var(--color-text-secondary)" }}>Este reporte está disponible para Admin, Casa Matriz, encargadas y franquiciados con más de un local asignado.</p></Card>;
   }
 
   const hoy = new Date();
@@ -12074,15 +12079,42 @@ function PizarraSemanal({ data, user }) {
   const dayNames=["Lun","Mar","Mié","Jue","Vie","Sáb","Dom"];
   const fmt=(v)=>String(v||"").slice(0,5);
   const canEdit=(uid)=>user.rol==="manicura"&&Number(uid)===Number(user.id);
+  const isPeriodBlocked=useCallback((uid,f,lid=localNum)=>{
+    const periodo=String(f||"").slice(0,7);
+    return (data.periodosBloqueados||[]).some(p=>{
+      const pPeriodo=p.periodo||"";
+      const pUser=Number(p.userId??p.user_id);
+      const pLocal=p.localId??p.local_id??null;
+      return pPeriodo===periodo && pUser===Number(uid) && (pLocal==null || Number(pLocal)===Number(lid));
+    });
+  },[data.periodosBloqueados,localNum]);
+  const isPeriodBlockedOnServer=useCallback(async(uid,f,lid)=>{
+    const periodo=String(f||"").slice(0,7);
+    const regs=await api.getPeriodosBloqueadosPara(periodo,uid);
+    return (regs||[]).some(p=>{
+      const pLocal=p.local_id??p.localId??null;
+      return pLocal==null || Number(pLocal)===Number(lid);
+    });
+  },[]);
+  const warnBlocked=(f)=>notifyToast(
+    `El período ${String(f||"").slice(0,7)} está bloqueado. No podés modificar tus horarios desde la Pizarra semanal.`,
+    "warning",
+    {title:"Período bloqueado"}
+  );
 
   const moveWeek=(delta)=>{const d=parseDateLocal(weekStart)||getMon(today);d.setDate(d.getDate()+delta*7);setWeekStart(dateKey(d));setEditCell(null);};
   const openCell=(m,f)=>{
     if(!canEdit(m.id))return;
+    if(isPeriodBlocked(m.id,f,localNum)){warnBlocked(f);return;}
     const h=scheduleMap.get(`${Number(m.id)}|${localNum}|${f}`);
     setEditCell({userId:m.id,nombre:m.nombre,fecha:f,localId:localNum,entrada:fmt(h?.entrada),salida:fmt(h?.salida),exists:!!h});
   };
   const saveCell=async()=>{
     if(!editCell||!canEdit(editCell.userId))return;
+    if(isPeriodBlocked(editCell.userId,editCell.fecha,editCell.localId)){warnBlocked(editCell.fecha);setEditCell(null);return;}
+    try{
+      if(await isPeriodBlockedOnServer(editCell.userId,editCell.fecha,editCell.localId)){warnBlocked(editCell.fecha);setEditCell(null);return;}
+    }catch(e){return notifyToast("No se pudo validar si el período está habilitado. Intentá nuevamente.","error");}
     if(!editCell.entrada||!editCell.salida)return notifyToast("Completá horario de ingreso y salida.","warning");
     if(editCell.entrada>=editCell.salida)return notifyToast("La hora de salida debe ser posterior al ingreso.","warning");
     const conflict=rows.find(h=>Number(h.userId)===Number(editCell.userId)&&h.fecha===editCell.fecha&&Number(h.localId)!==Number(editCell.localId)&&h.trabaja!==false&&h.entrada&&h.salida&&editCell.entrada<h.salida&&editCell.salida>h.entrada);
@@ -12097,6 +12129,10 @@ function PizarraSemanal({ data, user }) {
   };
   const removeCell=async()=>{
     if(!editCell||!canEdit(editCell.userId)) return;
+    if(isPeriodBlocked(editCell.userId,editCell.fecha,editCell.localId)){warnBlocked(editCell.fecha);setEditCell(null);return;}
+    try{
+      if(await isPeriodBlockedOnServer(editCell.userId,editCell.fecha,editCell.localId)){warnBlocked(editCell.fecha);setEditCell(null);return;}
+    }catch(e){return notifyToast("No se pudo validar si el período está habilitado. Intentá nuevamente.","error");}
     setSaving(true);
     try{
       await api.deleteHorario(editCell.userId,editCell.localId,editCell.fecha);
@@ -12119,7 +12155,7 @@ function PizarraSemanal({ data, user }) {
     <Card style={{padding:12,marginBottom:12}}><div style={{display:"flex",alignItems:"end",gap:9,flexWrap:"wrap"}}><div style={{minWidth:220,flex:"1 1 240px"}}><label style={{display:"block",fontSize:10,fontWeight:800,color:"var(--color-text-secondary)",marginBottom:4,textTransform:"uppercase"}}>Local</label><Select value={localId} onChange={setLocalId}>{locales.map(l=><option key={l.id} value={l.id}>{l.nombre}</option>)}</Select></div><div style={{display:"flex",gap:6,alignItems:"center"}}><Btn size="sm" variant="ghost" onClick={()=>moveWeek(-1)}>←</Btn><input type="date" value={weekStart} onChange={e=>setWeekStart(dateKey(getMon(parseDateLocal(e.target.value)||today)))} style={{border:"1px solid var(--color-border-secondary)",borderRadius:8,padding:"7px 9px",fontSize:12,background:"var(--color-background-primary)",color:"var(--color-text-primary)"}}/><Btn size="sm" variant="ghost" onClick={()=>moveWeek(1)}>→</Btn><Btn size="sm" variant="secondary" onClick={()=>setWeekStart(dateKey(getMon(today)))}>Esta semana</Btn></div></div></Card>
     {!locales.length?<Card><p style={{margin:0,fontSize:12,color:"var(--color-text-secondary)"}}>No tenés locales habilitados para esta semana.</p></Card>:loading?<Card><p style={{margin:0,fontSize:12}}>Cargando pizarra...</p></Card>:<Card style={{padding:0,overflow:"hidden"}}><div style={{overflowX:"auto"}}><div style={{minWidth:980}}>
       <div style={{display:"grid",gridTemplateColumns:"190px repeat(7,minmax(105px,1fr))",background:"rgba(225,198,204,.34)",borderBottom:"1px solid rgba(120,120,120,.12)"}}><div style={{padding:"11px 12px",fontSize:10,fontWeight:800,textTransform:"uppercase",color:COLORS.pinkDark}}>Manicura</div>{weekDays.map((d,i)=><div key={dateKey(d)} style={{padding:"9px 7px",textAlign:"center",borderLeft:"1px solid rgba(120,120,120,.1)"}}><strong style={{display:"block",fontSize:11}}>{dayNames[i]}</strong><span style={{fontSize:10,color:"var(--color-text-secondary)"}}>{String(d.getDate()).padStart(2,"0")}/{String(d.getMonth()+1).padStart(2,"0")}</span></div>)}</div>
-      {manicuras.length===0?<div style={{padding:18,fontSize:12,color:"var(--color-text-secondary)"}}>No hay manicuras asignadas a este local durante la semana.</div>:manicuras.map((m,ri)=><div key={m.id} style={{display:"grid",gridTemplateColumns:"190px repeat(7,minmax(105px,1fr))",borderBottom:"1px solid rgba(120,120,120,.09)",background:ri%2?"rgba(120,120,120,.018)":"var(--color-background-primary)"}}><div style={{padding:"10px 11px",display:"flex",alignItems:"center",gap:8,minWidth:0}}><Avatar nombre={m.nombre} userId={m.id} size={28}/><div style={{minWidth:0}}><strong style={{display:"block",fontSize:11,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{m.nombre}</strong>{canEdit(m.id)&&<span style={{fontSize:9,color:COLORS.pink,fontWeight:700}}>Tu horario · editable</span>}</div></div>{weekKeys.map(f=>{const h=scheduleMap.get(`${Number(m.id)}|${localNum}|${f}`);const own=canEdit(m.id);return <button key={f} disabled={!own} onClick={()=>openCell(m,f)} title={own?"Editar mi horario":"Solo la manicura puede editar su propio horario"} style={{border:0,borderLeft:"1px solid rgba(120,120,120,.09)",background:own?"rgba(212,83,126,.035)":"transparent",padding:"8px 5px",cursor:own?"pointer":"default",minHeight:54,color:"var(--color-text-primary)"}}>{h?.trabaja!==false&&h?.entrada&&h?.salida?<><strong style={{display:"block",fontSize:12,color:own?COLORS.pinkDark:"var(--color-text-primary)"}}>{fmt(h.entrada)}</strong><span style={{fontSize:9,color:"var(--color-text-secondary)"}}>a</span><strong style={{display:"block",fontSize:12,color:own?COLORS.pinkDark:"var(--color-text-primary)"}}>{fmt(h.salida)}</strong></>:<span style={{fontSize:14,color:"var(--color-text-secondary)",opacity:.55}}>—</span>}</button>})}</div>)}
+      {manicuras.length===0?<div style={{padding:18,fontSize:12,color:"var(--color-text-secondary)"}}>No hay manicuras asignadas a este local durante la semana.</div>:manicuras.map((m,ri)=><div key={m.id} style={{display:"grid",gridTemplateColumns:"190px repeat(7,minmax(105px,1fr))",borderBottom:"1px solid rgba(120,120,120,.09)",background:ri%2?"rgba(120,120,120,.018)":"var(--color-background-primary)"}}><div style={{padding:"10px 11px",display:"flex",alignItems:"center",gap:8,minWidth:0}}><Avatar nombre={m.nombre} userId={m.id} size={28}/><div style={{minWidth:0}}><strong style={{display:"block",fontSize:11,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{m.nombre}</strong>{canEdit(m.id)&&<span style={{fontSize:9,color:COLORS.pink,fontWeight:700}}>Tu horario</span>}</div></div>{weekKeys.map(f=>{const h=scheduleMap.get(`${Number(m.id)}|${localNum}|${f}`);const own=canEdit(m.id);const blocked=own&&isPeriodBlocked(m.id,f,localNum);const editable=own&&!blocked;return <button key={f} disabled={!editable} onClick={()=>openCell(m,f)} title={blocked?"Período bloqueado":editable?"Editar mi horario":"Solo la manicura puede editar su propio horario"} style={{border:0,borderLeft:"1px solid rgba(120,120,120,.09)",background:blocked?"rgba(180,140,40,.07)":editable?"rgba(212,83,126,.035)":"transparent",padding:"8px 5px",cursor:editable?"pointer":"default",minHeight:54,color:"var(--color-text-primary)",position:"relative"}}>{h?.trabaja!==false&&h?.entrada&&h?.salida?<><strong style={{display:"block",fontSize:12,color:editable?COLORS.pinkDark:"var(--color-text-primary)"}}>{fmt(h.entrada)}</strong><span style={{fontSize:9,color:"var(--color-text-secondary)"}}>a</span><strong style={{display:"block",fontSize:12,color:editable?COLORS.pinkDark:"var(--color-text-primary)"}}>{fmt(h.salida)}</strong></>:<span style={{fontSize:14,color:"var(--color-text-secondary)",opacity:.55}}>—</span>}{blocked&&<span style={{position:"absolute",right:4,top:3,fontSize:9}} title="Período bloqueado">🔒</span>}</button>})}</div>)}
     </div></div></Card>}
     {editCell&&<Modal title={`Mi horario · ${editCell.nombre}`} onClose={()=>!saving&&setEditCell(null)} width={440}><div style={{display:"flex",flexDirection:"column",gap:11}}><div style={{padding:"9px 10px",borderRadius:10,background:COLORS.pinkLight,fontSize:12,color:COLORS.pinkDark,fontWeight:700}}>{editCell.fecha.split("-").reverse().join("/")} · {data.locales.find(l=>Number(l.id)===Number(editCell.localId))?.nombre}</div><div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:9}}><div><label style={{fontSize:10,fontWeight:800,color:"var(--color-text-secondary)"}}>INGRESO</label><input type="time" value={editCell.entrada} onChange={e=>setEditCell(x=>({...x,entrada:e.target.value}))} style={{width:"100%",marginTop:4,border:"1px solid var(--color-border-secondary)",borderRadius:8,padding:"8px"}}/></div><div><label style={{fontSize:10,fontWeight:800,color:"var(--color-text-secondary)"}}>SALIDA</label><input type="time" value={editCell.salida} onChange={e=>setEditCell(x=>({...x,salida:e.target.value}))} style={{width:"100%",marginTop:4,border:"1px solid var(--color-border-secondary)",borderRadius:8,padding:"8px"}}/></div></div><div style={{display:"flex",gap:7,justifyContent:"space-between",flexWrap:"wrap"}}><div>{editCell.exists&&<Btn variant="danger" size="sm" onClick={removeCell} disabled={saving}>Quitar horario</Btn>}</div><div style={{display:"flex",gap:7}}><Btn variant="secondary" onClick={()=>setEditCell(null)} disabled={saving}>Cancelar</Btn><Btn onClick={saveCell} disabled={saving}>{saving?"Guardando...":"Guardar"}</Btn></div></div></div></Modal>}
   </div>;
