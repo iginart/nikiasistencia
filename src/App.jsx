@@ -137,10 +137,52 @@ if (!document.getElementById("niki-font-global-style")) {
     }
     .niki-report-expense-table tr:last-child td { border-bottom: none; }
     @media (max-width: 900px) {
-      .niki-report-two-col, .niki-report-three-col, .niki-report-claims {
-        grid-template-columns: minmax(0, 1fr);
+      .niki-report-two-col, .niki-report-three-col, .niki-report-claims,
+      .niki-dashboard-two {
+        grid-template-columns: minmax(0, 1fr) !important;
+      }
+      .niki-dashboard-kpis {
+        grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
       }
     }
+    @media (max-width: 560px) {
+      .niki-dashboard-kpis {
+        grid-template-columns: minmax(0, 1fr) !important;
+      }
+    }
+    @media (max-width: 1100px) {
+      .niki-dashboard-kpis { grid-template-columns: repeat(2, minmax(0, 1fr)) !important; }
+    }
+    @media (max-width: 900px) {
+      .niki-dashboard-filters, .niki-dashboard-two-col, .niki-dashboard-insights {
+        grid-template-columns: minmax(0, 1fr) !important;
+      }
+    }
+    @media (max-width: 640px) {
+      .niki-dashboard-kpis { grid-template-columns: minmax(0, 1fr) !important; }
+    }
+
+    @media (max-width: 1000px) {
+      .niki-crm-kpis { grid-template-columns: repeat(2, minmax(0, 1fr)) !important; }
+      .niki-crm-filters { grid-template-columns: minmax(0, 1fr) !important; }
+      .niki-crm-detail-kpis { grid-template-columns: repeat(2, minmax(0, 1fr)) !important; }
+    }
+    @media (max-width: 560px) {
+      .niki-crm-kpis, .niki-crm-detail-kpis { grid-template-columns: minmax(0, 1fr) !important; }
+    }
+
+    @media (max-width: 1100px) {
+      .niki-crm-kpis { grid-template-columns: repeat(3, minmax(0, 1fr)) !important; }
+    }
+    @media (max-width: 760px) {
+      .niki-crm-kpis { grid-template-columns: repeat(2, minmax(0, 1fr)) !important; }
+      .niki-crm-filters { grid-template-columns: minmax(0, 1fr) !important; }
+      .niki-crm-detail-kpis { grid-template-columns: repeat(2, minmax(0, 1fr)) !important; }
+    }
+    @media (max-width: 480px) {
+      .niki-crm-kpis, .niki-crm-detail-kpis { grid-template-columns: minmax(0, 1fr) !important; }
+    }
+
     @keyframes nikiToastIn {
       from { opacity: 0; transform: translateY(-8px) scale(0.98); }
       to { opacity: 1; transform: translateY(0) scale(1); }
@@ -282,6 +324,64 @@ const sbAll = async (path, opts = {}) => {
     offset += pageSize;
   }
   return all;
+};
+
+const sbPage = async (path, { limit = 250, offset = 0 } = {}) => {
+  const separator = path.includes("?") ? "&" : "?";
+  const url = `${SUPABASE_URL}/rest/v1/${path}${separator}limit=${Math.max(1, parseInt(limit) || 250)}&offset=${Math.max(0, parseInt(offset) || 0)}`;
+  const res = await fetch(url, {
+    method: "GET",
+    headers: {
+      apikey: SUPABASE_KEY,
+      Authorization: `Bearer ${SUPABASE_KEY}`,
+      "Content-Type": "application/json",
+      Prefer: "count=exact",
+    },
+  });
+  if (!res.ok) throw new Error(await res.text());
+  const text = await res.text();
+  const rows = text ? JSON.parse(text) : [];
+  const contentRange = res.headers.get("content-range") || "";
+  const totalPart = contentRange.includes("/") ? contentRange.split("/").pop() : "";
+  const total = /^\d+$/.test(totalPart) ? Number(totalPart) : (Array.isArray(rows) ? rows.length : 0);
+  return { rows:Array.isArray(rows) ? rows : [], total };
+};
+
+function crmScopeQueryParams({ estado="TODOS", query="", selectOverride="" } = {}) {
+  const select = selectOverride || "client_id,cliente,email,primera_visita,ultima_visita,visitas,locales_visitados,gasto_facturado,gasto_pagado,ticket_pagado,frecuencia_mediana_dias,frecuencia_promedio_dias,dias_desde_ultima_visita,dias_umbral_riesgo,dias_umbral_perdida,dias_atraso_estimado,estado_cliente,confianza_frecuencia,local_principal_id,local_principal,ultima_visita_global,ultimo_local_global,atendida_despues_otro_local,dias_desde_visita_otro_local";
+  const params = [`select=${select}`];
+  if (estado && estado !== "TODOS") params.push(`estado_cliente=eq.${encodeURIComponent(estado)}`);
+  const q = String(query || "").trim();
+  if (q) {
+    const pattern = encodeURIComponent(`*${q.replace(/[(),]/g," ")}*`);
+    params.push(`or=(cliente.ilike.${pattern},email.ilike.${pattern},local_principal.ilike.${pattern},ultimo_local_global.ilike.${pattern})`);
+  }
+  params.push("order=dias_atraso_estimado.desc,visitas.desc,ultima_visita.desc,client_id.asc");
+  return params.join("&");
+}
+
+const crmScopePage = async ({ localIds=[], estado="TODOS", query="", limit=250, offset=0, selectOverride="" } = {}) => {
+  const ids = Array.from(new Set((localIds || []).map(Number).filter(Boolean)));
+  if (!ids.length) return { rows:[], total:0 };
+  const params = crmScopeQueryParams({ estado, query, selectOverride });
+  const url = `${SUPABASE_URL}/rest/v1/rpc/crm_clientes_scope?${params}&limit=${Math.max(1,parseInt(limit)||250)}&offset=${Math.max(0,parseInt(offset)||0)}`;
+  const res = await fetch(url, {
+    method:"POST",
+    headers:{
+      apikey:SUPABASE_KEY,
+      Authorization:`Bearer ${SUPABASE_KEY}`,
+      "Content-Type":"application/json",
+      Prefer:"count=exact",
+    },
+    body:JSON.stringify({ p_local_ids:ids }),
+  });
+  if (!res.ok) throw new Error(await res.text());
+  const text = await res.text();
+  const rows = text ? JSON.parse(text) : [];
+  const contentRange = res.headers.get("content-range") || "";
+  const totalPart = contentRange.includes("/") ? contentRange.split("/").pop() : "";
+  const total = /^\d+$/.test(totalPart) ? Number(totalPart) : (Array.isArray(rows) ? rows.length : 0);
+  return { rows:Array.isArray(rows)?rows:[], total };
 };
 
 const patchOrPost = async (table, matchQuery, data) => {
@@ -689,6 +789,41 @@ const api = {
   getComisiones: () => sbAll("comisiones_detalle?select=*&order=fecha_pago.desc,id.desc"),
   getComisionesPeriodo: (periodo) => sbAll(`comisiones_detalle?select=*&periodo=eq.${encodeURIComponent(periodo)}&order=fecha_pago.desc,id.desc`),
   getComisionesRango: (desde,hasta) => sbAll(`comisiones_detalle?select=*&fecha_pago=gte.${encodeURIComponent(desde)}&fecha_pago=lte.${encodeURIComponent(hasta)}&order=fecha_pago.desc,id.desc`),
+  getComisionesAgendaProShadowRango: (desde,hasta) => sbAll(`comisiones_agendapro_shadow?select=*&fecha_pago=gte.${encodeURIComponent(desde)}&fecha_pago=lte.${encodeURIComponent(hasta)}&order=fecha_pago.desc,id.desc`),
+  getAgendaComisionesSinVincular: () => sbAll("vw_comisiones_agendapro_base?select=local_id,nombre_local,agendapro_provider_id,profesional_agendapro,fecha_pago,precio_efectivo&estado=eq.PROFESIONAL_NO_VINCULADA&order=fecha_pago.desc"),
+  getAgendaComisionesSinVincularRango: (desde,hasta) => sbAll(`vw_comisiones_agendapro_base?select=local_id,nombre_local,agendapro_provider_id,profesional_agendapro,fecha_pago,precio_efectivo&estado=eq.PROFESIONAL_NO_VINCULADA&fecha_pago=gte.${encodeURIComponent(desde)}&fecha_pago=lte.${encodeURIComponent(hasta)}&order=fecha_pago.desc`),
+  refrescarComisionesAgendaProShadow: () => sb("rpc/refrescar_comisiones_agendapro_shadow", { method:"POST", body:"{}" }),
+  getDashboardKpiLocalMesActual: () => sbAll("vw_agendapro_kpi_local_mes_actual?select=*&order=ventas.desc"),
+  getDashboardKpiLocalDia: (desde,hasta) => sbAll(`mv_agendapro_kpi_local_dia?select=*&fecha=gte.${encodeURIComponent(desde)}&fecha=lte.${encodeURIComponent(hasta)}&order=fecha.asc,local_id.asc`),
+  getDashboardKpiLocalDiaTodo: () => sbAll("mv_agendapro_kpi_local_dia?select=*&order=fecha.asc,local_id.asc"),
+  getClientesCrmScopePage: (filters = {}) => crmScopePage(filters),
+  getClientesCrmScopeAll: async (localIds=[]) => {
+    const ids=Array.from(new Set((localIds||[]).map(Number).filter(Boolean)));
+    if(!ids.length) return [];
+    // IMPORTANTE: crm_clientes_scope devuelve SETOF y Supabase limita las respuestas
+    // tabulares a 1.000 filas. El wrapper JSON agrega todo el alcance en un único
+    // valor JSONB, evitando truncar la cartera del franquiciado.
+    const res=await fetch(`${SUPABASE_URL}/rest/v1/rpc/crm_clientes_scope_json`,{
+      method:"POST",
+      headers:{ apikey:SUPABASE_KEY,Authorization:`Bearer ${SUPABASE_KEY}`,"Content-Type":"application/json" },
+      body:JSON.stringify({ p_local_ids:ids }),
+    });
+    if(!res.ok) throw new Error(await res.text());
+    const text=await res.text();
+    if(!text) return [];
+    const parsed=JSON.parse(text);
+    if(Array.isArray(parsed)) return parsed;
+    // Compatibilidad defensiva por si PostgREST envuelve el escalar.
+    if(Array.isArray(parsed?.crm_clientes_scope_json)) return parsed.crm_clientes_scope_json;
+    if(Array.isArray(parsed?.data)) return parsed.data;
+    return [];
+  },
+  getClientesCrmGlobalAll: () => sbAll("mv_agendapro_clientes_estado?select=*&order=dias_atraso_estimado.desc,visitas.desc,ultima_visita.desc,client_id.asc",{ pageSize:1000 }),
+  getClienteCrmVisitas: (clientId, localIds=[]) => {
+    const ids=Array.from(new Set((localIds||[]).map(Number).filter(Boolean)));
+    if(!ids.length) return Promise.resolve([]);
+    return sb(`mv_agendapro_clientes_visitas?select=client_id,fecha,local_id,local,gasto_facturado,gasto_pagado,ventas_totales&client_id=eq.${parseInt(clientId)}&local_id=in.(${ids.join(",")})&order=fecha.desc&limit=80`);
+  },
   getComisionesFechaLocal: (fecha,localId) => sbAll(`comisiones_detalle?select=*&fecha_pago=eq.${encodeURIComponent(fecha)}&local_id=eq.${parseInt(localId)}&order=id.desc`),
   buscarClientesComisionesLocal: (localId,query) => sb(`comisiones_detalle?select=cliente,fecha_pago&local_id=eq.${parseInt(localId)}&cliente=ilike.${encodeURIComponent(`*${String(query||"").trim()}*`)}&cliente=not.is.null&order=fecha_pago.desc,id.desc&limit=80`),
   getUltimosServiciosClienteLocal: (localId,cliente,limit=5) => sb(`comisiones_detalle?select=*&local_id=eq.${parseInt(localId)}&cliente=eq.${encodeURIComponent(cliente)}&order=fecha_pago.desc,id.desc&limit=${parseInt(limit)||5}`),
@@ -888,7 +1023,7 @@ function normalizeLocal(l) {
 }
 function localActivo(l) { return l?.activo !== false; }
 function normalizeUsuarioLocal(x) { return { userId:x.user_id, localId:x.local_id }; }
-function normalizeManicuraHistorialLocal(x) { return { id:x.id, userId:x.user_id, localId:x.local_id, fechaInicio:x.fecha_inicio || "", fechaFin:x.fecha_fin || "", motivoFin:x.motivo_fin || "", observacion:x.observacion || "", creadoEn:x.creado_en || "", actualizadoEn:x.actualizado_en || "" }; }
+function normalizeManicuraHistorialLocal(x) { return { id:x.id, userId:x.user_id, localId:x.local_id, fechaInicio:x.fecha_inicio || "", fechaFin:x.fecha_fin || "", motivoFin:x.motivo_fin || "", observacion:x.observacion || "", agendaproProviderId:x.agendapro_provider_id ?? x.agendaproProviderId ?? null, creadoEn:x.creado_en || "", actualizadoEn:x.actualizado_en || "" }; }
 function normalizeUsuarioHistorialLaboral(x) { return { id:x.id,userId:x.user_id,fechaInicio:x.fecha_inicio||"",fechaFin:x.fecha_fin||"",motivoFin:x.motivo_fin||"",observacion:x.observacion||"",creadoEn:x.creado_en||"",actualizadoEn:x.actualizado_en||"" }; }
 function normalizePersonaDocumento(x) { return { id:x.id,userId:x.user_id,tipo:x.tipo||"otro",descripcion:x.descripcion||"",nombreArchivo:x.nombre_archivo||"",mimeType:x.mime_type||"",tamanoBytes:Number(x.tamano_bytes||0),storagePath:x.storage_path||"",creadoEn:x.creado_en||"",url:"" }; }
 function isValidEmail(email) {
@@ -928,7 +1063,25 @@ function normalizePeriodo(p) { return { id: p.id, periodo: p.periodo, userId: p.
 function normalizeReglaCobertura(r) { return { id:r.id, localId:r.local_id, diaSemana:r.dia_semana, afluencia:r.afluencia, minimoDiario:r.minimo_diario, maximoDiario:r.maximo_diario, minimoApertura:r.minimo_apertura, minimoCierre:r.minimo_cierre, activo:r.activo }; }
 function normalizeConfigCobertura(c) { return { id:c.id, localId:c.local_id, horaApertura:(c.hora_apertura||"10:00").slice(0,5), horaCierre:(c.hora_cierre||"20:00").slice(0,5), minutosApertura:c.minutos_apertura ?? 60, minutosCierre:c.minutos_cierre ?? 60 }; }
 function normalizeEncargadoLocal(x) { return { userId:x.user_id, localId:x.local_id }; }
-function normalizeComision(c) { return { id:c.id, periodo:c.periodo, fechaPago:c.fecha_pago, localId:c.local_id, codigoExternoLocal:c.codigo_externo_local || "", nombreLocal:c.nombre_local || "", userId:c.user_id, codigoExternoManicura:c.codigo_externo_manicura || "", nombreManicura:c.nombre_manicura || "", servicio:c.servicio || "", cliente:c.cliente || "", precio:Number(c.precio || 0), comision:Number(c.comision || 0), hashRegistro:c.hash_registro || "", actualizadoEn:c.actualizado_en || "" }; }
+function normalizeComision(c) { return { id:c.id, periodo:c.periodo, fechaPago:c.fecha_pago, localId:c.local_id, codigoExternoLocal:c.codigo_externo_local || "", nombreLocal:c.nombre_local || "", userId:c.user_id, codigoExternoManicura:c.codigo_externo_manicura || "", nombreManicura:c.nombre_manicura || "", servicio:c.servicio || "", cliente:c.cliente || "", precio:Number(c.precio || 0), precioCobradoAgendaPro:Number(c.precio_cobrado_agendapro ?? c.precio ?? 0), comision:Number(c.comision || 0), hashRegistro:c.hash_registro || "", actualizadoEn:c.actualizado_en || "" }; }
+function agruparComisionesAgendaProSinVincular(rows = []) {
+  const map = new Map();
+  (rows || []).forEach(r => {
+    const localId = Number(r.local_id || 0) || null;
+    const providerId = r.agendapro_provider_id == null ? null : Number(r.agendapro_provider_id);
+    const profesional = String(r.profesional_agendapro || "").trim();
+    const nombreLocal = String(r.nombre_local || "").trim();
+    const fecha = String(r.fecha_pago || "").slice(0,10);
+    const key = `${localId || 0}|${providerId == null ? "sin-id" : providerId}|${profesional.toLowerCase()}`;
+    const prev = map.get(key) || { key, localId, nombreLocal, providerId, profesional, cantidad:0, totalPrecio:0, fechaDesde:fecha, fechaHasta:fecha };
+    prev.cantidad += 1;
+    prev.totalPrecio += Number(r.precio_efectivo || 0);
+    if (fecha && (!prev.fechaDesde || fecha < prev.fechaDesde)) prev.fechaDesde = fecha;
+    if (fecha && (!prev.fechaHasta || fecha > prev.fechaHasta)) prev.fechaHasta = fecha;
+    map.set(key, prev);
+  });
+  return Array.from(map.values()).sort((a,b)=>(a.nombreLocal||"").localeCompare(b.nombreLocal||"") || (a.profesional||"").localeCompare(b.profesional||""));
+}
 function normalizeComisionImportacion(i) { return { id:i.id, periodo:i.periodo, registros:i.registros || 0, totalPrecio:Number(i.total_precio || 0), totalComision:Number(i.total_comision || 0), estado:i.estado || "", mensaje:i.mensaje || "", creadoEn:i.creado_en || "" }; }
 function normalizeComisionCriterio(c) { return { id:c.id, periodo:c.periodo, semana:Number(c.semana || 0), userId:c.user_id, localId:c.local_id, porcentaje:Number(c.porcentaje || 0), motivo:c.motivo || "", actualizadoPor:c.actualizado_por_user_id, actualizadoEn:c.actualizado_en || "" }; }
 function normalizeComisionesConfiguracion(c) { return { id:c.id, nombre:c.nombre || "Configuración principal", activo:c.activo !== false, porcentajeBase:Number(c.porcentaje_base ?? 40), porcentajeReducido:Number(c.porcentaje_reducido ?? 35), horasObjetivoDefault:Number(c.horas_objetivo_default ?? 36), horasObjetivoFinSemana:c.horas_objetivo_fin_semana === null || c.horas_objetivo_fin_semana === undefined ? null : Number(c.horas_objetivo_fin_semana), maxLlegadasTarde:Number(c.max_llegadas_tarde ?? 0), maxFaltasNoJustificadas:Number(c.max_faltas_no_justificadas ?? 0), contarFaltasJustificadas:c.contar_faltas_justificadas === true, toleranciaLlegadaTardeMinutos:Number(c.tolerancia_llegada_tarde_minutos ?? 0), minimoSemanalEstandar:Number(c.minimo_semanal_estandar ?? 0), minimoSemanalPremiumExclusiva:Number(c.minimo_semanal_premium_exclusiva ?? 0), minimoSemanalEstandarFinSemana:c.minimo_semanal_estandar_fin_semana === null || c.minimo_semanal_estandar_fin_semana === undefined ? null : Number(c.minimo_semanal_estandar_fin_semana), minimoSemanalPremiumExclusivaFinSemana:c.minimo_semanal_premium_exclusiva_fin_semana === null || c.minimo_semanal_premium_exclusiva_fin_semana === undefined ? null : Number(c.minimo_semanal_premium_exclusiva_fin_semana), actualizadoPor:c.actualizado_por_user_id, actualizadoEn:c.actualizado_en || "" }; }
@@ -948,6 +1101,23 @@ function normalizeAgendaTurno(t) { return { id:t.id, fecha:t.fecha, localId:t.lo
 function normalizeAgendaTurnoPago(p) { return { id:p.id, turnoId:p.turno_id, formaPago:p.forma_pago || "", importe:Number(p.importe || 0), observacion:p.observacion || "", orden:p.orden || 1, creadoEn:p.creado_en || "" }; }
 function normalizeAgendaTurnoServicio(x) { return { id:x.id, turnoId:x.turno_id, servicioId:x.servicio_id, userId:x.user_id, posicion:x.posicion || "despues", sumaTiempo:x.suma_tiempo !== false, cantidad:Number(x.cantidad || 1), duracionMinutos:Number(x.duracion_minutos || 0), precioUnitario:Number(x.precio_unitario || 0), precioTotal:Number(x.precio_total || 0), orden:x.orden || 1, creadoEn:x.creado_en || "" }; }
 function normalizeAgendaBloqueo(b) { return { id:b.id, fecha:b.fecha, localId:b.local_id, userId:b.user_id, inicio:(b.inicio||"").slice(0,5), fin:(b.fin||"").slice(0,5), tipo:b.tipo || "no_disponible", motivo:b.motivo || "", creadoPor:b.creado_por_user_id, creadoEn:b.creado_en || "", actualizadoEn:b.actualizado_en || "" }; }
+function normalizeClienteCrm(c) { return {
+  clientId:Number(c.client_id || 0), cliente:c.cliente || "Sin nombre", email:c.email || "",
+  primeraVisita:c.primera_visita || "", ultimaVisita:c.ultima_visita || "",
+  visitas:Number(c.visitas || 0), localesVisitados:Number(c.locales_visitados || 0),
+  gastoFacturado:Number(c.gasto_facturado || 0), gastoPagado:Number(c.gasto_pagado || 0),
+  ticketPagado:Number(c.ticket_pagado ?? c.ticket_pagado_por_visita ?? 0),
+  localPrincipalId:c.local_principal_id == null ? (c.local_id == null ? null : Number(c.local_id)) : Number(c.local_principal_id), localPrincipal:c.local_principal || c.local_principal_agendapro || c.local || "",
+  frecuenciaPromedio:c.frecuencia_promedio_dias == null ? null : Number(c.frecuencia_promedio_dias),
+  frecuenciaMediana:c.frecuencia_mediana_dias == null ? null : Number(c.frecuencia_mediana_dias),
+  diasDesdeUltima:Number(c.dias_desde_ultima_visita || 0),
+  umbralRiesgo:c.dias_umbral_riesgo == null ? null : Number(c.dias_umbral_riesgo),
+  umbralPerdida:c.dias_umbral_perdida == null ? null : Number(c.dias_umbral_perdida),
+  estado:c.estado_cliente || "SIN_CLASIFICAR", diasAtraso:Number(c.dias_atraso_estimado || 0), confianza:c.confianza_frecuencia || "SIN_HISTORIA",
+  ultimaVisitaGlobal:c.ultima_visita_global || "", ultimoLocalGlobal:c.ultimo_local_global || "",
+  atendidaDespuesOtroLocal:c.atendida_despues_otro_local === true,
+  diasDespuesOtroLocal:c.dias_desde_visita_otro_local == null ? null : Number(c.dias_desde_visita_otro_local),
+}; }
 
 export const COLORS = {
   pink: "#e1c6cc", pinkLight: "#f7edf0", pinkDark: "#72243e",
@@ -3272,7 +3442,7 @@ const HELP_TOPICS = [
         heading: "Para qué sirve el reporte",
         text: "El Reporte de comisiones reúne la venta realizada por cada manicura, la comisión calculada, los adelantos, los ajustes por garantías y el importe neto a pagar. La información puede consultarse por local, manicura, año, mes y semana.",
         bullets: [
-          "Venta total: suma de los servicios incluidos en la selección.",
+          "Venta total: suma del importe realmente cobrado en AgendaPro para los servicios incluidos en la selección. La base de comisión puede ser distinta porque utiliza el precio efectivo histórico.",
           "Comisión definitiva: importe que corresponde según el porcentaje aplicado.",
           "Adelantos: importes que deben descontarse en la semana seleccionada.",
           "Neto a pagar: comisión definitiva menos adelantos, más o menos ajustes por garantías.",
@@ -4881,7 +5051,24 @@ function ABMManicuras({ data, setData, reloadData, user }) {
   const [dragCandidateId, setDragCandidateId] = useState(null);
   const [candidateIncorpModal, setCandidateIncorpModal] = useState(null);
   const [savingCandidateIncorp, setSavingCandidateIncorp] = useState(false);
+  const [agendaComisionesSinVincular, setAgendaComisionesSinVincular] = useState([]);
+  const [agendaPendientesLoading, setAgendaPendientesLoading] = useState(false);
+  const [agendaPendientesError, setAgendaPendientesError] = useState("");
+  const [agendaLinkConfirm, setAgendaLinkConfirm] = useState(null);
   useEffect(()=>{api.getReclutamientoCandidatasDisponibles().then(rows=>setData(prev=>prev?{...prev,reclutamientoCandidatas:rows||[]}:prev)).catch(()=>{});},[setData]);
+  const cargarAgendaPendientes = useCallback(async () => {
+    setAgendaPendientesLoading(true);
+    setAgendaPendientesError("");
+    try {
+      const rows = await api.getAgendaComisionesSinVincular();
+      setAgendaComisionesSinVincular(Array.isArray(rows) ? rows : []);
+    } catch (e) {
+      setAgendaPendientesError(e?.message || "No se pudieron consultar las comisiones sin vincular.");
+    } finally {
+      setAgendaPendientesLoading(false);
+    }
+  }, []);
+  useEffect(() => { void cargarAgendaPendientes(); }, [cargarAgendaPendientes]);
   useEffect(() => {
     const cancelarArrastre = () => {
       if (dragCompactTimer.current) clearTimeout(dragCompactTimer.current);
@@ -4907,6 +5094,64 @@ function ABMManicuras({ data, setData, reloadData, user }) {
   const manicuras = data.users.filter(u => u.rol === "manicura" && (esAdmin || getActiveManicuraLocalIds(data,u.id).some(id=>allowedLocalIds.includes(Number(id))) || (!getActiveManicuraLocalIds(data,u.id).length && allowedLocalIds.includes(Number(u.localId))) || !u.localId));
   const encargadasEquipo = data.users.filter(u => u.activo && isEncargadaOperativa(data,u.id));
   const normalizeSearch = value => String(value || "").toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
+  const agendaPendientesAgrupados = useMemo(() => {
+    const map = new Map();
+    (agendaComisionesSinVincular || []).forEach(x => {
+      const localId = Number(x.local_id || 0);
+      if (!localId) return;
+      const providerId = x.agendapro_provider_id === null || x.agendapro_provider_id === undefined || x.agendapro_provider_id === "" ? null : Number(x.agendapro_provider_id);
+      const profesional = String(x.profesional_agendapro || "").trim();
+      const fecha = String(x.fecha_pago || "").slice(0,10);
+      const key = `${localId}|${providerId ?? "null"}|${profesional}`;
+      const prev = map.get(key) || {
+        key,
+        localId,
+        nombreLocal:String(x.nombre_local || ""),
+        providerId,
+        profesional,
+        fechaDesde:fecha,
+        fechaHasta:fecha,
+        cantidad:0,
+        totalPrecio:0
+      };
+      prev.cantidad += 1;
+      prev.totalPrecio += Number(x.precio_efectivo || 0);
+      if (fecha && (!prev.fechaDesde || fecha < prev.fechaDesde)) prev.fechaDesde = fecha;
+      if (fecha && (!prev.fechaHasta || fecha > prev.fechaHasta)) prev.fechaHasta = fecha;
+      map.set(key, prev);
+    });
+    return Array.from(map.values()).sort((a,b)=>(a.nombreLocal||"").localeCompare(b.nombreLocal||"") || (a.profesional||"").localeCompare(b.profesional||""));
+  }, [agendaComisionesSinVincular]);
+  const agendaPendientesVisibles = useMemo(() => {
+    const permitidos = new Set((localesPermitidos || []).map(l=>Number(l.id)));
+    return agendaPendientesAgrupados.filter(p=>permitidos.has(Number(p.localId)));
+  }, [agendaPendientesAgrupados, localesPermitidos]);
+  const agendaPendientesConId = useMemo(() => agendaPendientesVisibles.filter(p=>p.providerId !== null && Number.isFinite(Number(p.providerId))), [agendaPendientesVisibles]);
+  const agendaPendientesSinId = useMemo(() => agendaPendientesVisibles.filter(p=>p.providerId === null || !Number.isFinite(Number(p.providerId))), [agendaPendientesVisibles]);
+  const agendaCantidadVinculable = useMemo(() => agendaPendientesConId.reduce((acc,p)=>acc+Number(p.cantidad||0),0), [agendaPendientesConId]);
+  const agendaCantidadSinId = useMemo(() => agendaPendientesSinId.reduce((acc,p)=>acc+Number(p.cantidad||0),0), [agendaPendientesSinId]);
+  const agendaCandidatosModal = useMemo(() => {
+    const ids = new Set((historialDraft || []).map(r=>Number(r.localId)).filter(Boolean));
+    const nombre = normalizeSearch(form.nombre);
+    return agendaPendientesConId
+      .filter(p=>ids.has(Number(p.localId)))
+      .map(p=>({...p, coincideNombre:!!nombre && normalizeSearch(p.profesional)===nombre}))
+      .sort((a,b)=>Number(b.coincideNombre)-Number(a.coincideNombre) || Number(b.cantidad||0)-Number(a.cantidad||0) || (a.profesional||"").localeCompare(b.profesional||""));
+  }, [agendaPendientesConId, historialDraft, form.nombre]);
+  const agendaSinIdModal = useMemo(() => {
+    const ids = new Set((historialDraft || []).map(r=>Number(r.localId)).filter(Boolean));
+    return agendaPendientesSinId.filter(p=>ids.has(Number(p.localId)));
+  }, [agendaPendientesSinId, historialDraft]);
+  const agendaVinculosDraft = useMemo(() => (historialDraft || [])
+    .filter(r=>r.agendaproProviderId !== null && r.agendaproProviderId !== undefined && r.agendaproProviderId !== "")
+    .map(r=>({
+      key:r.id || r.tempId,
+      localId:Number(r.localId),
+      localNombre:(localesPermitidos || []).find(l=>Number(l.id)===Number(r.localId))?.nombre || `Local ${r.localId}`,
+      providerId:Number(r.agendaproProviderId),
+      fechaInicio:r.fechaInicio || "",
+      fechaFin:r.fechaFin || ""
+    })), [historialDraft, localesPermitidos]);
   const queryEquipo = normalizeSearch(busqueda.trim());
   const coincideBusqueda = u => !queryEquipo || normalizeSearch(`${u.nombre || ""} ${u.usuario || ""}`).includes(queryEquipo);
   const hoy = dateKey(new Date());
@@ -4975,6 +5220,27 @@ function ABMManicuras({ data, setData, reloadData, user }) {
   const addHistorial = () => setHistorialDraft(rows => [{ tempId:`new-${Date.now()}`, localId:form.localId||localesPermitidos[0]?.id||"", fechaInicio:hoy, fechaFin:"", motivoFin:"", observacion:"", isNew:true }, ...rows]);
   const updateHistorialDraft = (key, field, value) => setHistorialDraft(rows=>rows.map(r=>(r.id||r.tempId)===key?{...r,[field]:value}:r));
   const removeHistorialDraft = key => setHistorialDraft(rows=>rows.filter(r=>(r.id||r.tempId)!==key));
+  const aplicarVinculoAgenda = pendiente => {
+    if (!pendiente?.providerId || !pendiente?.localId) return;
+    const rowsLocal = (historialDraft || []).filter(r=>Number(r.localId)===Number(pendiente.localId));
+    if (!rowsLocal.length) {
+      setAgendaLinkConfirm(null);
+      setFormErr(`Primero agregá un período de antigüedad para ${pendiente.nombreLocal || "ese local"}.`);
+      setModalTab("antiguedad");
+      return;
+    }
+    const cubreTodo = r => !!r.fechaInicio && (!pendiente.fechaDesde || r.fechaInicio <= pendiente.fechaDesde) && (!r.fechaFin || !pendiente.fechaHasta || r.fechaFin >= pendiente.fechaHasta);
+    const target = rowsLocal.find(cubreTodo) || rowsLocal.find(r=>!r.fechaFin) || rowsLocal[0];
+    const targetKey = target.id || target.tempId;
+    setHistorialDraft(rows=>rows.map(r=>(r.id||r.tempId)===targetKey?{...r,agendaproProviderId:Number(pendiente.providerId)}:r));
+    setAgendaLinkConfirm(null);
+    if (!cubreTodo(target)) {
+      notifyToast(`Vínculo seleccionado con ${pendiente.profesional}. Revisá las fechas del período en ${pendiente.nombreLocal}: las comisiones pendientes van de ${pendiente.fechaDesde || "?"} a ${pendiente.fechaHasta || "?"}.`, "warning");
+      setModalTab("antiguedad");
+    } else {
+      notifyToast(`Vínculo AgendaPro confirmado: ${pendiente.profesional} · ${pendiente.nombreLocal}.`, "success");
+    }
+  };
 
   const validarHistorial = rows => {
     if (!rows.length) return "La manicura debe tener al menos un período de antigüedad.";
@@ -5019,6 +5285,14 @@ function ABMManicuras({ data, setData, reloadData, user }) {
       setMultiLocalConfirm({ cantidad:nombres.length, nombres });
       return;
     }
+    const originalesAgenda = modal==="new" ? [] : (data.manicuraHistorialLocales||[]).filter(h=>Number(h.userId)===Number(form.id));
+    const idsDraftAgenda = new Set(historialDraft.filter(r=>r.id).map(r=>String(r.id)));
+    const agendaVinculoModificado =
+      historialDraft.some(r => {
+        const original = r.id ? originalesAgenda.find(h=>String(h.id)===String(r.id)) : null;
+        return Number(r.agendaproProviderId || 0) !== Number(original?.agendaproProviderId || 0);
+      }) ||
+      originalesAgenda.some(h=>h.agendaproProviderId && !idsDraftAgenda.has(String(h.id)));
     setSaving(true);
     try {
       let targetId=form.id;
@@ -5041,17 +5315,25 @@ function ABMManicuras({ data, setData, reloadData, user }) {
       const nuevos=historialDraft.filter(r=>!r.id).sort((a,b)=>Number(!!b.fechaFin)-Number(!!a.fechaFin));
       const historialGuardado=[];
       for(const r of [...existentes,...nuevos]){
-        const payload={user_id:targetId,local_id:parseInt(r.localId),fecha_inicio:r.fechaInicio,fecha_fin:r.fechaFin||null,motivo_fin:r.fechaFin?(r.motivoFin||null):null,observacion:(r.observacion||"").trim()||null};
+        const payload={user_id:targetId,local_id:parseInt(r.localId),fecha_inicio:r.fechaInicio,fecha_fin:r.fechaFin||null,motivo_fin:r.fechaFin?(r.motivoFin||null):null,observacion:(r.observacion||"").trim()||null,agendapro_provider_id:r.agendaproProviderId?Number(r.agendaproProviderId):null};
         const rows=r.id?await api.updateManicuraHistorialLocal(r.id,payload):await api.createManicuraHistorialLocal(payload);
         const raw=Array.isArray(rows)?rows[0]:rows;
         if(raw) historialGuardado.push(normalizeManicuraHistorialLocal(raw));
+      }
+      if (agendaVinculoModificado) {
+        try {
+          await api.refrescarComisionesAgendaProShadow();
+          await cargarAgendaPendientes();
+        } catch (e) {
+          notifyToast("El vínculo AgendaPro se guardó, pero no se pudo refrescar la fuente de comisiones automáticamente: "+(e?.message||e), "warning");
+        }
       }
       if(modal==="new"&&targetId){try{await api.enviarInvitacionUsuario({actor_id:user.id,session_token:user.sessionToken,target_user_id:targetId});}catch(e){notifyToast("La manicura se creó, pero la invitación quedó pendiente.","warning");}}
       const abiertosGuardados=historialGuardado.filter(r=>!r.fechaFin).sort((a,b)=>(b.fechaInicio||"").localeCompare(a.fechaInicio||""));
       const principal=abiertosGuardados[0]||historialDraft.filter(r=>!r.fechaFin).sort((a,b)=>(b.fechaInicio||"").localeCompare(a.fechaInicio||""))[0];
       const updatedUser={...form,id:targetId,nombre:form.nombre.trim(),usuario:usuarioLimpio,email:emailLimpio,rol:"manicura",localId:principal?parseInt(principal.localId):null,activo:abiertosGuardados.length>0||historialDraft.some(r=>!r.fechaFin),codigoExterno:(form.codigoExterno||"").trim(),telefonoCodigoArea:onlyDigits(form.telefonoCodigoArea),telefonoNumero:onlyDigits(form.telefonoNumero),telefono:[onlyDigits(form.telefonoCodigoArea),onlyDigits(form.telefonoNumero)].filter(Boolean).join(""),datoBancario:String(form.datoBancario||"").trim(),tipoRelacion:form.tipoRelacion||"a_resolver"};
       setData(prev=>({...prev,users:[...(prev.users||[]).filter(u=>parseInt(u.id)!==parseInt(targetId)),updatedUser].sort((a,b)=>(a.nombre||"").localeCompare(b.nombre||"")),manicuraHistorialLocales:[...(prev.manicuraHistorialLocales||[]).filter(h=>parseInt(h.userId)!==parseInt(targetId)),...historialGuardado]}));
-      setModal(null); notifyToast("Datos e historial guardados correctamente.","success");
+      setModal(null); notifyToast(agendaVinculoModificado?"Datos, historial y vínculo AgendaPro guardados correctamente.":"Datos e historial guardados correctamente.","success");
     } catch(e) { setFormErr("Error al guardar: "+e.message); }
     setSaving(false);
   };
@@ -5113,6 +5395,17 @@ function ABMManicuras({ data, setData, reloadData, user }) {
 
   return <div>
     <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:12,gap:10,flexWrap:"wrap"}}><div><h2 style={{margin:0,fontSize:18,fontWeight:500}}>Equipo</h2><p style={{margin:"3px 0 0",fontSize:12,color:"var(--color-text-secondary)"}}>Manicuras por local y encargadas asignadas.</p></div><div style={{display:"flex",gap:8,flexWrap:"wrap"}}><Btn variant={vistaEquipo==="equipo"?"primary":"secondary"} size="sm" onClick={()=>setVistaEquipo("equipo")}>Equipo por local</Btn><Btn variant={vistaEquipo==="listado"?"primary":"secondary"} size="sm" onClick={()=>setVistaEquipo("listado")}>Listado</Btn><Btn onClick={openNew} size="sm">+ Nueva manicura</Btn></div></div>
+    {(agendaPendientesLoading || agendaPendientesError || agendaCantidadVinculable>0 || agendaCantidadSinId>0) && <Card style={{marginBottom:14,padding:"11px 12px",background:agendaCantidadVinculable>0?COLORS.amberLight:COLORS.infoLight,border:`1px solid ${agendaCantidadVinculable>0?COLORS.amber:COLORS.info}55`}}>
+      <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",gap:10,flexWrap:"wrap"}}>
+        <div style={{flex:1,minWidth:240}}>
+          <p style={{margin:0,fontSize:13,fontWeight:800,color:agendaCantidadVinculable>0?COLORS.amber:COLORS.info}}>{agendaPendientesLoading?"Revisando comisiones de AgendaPro...":agendaCantidadVinculable>0?`${agendaCantidadVinculable} comisiones sin vincular · ${agendaPendientesConId.length} profesional${agendaPendientesConId.length===1?"":"es"}`:"Sin comisiones vinculables pendientes"}</p>
+          {!agendaPendientesLoading&&!agendaPendientesError&&agendaCantidadVinculable>0&&<p style={{margin:"3px 0 0",fontSize:11,color:"#666"}}>Al dar de alta o editar una manicura, confirmá el profesional de AgendaPro. Ese vínculo se guarda por local e ID numérico, no por nombre.</p>}
+          {!agendaPendientesLoading&&!agendaPendientesError&&agendaCantidadSinId>0&&<p style={{margin:"3px 0 0",fontSize:11,color:COLORS.danger}}>{agendaCantidadSinId} prestación{agendaCantidadSinId===1?"":"es"} no trae{agendaCantidadSinId===1?"":"n"} profesional desde AgendaPro y no se puede{agendaCantidadSinId===1?"":"n"} vincular desde NikiOS.</p>}
+          {agendaPendientesError&&<p style={{margin:"3px 0 0",fontSize:11,color:COLORS.danger}}>No se pudo consultar el control AgendaPro: {agendaPendientesError}</p>}
+        </div>
+        <Btn size="sm" variant="secondary" disabled={agendaPendientesLoading} onClick={()=>void cargarAgendaPendientes()}>Actualizar control</Btn>
+      </div>
+    </Card>}
     <Card style={{marginBottom:14,padding:"10px 12px"}}><div style={{display:"flex",gap:10,alignItems:"center",flexWrap:"wrap"}}><div style={{flex:"1 1 280px",position:"relative"}}><span style={{position:"absolute",left:11,top:8,color:"#999"}}>⌕</span><Input value={busqueda} onChange={setBusqueda} placeholder="Buscar manicura o encargada por nombre" style={{paddingLeft:32}}/></div>{busqueda&&<Btn size="sm" variant="ghost" onClick={()=>setBusqueda("")}>Limpiar</Btn>}</div></Card>
     {vistaEquipo==="equipo"?<div>
       <Card style={{marginBottom:14,padding:12}}>
@@ -5151,7 +5444,21 @@ function ABMManicuras({ data, setData, reloadData, user }) {
     {bajaModal&&<Modal title="Dar de baja manicura" onClose={()=>setBajaModal(null)} width={500}><div style={{display:"flex",flexDirection:"column",gap:12}}><p style={{margin:0,fontSize:13}}>Se desactivará a <strong>{bajaModal.nombre}</strong> y se cerrará su período activo.</p><ModalInput label="Fecha de baja" type="date" value={bajaModal.fechaFin} onChange={v=>setBajaModal(b=>({...b,fechaFin:v}))}/><ModalSelect label="Motivo" value={bajaModal.motivo} onChange={v=>setBajaModal(b=>({...b,motivo:v}))}><option value="Baja">Baja</option><option value="Renuncia">Renuncia</option><option value="Despido">Despido</option><option value="Otro">Otro</option></ModalSelect><ModalInput label="Observación (opcional)" value={bajaModal.observacion} onChange={v=>setBajaModal(b=>({...b,observacion:v}))}/><div style={{display:"flex",gap:8}}><Btn variant="danger" onClick={confirmarBaja} disabled={savingMovimiento} style={{flex:1,justifyContent:"center"}}>{savingMovimiento?"Guardando...":"Dar de baja"}</Btn><Btn variant="secondary" onClick={()=>setBajaModal(null)} style={{flex:1,justifyContent:"center"}}>Cancelar</Btn></div></div></Modal>}
     {modal&&<Modal title={modal==="new"?"Nueva manicura":"Editar manicura"} onClose={()=>setModal(null)} width={780}>
       <div className="niki-config-tabs" style={{marginBottom:18,borderBottom:"1px solid #eee",paddingBottom:10}}><button style={tabStyle(modalTab==="general")} onClick={()=>setModalTab("general")}>Datos generales</button><button style={tabStyle(modalTab==="antiguedad")} onClick={()=>setModalTab("antiguedad")}>Antigüedad y locales</button><button style={tabStyle(modalTab==="laboral")} onClick={()=>setModalTab("laboral")}>Datos laborales y bancarios</button><button style={tabStyle(modalTab==="documentacion")} onClick={()=>setModalTab("documentacion")}>Documentación</button></div>
-      {modalTab==="general"?<div style={{display:"flex",flexDirection:"column",gap:14}}><ModalInput label="Nombre completo" value={form.nombre||""} onChange={v=>setForm(f=>({...f,nombre:v}))}/><ModalInput label="Usuario" value={form.usuario||""} onChange={v=>setForm(f=>({...f,usuario:v}))}/><ModalInput label="Email" type="email" value={form.email||""} onChange={v=>setForm(f=>({...f,email:v}))}/><div className="niki-mobile-one-column" style={{display:"grid",gridTemplateColumns:"minmax(120px,.45fr) 1fr",gap:12}}><ModalInput label="Código de área" value={form.telefonoCodigoArea||""} onChange={v=>setForm(f=>({...f,telefonoCodigoArea:onlyDigits(v).slice(0,4)}))}/><ModalInput label="Número de teléfono" value={form.telefonoNumero||""} onChange={v=>setForm(f=>({...f,telefonoNumero:onlyDigits(v).slice(0,8)}))}/></div><ModalInputWithHelp label="Código externo AgendaPro" value={form.codigoExterno||""} onChange={v=>setForm(f=>({...f,codigoExterno:v}))} help="Vincula la manicura con AgendaPro/Qlik."/><div style={{borderTop:"1px dashed #eee",paddingTop:14}}><p style={{margin:"0 0 10px",fontSize:13,color:"#888"}}>{modal==="edit"?"Dejá en blanco para no cambiar la contraseña":"Contraseña"}</p><div className="niki-mobile-one-column" style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12}}><ModalInput label={modal==="edit"?"Nueva contraseña":"Contraseña"} type="password" value={form.password||""} onChange={v=>setForm(f=>({...f,password:v}))}/><ModalInput label="Repetir contraseña" type="password" value={form.password2||""} onChange={v=>setForm(f=>({...f,password2:v}))}/></div></div><div style={{background:COLORS.infoLight,color:COLORS.info,borderRadius:10,padding:"10px 12px",fontSize:12}}>El local y el estado actual se determinan desde la solapa <strong>Antigüedad y locales</strong>.</div></div>:modalTab==="antiguedad"?
+      {modalTab==="general"?<div style={{display:"flex",flexDirection:"column",gap:14}}><ModalInput label="Nombre completo" value={form.nombre||""} onChange={v=>setForm(f=>({...f,nombre:v}))}/><ModalInput label="Usuario" value={form.usuario||""} onChange={v=>setForm(f=>({...f,usuario:v}))}/><ModalInput label="Email" type="email" value={form.email||""} onChange={v=>setForm(f=>({...f,email:v}))}/><div className="niki-mobile-one-column" style={{display:"grid",gridTemplateColumns:"minmax(120px,.45fr) 1fr",gap:12}}><ModalInput label="Código de área" value={form.telefonoCodigoArea||""} onChange={v=>setForm(f=>({...f,telefonoCodigoArea:onlyDigits(v).slice(0,4)}))}/><ModalInput label="Número de teléfono" value={form.telefonoNumero||""} onChange={v=>setForm(f=>({...f,telefonoNumero:onlyDigits(v).slice(0,8)}))}/></div><ModalInputWithHelp label="Código externo (Qlik · temporal)" value={form.codigoExterno||""} onChange={v=>setForm(f=>({...f,codigoExterno:v}))} help="Se mantiene temporalmente por compatibilidad con Qlik. La nueva integración con AgendaPro usa el ID numérico del profesional por local."/>
+      <div style={{border:"1px solid rgba(186,117,23,.28)",background:agendaCandidatosModal.length?COLORS.amberLight:"var(--color-background-secondary)",borderRadius:12,padding:"11px 12px"}}>
+        <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",gap:8,marginBottom:agendaCandidatosModal.length||agendaVinculosDraft.length||agendaSinIdModal.length?9:0}}>
+          <div><p style={{margin:0,fontSize:12,fontWeight:800,color:agendaCandidatosModal.length?COLORS.amber:"var(--color-text-primary)"}}>Vinculación con AgendaPro</p><p style={{margin:"2px 0 0",fontSize:10,color:"var(--color-text-secondary)"}}>La confirmación guarda <strong>local + provider_id</strong> en el historial de la manicura.</p></div>
+          {agendaPendientesLoading&&<Badge color="info">Consultando...</Badge>}
+        </div>
+        {agendaVinculosDraft.length>0&&<div style={{display:"flex",gap:6,flexWrap:"wrap",marginBottom:9}}>{agendaVinculosDraft.map(v=><span key={`${v.key}-${v.providerId}`} style={{display:"inline-flex",alignItems:"center",gap:5,border:`1px solid ${COLORS.success}55`,background:COLORS.successLight,color:COLORS.success,borderRadius:999,padding:"4px 7px",fontSize:10,fontWeight:700}}>✓ {v.localNombre} · ID {v.providerId}</span>)}</div>}
+        {agendaCandidatosModal.length>0?<div style={{display:"flex",flexDirection:"column",gap:7}}>
+          <p style={{margin:0,fontSize:11,color:"#555"}}>Hay comisiones de profesionales de AgendaPro todavía sin asociar en los locales de esta manicura. Confirmá únicamente la persona correcta.</p>
+          {agendaCandidatosModal.map(p=>{const linked=agendaVinculosDraft.some(v=>Number(v.localId)===Number(p.localId)&&Number(v.providerId)===Number(p.providerId));return <div key={p.key} style={{display:"flex",alignItems:"center",gap:9,padding:"8px 9px",background:"#fff",border:`1px solid ${p.coincideNombre?COLORS.amber+"66":"#e7e7e7"}`,borderRadius:9,flexWrap:"wrap"}}><div style={{flex:1,minWidth:210}}><div style={{display:"flex",alignItems:"center",gap:6,flexWrap:"wrap"}}><strong style={{fontSize:12}}>{p.profesional || `AgendaPro #${p.providerId}`}</strong>{p.coincideNombre&&<Badge color="amber">Coincide con el nombre</Badge>}<span style={{fontSize:10,color:"var(--color-text-secondary)"}}>{p.nombreLocal} · ID {p.providerId}</span></div><p style={{margin:"3px 0 0",fontSize:10,color:"#666"}}>{p.cantidad} comisión{p.cantidad===1?"":"es"} · {p.fechaDesde===p.fechaHasta?p.fechaDesde:`${p.fechaDesde} a ${p.fechaHasta}`} · {fmtMoney(p.totalPrecio)}</p></div>{linked?<Badge color="success">Vinculado</Badge>:<Btn size="sm" variant={p.coincideNombre?"primary":"secondary"} onClick={()=>setAgendaLinkConfirm(p)}>Confirmar vínculo</Btn>}</div>})}
+        </div>:!agendaPendientesLoading&&<p style={{margin:0,fontSize:11,color:"var(--color-text-secondary)"}}>No hay profesionales con comisiones pendientes en los locales seleccionados.</p>}
+        {agendaSinIdModal.length>0&&<div style={{marginTop:8,padding:"7px 8px",borderRadius:8,background:COLORS.dangerLight,color:COLORS.danger,fontSize:10}}>{agendaSinIdModal.reduce((acc,p)=>acc+Number(p.cantidad||0),0)} prestación{agendaSinIdModal.reduce((acc,p)=>acc+Number(p.cantidad||0),0)===1?"":"es"} sin profesional informado por AgendaPro. Estas no se pueden vincular desde esta pantalla.</div>}
+        {agendaPendientesError&&<p style={{margin:"7px 0 0",fontSize:10,color:COLORS.danger}}>No se pudo cargar el control AgendaPro: {agendaPendientesError}</p>}
+      </div>
+      <div style={{borderTop:"1px dashed #eee",paddingTop:14}}><p style={{margin:"0 0 10px",fontSize:13,color:"#888"}}>{modal==="edit"?"Dejá en blanco para no cambiar la contraseña":"Contraseña"}</p><div className="niki-mobile-one-column" style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12}}><ModalInput label={modal==="edit"?"Nueva contraseña":"Contraseña"} type="password" value={form.password||""} onChange={v=>setForm(f=>({...f,password:v}))}/><ModalInput label="Repetir contraseña" type="password" value={form.password2||""} onChange={v=>setForm(f=>({...f,password2:v}))}/></div></div><div style={{background:COLORS.infoLight,color:COLORS.info,borderRadius:10,padding:"10px 12px",fontSize:12}}>El local y el estado actual se determinan desde la solapa <strong>Antigüedad y locales</strong>.</div></div>:modalTab==="antiguedad"?
       <div><div style={{display:"flex",justifyContent:"space-between",alignItems:"center",gap:12,marginBottom:12}}><div><h3 style={{margin:0,fontSize:15}}>Historial por local</h3><p style={{margin:"3px 0 0",fontSize:12,color:"var(--color-text-secondary)"}}>Puede haber más de un período activo siempre que correspondan a sucursales distintas.</p></div><Btn onClick={addHistorial} size="sm">+ Agregar período</Btn></div><div style={{overflowX:"auto",border:"1px solid rgba(120,120,120,0.16)",borderRadius:12}}><div className="niki-history-table" style={{minWidth:760}}><div className="niki-history-header" style={{display:"grid",gridTemplateColumns:"1.25fr 130px 130px 150px 1.2fr 44px",gap:8,padding:"9px 10px",background:"var(--color-background-secondary)",fontSize:11,fontWeight:700,textTransform:"uppercase"}}><span>Local</span><span>Fecha inicio</span><span>Fecha fin</span><span>Motivo</span><span>Observación</span><span></span></div>{historialDraft.length===0?<p style={{padding:16,textAlign:"center",fontSize:13,color:"var(--color-text-secondary)"}}>Sin períodos cargados.</p>:historialDraft.map(r=>{const key=r.id||r.tempId;return <div className="niki-history-row" key={key} style={{display:"grid",gridTemplateColumns:"1.25fr 130px 130px 150px 1.2fr 44px",gap:8,padding:"9px 10px",borderTop:"1px solid rgba(120,120,120,0.12)",alignItems:"center",background:!r.fechaFin?COLORS.successLight:"#fff"}}><select value={r.localId||""} onChange={e=>updateHistorialDraft(key,"localId",e.target.value)} style={{border:"1px solid #ddd",borderRadius:7,padding:"7px 8px",fontSize:12}}>{localesPermitidos.map(l=><option key={l.id} value={l.id}>{l.nombre}</option>)}</select><input type="date" value={r.fechaInicio||""} onChange={e=>updateHistorialDraft(key,"fechaInicio",e.target.value)} style={{border:"1px solid #ddd",borderRadius:7,padding:"7px 8px",fontSize:12}}/><input type="date" value={r.fechaFin||""} onChange={e=>{updateHistorialDraft(key,"fechaFin",e.target.value);if(!e.target.value)updateHistorialDraft(key,"motivoFin","");}} style={{border:"1px solid #ddd",borderRadius:7,padding:"7px 8px",fontSize:12}}/><select value={r.motivoFin||""} disabled={!r.fechaFin} onChange={e=>updateHistorialDraft(key,"motivoFin",e.target.value)} style={{border:"1px solid #ddd",borderRadius:7,padding:"7px 8px",fontSize:12,background:!r.fechaFin?"#f4f4f4":"#fff"}}><option value="">{r.fechaFin?"Seleccionar":"Período activo"}</option>{motivosFin.map(x=><option key={x}>{x}</option>)}</select><input value={r.observacion||""} onChange={e=>updateHistorialDraft(key,"observacion",e.target.value)} placeholder="Opcional" style={{border:"1px solid #ddd",borderRadius:7,padding:"7px 8px",fontSize:12}}/><button onClick={()=>removeHistorialDraft(key)} title="Eliminar período" style={{border:"none",background:COLORS.dangerLight,color:COLORS.danger,borderRadius:7,width:34,height:34,cursor:"pointer"}}>×</button></div>})}</div></div></div>:modalTab==="laboral"?<div style={{display:"flex",flexDirection:"column",gap:14}}><ModalInput label="Alias o CBU bancario" value={form.datoBancario||""} onChange={v=>setForm(f=>({...f,datoBancario:v}))}/><ModalSelect label="Tipo de relación" value={form.tipoRelacion||"a_resolver"} onChange={v=>setForm(f=>({...f,tipoRelacion:v}))}><option value="monotributista">Monotributista</option><option value="dependencia">Relación de Dependencia</option><option value="a_resolver">A resolver</option></ModalSelect></div>:<LegajoDocumentosPanel actor={user} userId={form.id} documentos={documentosPersona} onReload={reloadData} currentPhotoUrl={form.fotoPerfilUrl||""}/>}
       {formErr&&<p style={{margin:"14px 0 0",fontSize:13,color:COLORS.danger,background:COLORS.dangerLight,padding:"8px 12px",borderRadius:8}}>{formErr}</p>}<div style={{display:"flex",gap:8,marginTop:18,flexWrap:"wrap"}}><Btn onClick={save} disabled={saving} style={{flex:1,justifyContent:"center"}}>{saving?"Guardando...":"Guardar"}</Btn><Btn onClick={()=>setModal(null)} variant="secondary" style={{flex:1,justifyContent:"center"}}>Cancelar</Btn></div>
     </Modal>}
@@ -5164,6 +5471,16 @@ function ABMManicuras({ data, setData, reloadData, user }) {
       } : null}
       onCancel={()=>setMultiLocalConfirm(null)}
       onConfirm={()=>{ setMultiLocalConfirm(null); void save(true); }}
+    />
+    <ConfirmDialog
+      config={agendaLinkConfirm ? {
+        title:"Confirmar vínculo con AgendaPro",
+        message:`Vas a vincular ${agendaLinkConfirm.profesional || `AgendaPro #${agendaLinkConfirm.providerId}`} (ID ${agendaLinkConfirm.providerId}) con esta manicura en ${agendaLinkConfirm.nombreLocal}. Hay ${agendaLinkConfirm.cantidad} comisión${agendaLinkConfirm.cantidad===1?"":"es"} pendiente${agendaLinkConfirm.cantidad===1?"":"s"} por ${fmtMoney(agendaLinkConfirm.totalPrecio)} entre ${agendaLinkConfirm.fechaDesde || "?"} y ${agendaLinkConfirm.fechaHasta || "?"}.`,
+        confirmText:"Confirmar vínculo",
+        variant:"primary"
+      } : null}
+      onCancel={()=>setAgendaLinkConfirm(null)}
+      onConfirm={()=>aplicarVinculoAgenda(agendaLinkConfirm)}
     />
   </div>;
 }
@@ -5722,7 +6039,7 @@ function Reportes({ data, setData, user, onOpenAgenda, reportRestore, reloadData
   const [comisionesReady, setComisionesReady] = useState(false);
   const [ultimaActualizacionComisiones, setUltimaActualizacionComisiones] = useState(null);
   const [comisionesSinVincularModal, setComisionesSinVincularModal] = useState(false);
-  const [reintentandoVinculacion, setReintentandoVinculacion] = useState(false);
+  const [agendaPendientesComisiones, setAgendaPendientesComisiones] = useState([]);
   const refreshComisionesSeq = useRef(0);
   const [configComisionesFiltros, setConfigComisionesFiltros] = useState({ local:"", tipoLocal:"", zona:"", manicura:"", estado:"activas", configuracion:"" });
   const [colsComisiones, setColsComisiones] = useState([
@@ -5768,8 +6085,9 @@ function Reportes({ data, setData, user, onOpenAgenda, reportRestore, reloadData
       const semanas = getCommissionWeeksForMonth(yy, (mm || 1) - 1);
       const desde = semanas[0]?.desdeKey || `${periodoComisiones}-01`;
       const hasta = semanas[semanas.length-1]?.hastaKey || dateKey(new Date(yy, mm || 1, 0));
-      const [comisionesRaw, importacionesRaw, criteriosRaw, configuracionRaw, manicuraConfigRaw, adelantosRaw, garantiasRaw, horariosRaw, asistenciasRaw] = await Promise.all([
-        api.getComisionesRango(desde,hasta),
+      const [comisionesRaw, agendaPendientesRaw, importacionesRaw, criteriosRaw, configuracionRaw, manicuraConfigRaw, adelantosRaw, garantiasRaw, horariosRaw, asistenciasRaw] = await Promise.all([
+        api.getComisionesAgendaProShadowRango(desde,hasta),
+        api.getAgendaComisionesSinVincularRango(desde,hasta),
         api.getComisionesImportacionesPeriodo(periodoComisiones),
         api.getComisionesCriteriosPeriodo(periodoComisiones),
         api.getComisionesConfiguracion(),
@@ -5781,6 +6099,7 @@ function Reportes({ data, setData, user, onOpenAgenda, reportRestore, reloadData
       ]);
       if (seq !== refreshComisionesSeq.current) return;
       const nuevasComisiones=(comisionesRaw||[]).map(normalizeComision);
+      setAgendaPendientesComisiones(agendaPendientesRaw || []);
       const nuevasImportaciones=(importacionesRaw||[]).map(normalizeComisionImportacion);
       const nuevosCriterios=(criteriosRaw||[]).map(normalizeComisionCriterio);
       const nuevaConfig=(configuracionRaw||[]).map(normalizeComisionesConfiguracion);
@@ -6064,26 +6383,18 @@ function Reportes({ data, setData, user, onOpenAgenda, reportRestore, reloadData
       .filter(c=>!sinSemanaComisiones && fechaEnSemanaSeleccionada(c.fechaPago))
       .filter(c=>!localComisionesSeleccionado || c.localId === localComisionesSeleccionado || normalize(c.nombreLocal) === normalize(localNameById.get(localComisionesSeleccionado)))
       .filter(c=>manicuraComisiones === "todas" || c.userId === parseInt(manicuraComisiones) || normalize(c.nombreManicura) === normalize(userNameById.get(parseInt(manicuraComisiones))));
-    const comisionesSinVincularVisibles = (data.comisiones||[])
-      .filter(c=>!c.userId)
-      .filter(c=>puedeGestionar && puedeVerComision(c))
-      .filter(c=>!sinSemanaComisiones && fechaEnSemanaSeleccionada(c.fechaPago))
-      .filter(c=>!localComisionesSeleccionado || c.localId === localComisionesSeleccionado || normalize(c.nombreLocal) === normalize(localNameById.get(localComisionesSeleccionado)));
-    const reintentarVinculacionComisiones = async () => {
-      if (reintentandoVinculacion) return;
-      setReintentandoVinculacion(true);
-      try {
-        const localIds = localComisionesSeleccionado ? [Number(localComisionesSeleccionado)] : localesComisionesDisponibles.map(l=>Number(l.id));
-        const raw = await api.reconciliarComisiones({ periodo:periodoComisiones, localIds });
-        const result = Array.isArray(raw) ? raw[0] : raw;
-        const vinculadas = Number(result?.vinculadas || 0);
-        await refrescarDatosComisiones({ silencioso:true });
-        notifyToast(vinculadas ? `${vinculadas} registro${vinculadas===1?"":"s"} de comisión vinculado${vinculadas===1?"":"s"}.` : "No se encontraron nuevas coincidencias para vincular.", vinculadas ? "success" : "info");
-        if (vinculadas) setComisionesSinVincularModal(false);
-      } catch(e) {
-        notifyToast("No se pudo reintentar la vinculación: "+(e.message||e),"error");
-      } finally { setReintentandoVinculacion(false); }
-    };
+    const agendaPendientesVisibles = (agendaPendientesComisiones || [])
+      .filter(r => {
+        const lid = Number(r.local_id || 0);
+        if (!puedeGestionar) return false;
+        if (!esAdmin && !allowedLocalIds.includes(lid)) return false;
+        if (localComisionesSeleccionado && lid !== Number(localComisionesSeleccionado)) return false;
+        if (!sinSemanaComisiones && semanaSeleccionadaComision && !isDateInRangeKey(r.fecha_pago, semanaSeleccionadaComision.desdeKey, semanaSeleccionadaComision.hastaKey)) return false;
+        return true;
+      });
+    const agendaPendientesAgrupados = agruparComisionesAgendaProSinVincular(agendaPendientesVisibles);
+    const agendaPendientesCantidad = agendaPendientesVisibles.length;
+    const agendaPendientesTotal = agendaPendientesVisibles.reduce((acc,r)=>acc+Number(r.precio_efectivo||0),0);
     const garantiaVisible = (g, tipo) => {
       const uid = tipo === "reparacion" ? g.manicuraReparacionId : g.manicuraOriginalId;
       if (esAdmin) return true;
@@ -6152,6 +6463,7 @@ function Reportes({ data, setData, user, onOpenAgenda, reportRestore, reloadData
     const adelantosPlanesComisiones = buildAdelantoPlanes((data.adelantos||[]).filter(a=>puedeVerAdelanto(a)).filter(a=>adelantoGroupKeysSeleccion.has(a.grupoId || `adelanto-${a.id}`)));
     const planesPorUserComisiones = adelantosPlanesComisiones.reduce((map,p)=>{ const arr=map.get(p.userId)||[]; arr.push(p); map.set(p.userId,arr); return map; }, new Map());
     const totalPrecio = registros.reduce((a,c)=>a+c.precio,0);
+    const totalVentaReal = registros.reduce((a,c)=>a+Number(c.precioCobradoAgendaPro ?? c.precio ?? 0),0);
     const totalComision = registros.reduce((a,c)=>a+c.comision,0);
     const totalAdelantos = adelantos.reduce((a,x)=>a+x.importe,0);
     const netoPagar = totalComision - totalAdelantos;
@@ -6819,15 +7131,15 @@ function Reportes({ data, setData, user, onOpenAgenda, reportRestore, reloadData
     };
 
     return <>
-      {comisionesSinVincularModal&&<Modal title="Comisiones sin vincular" onClose={()=>setComisionesSinVincularModal(false)} width={880}>
+      {comisionesSinVincularModal&&<Modal title="Comisiones AgendaPro sin vincular" onClose={()=>setComisionesSinVincularModal(false)} width={900}>
         <div style={{display:"flex",flexDirection:"column",gap:10}}>
-          <div style={{padding:"10px 12px",background:COLORS.amberLight,borderRadius:10,color:COLORS.amber,fontSize:12}}>Estos registros pertenecen únicamente a los locales y período visibles en el reporte. No se incluyen sucursales fuera de tu alcance.</div>
+          <div style={{padding:"10px 12px",background:COLORS.amberLight,borderRadius:10,color:COLORS.amber,fontSize:12,lineHeight:1.45}}><strong>Estas prestaciones no están incluidas en la liquidación.</strong> Falta confirmar qué manicura de NikiOS corresponde a cada profesional de AgendaPro. El vínculo se resuelve desde Equipo → Manicuras.</div>
           <div style={{maxHeight:430,overflowY:"auto",border:"1px solid rgba(120,120,120,0.14)",borderRadius:10}}>
-            <div style={{display:"grid",gridTemplateColumns:"90px 1.1fr 1fr 1.2fr 1.4fr 100px",gap:8,padding:"8px 10px",background:"var(--color-background-secondary)",fontSize:10,fontWeight:800,textTransform:"uppercase",position:"sticky",top:0,zIndex:1}}><span>Fecha</span><span>Local</span><span>Código</span><span>Manicura origen</span><span>Servicio</span><span>Comisión</span></div>
-            {comisionesSinVincularVisibles.map(c=><div key={c.id} style={{display:"grid",gridTemplateColumns:"90px 1.1fr 1fr 1.2fr 1.4fr 100px",gap:8,padding:"8px 10px",borderTop:"1px solid rgba(120,120,120,0.08)",fontSize:11,alignItems:"center"}}><span>{c.fechaPago?c.fechaPago.split("-").reverse().join("/"):"—"}</span><span>{localNameById.get(Number(c.localId)) || c.nombreLocal || "Sin local"}</span><code style={{fontSize:10}}>{c.codigoExternoManicura||"—"}</code><span>{c.nombreManicura||"—"}</span><span>{c.servicio||"—"}</span><strong>{fmtMoney(c.comision)}</strong></div>)}
-            {!comisionesSinVincularVisibles.length&&<div style={{padding:18,fontSize:12,color:"var(--color-text-secondary)"}}>No quedan registros sin vincular en la selección actual.</div>}
+            <div style={{display:"grid",gridTemplateColumns:"1.1fr 1.2fr 110px 90px 150px 110px",gap:8,padding:"8px 10px",background:"var(--color-background-secondary)",fontSize:10,fontWeight:800,textTransform:"uppercase",position:"sticky",top:0,zIndex:1}}><span>Local</span><span>Manicura AgendaPro</span><span>ID AgendaPro</span><span>Prestaciones</span><span>Fechas</span><span>Base comisión</span></div>
+            {agendaPendientesAgrupados.map(p=><div key={p.key} style={{display:"grid",gridTemplateColumns:"1.1fr 1.2fr 110px 90px 150px 110px",gap:8,padding:"9px 10px",borderTop:"1px solid rgba(120,120,120,0.08)",fontSize:11,alignItems:"center"}}><strong>{p.nombreLocal || localNameById.get(Number(p.localId)) || "Sin local"}</strong><span>{p.profesional || <span style={{color:COLORS.danger,fontWeight:700}}>Sin profesional informado</span>}</span><code style={{fontSize:10}}>{p.providerId ?? "—"}</code><span>{p.cantidad}</span><span>{p.fechaDesde===p.fechaHasta?(p.fechaDesde||"—"):`${p.fechaDesde||"—"} a ${p.fechaHasta||"—"}`}</span><strong>{fmtMoney(p.totalPrecio)}</strong></div>)}
+            {!agendaPendientesAgrupados.length&&<div style={{padding:18,fontSize:12,color:"var(--color-text-secondary)"}}>No quedan prestaciones sin vincular en la selección actual.</div>}
           </div>
-          <div style={{display:"flex",justifyContent:"flex-end",gap:8}}><Btn variant="secondary" onClick={()=>setComisionesSinVincularModal(false)}>Cerrar</Btn><Btn onClick={reintentarVinculacionComisiones} disabled={reintentandoVinculacion}>{reintentandoVinculacion?"Reintentando...":"↻ Reintentar vinculación"}</Btn></div>
+          <div style={{display:"flex",justifyContent:"space-between",gap:8,alignItems:"center",flexWrap:"wrap"}}><span style={{fontSize:11,color:"var(--color-text-secondary)"}}>Después de confirmar los vínculos en Equipo, usá “Actualizar ahora” en el reporte.</span><Btn variant="secondary" onClick={()=>setComisionesSinVincularModal(false)}>Cerrar</Btn></div>
         </div>
       </Modal>}
       {configComisionesDraft&&<Modal title="Configuración de comisiones" onClose={()=>setConfigComisionesDraft(null)} width={980}>
@@ -6893,9 +7205,9 @@ function Reportes({ data, setData, user, onOpenAgenda, reportRestore, reloadData
         <span style={{fontSize:11,color:"var(--color-text-secondary)"}}>{refreshingComisiones?"Actualizando datos del período...":ultimaActualizacionComisiones?`Datos actualizados a las ${ultimaActualizacionComisiones.toLocaleTimeString("es-AR",{hour:"2-digit",minute:"2-digit"})}`:"Los datos se actualizan automáticamente al abrir el reporte."}</span>
         <Btn size="sm" variant="ghost" onClick={()=>refrescarDatosComisiones()} disabled={refreshingComisiones}>{refreshingComisiones?"Actualizando...":"↻ Actualizar ahora"}</Btn>
       </div>
-      {puedeGestionar&&comisionesSinVincularVisibles.length>0&&<div style={{display:"flex",alignItems:"center",justifyContent:"space-between",gap:10,flexWrap:"wrap",marginBottom:10,padding:"10px 12px",background:COLORS.amberLight,border:`1px solid ${COLORS.amber}44`,borderRadius:10}}>
-        <div><strong style={{fontSize:12,color:COLORS.amber}}>⚠ {comisionesSinVincularVisibles.length} registro{comisionesSinVincularVisibles.length===1?"":"s"} de comisión sin vincular</strong><p style={{margin:"2px 0 0",fontSize:10,color:COLORS.amber}}>Solo corresponde{comisionesSinVincularVisibles.length===1?"":"n"} a la sucursal, período y semana visibles.</p></div>
-        <div style={{display:"flex",gap:6}}><Btn size="sm" variant="secondary" onClick={()=>setComisionesSinVincularModal(true)}>Ver registros</Btn><Btn size="sm" onClick={reintentarVinculacionComisiones} disabled={reintentandoVinculacion}>{reintentandoVinculacion?"Reintentando...":"↻ Reintentar"}</Btn></div>
+      {puedeGestionar&&agendaPendientesCantidad>0&&<div style={{display:"flex",alignItems:"center",justifyContent:"space-between",gap:10,flexWrap:"wrap",marginBottom:10,padding:"11px 12px",background:COLORS.amberLight,border:`1px solid ${COLORS.amber}55`,borderRadius:10}}>
+        <div><strong style={{fontSize:12,color:COLORS.amber}}>⚠ {agendaPendientesCantidad} prestación{agendaPendientesCantidad===1?"":"es"} de AgendaPro sin manicura vinculada</strong><p style={{margin:"3px 0 0",fontSize:10,color:COLORS.amber}}>No están incluidas en los totales del reporte · {agendaPendientesAgrupados.length} profesional{agendaPendientesAgrupados.length===1?"":"es"}/situación{agendaPendientesAgrupados.length===1?"":"es"} · base {fmtMoney(agendaPendientesTotal)}.</p></div>
+        <Btn size="sm" variant="secondary" onClick={()=>setComisionesSinVincularModal(true)}>Ver Manicura / Local</Btn>
       </div>}
       {!comisionesReady&&refreshingComisiones?<Card style={{padding:18,marginBottom:12}}><div style={{display:"flex",alignItems:"center",gap:10}}><span style={{fontSize:18}}>↻</span><div><strong style={{fontSize:13}}>Actualizando reporte de comisiones</strong><p style={{margin:"3px 0 0",fontSize:11,color:"var(--color-text-secondary)"}}>Se consulta únicamente el período seleccionado, sin recargar el resto de NikiAsistencia.</p></div></div></Card>:<>
       <div style={{ display:"flex",gap:8,marginBottom:16,flexWrap:"wrap",alignItems:"center" }}>
@@ -6920,7 +7232,7 @@ function Reportes({ data, setData, user, onOpenAgenda, reportRestore, reloadData
         <span style={{ fontSize:12,color:"var(--color-text-secondary)",marginLeft:"auto" }}>Última importación{!sinSemanaComisiones?" de la selección":""}: {ultimaImportacionTexto || "Sin datos"}{ultimaImportacionPeriodo?.registros && sinSemanaComisiones ? ` · ${ultimaImportacionPeriodo.registros} registros` : ""}</span>
       </div>
       <div style={{ display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(160px,1fr))",gap:10,marginBottom:14 }}>
-        <Card><p style={{ margin:"0 0 4px",fontSize:11,color:"var(--color-text-secondary)",textTransform:"uppercase",letterSpacing:"0.04em" }}>Venta total</p><p style={{ margin:0,fontSize:22,fontWeight:600 }}>{fmtMoney(totalPrecio)}</p></Card>
+        <Card><p style={{ margin:"0 0 4px",fontSize:11,color:"var(--color-text-secondary)",textTransform:"uppercase",letterSpacing:"0.04em" }}>Venta total</p><p style={{ margin:0,fontSize:22,fontWeight:600 }}>{fmtMoney(totalVentaReal)}</p><p style={{ margin:"2px 0 0",fontSize:11,color:"var(--color-text-secondary)" }}>Cobrado real en AgendaPro · base comisión: {fmtMoney(totalPrecio)}</p></Card>
         <Card><p style={{ margin:"0 0 4px",fontSize:11,color:"var(--color-text-secondary)",textTransform:"uppercase",letterSpacing:"0.04em" }}>Comisión definitiva</p><p style={{ margin:0,fontSize:22,fontWeight:600,color:COLORS.pink }}>{fmtMoney(totalComisionDefinitiva)}</p><p style={{ margin:"2px 0 0",fontSize:11,color:"var(--color-text-secondary)" }}>{Number(configGeneralComisiones.porcentajeBase||40)}%: {fmtMoney(totalComision)} · reducido: {fmtMoney(totalComision35)}</p></Card>
         <Card><p style={{ margin:"0 0 4px",fontSize:11,color:"var(--color-text-secondary)",textTransform:"uppercase",letterSpacing:"0.04em" }}>Adelantos</p><p style={{ margin:0,fontSize:22,fontWeight:600,color:COLORS.amber }}>-{fmtMoney(totalAdelantos)}</p></Card>
         <Card><p style={{ margin:"0 0 4px",fontSize:11,color:"var(--color-text-secondary)",textTransform:"uppercase",letterSpacing:"0.04em" }}>Neto a pagar</p><p style={{ margin:0,fontSize:22,fontWeight:600,color:netoPagarDefinitivo>=0?COLORS.success:COLORS.danger }}>{fmtMoney(netoPagarDefinitivo)}</p></Card>
@@ -10534,6 +10846,8 @@ function ReportePagoComisiones({ data, setData, user }) {
   const [dragPagoTarget, setDragPagoTarget] = useState("");
   const [cargandoPagoComisiones, setCargandoPagoComisiones] = useState(false);
   const [pagoComisionesReady, setPagoComisionesReady] = useState(false);
+  const [agendaPendientesPago, setAgendaPendientesPago] = useState([]);
+  const [agendaPendientesPagoModal, setAgendaPendientesPagoModal] = useState(false);
   const refreshPagoSeq = useRef(0);
 
   const semanas = useMemo(() => getCommissionWeeksForMonth(Number(anio), Number(mes) - 1), [anio, mes]);
@@ -10551,8 +10865,9 @@ function ReportePagoComisiones({ data, setData, user }) {
       const semanasPeriodo = getCommissionWeeksForMonth(Number(anio), Number(mes) - 1);
       const desde = semanasPeriodo[0]?.desdeKey || `${periodo}-01`;
       const hasta = semanasPeriodo[semanasPeriodo.length-1]?.hastaKey || dateKey(new Date(Number(anio), Number(mes), 0));
-      const [comisionesRaw, criteriosRaw, configRaw, configManicuraRaw, horariosRaw, asistenciasRaw] = await Promise.all([
-        api.getComisionesRango(desde,hasta),
+      const [comisionesRaw, agendaPendientesRaw, criteriosRaw, configRaw, configManicuraRaw, horariosRaw, asistenciasRaw] = await Promise.all([
+        api.getComisionesAgendaProShadowRango(desde,hasta),
+        api.getAgendaComisionesSinVincularRango(desde,hasta),
         api.getComisionesCriteriosPeriodo(periodo),
         api.getComisionesConfiguracion(),
         api.getComisionesManicuraConfig(),
@@ -10560,6 +10875,7 @@ function ReportePagoComisiones({ data, setData, user }) {
         api.getAsistenciasRango(desde,hasta),
       ]);
       if (seq !== refreshPagoSeq.current) return;
+      setAgendaPendientesPago(agendaPendientesRaw || []);
       setData?.(prev => {
         if (!prev) return prev;
         const comisionesFuera=(prev.comisiones||[]).filter(c=>{
@@ -10598,6 +10914,14 @@ function ReportePagoComisiones({ data, setData, user }) {
   const localBaseSet = new Set(localBaseIds);
   const filtroLocalIds = localesAplicados.length ? localesAplicados.map(Number).filter(id => localBaseSet.has(id)) : localBaseIds;
   const filtroLocalSet = new Set(filtroLocalIds.map(Number));
+  const agendaPendientesPagoVisibles = (agendaPendientesPago || []).filter(r => {
+    const lid = Number(r.local_id || 0);
+    if (!filtroLocalSet.has(lid)) return false;
+    if (semanaSeleccionada && !isDateInRangeKey(r.fecha_pago, semanaSeleccionada.desdeKey, semanaSeleccionada.hastaKey)) return false;
+    return true;
+  });
+  const agendaPendientesPagoAgrupados = agruparComisionesAgendaProSinVincular(agendaPendientesPagoVisibles);
+  const agendaPendientesPagoTotal = agendaPendientesPagoVisibles.reduce((acc,r)=>acc+Number(r.precio_efectivo||0),0);
 
   const configGeneralPagoComisiones = (data.comisionesConfiguracion || []).find(c => c.activo) || { id:1, porcentajeBase:40, porcentajeReducido:35, horasObjetivoDefault:36, horasObjetivoFinSemana:null, maxLlegadasTarde:0, maxFaltasNoJustificadas:0, contarFaltasJustificadas:false, toleranciaLlegadaTardeMinutos:0, minimoSemanalEstandar:0, minimoSemanalPremiumExclusiva:0, minimoSemanalEstandarFinSemana:null, minimoSemanalPremiumExclusivaFinSemana:null };
   const configManicuraPagoMap = useMemo(() => new Map((data.comisionesManicuraConfig || []).filter(c => c.activo).map(c => [`${c.userId}|${c.localId || 0}`, c])), [data.comisionesManicuraConfig]);
@@ -10975,6 +11299,22 @@ function ReportePagoComisiones({ data, setData, user }) {
         <Btn size="sm" variant="ghost" onClick={limpiarSeleccionLocal}>Limpiar</Btn>
       </div>}
     </div>
+
+    {agendaPendientesPagoVisibles.length>0&&<div style={{display:"flex",alignItems:"center",justifyContent:"space-between",gap:10,flexWrap:"wrap",padding:"11px 12px",background:COLORS.amberLight,border:`1px solid ${COLORS.amber}55`,borderRadius:10}}>
+      <div><strong style={{fontSize:12,color:COLORS.amber}}>⚠ {agendaPendientesPagoVisibles.length} prestación{agendaPendientesPagoVisibles.length===1?"":"es"} de AgendaPro sin manicura vinculada</strong><p style={{margin:"3px 0 0",fontSize:10,color:COLORS.amber}}>No están incluidas en esta liquidación · {agendaPendientesPagoAgrupados.length} profesional{agendaPendientesPagoAgrupados.length===1?"":"es"}/situación{agendaPendientesPagoAgrupados.length===1?"":"es"} · base {fmtMoney(agendaPendientesPagoTotal)}.</p></div>
+      <Btn size="sm" variant="secondary" onClick={()=>setAgendaPendientesPagoModal(true)}>Ver Manicura / Local</Btn>
+    </div>}
+
+    {agendaPendientesPagoModal&&<Modal title="Prestaciones AgendaPro sin vincular" onClose={()=>setAgendaPendientesPagoModal(false)} width={900}>
+      <div style={{display:"flex",flexDirection:"column",gap:10}}>
+        <div style={{padding:"10px 12px",background:COLORS.amberLight,borderRadius:10,color:COLORS.amber,fontSize:12,lineHeight:1.45}}><strong>No están incluidas en el neto a pagar.</strong> Confirmá el vínculo desde Equipo → Manicuras y luego actualizá este reporte.</div>
+        <div style={{maxHeight:430,overflowY:"auto",border:"1px solid rgba(120,120,120,0.14)",borderRadius:10}}>
+          <div style={{display:"grid",gridTemplateColumns:"1.1fr 1.2fr 110px 90px 150px 110px",gap:8,padding:"8px 10px",background:"var(--color-background-secondary)",fontSize:10,fontWeight:800,textTransform:"uppercase",position:"sticky",top:0,zIndex:1}}><span>Local</span><span>Manicura AgendaPro</span><span>ID AgendaPro</span><span>Prestaciones</span><span>Fechas</span><span>Base comisión</span></div>
+          {agendaPendientesPagoAgrupados.map(p=><div key={p.key} style={{display:"grid",gridTemplateColumns:"1.1fr 1.2fr 110px 90px 150px 110px",gap:8,padding:"9px 10px",borderTop:"1px solid rgba(120,120,120,0.08)",fontSize:11,alignItems:"center"}}><strong>{p.nombreLocal || localNombre(p.localId)}</strong><span>{p.profesional || <span style={{color:COLORS.danger,fontWeight:700}}>Sin profesional informado</span>}</span><code style={{fontSize:10}}>{p.providerId ?? "—"}</code><span>{p.cantidad}</span><span>{p.fechaDesde===p.fechaHasta?(p.fechaDesde||"—"):`${p.fechaDesde||"—"} a ${p.fechaHasta||"—"}`}</span><strong>{fmtMoney(p.totalPrecio)}</strong></div>)}
+        </div>
+        <div style={{display:"flex",justifyContent:"flex-end"}}><Btn variant="secondary" onClick={()=>setAgendaPendientesPagoModal(false)}>Cerrar</Btn></div>
+      </div>
+    </Modal>}
 
     <Card style={{ padding:14 }}>
       <div style={{ display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(160px,1fr))",gap:10 }}>
@@ -12161,6 +12501,739 @@ function PizarraSemanal({ data, user }) {
   </div>;
 }
 
+
+// ── DASHBOARD COMERCIAL (AgendaPro) ────────────────────────────────
+function dashboardPct(actual, anterior) {
+  const a = Number(actual || 0), b = Number(anterior || 0);
+  if (!b) return null;
+  return ((a - b) / b) * 100;
+}
+
+function dashboardPctLabel(value) {
+  if (value === null || value === undefined || !Number.isFinite(Number(value))) return "Sin comparación";
+  const n = Number(value);
+  return `${n > 0 ? "+" : ""}${new Intl.NumberFormat("es-AR", { maximumFractionDigits:1, minimumFractionDigits:1 }).format(n)}%`;
+}
+
+function dashboardCompactNumber(value) {
+  return new Intl.NumberFormat("es-AR", { notation:"compact", maximumFractionDigits:1 }).format(Number(value || 0));
+}
+
+function DashboardMetricCard({ icon, label, value, variation = null, detail = "", accent = false, subValue = "" }) {
+  const hasVariation = variation !== null && variation !== undefined && Number.isFinite(Number(variation));
+  const positive = Number(variation) >= 0;
+  return <Card style={{ padding:"18px 18px 16px",minHeight:150,display:"flex",flexDirection:"column",justifyContent:"space-between",background:accent?"linear-gradient(145deg,#fff 0%,#fbf1f4 100%)":"var(--color-background-primary)",boxShadow:"0 12px 34px rgba(68,34,47,0.06)",border:accent?"1px solid rgba(114,36,62,0.16)":"0.5px solid rgba(120,120,120,0.14)" }}>
+    <div style={{ display:"flex",alignItems:"center",justifyContent:"space-between",gap:8 }}>
+      <span style={{ fontSize:10.5,fontWeight:800,textTransform:"uppercase",letterSpacing:"0.055em",color:"var(--color-text-secondary)" }}>{label}</span>
+      <span style={{ width:34,height:34,borderRadius:11,display:"grid",placeItems:"center",background:accent?"rgba(114,36,62,.11)":COLORS.pinkLight,color:COLORS.pinkDark,fontSize:16 }}>{icon}</span>
+    </div>
+    <div>
+      <div style={{ fontSize:28,fontWeight:800,letterSpacing:"-0.05em",color:COLORS.pinkDark,lineHeight:1.05 }}>{value}</div>
+      {subValue && <div style={{ marginTop:4,fontSize:11,fontWeight:700,color:"var(--color-text-secondary)" }}>{subValue}</div>}
+      <div style={{ minHeight:20,marginTop:9,display:"flex",alignItems:"center",gap:7,flexWrap:"wrap" }}>
+        {hasVariation && <span style={{ fontSize:11,fontWeight:800,color:positive?COLORS.success:COLORS.danger,background:positive?COLORS.successLight:COLORS.dangerLight,borderRadius:999,padding:"4px 8px" }}>{positive?"▲":"▼"} {dashboardPctLabel(Math.abs(Number(variation)))}</span>}
+        {detail && <span style={{ fontSize:10.5,color:"var(--color-text-secondary)" }}>{detail}</span>}
+      </div>
+    </div>
+  </Card>;
+}
+
+function dashboardMovingAverage(rows, valueKey, windowSize = 3) {
+  const size = Math.max(1, Number(windowSize || 1));
+  return (rows || []).map((r, i) => {
+    const from = Math.max(0, i - size + 1);
+    const chunk = rows.slice(from, i + 1);
+    const avg = chunk.reduce((acc, x) => acc + Number(x[valueKey] || 0), 0) / Math.max(1, chunk.length);
+    return avg;
+  });
+}
+
+function DashboardBars({ rows, valueKey, money = false, height = 210, trendWindow = 3, compareKey = null, currentLabel = "Actual", compareLabel = "Período anterior", highlightIncomplete = false }) {
+  if (!rows?.length) return <div style={{ height,display:"grid",placeItems:"center",fontSize:12,color:"var(--color-text-secondary)" }}>Sin datos</div>;
+  const trend = dashboardMovingAverage(rows, valueKey, trendWindow);
+  const values = rows.flatMap((r,i)=>[Number(r[valueKey]||0),compareKey?Number(r[compareKey]||0):0,Number(trend[i]||0)]);
+  const max = Math.max(1,...values);
+  const width = Math.max(620, rows.length * 54);
+  const chartH = Math.max(120, height - 46);
+  const top = 16, bottom = 26, left = 12, right = 12;
+  const innerH = chartH - top - bottom;
+  const step = (width-left-right) / Math.max(1, rows.length);
+  const barW = Math.min(30, Math.max(14, step * .52));
+  const yFor = v => top + (1 - Math.max(0,Number(v||0))/max) * innerH;
+  const centerX = i => left + step*i + step/2;
+  const trendPath = trend.map((v,i)=>`${i?'L':'M'}${centerX(i).toFixed(1)},${yFor(v).toFixed(1)}`).join(' ');
+  const comparePath = compareKey ? rows.map((r,i)=>`${i?'L':'M'}${centerX(i).toFixed(1)},${yFor(r[compareKey]).toFixed(1)}`).join(' ') : '';
+  return <div>
+    <div style={{ display:"flex",gap:13,alignItems:"center",flexWrap:"wrap",margin:"8px 0 1px",fontSize:10,color:"var(--color-text-secondary)" }}>
+      <span style={{ display:"inline-flex",alignItems:"center",gap:5 }}><i style={{ width:12,height:8,borderRadius:2,background:COLORS.pinkDark,display:"inline-block" }}/>{currentLabel}</span>
+      <span style={{ display:"inline-flex",alignItems:"center",gap:5 }}><i style={{ width:18,height:2,borderRadius:2,background:COLORS.info,display:"inline-block" }}/>Tendencia · media móvil {trendWindow}</span>
+      {compareKey&&<span style={{ display:"inline-flex",alignItems:"center",gap:5 }}><i style={{ width:18,height:2,borderRadius:2,background:"#aaa8a2",display:"inline-block",borderTop:"1px dashed #aaa8a2" }}/>{compareLabel}</span>}
+      {highlightIncomplete&&rows.some(r=>r.incomplete)&&<span style={{ display:"inline-flex",alignItems:"center",gap:5 }}><i style={{ width:12,height:8,borderRadius:2,background:COLORS.amber,display:"inline-block" }}/>Semana en curso</span>}
+    </div>
+    <div style={{ overflowX:"auto",overflowY:"hidden" }}>
+      <svg viewBox={`0 0 ${width} ${chartH}`} style={{ width:"100%",minWidth:Math.min(width,620),height:chartH,display:"block" }} preserveAspectRatio="none">
+        {[.25,.5,.75].map(n=><line key={n} x1={left} x2={width-right} y1={top+innerH*n} y2={top+innerH*n} stroke="rgba(120,120,120,.10)" strokeWidth="1" vectorEffect="non-scaling-stroke" />)}
+        {rows.map((r,i)=>{
+          const v=Number(r[valueKey]||0); const y=yFor(v); const x=centerX(i)-barW/2; const h=Math.max(2,top+innerH-y);
+          const incomplete=highlightIncomplete&&r.incomplete;
+          return <g key={`${r.label}-${i}`}>
+            <rect x={x} y={y} width={barW} height={h} rx="5" fill={incomplete?COLORS.amber:COLORS.pinkDark} opacity={incomplete?0.72:0.92}>
+              <title>{`${r.label}: ${money?fmtMoney(v):new Intl.NumberFormat("es-AR").format(v)}${incomplete?" · semana en curso":""}`}</title>
+            </rect>
+            <text x={centerX(i)} y={chartH-7} textAnchor="middle" fontSize="9" fill="var(--color-text-secondary)">{r.label}</text>
+          </g>;
+        })}
+        {compareKey&&<path d={comparePath} fill="none" stroke="#aaa8a2" strokeWidth="2" strokeDasharray="6 5" strokeLinejoin="round" strokeLinecap="round" vectorEffect="non-scaling-stroke" />}
+        <path d={trendPath} fill="none" stroke={COLORS.info} strokeWidth="2.5" strokeLinejoin="round" strokeLinecap="round" vectorEffect="non-scaling-stroke" />
+        {trend.map((v,i)=><circle key={`t-${i}`} cx={centerX(i)} cy={yFor(v)} r="2.5" fill="#fff" stroke={COLORS.info} strokeWidth="1.5" vectorEffect="non-scaling-stroke"><title>{`Tendencia: ${money?fmtMoney(v):new Intl.NumberFormat("es-AR",{maximumFractionDigits:1}).format(v)}`}</title></circle>)}
+      </svg>
+    </div>
+  </div>;
+}
+
+function DashboardCompareLine({ rows, currentKey, previousKey, money = false, height = 230, currentLabel = "Mes actual", previousLabel = "Mes anterior", xLabelPrefix = "Día" }) {
+  if (!rows?.length) return <div style={{ height,display:"grid",placeItems:"center",fontSize:12,color:"var(--color-text-secondary)" }}>Sin datos</div>;
+  const w=760, h=height-34, pad=22;
+  const allVals=rows.flatMap(r=>[Number(r[currentKey]||0),Number(r[previousKey]||0)]);
+  const min=0, max=Math.max(1,...allVals);
+  const yFor=v=>pad + (1-(Number(v||0)-min)/(max-min||1))*(h-pad*2);
+  const pts=(key)=>rows.map((r,i)=>({x:pad+(rows.length===1?0:(i/(rows.length-1))*(w-pad*2)),y:yFor(r[key]),r}));
+  const cur=pts(currentKey), prev=pts(previousKey);
+  const path=arr=>arr.map((p,i)=>`${i?"L":"M"}${p.x.toFixed(1)},${p.y.toFixed(1)}`).join(" ");
+  return <div>
+    <div style={{ display:"flex",gap:14,alignItems:"center",flexWrap:"wrap",margin:"8px 0 2px",fontSize:10.5,color:"var(--color-text-secondary)" }}>
+      <span style={{ display:"inline-flex",alignItems:"center",gap:6 }}><i style={{ width:20,height:3,borderRadius:3,background:COLORS.pinkDark,display:"inline-block" }}/><strong>{currentLabel}</strong></span>
+      <span style={{ display:"inline-flex",alignItems:"center",gap:6 }}><i style={{ width:20,height:2,borderRadius:3,background:"#b5b3ad",display:"inline-block" }}/>{previousLabel}</span>
+    </div>
+    <div style={{ height,overflow:"hidden" }}>
+      <svg viewBox={`0 0 ${w} ${h}`} preserveAspectRatio="none" style={{ width:"100%",height:h,display:"block" }}>
+        {[0.25,0.5,0.75].map(n=><line key={n} x1={pad} x2={w-pad} y1={pad+(h-pad*2)*n} y2={pad+(h-pad*2)*n} stroke="rgba(120,120,120,.11)" strokeWidth="1" />)}
+        <path d={path(prev)} fill="none" stroke="#b5b3ad" strokeWidth="2" vectorEffect="non-scaling-stroke" strokeDasharray="6 5" strokeLinejoin="round" strokeLinecap="round" />
+        <path d={path(cur)} fill="none" stroke={COLORS.pinkDark} strokeWidth="3" vectorEffect="non-scaling-stroke" strokeLinejoin="round" strokeLinecap="round" />
+        {cur.map((p,i)=><circle key={`c-${i}`} cx={p.x} cy={p.y} r="3.4" fill="#fff" stroke={COLORS.pinkDark} strokeWidth="2" vectorEffect="non-scaling-stroke"><title>{`${p.r.label}: ${money?fmtMoney(p.r[currentKey]):new Intl.NumberFormat("es-AR").format(Number(p.r[currentKey]||0))}`}</title></circle>)}
+      </svg>
+      <div style={{ display:"flex",justifyContent:"space-between",gap:6,fontSize:9.5,color:"var(--color-text-secondary)",padding:"0 8px" }}>
+        {rows.filter((_,i)=>i===0||i===rows.length-1||i===Math.floor((rows.length-1)/2)).map((r,i)=><span key={`${r.label}-${i}`}>{xLabelPrefix ? `${xLabelPrefix} ` : ""}{r.label}</span>)}
+      </div>
+    </div>
+  </div>;
+}
+
+function DashboardInsight({ tone="neutral", title, text }) {
+  const meta={positive:[COLORS.successLight,COLORS.success,"↗"],negative:[COLORS.dangerLight,COLORS.danger,"↘"],warning:[COLORS.amberLight,COLORS.amber,"!"],neutral:[COLORS.pinkLight,COLORS.pinkDark,"•"]};
+  const [bg,fg,icon]=meta[tone]||meta.neutral;
+  return <div style={{ padding:"11px 12px",borderRadius:12,background:bg,border:`1px solid ${fg}22`,display:"flex",gap:10,alignItems:"flex-start" }}>
+    <span style={{ width:25,height:25,borderRadius:8,background:"rgba(255,255,255,.72)",display:"grid",placeItems:"center",fontWeight:900,color:fg,flexShrink:0 }}>{icon}</span>
+    <div><p style={{ margin:0,fontSize:11.5,fontWeight:800,color:fg }}>{title}</p><p style={{ margin:"3px 0 0",fontSize:10.5,lineHeight:1.4,color:"var(--color-text-secondary)" }}>{text}</p></div>
+  </div>;
+}
+
+function DashboardLocalMultiSelect({ locales, selectedIds, onChange }) {
+  const [open,setOpen]=useState(false);
+  const [query,setQuery]=useState("");
+  const validIds=useMemo(()=>locales.map(l=>Number(l.id)),[locales]);
+  const selectedSet=useMemo(()=>new Set((selectedIds||[]).map(Number).filter(id=>validIds.includes(id))),[selectedIds,validIds]);
+  const filtered=useMemo(()=>{
+    const q=String(query||"").trim().toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g,"");
+    if(!q)return locales;
+    return locales.filter(l=>String(l.nombre||"").toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g,"").includes(q));
+  },[locales,query]);
+  const all=selectedIds===null || !selectedIds?.length;
+  const count=all?0:selectedSet.size;
+  const label=all?`Todos los locales (${validIds.length})`:count===1?(locales.find(l=>selectedSet.has(Number(l.id)))?.nombre||"1 local"):`${count} locales seleccionados`;
+  const toggle=id=>{
+    const nid=Number(id);
+    if(all){
+      // Sin selección = todos. El primer tilde inicia una selección puntual.
+      onChange([nid]);
+      return;
+    }
+    const next=new Set(selectedSet);
+    if(next.has(nid)) next.delete(nid); else next.add(nid);
+    if(next.size===0){ onChange(null); return; }
+    if(next.size===validIds.length) onChange(null); else onChange(Array.from(next));
+  };
+  return <div style={{ position:"relative" }}>
+    <button type="button" onClick={()=>setOpen(o=>!o)} style={{ width:"100%",height:36,border:"0.5px solid rgba(120,120,120,.24)",borderRadius:8,padding:"7px 10px",fontSize:12.5,background:"var(--color-background-primary)",color:"var(--color-text-primary)",display:"flex",alignItems:"center",justifyContent:"space-between",gap:8,cursor:"pointer",textAlign:"left" }}><span style={{ overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap" }}>{label}</span><span style={{ fontSize:10,color:"var(--color-text-secondary)" }}>{open?"▲":"▼"}</span></button>
+    {open&&<>
+      <div onMouseDown={()=>setOpen(false)} style={{ position:"fixed",inset:0,zIndex:10030,background:"transparent" }}/>
+      <div style={{ position:"absolute",zIndex:10040,top:"calc(100% + 6px)",left:0,right:0,minWidth:280,background:"#fff",border:"1px solid rgba(120,120,120,.16)",borderRadius:12,boxShadow:"0 14px 36px rgba(0,0,0,.16)",overflow:"hidden" }}>
+        <div style={{ padding:9,borderBottom:"1px solid #eee" }}><input value={query} onChange={e=>setQuery(e.target.value)} placeholder="Buscar sucursal..." autoFocus style={{ width:"100%",border:"1px solid #ddd",borderRadius:8,padding:"7px 9px",fontSize:12,outline:"none" }}/></div>
+        <div style={{ display:"flex",justifyContent:"space-between",gap:6,padding:"7px 9px",borderBottom:"1px solid #eee" }}><button type="button" onClick={()=>onChange(null)} style={{ border:"none",background:COLORS.pinkLight,color:COLORS.pinkDark,borderRadius:7,padding:"5px 8px",fontSize:10.5,fontWeight:800,cursor:"pointer" }}>Todos</button><span style={{ fontSize:10.5,color:"#777",alignSelf:"center" }}>{all?"Sin selección = todos":`${count} seleccionados`}</span></div>
+        <div style={{ maxHeight:260,overflowY:"auto" }}>{filtered.map(l=>{const checked=!all&&selectedSet.has(Number(l.id));return <button key={l.id} type="button" onClick={()=>toggle(l.id)} style={{ width:"100%",border:"none",display:"flex",alignItems:"center",gap:8,padding:"8px 10px",fontSize:12,cursor:"pointer",background:checked?"rgba(225,198,204,.28)":"#fff",borderBottom:"1px solid #f5f5f5",textAlign:"left",color:"var(--color-text-primary)" }}><input type="checkbox" checked={checked} readOnly tabIndex={-1} style={{ accentColor:COLORS.pinkDark,pointerEvents:"none" }}/><span style={{ fontWeight:checked?700:500 }}>{l.nombre}</span></button>})}</div>
+      </div>
+    </>}
+  </div>;
+}
+
+
+function DashboardLocalDrilldown({ row, diaRows, onClose }) {
+  if(!row) return null;
+  const localId=Number(row.local_id);
+  const actualDesde=String(row.actual_desde||"").slice(0,10);
+  const actualHasta=String(row.actual_hasta||row.fecha_corte||"").slice(0,10);
+  const anteriorDesde=String(row.anterior_desde||"").slice(0,10);
+  const anteriorHasta=String(row.anterior_hasta||"").slice(0,10);
+  const localDia=(diaRows||[]).filter(x=>Number(x.local_id)===localId);
+  const current=localDia.filter(x=>x.fecha>=actualDesde&&x.fecha<=actualHasta).sort((a,b)=>String(a.fecha).localeCompare(String(b.fecha)));
+  const previous=localDia.filter(x=>x.fecha>=anteriorDesde&&x.fecha<=anteriorHasta).sort((a,b)=>String(a.fecha).localeCompare(String(b.fecha)));
+  const daily=Array.from({length:Math.max(current.length,previous.length)},(_,i)=>{
+    const c=current[i]||{},p=previous[i]||{};
+    const d=parseDateLocal(c.fecha||"");
+    return { label:d?String(d.getDate()):String(i+1), ventas:Number(c.ventas||0), ventasAnt:Number(p.ventas||0), visitas:Number(c.visitas||0), visitasAnt:Number(p.visitas||0) };
+  });
+  const ventas=Number(row.ventas||0), ventasAnt=Number(row.ventas_mes_anterior||0), visitas=Number(row.visitas||0), visitasAnt=Number(row.visitas_mes_anterior||0);
+  const ticket=Number(row.ticket_promedio||0), ticketAnt=Number(row.ticket_mes_anterior||0);
+  const fmtInt=n=>new Intl.NumberFormat("es-AR").format(Math.round(Number(n||0)));
+  const cutoffLabel=actualHasta?actualHasta.split("-").reverse().join("/"):"";
+  return <Modal title={`Detalle · ${row.local||"Sucursal"}`} onClose={onClose} width={1040}>
+    <div style={{ display:"flex",flexDirection:"column",gap:14 }}>
+      <div style={{ display:"flex",justifyContent:"space-between",gap:12,alignItems:"center",flexWrap:"wrap",padding:"10px 12px",borderRadius:12,background:"linear-gradient(135deg, rgba(247,237,240,.95), rgba(255,255,255,.96))",border:"1px solid rgba(114,36,62,.10)" }}>
+        <div><p style={{ margin:0,fontSize:11,fontWeight:800,textTransform:"uppercase",color:COLORS.pinkDark,letterSpacing:".04em" }}>Sucursal</p><h3 style={{ margin:"2px 0 0",fontSize:21 }}>{row.local}</h3></div>
+        <div style={{ textAlign:"right" }}><p style={{ margin:0,fontSize:10.5,color:"var(--color-text-secondary)" }}>{row.es_mes_actual?"Datos consolidados hasta":"Período"}</p><strong style={{ fontSize:13 }}>{row.es_mes_actual?(cutoffLabel||"—"):periodoLabel(row.periodo)}</strong></div>
+      </div>
+      <div className="niki-dashboard-kpis" style={{ display:"grid",gridTemplateColumns:"repeat(4,minmax(0,1fr))",gap:10 }}>
+        <DashboardMetricCard icon="💳" label="Ventas" value={fmtMoney(ventas)} variation={dashboardPct(ventas,ventasAnt)} detail={row.es_mes_actual?"vs. mismo tramo anterior":"vs. mes anterior"} accent />
+        <DashboardMetricCard icon="👣" label="Visitas" value={fmtInt(visitas)} variation={dashboardPct(visitas,visitasAnt)} detail={row.es_mes_actual?"vs. mismo tramo anterior":"vs. mes anterior"} accent />
+        <DashboardMetricCard icon="🎟" label="Ticket promedio" value={fmtMoney(ticket)} variation={dashboardPct(ticket,ticketAnt)} detail={`Anterior: ${fmtMoney(ticketAnt)}`} />
+        {row.es_mes_actual?<DashboardMetricCard icon="↗" label="Proyección" value={fmtMoney(Number(row.proyeccion_ventas||0))} subValue={`${fmtInt(Number(row.proyeccion_visitas||0))} visitas`} detail="proyección lineal al cierre" />:<DashboardMetricCard icon="◀" label="Mes anterior" value={fmtMoney(ventasAnt)} subValue={`${fmtInt(visitasAnt)} visitas`} detail="período cerrado" />}
+      </div>
+      <div className="niki-dashboard-two" style={{ display:"grid",gridTemplateColumns:"repeat(2,minmax(0,1fr))",gap:12 }}>
+        <Card style={{ padding:14 }}><div><h3 style={{ margin:0,fontSize:14 }}>Ventas diarias</h3><p style={{ margin:"3px 0 0",fontSize:10.5,color:"var(--color-text-secondary)" }}>Actual vs mismo tramo anterior · tendencia móvil</p></div><DashboardBars rows={daily} valueKey="ventas" compareKey="ventasAnt" money trendWindow={3} currentLabel="Actual" compareLabel="Anterior" /></Card>
+        <Card style={{ padding:14 }}><div><h3 style={{ margin:0,fontSize:14 }}>Visitas diarias</h3><p style={{ margin:"3px 0 0",fontSize:10.5,color:"var(--color-text-secondary)" }}>Actual vs mismo tramo anterior · tendencia móvil</p></div><DashboardBars rows={daily} valueKey="visitas" compareKey="visitasAnt" trendWindow={3} currentLabel="Actual" compareLabel="Anterior" /></Card>
+      </div>
+      <Card style={{ padding:13,background:"var(--color-background-secondary)" }}>
+        <div style={{ display:"grid",gridTemplateColumns:"repeat(3,minmax(0,1fr))",gap:10,fontSize:11.5 }}>
+          <div><span style={{ color:"var(--color-text-secondary)" }}>Ventas anteriores</span><strong style={{ display:"block",marginTop:3 }}>{fmtMoney(ventasAnt)}</strong></div>
+          <div><span style={{ color:"var(--color-text-secondary)" }}>Visitas anteriores</span><strong style={{ display:"block",marginTop:3 }}>{fmtInt(visitasAnt)}</strong></div>
+          <div><span style={{ color:"var(--color-text-secondary)" }}>Variación de ticket</span><strong style={{ display:"block",marginTop:3,color:Number(row.variacion_ticket_pct||0)>=0?COLORS.success:COLORS.danger }}>{dashboardPctLabel(Number(row.variacion_ticket_pct||0))}</strong></div>
+        </div>
+      </Card>
+    </div>
+  </Modal>;
+}
+
+
+function dashboardPreviousPeriodo(periodo) {
+  const [y,m]=String(periodo||"").split("-").map(Number);
+  if(!y||!m)return "";
+  const d=new Date(y,m-2,1,12,0,0,0);
+  return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}`;
+}
+
+function dashboardBuildMonthRows(diaRows, periodo, locales = []) {
+  if(!periodo)return [];
+  const [y,m]=String(periodo).split("-").map(Number);
+  if(!y||!m)return [];
+  const today=new Date();
+  const currentPeriodo=fmtPeriodo(today);
+  const isCurrent=periodo===currentPeriodo;
+  const diasMes=new Date(y,m,0,12,0,0,0).getDate();
+  const actualDesde=`${periodo}-01`;
+  const monthEnd=`${periodo}-${String(diasMes).padStart(2,"0")}`;
+  const todayKey=dateKey(today);
+  const fechasPeriodo=(diaRows||[]).map(r=>String(r.fecha||"").slice(0,10)).filter(f=>f.startsWith(`${periodo}-`)&&(!isCurrent||f<todayKey)).sort();
+  const actualHasta=isCurrent?(fechasPeriodo[fechasPeriodo.length-1]||actualDesde):monthEnd;
+  const diasTranscurridos=isCurrent?Number(String(actualHasta).slice(8,10)||0):diasMes;
+  const anteriorPeriodo=dashboardPreviousPeriodo(periodo);
+  const [ay,am]=anteriorPeriodo.split("-").map(Number);
+  const diasAnterior=new Date(ay,am,0,12,0,0,0).getDate();
+  const anteriorDesde=`${anteriorPeriodo}-01`;
+  const anteriorHasta=isCurrent?`${anteriorPeriodo}-${String(Math.min(diasTranscurridos,diasAnterior)).padStart(2,"0")}`:`${anteriorPeriodo}-${String(diasAnterior).padStart(2,"0")}`;
+  const localMap=new Map((locales||[]).map(l=>[Number(l.id),l]));
+  const ids=new Set();
+  (diaRows||[]).forEach(r=>{
+    const f=String(r.fecha||"").slice(0,10);
+    if((f>=actualDesde&&f<=actualHasta)||(f>=anteriorDesde&&f<=anteriorHasta)) ids.add(Number(r.local_id));
+  });
+  const sumRange=(localId,desde,hasta,key)=>(diaRows||[]).filter(r=>Number(r.local_id)===Number(localId)&&String(r.fecha)>=desde&&String(r.fecha)<=hasta).reduce((a,r)=>a+Number(r[key]||0),0);
+  return Array.from(ids).map(localId=>{
+    const ventas=sumRange(localId,actualDesde,actualHasta,"ventas");
+    const visitas=sumRange(localId,actualDesde,actualHasta,"visitas");
+    const ventasAnt=sumRange(localId,anteriorDesde,anteriorHasta,"ventas");
+    const visitasAnt=sumRange(localId,anteriorDesde,anteriorHasta,"visitas");
+    const ticket=visitas?ventas/visitas:0;
+    const ticketAnt=visitasAnt?ventasAnt/visitasAnt:0;
+    const proyVentas=isCurrent&&diasTranscurridos?ventas/diasTranscurridos*diasMes:ventas;
+    const proyVisitas=isCurrent&&diasTranscurridos?visitas/diasTranscurridos*diasMes:visitas;
+    const loc=localMap.get(Number(localId));
+    return {
+      periodo,fecha_corte:actualHasta,actual_desde:actualDesde,actual_hasta:actualHasta,anterior_desde:anteriorDesde,anterior_hasta:anteriorHasta,
+      local_id:localId,local:loc?.nombre||String(localId),ventas,visitas,ticket_promedio:ticket,
+      ventas_mes_anterior:ventasAnt,visitas_mes_anterior:visitasAnt,ticket_mes_anterior:ticketAnt,
+      variacion_ventas_pct:dashboardPct(ventas,ventasAnt),variacion_visitas_pct:dashboardPct(visitas,visitasAnt),variacion_ticket_pct:dashboardPct(ticket,ticketAnt),
+      venta_promedio_dia:diasTranscurridos?ventas/diasTranscurridos:0,visitas_promedio_dia:diasTranscurridos?visitas/diasTranscurridos:0,
+      proyeccion_ventas:proyVentas,proyeccion_visitas:proyVisitas,dias_transcurridos:diasTranscurridos,dias_mes:diasMes,es_mes_actual:isCurrent
+    };
+  }).sort((a,b)=>Number(b.ventas||0)-Number(a.ventas||0));
+}
+
+function DashboardComercial({ data, user }) {
+  const [mesRows,setMesRows]=useState([]);
+  const [diaRows,setDiaRows]=useState([]);
+  const [loading,setLoading]=useState(true);
+  const [error,setError]=useState("");
+  const [tipo,setTipo]=useState("todos");
+  const [zona,setZona]=useState("todas");
+  const [selectedLocalIds,setSelectedLocalIds]=useState(null);
+  const [sortKey,setSortKey]=useState("ventas");
+  const [sortDir,setSortDir]=useState("desc");
+  const [drillLocalId,setDrillLocalId]=useState(null);
+  const [selectedPeriodo,setSelectedPeriodo]=useState("");
+
+  const allowedIds=useMemo(()=>new Set(getAssignedLocalIds(data,user).map(Number)),[data,user]);
+  const localesBase=useMemo(()=>(data.locales||[]).filter(l=>localActivo(l)&&allowedIds.has(Number(l.id))),[data.locales,allowedIds]);
+  const localesFiltro=useMemo(()=>localesBase.filter(l=>(tipo==="todos"||(l.tipoLocal||l.tipo_local||"propio")===tipo)&&(zona==="todas"||(l.zona||"estandar")===zona)),[localesBase,tipo,zona]);
+  const visibleIds=useMemo(()=>{
+    const allowed=new Set(localesFiltro.map(l=>Number(l.id)));
+    if(selectedLocalIds===null)return allowed;
+    return new Set((selectedLocalIds||[]).map(Number).filter(id=>allowed.has(id)));
+  },[localesFiltro,selectedLocalIds]);
+
+  useEffect(()=>{
+    if(selectedLocalIds===null)return;
+    const allowed=new Set(localesFiltro.map(l=>Number(l.id)));
+    const next=(selectedLocalIds||[]).map(Number).filter(id=>allowed.has(id));
+    if(next.length===0&&localesFiltro.length){ setSelectedLocalIds(null); return; }
+    if(next.length!==(selectedLocalIds||[]).length) setSelectedLocalIds(next);
+  },[tipo,zona,localesFiltro,selectedLocalIds]);
+
+  const load=useCallback(async()=>{
+    setLoading(true);setError("");
+    try{
+      let diarios;
+      try{
+        diarios=await api.getDashboardKpiLocalDiaTodo();
+      }catch(firstError){
+        const msg=String(firstError?.message||firstError||"");
+        const isTimeout=msg.includes("57014")||msg.toLowerCase().includes("statement timeout");
+        if(!isTimeout) throw firstError;
+        await new Promise(resolve=>setTimeout(resolve,1200));
+        diarios=await api.getDashboardKpiLocalDiaTodo();
+      }
+      setDiaRows(diarios||[]);
+      const periodos=Array.from(new Set((diarios||[]).map(r=>String(r.fecha||"").slice(0,7)).filter(Boolean))).sort().reverse();
+      setSelectedPeriodo(prev=>prev&&periodos.includes(prev)?prev:(periodos[0]||""));
+    }catch(e){setError(e?.message||"No se pudo cargar el dashboard.");}
+    finally{setLoading(false);}
+  },[]);
+  useEffect(()=>{load();},[load]);
+
+  const periodosDisponibles=useMemo(()=>Array.from(new Set((diaRows||[]).map(r=>String(r.fecha||"").slice(0,7)).filter(Boolean))).sort().reverse(),[diaRows]);
+  useEffect(()=>{
+    setMesRows(dashboardBuildMonthRows(diaRows,selectedPeriodo,data.locales||[]));
+    setDrillLocalId(null);
+  },[diaRows,selectedPeriodo,data.locales]);
+
+  const filtradosMes=useMemo(()=>mesRows.filter(r=>visibleIds.has(Number(r.local_id))),[mesRows,visibleIds]);
+  const filtradosDia=useMemo(()=>diaRows.filter(r=>visibleIds.has(Number(r.local_id))),[diaRows,visibleIds]);
+  const first=filtradosMes[0]||mesRows[0]||{};
+  const periodo=first.periodo||"";
+  const cutoff=first.fecha_corte||"";
+  const actualDesde=first.actual_desde||"";
+  const actualHasta=first.actual_hasta||"";
+  const anteriorDesde=first.anterior_desde||"";
+  const anteriorHasta=first.anterior_hasta||"";
+  const diasTranscurridos=Number(first.dias_transcurridos||0);
+  const diasMes=Number(first.dias_mes||0);
+  const progresoMes=diasMes?Math.min(100,(diasTranscurridos/diasMes)*100):0;
+  const isCurrentPeriod=periodo===fmtPeriodo(new Date());
+  const comparisonText=isCurrentPeriod?"mismo tramo del mes anterior":"mes anterior completo";
+
+  const totals=useMemo(()=>{
+    const sum=k=>filtradosMes.reduce((a,r)=>a+Number(r[k]||0),0);
+    const ventas=sum("ventas"), visitas=sum("visitas"), ventasAnt=sum("ventas_mes_anterior"), visitasAnt=sum("visitas_mes_anterior"), proy=sum("proyeccion_ventas"), proyVis=sum("proyeccion_visitas");
+    const ticket=visitas?ventas/visitas:0, ticketAnt=visitasAnt?ventasAnt/visitasAnt:0;
+    return {ventas,visitas,ventasAnt,visitasAnt,ticket,ticketAnt,proy,proyVis,varVentas:dashboardPct(ventas,ventasAnt),varVisitas:dashboardPct(visitas,visitasAnt),varTicket:dashboardPct(ticket,ticketAnt)};
+  },[filtradosMes]);
+
+  const aggregateRange=useCallback((desde,hasta)=>{
+    const map=new Map();
+    filtradosDia.filter(r=>!desde||!hasta||(r.fecha>=desde&&r.fecha<=hasta)).forEach(r=>{
+      const k=r.fecha; const p=map.get(k)||{fecha:k,ventas:0,visitas:0}; p.ventas+=Number(r.ventas||0); p.visitas+=Number(r.visitas||0); map.set(k,p);
+    });
+    return Array.from(map.values()).sort((a,b)=>a.fecha.localeCompare(b.fecha));
+  },[filtradosDia]);
+
+  const dailyCurrent=useMemo(()=>aggregateRange(actualDesde,actualHasta),[aggregateRange,actualDesde,actualHasta]);
+  const dailyPrevious=useMemo(()=>aggregateRange(anteriorDesde,anteriorHasta),[aggregateRange,anteriorDesde,anteriorHasta]);
+
+  const dailyCompare=useMemo(()=>{
+    let curSales=0,prevSales=0,curVisits=0,prevVisits=0;
+    const len=Math.max(dailyCurrent.length,dailyPrevious.length);
+    return Array.from({length:len},(_,i)=>{
+      const c=dailyCurrent[i]||{}, p=dailyPrevious[i]||{};
+      curSales+=Number(c.ventas||0); prevSales+=Number(p.ventas||0); curVisits+=Number(c.visitas||0); prevVisits+=Number(p.visitas||0);
+      const d=parseDateLocal(c.fecha||"");
+      const label=d?String(d.getDate()):String(i+1);
+      return {label,ventas:Number(c.ventas||0),ventasAnt:Number(p.ventas||0),visitas:Number(c.visitas||0),visitasAnt:Number(p.visitas||0),ventasAcum:curSales,ventasAcumAnt:prevSales,visitasAcum:curVisits,visitasAcumAnt:prevVisits};
+    });
+  },[dailyCurrent,dailyPrevious]);
+
+  const weekly=useMemo(()=>{
+    const map=new Map();
+    filtradosDia.filter(r=>r.fecha>=anteriorDesde&&r.fecha<=actualHasta).forEach(r=>{
+      const d=parseDateLocal(r.fecha); if(!d)return; const mon=getMon(d); const key=dateKey(mon); const p=map.get(key)||{key,ventas:0,visitas:0}; p.ventas+=Number(r.ventas||0); p.visitas+=Number(r.visitas||0); map.set(key,p);
+    });
+    const cutoffDate=parseDateLocal(cutoff);
+    return Array.from(map.values()).sort((a,b)=>a.key.localeCompare(b.key)).slice(-8).map(r=>{
+      const start=parseDateLocal(r.key); const end=new Date(start); end.setDate(end.getDate()+6);
+      const incomplete=isCurrentPeriod && !!cutoffDate && cutoffDate>=start && cutoffDate<end;
+      return {...r,incomplete,label:`${String(start?.getDate()||"").padStart(2,"0")}/${String((start?.getMonth()||0)+1).padStart(2,"0")}`};
+    });
+  },[filtradosDia,cutoff,anteriorDesde,actualHasta,isCurrentPeriod]);
+
+
+  const monthlyEvolution=useMemo(()=>{
+    if(!selectedPeriodo)return [];
+    const [sy,sm]=selectedPeriodo.split("-").map(Number);
+    if(!sy||!sm)return [];
+    const anchor=new Date(sy,sm-1,1,12,0,0,0);
+    const cutoffDay=isCurrentPeriod&&cutoff?Number(String(cutoff).slice(8,10)):null;
+    const sumMonth=(year,monthIndex,key,dayLimit=null)=>filtradosDia.reduce((acc,r)=>{
+      const f=parseDateLocal(r.fecha);
+      if(!f||f.getFullYear()!==year||f.getMonth()!==monthIndex)return acc;
+      if(dayLimit&&f.getDate()>dayLimit)return acc;
+      return acc+Number(r[key]||0);
+    },0);
+    return Array.from({length:12},(_,i)=>{
+      const d=new Date(anchor.getFullYear(),anchor.getMonth()-11+i,1,12,0,0,0);
+      const sameAsSelected=d.getFullYear()===anchor.getFullYear()&&d.getMonth()===anchor.getMonth();
+      const dayLimit=sameAsSelected?cutoffDay:null;
+      return {
+        label:`${MESES[d.getMonth()].slice(0,3)} ${String(d.getFullYear()).slice(-2)}`,
+        ventas:sumMonth(d.getFullYear(),d.getMonth(),"ventas",dayLimit),
+        ventasYoY:sumMonth(d.getFullYear()-1,d.getMonth(),"ventas",dayLimit),
+        visitas:sumMonth(d.getFullYear(),d.getMonth(),"visitas",dayLimit),
+        visitasYoY:sumMonth(d.getFullYear()-1,d.getMonth(),"visitas",dayLimit)
+      };
+    });
+  },[filtradosDia,selectedPeriodo,isCurrentPeriod,cutoff]);
+
+  const mesRowsScope=useMemo(()=>{
+    const ids=new Set(localesFiltro.map(l=>Number(l.id)));
+    return mesRows.filter(r=>ids.has(Number(r.local_id)));
+  },[mesRows,localesFiltro]);
+
+  const branchRows=useMemo(()=>{
+    const rows=[...mesRowsScope];
+    rows.sort((a,b)=>{
+      const av=sortKey==="local"?String(a.local||"").toLowerCase():Number(a[sortKey]||0);
+      const bv=sortKey==="local"?String(b.local||"").toLowerCase():Number(b[sortKey]||0);
+      if(av<bv)return sortDir==="asc"?-1:1;
+      if(av>bv)return sortDir==="asc"?1:-1;
+      return 0;
+    });
+    return rows;
+  },[mesRowsScope,sortKey,sortDir]);
+
+  const branchMaxSales=useMemo(()=>Math.max(1,...mesRowsScope.map(r=>Number(r.ventas||0))),[mesRowsScope]);
+  const branchMaxVisits=useMemo(()=>Math.max(1,...mesRowsScope.map(r=>Number(r.visitas||0))),[mesRowsScope]);
+  const periodoTxt=periodo?periodoLabel(periodo):"Mes actual";
+  const selectedCount=selectedLocalIds===null||!(selectedLocalIds||[]).length?0:visibleIds.size;
+
+  const insights=useMemo(()=>{
+    const out=[];
+    out.push({tone:(totals.varVentas??0)>=0?"positive":"negative",title:`Ventas ${dashboardPctLabel(totals.varVentas)}`,text:`El cambio se explica por visitas ${dashboardPctLabel(totals.varVisitas)} y ticket ${dashboardPctLabel(totals.varTicket)} frente al período comparable anterior.`});
+    const comparables=filtradosMes.filter(r=>Number(r.visitas_mes_anterior||0)>0&&Number(r.visitas||0)>0);
+    if(comparables.length){
+      const best=[...comparables].sort((a,b)=>Number(b.variacion_ventas_pct||0)-Number(a.variacion_ventas_pct||0))[0];
+      const worst=[...comparables].sort((a,b)=>Number(a.variacion_ventas_pct||0)-Number(b.variacion_ventas_pct||0))[0];
+      if(best) out.push({tone:Number(best.variacion_ventas_pct)>=0?"positive":"neutral",title:`Mayor crecimiento: ${best.local}`,text:`Ventas ${dashboardPctLabel(Number(best.variacion_ventas_pct))}, con visitas ${dashboardPctLabel(Number(best.variacion_visitas_pct))} y ticket ${dashboardPctLabel(Number(best.variacion_ticket_pct))}.`});
+      if(worst&&Number(worst.local_id)!==Number(best?.local_id)) out.push({tone:Number(worst.variacion_ventas_pct)<0?"negative":"neutral",title:`A revisar: ${worst.local}`,text:`Ventas ${dashboardPctLabel(Number(worst.variacion_ventas_pct))}. La evolución de visitas es ${dashboardPctLabel(Number(worst.variacion_visitas_pct))} y la del ticket ${dashboardPctLabel(Number(worst.variacion_ticket_pct))}.`});
+      const extreme=comparables.find(r=>Math.abs(Number(r.variacion_ventas_pct||0))>=100);
+      if(extreme) out.push({tone:"warning",title:`Comparación excepcional en ${extreme.local}`,text:"La variación supera 100%. Conviene revisar si el período anterior tuvo apertura parcial, carga incompleta o una base de comparación atípica."});
+      else if(comparables.length>1){
+        const movements=comparables.map(r=>({r,delta:Number(r.ventas||0)-Number(r.ventas_mes_anterior||0)}));
+        const totalAbs=movements.reduce((a,x)=>a+Math.abs(x.delta),0);
+        const top=[...movements].sort((a,b)=>Math.abs(b.delta)-Math.abs(a.delta))[0];
+        if(top&&totalAbs>0) out.push({tone:top.delta>=0?"positive":"negative",title:`Mayor aporte al cambio: ${top.r.local}`,text:`Aporta ${fmtMoney(top.delta)} de variación; representa ${new Intl.NumberFormat("es-AR",{maximumFractionDigits:0}).format(Math.abs(top.delta)/totalAbs*100)}% del movimiento absoluto entre los locales seleccionados.`});
+      }
+    }
+    return out.slice(0,4);
+  },[filtradosMes,totals]);
+
+  const toggleSort=(key)=>{ if(sortKey===key)setSortDir(d=>d==="asc"?"desc":"asc"); else {setSortKey(key);setSortDir(key==="local"?"asc":"desc");} };
+  const sortMark=key=>sortKey===key?(sortDir==="asc"?" ↑":" ↓"):"";
+  const toggleLocalFromTable=id=>{
+    const nid=Number(id);
+    const validIds=localesFiltro.map(l=>Number(l.id));
+    const all=selectedLocalIds===null || !(selectedLocalIds||[]).length;
+    if(all){
+      setSelectedLocalIds([nid]);
+      return;
+    }
+    const set=new Set((selectedLocalIds||[]).map(Number));
+    if(set.has(nid)) set.delete(nid); else set.add(nid);
+    if(set.size===0){ setSelectedLocalIds(null); return; }
+    if(set.size===validIds.length){ setSelectedLocalIds(null); return; }
+    setSelectedLocalIds(Array.from(set));
+  };
+  const drillRow=useMemo(()=>mesRowsScope.find(r=>Number(r.local_id)===Number(drillLocalId))||null,[mesRowsScope,drillLocalId]);
+
+  if(loading) return <div style={{ minHeight:360,display:"grid",placeItems:"center" }}><NikiSplash text="Cargando indicadores..." fullScreen={false} compact /></div>;
+  if(error) return <Card><p style={{ margin:0,color:COLORS.danger,fontSize:13 }}>No se pudo cargar el Dashboard: {error}</p><div style={{ marginTop:12 }}><Btn size="sm" onClick={load}>Reintentar</Btn></div></Card>;
+
+  return <div style={{ display:"flex",flexDirection:"column",gap:17 }}>
+    <div style={{ display:"flex",justifyContent:"space-between",alignItems:"flex-start",gap:14,flexWrap:"wrap" }}>
+      <div>
+        <h2 style={{ margin:0,fontSize:25,letterSpacing:"-0.035em",color:"var(--color-text-primary)" }}>Dashboard</h2>
+        <p style={{ margin:"5px 0 0",fontSize:12.5,color:"var(--color-text-secondary)" }}>Vista ejecutiva de ventas, visitas y ticket desde AgendaPro.</p>
+      </div>
+      <div style={{ display:"flex",alignItems:"center",gap:8,flexWrap:"wrap" }}>
+        {cutoff&&<span style={{ fontSize:11.5,fontWeight:700,color:COLORS.pinkDark,background:COLORS.pinkLight,borderRadius:999,padding:"7px 10px" }}>{isCurrentPeriod?`Datos consolidados hasta ${String(cutoff).split("-").reverse().join("/")}`:`Período cerrado · ${periodoTxt}`}</span>}
+        <Btn size="sm" variant="secondary" onClick={load}>↻ Actualizar</Btn>
+      </div>
+    </div>
+
+    <Card style={{ padding:12,boxShadow:"0 8px 24px rgba(0,0,0,.035)" }}>
+      <div className="niki-dashboard-filters" style={{ display:"grid",gridTemplateColumns:"repeat(4,minmax(0,1fr))",gap:10 }}>
+        <div><label style={{ display:"block",fontSize:10,fontWeight:800,textTransform:"uppercase",color:"var(--color-text-secondary)",marginBottom:5 }}>Tipo de local</label><Select value={tipo} onChange={setTipo}><option value="todos">Todos</option><option value="propio">Propios</option><option value="franquicia">Franquicias</option></Select></div>
+        <div><label style={{ display:"block",fontSize:10,fontWeight:800,textTransform:"uppercase",color:"var(--color-text-secondary)",marginBottom:5 }}>Zona</label><Select value={zona} onChange={setZona}><option value="todas">Todas</option><option value="estandar">Estándar</option><option value="premium">Premium</option><option value="exclusiva">Exclusiva</option></Select></div>
+        <div><label style={{ display:"block",fontSize:10,fontWeight:800,textTransform:"uppercase",color:"var(--color-text-secondary)",marginBottom:5 }}>Sucursales</label><DashboardLocalMultiSelect locales={localesFiltro} selectedIds={selectedLocalIds} onChange={setSelectedLocalIds}/></div>
+        <div><label style={{ display:"block",fontSize:10,fontWeight:800,textTransform:"uppercase",color:"var(--color-text-secondary)",marginBottom:5 }}>Período</label><Select value={selectedPeriodo} onChange={setSelectedPeriodo}>{periodosDisponibles.map(p=><option key={p} value={p}>{periodoLabel(p)}</option>)}</Select></div>
+      </div>
+      {selectedLocalIds!==null&&<div style={{ marginTop:9,display:"flex",alignItems:"center",gap:7,flexWrap:"wrap" }}><Badge color="pink">{selectedCount} seleccionados</Badge>{localesFiltro.filter(l=>visibleIds.has(Number(l.id))).map(l=><button key={l.id} type="button" onClick={()=>toggleLocalFromTable(l.id)} style={{ border:"1px solid rgba(114,36,62,.12)",background:"#fff",color:COLORS.pinkDark,borderRadius:999,padding:"4px 8px",fontSize:10.5,cursor:"pointer" }}>{l.nombre} ×</button>)}<button type="button" onClick={()=>setSelectedLocalIds(null)} style={{ border:"none",background:"transparent",color:COLORS.pink,fontSize:10.5,fontWeight:800,cursor:"pointer" }}>Ver todos</button></div>}
+    </Card>
+
+    <Card style={{ padding:"13px 15px",background:"linear-gradient(90deg,rgba(247,237,240,.82),rgba(255,255,255,.96))",border:"1px solid rgba(114,36,62,.10)" }}>
+      <div style={{ display:"flex",alignItems:"center",justifyContent:"space-between",gap:12,flexWrap:"wrap" }}>
+        <div><strong style={{ fontSize:12,color:COLORS.pinkDark }}>{isCurrentPeriod?"Avance del mes":"Mes cerrado"}</strong><span style={{ marginLeft:8,fontSize:11,color:"var(--color-text-secondary)" }}>{isCurrentPeriod?`${diasTranscurridos} de ${diasMes} días consolidados`:`${diasMes} días del período`}</span></div>
+        <strong style={{ fontSize:12,color:COLORS.pinkDark }}>{Math.round(progresoMes)}%</strong>
+      </div>
+      <div style={{ height:7,background:"rgba(114,36,62,.09)",borderRadius:999,overflow:"hidden",marginTop:9 }}><div style={{ width:`${progresoMes}%`,height:"100%",borderRadius:999,background:"linear-gradient(90deg,#d3a0ae,#72243e)" }}/></div>
+    </Card>
+
+    <div className="niki-dashboard-kpis" style={{ display:"grid",gridTemplateColumns:"repeat(4,minmax(0,1fr))",gap:12 }}>
+      <DashboardMetricCard icon="💳" label={`Ventas ${periodoTxt}`} value={fmtMoney(totals.ventas)} variation={totals.varVentas} detail={`vs. ${comparisonText}`} accent />
+      {isCurrentPeriod?<DashboardMetricCard icon="↗" label="Proyección de ventas" value={fmtMoney(totals.proy)} subValue={`Actual: ${fmtMoney(totals.ventas)}`} detail="proyección lineal al cierre" />:<DashboardMetricCard icon="◀" label="Ventas mes anterior" value={fmtMoney(totals.ventasAnt)} subValue={`Variación: ${dashboardPctLabel(totals.varVentas)}`} detail="comparación mensual cerrada" />}
+      <DashboardMetricCard icon="👣" label={`Visitas ${periodoTxt}`} value={new Intl.NumberFormat("es-AR").format(Math.round(totals.visitas))} variation={totals.varVisitas} subValue={isCurrentPeriod?`Proyección: ${new Intl.NumberFormat("es-AR").format(Math.round(totals.proyVis))}`:`Anterior: ${new Intl.NumberFormat("es-AR").format(Math.round(totals.visitasAnt))}`} detail="atenciones consolidadas" accent />
+      <DashboardMetricCard icon="🎟" label="Ticket promedio" value={fmtMoney(totals.ticket)} variation={totals.varTicket} subValue={`Anterior: ${fmtMoney(totals.ticketAnt)}`} detail="venta / visitas" />
+    </div>
+
+    {insights.length>0&&<Card style={{ padding:14,boxShadow:"0 8px 24px rgba(0,0,0,.03)" }}>
+      <div style={{ display:"flex",justifyContent:"space-between",alignItems:"baseline",gap:10,marginBottom:10 }}><div><h3 style={{ margin:0,fontSize:14 }}>Lectura rápida</h3><p style={{ margin:"3px 0 0",fontSize:10.5,color:"var(--color-text-secondary)" }}>Señales automáticas sobre los datos visibles</p></div><Badge color="pink">{insights.length} insights</Badge></div>
+      <div className="niki-dashboard-insights" style={{ display:"grid",gridTemplateColumns:"repeat(2,minmax(0,1fr))",gap:9 }}>{insights.map((x,i)=><DashboardInsight key={i} {...x}/>)}</div>
+    </Card>}
+
+    <div className="niki-dashboard-monthly-evolution" style={{ display:"grid",gridTemplateColumns:"repeat(2,minmax(0,1fr))",gap:12 }}>
+      <Card style={{ padding:14,boxShadow:"0 8px 26px rgba(0,0,0,.035)" }}><div style={{ display:"flex",alignItems:"baseline",justifyContent:"space-between",gap:8,flexWrap:"wrap" }}><div><h3 style={{ margin:0,fontSize:14 }}>Evolución mensual de ventas</h3><p style={{ margin:"3px 0 0",fontSize:10.5,color:"var(--color-text-secondary)" }}>Últimos 12 meses hasta {periodoTxt} · comparación con el mismo mes del año anterior</p></div></div><DashboardCompareLine rows={monthlyEvolution} currentKey="ventas" previousKey="ventasYoY" money height={250} currentLabel="Ventas" previousLabel="Mismo mes año anterior" xLabelPrefix="" /></Card>
+      <Card style={{ padding:14,boxShadow:"0 8px 26px rgba(0,0,0,.035)" }}><div style={{ display:"flex",alignItems:"baseline",justifyContent:"space-between",gap:8,flexWrap:"wrap" }}><div><h3 style={{ margin:0,fontSize:14 }}>Evolución mensual de visitas</h3><p style={{ margin:"3px 0 0",fontSize:10.5,color:"var(--color-text-secondary)" }}>Últimos 12 meses hasta {periodoTxt} · comparación con el mismo mes del año anterior</p></div></div><DashboardCompareLine rows={monthlyEvolution} currentKey="visitas" previousKey="visitasYoY" height={250} currentLabel="Visitas" previousLabel="Mismo mes año anterior" xLabelPrefix="" /></Card>
+    </div>
+    <div className="niki-dashboard-two-col" style={{ display:"grid",gridTemplateColumns:"minmax(0,1.35fr) minmax(0,1fr)",gap:12 }}>
+      <Card style={{ padding:15,boxShadow:"0 10px 30px rgba(0,0,0,.04)" }}><div style={{ display:"flex",alignItems:"baseline",justifyContent:"space-between",gap:8,flexWrap:"wrap" }}><div><h3 style={{ margin:0,fontSize:14 }}>Ventas acumuladas · actual vs anterior</h3><p style={{ margin:"3px 0 0",fontSize:10.5,color:"var(--color-text-secondary)" }}>{isCurrentPeriod?"Mismo número de días del mes":"Mes completo vs mes anterior"}</p></div><Badge color={totals.varVentas>=0?"success":"danger"}>{dashboardPctLabel(totals.varVentas)}</Badge></div><DashboardCompareLine rows={dailyCompare} currentKey="ventasAcum" previousKey="ventasAcumAnt" money height={250} currentLabel={periodoTxt} previousLabel="Mes anterior" /></Card>
+      <Card style={{ padding:15,boxShadow:"0 10px 30px rgba(0,0,0,.04)" }}><div style={{ display:"flex",alignItems:"baseline",justifyContent:"space-between",gap:8,flexWrap:"wrap" }}><div><h3 style={{ margin:0,fontSize:14 }}>Visitas acumuladas</h3><p style={{ margin:"3px 0 0",fontSize:10.5,color:"var(--color-text-secondary)" }}>{isCurrentPeriod?"Actual vs mismo tramo anterior":"Mes completo vs mes anterior"}</p></div><Badge color={totals.varVisitas>=0?"success":"danger"}>{dashboardPctLabel(totals.varVisitas)}</Badge></div><DashboardCompareLine rows={dailyCompare} currentKey="visitasAcum" previousKey="visitasAcumAnt" height={250} currentLabel={periodoTxt} previousLabel="Mes anterior" /></Card>
+      <Card style={{ padding:14,boxShadow:"0 8px 26px rgba(0,0,0,.035)" }}><div style={{ display:"flex",alignItems:"baseline",justifyContent:"space-between",gap:8 }}><div><h3 style={{ margin:0,fontSize:14 }}>Ventas diarias</h3><p style={{ margin:"3px 0 0",fontSize:10.5,color:"var(--color-text-secondary)" }}>{periodoTxt} · barras actuales, línea gris período anterior</p></div><Badge color="pink">{fmtMoney(totals.ventas)}</Badge></div><DashboardBars rows={dailyCompare} valueKey="ventas" compareKey="ventasAnt" money trendWindow={3} currentLabel={periodoTxt} compareLabel="Mismo tramo anterior" /></Card>
+      <Card style={{ padding:14,boxShadow:"0 8px 26px rgba(0,0,0,.035)" }}><div style={{ display:"flex",alignItems:"baseline",justifyContent:"space-between",gap:8 }}><div><h3 style={{ margin:0,fontSize:14 }}>Ventas semanales</h3><p style={{ margin:"3px 0 0",fontSize:10.5,color:"var(--color-text-secondary)" }}>Últimas semanas disponibles · la semana abierta se destaca</p></div></div><DashboardBars rows={weekly} valueKey="ventas" money trendWindow={3} highlightIncomplete /></Card>
+      <Card style={{ padding:14,boxShadow:"0 8px 26px rgba(0,0,0,.035)" }}><div style={{ display:"flex",alignItems:"baseline",justifyContent:"space-between",gap:8 }}><div><h3 style={{ margin:0,fontSize:14 }}>Visitas semanales</h3><p style={{ margin:"3px 0 0",fontSize:10.5,color:"var(--color-text-secondary)" }}>Atenciones por semana · tendencia móvil</p></div></div><DashboardBars rows={weekly} valueKey="visitas" trendWindow={3} highlightIncomplete /></Card>
+    </div>
+
+    <Card style={{ padding:0,overflow:"hidden",boxShadow:"0 10px 30px rgba(0,0,0,.04)" }}>
+      <div style={{ padding:"14px 16px",display:"flex",alignItems:"center",justifyContent:"space-between",gap:10,borderBottom:"1px solid rgba(120,120,120,.12)",flexWrap:"wrap" }}><div><h3 style={{ margin:0,fontSize:14 }}>Comparativo por sucursal</h3><p style={{ margin:"3px 0 0",fontSize:10.5,color:"var(--color-text-secondary)" }}>Sin tildes se muestran todas las sucursales. Tildá una o más para analizar sólo esas. Abrí el nombre para ver el detalle.</p></div><div style={{ display:"flex",gap:7,alignItems:"center" }}>{selectedLocalIds!==null&&<Btn size="sm" variant="ghost" onClick={()=>setSelectedLocalIds(null)}>Ver todos</Btn>}<Badge color="gray">{branchRows.length} locales visibles</Badge></div></div>
+      <div style={{ overflowX:"auto",maxHeight:460 }}><table style={{ width:"100%",borderCollapse:"separate",borderSpacing:0,fontSize:11,minWidth:1180 }}><thead style={{ position:"sticky",top:0,zIndex:2 }}><tr style={{ background:"#f5e8ec",color:COLORS.pinkDark,textTransform:"uppercase",fontSize:9.5,letterSpacing:".025em" }}>
+        <th style={{ width:34,padding:"10px 5px",textAlign:"center" }}>✓</th><th onClick={()=>toggleSort("local")} style={{ textAlign:"left",padding:"10px",cursor:"pointer" }}>Sucursal{sortMark("local")}</th><th onClick={()=>toggleSort("ventas")} style={{ textAlign:"right",padding:"10px",cursor:"pointer" }}>Ventas{sortMark("ventas")}</th><th onClick={()=>toggleSort("variacion_ventas_pct")} style={{ textAlign:"right",padding:"10px",cursor:"pointer" }}>Var. ventas{sortMark("variacion_ventas_pct")}</th><th onClick={()=>toggleSort("visitas")} style={{ textAlign:"right",padding:"10px",cursor:"pointer" }}>Visitas{sortMark("visitas")}</th><th onClick={()=>toggleSort("variacion_visitas_pct")} style={{ textAlign:"right",padding:"10px",cursor:"pointer" }}>Var. visitas{sortMark("variacion_visitas_pct")}</th><th onClick={()=>toggleSort("ticket_promedio")} style={{ textAlign:"right",padding:"10px",cursor:"pointer" }}>Ticket{sortMark("ticket_promedio")}</th><th onClick={()=>toggleSort("variacion_ticket_pct")} style={{ textAlign:"right",padding:"10px",cursor:"pointer" }}>Var. ticket{sortMark("variacion_ticket_pct")}</th><th onClick={()=>toggleSort(isCurrentPeriod?"proyeccion_ventas":"ventas_mes_anterior")} style={{ textAlign:"right",padding:"10px",cursor:"pointer" }}>{isCurrentPeriod?"Proyección":"Mes anterior"}{sortMark(isCurrentPeriod?"proyeccion_ventas":"ventas_mes_anterior")}</th><th style={{ width:72,padding:"10px",textAlign:"center" }}>Detalle</th>
+      </tr></thead><tbody>{branchRows.map((r,i)=>{const vv=Number(r.variacion_ventas_pct),qv=Number(r.variacion_visitas_pct),tv=Number(r.variacion_ticket_pct);const pct=(n)=><span style={{ fontWeight:800,color:Number.isFinite(n)?(n>=0?COLORS.success:COLORS.danger):"var(--color-text-secondary)" }}>{Number.isFinite(n)?dashboardPctLabel(n):"—"}</span>;const salesPct=Math.max(2,Math.min(100,Number(r.ventas||0)/branchMaxSales*100));const visitsPct=Math.max(2,Math.min(100,Number(r.visitas||0)/branchMaxVisits*100));const allLocals=selectedLocalIds===null||!(selectedLocalIds||[]).length;const selected=!allLocals&&visibleIds.has(Number(r.local_id));return <tr key={r.local_id} style={{ borderTop:"1px solid rgba(120,120,120,.09)",background:selected?"rgba(225,198,204,.30)":(i%2?"rgba(120,120,120,.018)":"transparent") }}><td onClick={()=>toggleLocalFromTable(r.local_id)} title={selected?"Quitar de la selección":"Seleccionar sucursal"} style={{ padding:"10px 5px",textAlign:"center",cursor:"pointer" }}><input type="checkbox" checked={selected} readOnly style={{ accentColor:COLORS.pinkDark,pointerEvents:"none" }}/></td><td style={{ padding:"10px",fontWeight:800 }}><button type="button" onClick={()=>setDrillLocalId(Number(r.local_id))} style={{ border:"none",background:"transparent",padding:0,color:selected&&selectedLocalIds!==null?COLORS.pinkDark:"var(--color-text-primary)",fontWeight:800,cursor:"pointer",textDecoration:"underline",textDecorationColor:"rgba(114,36,62,.28)",textUnderlineOffset:3 }}>{r.local}</button></td><td style={{ padding:"10px",textAlign:"right",minWidth:145 }}><div>{fmtMoney(r.ventas)}</div><div style={{ height:4,marginTop:4,borderRadius:999,background:"rgba(114,36,62,.08)",overflow:"hidden" }}><div style={{ width:`${salesPct}%`,height:"100%",background:COLORS.pinkDark,borderRadius:999 }}/></div></td><td style={{ padding:"10px",textAlign:"right" }}>{pct(vv)}</td><td style={{ padding:"10px",textAlign:"right",minWidth:105 }}><div>{new Intl.NumberFormat("es-AR").format(Number(r.visitas||0))}</div><div style={{ height:4,marginTop:4,borderRadius:999,background:"rgba(114,36,62,.08)",overflow:"hidden" }}><div style={{ width:`${visitsPct}%`,height:"100%",background:"#c98fa0",borderRadius:999 }}/></div></td><td style={{ padding:"10px",textAlign:"right" }}>{pct(qv)}</td><td style={{ padding:"10px",textAlign:"right" }}>{fmtMoney(r.ticket_promedio)}</td><td style={{ padding:"10px",textAlign:"right" }}>{pct(tv)}</td><td style={{ padding:"10px",textAlign:"right",fontWeight:800 }}>{fmtMoney(isCurrentPeriod?r.proyeccion_ventas:r.ventas_mes_anterior)}</td><td style={{ padding:"8px",textAlign:"center" }}><button type="button" onClick={()=>setDrillLocalId(Number(r.local_id))} style={{ border:"1px solid rgba(114,36,62,.18)",background:COLORS.pinkLight,color:COLORS.pinkDark,borderRadius:8,padding:"5px 8px",fontSize:10.5,fontWeight:800,cursor:"pointer" }}>Ver</button></td></tr>})}</tbody></table></div>
+    </Card>
+    <p style={{ margin:"-4px 2px 0",fontSize:10.5,color:"var(--color-text-secondary)" }}>Venta = total pagado en AgendaPro. Visita = atención consolidada por local, día y cliente. En el mes actual, el día en curso no se incluye en comparativos ni proyecciones. Los meses anteriores se muestran cerrados. Las líneas de tendencia usan media móvil de 3 puntos.</p>
+    {drillRow&&<DashboardLocalDrilldown row={drillRow} diaRows={diaRows} onClose={()=>setDrillLocalId(null)}/>} 
+  </div>;
+}
+
+// ── CLIENTES CRM AGENDA PRO ──────────────────────────────────────────
+function normalizeCrmText(value) {
+  return String(value || "").trim().toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/\s+/g, " ");
+}
+function normalizeCrmLocalKey(value) {
+  return normalizeCrmText(value)
+    .replace(/[^a-z0-9 ]+/g, " ")
+    .replace(/\bniki\b/g, " ")
+    .replace(/\bbeauty\b/g, " ")
+    .replace(/\bbar\b/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+function crmEstadoMeta(estado) {
+  const map = {
+    NUEVA:{ label:"Nuevas", icon:"✨", color:COLORS.info, bg:COLORS.infoLight },
+    NUEVA_SIN_RETORNO:{ label:"Sin retorno", icon:"🌱", color:COLORS.amber, bg:COLORS.amberLight },
+    ACTIVA:{ label:"Activas", icon:"♥", color:COLORS.success, bg:COLORS.successLight },
+    EN_RIESGO:{ label:"En riesgo", icon:"!", color:COLORS.amber, bg:COLORS.amberLight },
+    PERDIDA:{ label:"Perdidas", icon:"○", color:COLORS.gray, bg:COLORS.grayLight },
+  };
+  return map[estado] || { label:estado || "Sin clasificar", icon:"·", color:COLORS.gray, bg:COLORS.grayLight };
+}
+function CrmEstadoBadge({ estado }) {
+  const m=crmEstadoMeta(estado);
+  return <span style={{ display:"inline-flex",alignItems:"center",gap:5,borderRadius:999,padding:"4px 9px",background:m.bg,color:m.color,fontSize:10.5,fontWeight:800,whiteSpace:"nowrap" }}><span>{m.icon}</span>{m.label}</span>;
+}
+function CrmKpiCard({ estado, value, active, onClick, subtitle }) {
+  const m=crmEstadoMeta(estado);
+  return <button type="button" onClick={onClick} style={{ border:active?`1.5px solid ${m.color}`:"1px solid rgba(120,120,120,.14)",background:active?m.bg:"#fff",borderRadius:16,padding:"14px 15px",textAlign:"left",cursor:"pointer",boxShadow:active?"0 10px 24px rgba(0,0,0,.06)":"0 6px 18px rgba(0,0,0,.035)",minWidth:0 }}>
+    <div style={{ display:"flex",alignItems:"center",justifyContent:"space-between",gap:8 }}><span style={{ fontSize:11,fontWeight:800,textTransform:"uppercase",letterSpacing:".035em",color:m.color }}>{m.label}</span><span style={{ width:25,height:25,borderRadius:9,display:"grid",placeItems:"center",background:m.bg,color:m.color,fontWeight:900 }}>{m.icon}</span></div>
+    <p style={{ margin:"7px 0 2px",fontSize:24,fontWeight:800,color:"var(--color-text-primary)",letterSpacing:"-.03em" }}>{new Intl.NumberFormat("es-AR").format(value||0)}</p>
+    <p style={{ margin:0,fontSize:10.5,color:"var(--color-text-secondary)" }}>{subtitle}</p>
+  </button>;
+}
+function ClientesCrm({ data, user }) {
+  const [scopeRows,setScopeRows]=useState([]);
+  const [loading,setLoading]=useState(true);
+  const [error,setError]=useState("");
+  const [estado,setEstado]=useState("TODOS");
+  const [localId,setLocalId]=useState("TODOS");
+  const [query,setQuery]=useState("");
+  const [selected,setSelected]=useState(null);
+  const [visitas,setVisitas]=useState([]);
+  const [visitasLoading,setVisitasLoading]=useState(false);
+  const scopeCacheRef=useRef(new Map());
+
+  const assignedIds=useMemo(()=>Array.from(new Set(getAssignedLocalIds(data,user).map(Number).filter(Boolean))),[data,user]);
+  const activeLocalIds=useMemo(()=>Array.from(new Set((data.locales||[]).filter(localActivo).map(l=>Number(l.id)).filter(Boolean))),[data.locales]);
+  const allowedLocals=useMemo(()=>{
+    const allowed=new Set(assignedIds);
+    return (data.locales||[]).filter(l=>allowed.has(Number(l.id)) && localActivo(l)).sort((a,b)=>String(a.nombre||"").localeCompare(String(b.nombre||""),"es"));
+  },[data.locales,assignedIds]);
+
+  const currentScopeIds=useMemo(()=>{
+    if(localId!=="TODOS") {
+      const id=Number(localId);
+      return assignedIds.includes(id) ? [id] : [];
+    }
+    return assignedIds;
+  },[assignedIds,localId]);
+
+  const isFullNetworkScope=useMemo(()=>{
+    if(!currentScopeIds.length || !activeLocalIds.length) return false;
+    const current=new Set(currentScopeIds);
+    return activeLocalIds.every(id=>current.has(id));
+  },[currentScopeIds,activeLocalIds]);
+
+  const scopeKey=useMemo(()=>`${isFullNetworkScope?"GLOBAL":"SCOPE"}:${[...currentScopeIds].sort((a,b)=>a-b).join(",")}`,[isFullNetworkScope,currentScopeIds]);
+
+  const loadScope=useCallback(async()=>{
+    setLoading(true);
+    setError("");
+    try {
+      if(!currentScopeIds.length) { setScopeRows([]); return; }
+      if(scopeCacheRef.current.has(scopeKey)) {
+        setScopeRows(scopeCacheRef.current.get(scopeKey));
+        return;
+      }
+      let raw;
+      if(isFullNetworkScope) {
+        raw=await api.getClientesCrmGlobalAll();
+      } else {
+        raw=await api.getClientesCrmScopeAll(currentScopeIds);
+      }
+      const normalized=(raw||[]).map(normalizeClienteCrm);
+      // En alcance global no existe "otra sucursal fuera del alcance".
+      const finalRows=isFullNetworkScope ? normalized.map(r=>({ ...r, atendidaDespuesOtroLocal:false, ultimaVisitaGlobal:r.ultimaVisitaGlobal||r.ultimaVisita, ultimoLocalGlobal:r.ultimoLocalGlobal||r.localPrincipal })) : normalized;
+      scopeCacheRef.current.set(scopeKey,finalRows);
+      setScopeRows(finalRows);
+    } catch(e) {
+      console.error("CRM scope error",e);
+      setError(e?.message || "No se pudo cargar Clientes.");
+      setScopeRows([]);
+    } finally {
+      setLoading(false);
+    }
+  },[currentScopeIds,isFullNetworkScope,scopeKey]);
+
+  useEffect(()=>{ loadScope(); },[loadScope]);
+
+  const counts=useMemo(()=>{
+    const c={ NUEVA:0,NUEVA_SIN_RETORNO:0,ACTIVA:0,EN_RIESGO:0,PERDIDA:0 };
+    scopeRows.forEach(r=>{ if(Object.prototype.hasOwnProperty.call(c,r.estado)) c[r.estado]+=1; });
+    return c;
+  },[scopeRows]);
+
+  const riesgo=useMemo(()=>scopeRows.filter(r=>r.estado==="EN_RIESGO").sort((a,b)=>b.diasAtraso-a.diasAtraso || b.visitas-a.visitas).slice(0,10),[scopeRows]);
+  const sinRetorno=useMemo(()=>scopeRows.filter(r=>r.estado==="NUEVA_SIN_RETORNO").sort((a,b)=>b.diasDesdeUltima-a.diasDesdeUltima).slice(0,10),[scopeRows]);
+
+  const filteredRows=useMemo(()=>{
+    const q=String(query||"").trim().toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g,"");
+    return scopeRows.filter(r=>{
+      if(estado!=="TODOS" && r.estado!==estado) return false;
+      if(!q) return true;
+      const hay=`${r.cliente||""} ${r.email||""} ${r.localPrincipal||""} ${r.ultimoLocalGlobal||""}`.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g,"");
+      return hay.includes(q);
+    }).sort((a,b)=>b.diasAtraso-a.diasAtraso || b.visitas-a.visitas || String(b.ultimaVisita||"").localeCompare(String(a.ultimaVisita||"")));
+  },[scopeRows,estado,query]);
+
+  const rows=useMemo(()=>filteredRows.slice(0,250),[filteredRows]);
+  const total=filteredRows.length;
+
+  const openClient=async(r)=>{
+    setSelected(r); setVisitas([]); setVisitasLoading(true);
+    try { setVisitas(await api.getClienteCrmVisitas(r.clientId,currentScopeIds) || []); }
+    catch(e){ notifyToast(e?.message || "No se pudo cargar el historial de la clienta.","error"); }
+    finally{ setVisitasLoading(false); }
+  };
+
+  const fechaFmt=v=>v?String(v).slice(0,10).split("-").reverse().join("/"):"—";
+  const frecuenciaTxt=r=>r.frecuenciaMediana!=null?`${r.frecuenciaMediana} días`:r.frecuenciaPromedio!=null?`${r.frecuenciaPromedio} días`:"Sin hábito";
+  const visibleCount=rows.length;
+  const stateCards=[
+    ["ACTIVA","Activas",counts.ACTIVA,"success"],
+    ["EN_RIESGO","En riesgo",counts.EN_RIESGO,"amber"],
+    ["NUEVA","Nuevas",counts.NUEVA,"info"],
+    ["NUEVA_SIN_RETORNO","Sin retorno",counts.NUEVA_SIN_RETORNO,"amber"],
+    ["PERDIDA","Perdidas",counts.PERDIDA,"gray"],
+  ];
+
+  if(loading) return <NikiSplash fullScreen={false} text="Cargando clientes..."/>;
+
+  const migrationNotice=(r,compact=false)=>r.atendidaDespuesOtroLocal ? <div style={{ marginTop:compact?3:7,padding:compact?"4px 6px":"7px 9px",borderRadius:8,background:COLORS.infoLight,color:COLORS.info,fontSize:compact?9.5:10.5,lineHeight:1.35,fontWeight:600 }}>
+    Se atendió después en otra sucursal: <strong>{r.ultimoLocalGlobal || "otro local"}</strong>{r.ultimaVisitaGlobal?` · ${fechaFmt(r.ultimaVisitaGlobal)}`:""}
+  </div> : null;
+
+  return <div style={{ display:"flex",flexDirection:"column",gap:12 }}>
+    <div style={{ display:"flex",justifyContent:"space-between",gap:10,alignItems:"flex-start",flexWrap:"wrap" }}>
+      <div><h2 style={{ margin:0,fontSize:20,color:COLORS.pinkDark }}>Clientes</h2><p style={{ margin:"4px 0 0",fontSize:11,color:"var(--color-text-secondary)",maxWidth:760 }}>Cartera y recuperación por tus locales. Si una clienta se atendió después en otra sucursal Niki, la seguimos mostrando pero lo indicamos para no confundir una migración interna con una pérdida de la marca.</p></div>
+      <Badge color="gray">{new Intl.NumberFormat("es-AR").format(scopeRows.length)} clientas</Badge>
+    </div>
+
+    <div className="niki-crm-kpis" style={{ display:"grid",gridTemplateColumns:"repeat(5,minmax(0,1fr))",gap:8 }}>
+      {stateCards.map(([key,label,value,color])=><button key={key} onClick={()=>setEstado(estado===key?"TODOS":key)} style={{ border:estado===key?`1.5px solid ${COLORS.pinkDark}`:"1px solid rgba(120,120,120,.12)",borderRadius:12,background:"var(--color-background-primary)",padding:"12px 13px",textAlign:"left",cursor:"pointer" }}><span style={{ display:"block",fontSize:10,color:"var(--color-text-secondary)",fontWeight:700,textTransform:"uppercase" }}>{label}</span><strong style={{ display:"block",fontSize:22,marginTop:4,color:key==="EN_RIESGO"?COLORS.amber:key==="PERDIDA"?COLORS.gray:key==="ACTIVA"?COLORS.success:COLORS.pinkDark }}>{new Intl.NumberFormat("es-AR").format(value)}</strong></button>)}
+    </div>
+
+    <div className="niki-dashboard-two-col" style={{ display:"grid",gridTemplateColumns:"repeat(2,minmax(0,1fr))",gap:10 }}>
+      <Card style={{ padding:15 }}><div style={{ display:"flex",justifyContent:"space-between",gap:8,alignItems:"baseline" }}><div><h3 style={{ margin:0,fontSize:14 }}>Para recuperar</h3><p style={{ margin:"3px 0 0",fontSize:10.5,color:"var(--color-text-secondary)" }}>Recurrentes que superaron su frecuencia esperada.</p></div><Badge color="amber">{counts.EN_RIESGO}</Badge></div>
+        <div style={{ display:"flex",flexDirection:"column",gap:6,marginTop:10 }}>{riesgo.length?riesgo.map(r=><button key={r.clientId} onClick={()=>openClient(r)} style={{ border:"1px solid rgba(120,120,120,.10)",background:"#fff",borderRadius:10,padding:"9px 10px",display:"grid",gridTemplateColumns:"minmax(0,1fr) auto",gap:8,textAlign:"left",cursor:"pointer" }}><span><strong style={{ display:"block",fontSize:12.5 }}>{r.cliente}</strong><small style={{ color:"var(--color-text-secondary)" }}>{r.localPrincipal || "Sin local"} · {r.visitas} visitas</small>{migrationNotice(r,true)}</span><span style={{ textAlign:"right",fontSize:11,color:COLORS.amber }}><strong>{r.diasDesdeUltima} días</strong><br/><small>sin venir</small></span></button>):<p style={{ margin:"12px 0",fontSize:12,color:"var(--color-text-secondary)" }}>No hay clientas en riesgo.</p>}</div>
+        {counts.EN_RIESGO>riesgo.length&&<Btn variant="ghost" size="sm" onClick={()=>setEstado("EN_RIESGO")} style={{ marginTop:8 }}>Ver todas →</Btn>}
+      </Card>
+      <Card style={{ padding:15 }}><div style={{ display:"flex",justifyContent:"space-between",gap:8,alignItems:"baseline" }}><div><h3 style={{ margin:0,fontSize:14 }}>Primera visita sin retorno</h3><p style={{ margin:"3px 0 0",fontSize:10.5,color:"var(--color-text-secondary)" }}>Clientas a convertir en recurrentes.</p></div><Badge color="amber">{counts.NUEVA_SIN_RETORNO}</Badge></div>
+        <div style={{ display:"flex",flexDirection:"column",gap:6,marginTop:10 }}>{sinRetorno.length?sinRetorno.map(r=><button key={r.clientId} onClick={()=>openClient(r)} style={{ border:"1px solid rgba(120,120,120,.10)",background:"#fff",borderRadius:10,padding:"9px 10px",display:"grid",gridTemplateColumns:"minmax(0,1fr) auto",gap:8,textAlign:"left",cursor:"pointer" }}><span><strong style={{ display:"block",fontSize:12.5 }}>{r.cliente}</strong><small style={{ color:"var(--color-text-secondary)" }}>{r.localPrincipal || "Sin local"}</small>{migrationNotice(r,true)}</span><span style={{ textAlign:"right",fontSize:11,color:COLORS.amber }}><strong>{r.diasDesdeUltima} días</strong><br/><small>desde 1ª visita</small></span></button>):<p style={{ margin:"12px 0",fontSize:12,color:"var(--color-text-secondary)" }}>No hay nuevas sin retorno.</p>}</div>
+        {counts.NUEVA_SIN_RETORNO>sinRetorno.length&&<Btn variant="ghost" size="sm" onClick={()=>setEstado("NUEVA_SIN_RETORNO")} style={{ marginTop:8 }}>Ver todas →</Btn>}
+      </Card>
+    </div>
+
+    <Card style={{ padding:15 }}>
+      <div style={{ display:"flex",justifyContent:"space-between",alignItems:"flex-end",gap:10,flexWrap:"wrap",marginBottom:12 }}><div><h3 style={{ margin:0,fontSize:14 }}>Cartera de clientes</h3><p style={{ margin:"3px 0 0",fontSize:10.5,color:"var(--color-text-secondary)" }}>La cartera se calcula dentro del alcance seleccionado; la actividad posterior en otra sucursal se muestra sólo como aviso.</p></div><span style={{ fontSize:11,color:"var(--color-text-secondary)" }}>{`Mostrando ${visibleCount} de ${new Intl.NumberFormat("es-AR").format(total)}`}</span></div>
+      <div className="niki-crm-filters" style={{ display:"grid",gridTemplateColumns:"minmax(240px,1.6fr) minmax(170px,.7fr) minmax(210px,.9fr)",gap:8,marginBottom:12 }}>
+        <Input value={query} onChange={setQuery} placeholder="Buscar por nombre, email o local..."/>
+        <Select value={estado} onChange={setEstado}><option value="TODOS">Todos los estados</option><option value="ACTIVA">Activas</option><option value="EN_RIESGO">En riesgo</option><option value="NUEVA">Nuevas</option><option value="NUEVA_SIN_RETORNO">Sin retorno</option><option value="PERDIDA">Perdidas</option></Select>
+        <Select value={localId} onChange={setLocalId}><option value="TODOS">Todos mis locales</option>{allowedLocals.map(x=><option key={x.id} value={x.id}>{x.nombre}</option>)}</Select>
+      </div>
+      {error&&<div style={{ marginBottom:10,padding:"9px 11px",borderRadius:10,background:COLORS.dangerLight,color:COLORS.danger,fontSize:11 }}>{error}</div>}
+      <div style={{ overflowX:"auto",maxHeight:540 }}><table style={{ width:"100%",borderCollapse:"separate",borderSpacing:0,fontSize:11,minWidth:1120 }}><thead style={{ position:"sticky",top:0,zIndex:2 }}><tr style={{ background:"#f5e8ec",color:COLORS.pinkDark,textTransform:"uppercase",fontSize:9.5 }}><th style={{ textAlign:"left",padding:9 }}>Clienta</th><th style={{ textAlign:"left",padding:9 }}>Estado</th><th style={{ textAlign:"left",padding:9 }}>Local</th><th style={{ textAlign:"right",padding:9 }}>Visitas</th><th style={{ textAlign:"right",padding:9 }}>Última visita</th><th style={{ textAlign:"right",padding:9 }}>Frecuencia</th><th style={{ textAlign:"right",padding:9 }}>Días sin venir</th><th style={{ textAlign:"right",padding:9 }}>Ticket</th><th style={{ textAlign:"right",padding:9 }}>Valor histórico</th><th style={{ textAlign:"left",padding:9 }}>Red Niki</th><th style={{ width:62 }}></th></tr></thead><tbody>{rows.map((r,i)=><tr key={r.clientId} style={{ background:i%2?"rgba(120,120,120,.018)":"transparent" }}><td style={{ padding:9,borderTop:"1px solid rgba(120,120,120,.08)" }}><strong style={{ display:"block",fontSize:11.5 }}>{r.cliente}</strong><span style={{ color:"var(--color-text-secondary)",fontSize:10 }}>{r.email || "Sin email"}</span></td><td style={{ padding:9,borderTop:"1px solid rgba(120,120,120,.08)" }}><CrmEstadoBadge estado={r.estado}/></td><td style={{ padding:9,borderTop:"1px solid rgba(120,120,120,.08)" }}>{r.localPrincipal || "—"}</td><td style={{ padding:9,textAlign:"right",borderTop:"1px solid rgba(120,120,120,.08)",fontWeight:700 }}>{r.visitas}</td><td style={{ padding:9,textAlign:"right",borderTop:"1px solid rgba(120,120,120,.08)" }}>{fechaFmt(r.ultimaVisita)}</td><td style={{ padding:9,textAlign:"right",borderTop:"1px solid rgba(120,120,120,.08)" }}>{frecuenciaTxt(r)}</td><td style={{ padding:9,textAlign:"right",borderTop:"1px solid rgba(120,120,120,.08)",fontWeight:700,color:r.estado==="EN_RIESGO"?COLORS.amber:r.estado==="PERDIDA"?COLORS.gray:"inherit" }}>{r.diasDesdeUltima}</td><td style={{ padding:9,textAlign:"right",borderTop:"1px solid rgba(120,120,120,.08)" }}>{fmtMoney(r.ticketPagado)}</td><td style={{ padding:9,textAlign:"right",borderTop:"1px solid rgba(120,120,120,.08)" }}>{fmtMoney(r.gastoPagado)}</td><td style={{ padding:9,borderTop:"1px solid rgba(120,120,120,.08)",minWidth:185 }}>{r.atendidaDespuesOtroLocal?<span style={{ display:"inline-block",background:COLORS.infoLight,color:COLORS.info,borderRadius:999,padding:"3px 7px",fontSize:9.5,fontWeight:700 }}>Luego: {r.ultimoLocalGlobal} · {fechaFmt(r.ultimaVisitaGlobal)}</span>:<span style={{ color:"var(--color-text-secondary)",fontSize:10 }}>Sin visita posterior afuera</span>}</td><td style={{ padding:7,textAlign:"right",borderTop:"1px solid rgba(120,120,120,.08)" }}><Btn size="sm" variant="ghost" onClick={()=>openClient(r)}>Ver</Btn></td></tr>)}</tbody></table></div>
+      {!rows.length&&<p style={{ margin:"14px 0 0",fontSize:12,color:"var(--color-text-secondary)" }}>No hay clientas para los filtros seleccionados.</p>}
+      {total>250&&<p style={{ margin:"10px 0 0",fontSize:10.5,color:"var(--color-text-secondary)" }}>Se muestran los primeros 250 resultados de esta búsqueda. La búsqueda se realiza sobre toda la cartera cargada del alcance.</p>}
+    </Card>
+
+    {selected&&<Modal title={selected.cliente} onClose={()=>setSelected(null)} width={760}>
+      <div style={{ display:"flex",flexDirection:"column",gap:10 }}>
+        <div style={{ display:"flex",justifyContent:"space-between",alignItems:"center",gap:8,flexWrap:"wrap" }}><CrmEstadoBadge estado={selected.estado}/><span style={{ fontSize:11,color:"var(--color-text-secondary)" }}>Última visita en este alcance: <strong>{fechaFmt(selected.ultimaVisita)}</strong> · hace {selected.diasDesdeUltima} días</span></div>
+        {migrationNotice(selected,false)}
+        <div className="niki-dashboard-two-col" style={{ display:"grid",gridTemplateColumns:"repeat(2,minmax(0,1fr))",gap:8 }}>
+          <Card style={{ padding:12 }}><h4 style={{ margin:"0 0 8px",fontSize:12 }}>Relación con tus locales</h4><div style={{ display:"grid",gridTemplateColumns:"1fr auto",gap:"6px 12px",fontSize:11 }}><span>Primera visita</span><strong>{fechaFmt(selected.primeraVisita)}</strong><span>Locales del alcance visitados</span><strong>{selected.localesVisitados}</strong><span>Local principal</span><strong>{selected.localPrincipal||"—"}</strong><span>Confianza frecuencia</span><strong>{selected.confianza}</strong>{selected.umbralRiesgo!=null&&<><span>Umbral de riesgo</span><strong>{selected.umbralRiesgo} días</strong></>}</div></Card>
+          <Card style={{ padding:12 }}><h4 style={{ margin:"0 0 8px",fontSize:12 }}>Valor en tus locales</h4><div style={{ display:"grid",gridTemplateColumns:"1fr auto",gap:"6px 12px",fontSize:11 }}><span>Gasto pagado</span><strong>{fmtMoney(selected.gastoPagado)}</strong><span>Ticket por visita</span><strong>{fmtMoney(selected.ticketPagado)}</strong><span>Visitas</span><strong>{selected.visitas}</strong><span>Estado</span><strong>{selected.estado.replaceAll("_"," ")}</strong></div></Card>
+        </div>
+        <Card style={{ padding:12 }}><div style={{ display:"flex",justifyContent:"space-between",gap:8,alignItems:"baseline" }}><div><h4 style={{ margin:0,fontSize:12 }}>Últimas visitas visibles</h4><p style={{ margin:"2px 0 0",fontSize:10,color:"var(--color-text-secondary)" }}>{selected.email || "Sin email registrado"}</p></div><small style={{ color:"var(--color-text-secondary)" }}>{visitas.length} registros</small></div>{visitasLoading?<p style={{ fontSize:12,color:"var(--color-text-secondary)" }}>Cargando historial...</p>:<div style={{ marginTop:8,maxHeight:260,overflowY:"auto" }}>{visitas.slice(0,30).map((v,idx)=><div key={`${v.client_id}-${v.local_id}-${v.fecha}-${idx}`} style={{ display:"grid",gridTemplateColumns:"90px minmax(0,1fr) auto",gap:8,padding:"7px 4px",borderTop:"1px solid rgba(120,120,120,.08)",fontSize:11 }}><span>{fechaFmt(v.fecha)}</span><span>{v.local || "Sin local"}</span><strong>{fmtMoney(v.gasto_pagado)}</strong></div>)}{!visitas.length&&<p style={{ margin:"10px 0",fontSize:11,color:"var(--color-text-secondary)" }}>No hay visitas visibles en el alcance de este usuario.</p>}</div>}</Card>
+      </div>
+    </Modal>}
+  </div>;
+}
+
 // ── APP PRINCIPAL ──────────────────────────────────────────────────
 function readSectionHash() {
   const h = (window.location.hash || "").replace(/^#\/?/, "").trim();
@@ -12169,12 +13242,13 @@ function readSectionHash() {
 function defaultSectionForRole(role) {
   return "inicio";
 }
+
 function sectionAllowedForRole(section, role) {
   const reportesOperativos = ["reportes","reportes_horas","reportes_cobertura","reportes_comisiones","reporte_pago_comisiones"];
-  const admin = ["inicio","ayuda","roadmap","asistencia","horarios","pizarra_semanal","horarios_encargadas","bloqueo_horarios",...reportesOperativos,"preliquidacion_encargadas","turnos","adelantos","garantias","informes","manicuras","encargadas","reclutamiento_busquedas","reclutamiento_candidatas","reclutamiento_calendario","reclutamiento_aprobaciones","reclutamiento_antiguedad","reclutamiento_config","locales","cobertura_config","perfil"];
-  const casaMatriz = ["inicio","ayuda","roadmap","asistencia","horarios","pizarra_semanal","horarios_encargadas","bloqueo_horarios",...reportesOperativos,"preliquidacion_encargadas","adelantos","garantias","informes","manicuras","encargadas","reclutamiento_busquedas","reclutamiento_candidatas","reclutamiento_calendario","reclutamiento_aprobaciones","reclutamiento_antiguedad","reclutamiento_config","locales","cobertura_config","perfil"];
-  const franquiciado = ["inicio","ayuda","asistencia","horarios","pizarra_semanal","horarios_encargadas","bloqueo_horarios",...reportesOperativos,"preliquidacion_encargadas","adelantos","garantias","informes","manicuras","encargadas","cobertura_config","perfil"];
-  const encargada = ["inicio","ayuda","asistencia","horarios","pizarra_semanal","bloqueo_horarios",...reportesOperativos,"preliquidacion_encargadas","adelantos","garantias","informes","manicuras","cobertura_config","perfil"];
+  const admin = ["inicio","dashboard","clientes_crm","ayuda","roadmap","asistencia","horarios","pizarra_semanal","horarios_encargadas","bloqueo_horarios",...reportesOperativos,"preliquidacion_encargadas","turnos","adelantos","garantias","informes","manicuras","encargadas","reclutamiento_busquedas","reclutamiento_candidatas","reclutamiento_calendario","reclutamiento_aprobaciones","reclutamiento_antiguedad","reclutamiento_config","locales","cobertura_config","perfil"];
+  const casaMatriz = ["inicio","dashboard","clientes_crm","ayuda","roadmap","asistencia","horarios","pizarra_semanal","horarios_encargadas","bloqueo_horarios",...reportesOperativos,"preliquidacion_encargadas","adelantos","garantias","informes","manicuras","encargadas","reclutamiento_busquedas","reclutamiento_candidatas","reclutamiento_calendario","reclutamiento_aprobaciones","reclutamiento_antiguedad","reclutamiento_config","locales","cobertura_config","perfil"];
+  const franquiciado = ["inicio","dashboard","clientes_crm","ayuda","asistencia","horarios","pizarra_semanal","horarios_encargadas","bloqueo_horarios",...reportesOperativos,"preliquidacion_encargadas","adelantos","garantias","informes","manicuras","encargadas","cobertura_config","perfil"];
+  const encargada = ["inicio","dashboard","clientes_crm","ayuda","asistencia","horarios","pizarra_semanal","bloqueo_horarios",...reportesOperativos,"preliquidacion_encargadas","adelantos","garantias","informes","manicuras","cobertura_config","perfil"];
   const manicura = ["inicio","ayuda","horarios","pizarra_semanal","reportes","reportes_horas","reportes_comisiones","perfil"];
   const allowed = role === "admin" ? admin : role === "casa_matriz" ? casaMatriz : role === "franquiciado" ? franquiciado : role === "encargada" ? encargada : manicura;
   return allowed.includes(section);
@@ -12288,6 +13362,8 @@ export default function App() {
     bloqueoHorarios: null,
     reportes: {},
   });
+  const [homeKpis, setHomeKpis] = useState({ loading:false, error:"", ventas:0, ventasAnt:0, visitas:0, visitasAnt:0, ticket:0, ticketAnt:0, fechaHasta:"" });
+
 
   const saveScreenState = useCallback((key, value) => {
     setScreenState(prev => ({ ...prev, [key]: value }));
@@ -12528,6 +13604,47 @@ export default function App() {
     }
   }, [user, seccion]);
 
+  useEffect(() => {
+    const rolesConResumen = new Set(["admin","casa_matriz","franquiciado","encargada"]);
+    if (!user || !data || seccion !== "inicio" || !rolesConResumen.has(user.rol)) return;
+
+    let cancelled = false;
+    const loadHomeKpis = async () => {
+      setHomeKpis(prev => ({ ...prev, loading:true, error:"" }));
+      try {
+        const now = new Date();
+        const cutoff = new Date(now.getFullYear(), now.getMonth(), now.getDate() - 1);
+        const currentStart = new Date(cutoff.getFullYear(), cutoff.getMonth(), 1);
+        const previousStart = new Date(cutoff.getFullYear(), cutoff.getMonth() - 1, 1);
+        const previousMonthLast = new Date(cutoff.getFullYear(), cutoff.getMonth(), 0).getDate();
+        const comparableDay = Math.min(cutoff.getDate(), previousMonthLast);
+        const previousEnd = new Date(previousStart.getFullYear(), previousStart.getMonth(), comparableDay);
+        const iso = d => `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}`;
+
+        const rows = await api.getDashboardKpiLocalDia(iso(previousStart), iso(cutoff));
+        const allowedIds = new Set((getAssignedLocalIds(data, user) || []).map(Number));
+        const scoped = (rows || []).filter(r => user.rol === "admin" || allowedIds.has(Number(r.local_id)));
+        const sumRange = (from,to) => {
+          let ventas=0, visitas=0;
+          for (const r of scoped) {
+            const f=String(r.fecha||"");
+            if (f < from || f > to) continue;
+            ventas += Number(r.ventas || 0);
+            visitas += Number(r.visitas || 0);
+          }
+          return { ventas, visitas, ticket: visitas ? ventas/visitas : 0 };
+        };
+        const cur=sumRange(iso(currentStart),iso(cutoff));
+        const prev=sumRange(iso(previousStart),iso(previousEnd));
+        if (!cancelled) setHomeKpis({ loading:false,error:"",ventas:cur.ventas,ventasAnt:prev.ventas,visitas:cur.visitas,visitasAnt:prev.visitas,ticket:cur.ticket,ticketAnt:prev.ticket,fechaHasta:iso(cutoff) });
+      } catch (e) {
+        if (!cancelled) setHomeKpis(prev => ({ ...prev, loading:false, error:e?.message || "No se pudo cargar el resumen." }));
+      }
+    };
+    void loadHomeKpis();
+    return () => { cancelled = true; };
+  }, [user?.id, user?.rol, seccion, data?.locales, data?.usuarioLocales, data?.encargadoLocales]);
+
   const currentPublicHash = publicHash;
   if (!user && currentPublicHash === "ayuda") return <CentroAyuda onBack={() => { window.location.hash = ""; }}/>; 
 
@@ -12548,6 +13665,22 @@ export default function App() {
       icon: "⌂",
       items: [
         { id: "inicio", label: "Inicio", icon: "⌂" },
+      ],
+    },
+    {
+      id: "indicadores",
+      label: "Indicadores",
+      icon: "📊",
+      items: [
+        { id: "dashboard", label: "Dashboard", icon: "📊" },
+      ],
+    },
+    {
+      id: "clientes_crm",
+      label: "Clientes",
+      icon: "♡",
+      items: [
+        { id: "clientes_crm", label: "Clientes", icon: "♡" },
       ],
     },
     {
@@ -12676,24 +13809,42 @@ export default function App() {
         border: "1px solid rgba(114,36,62,0.12)",
         background: "#fff",
         borderRadius: 18,
-        padding: 18,
-        minHeight: 104,
+        padding: 14,
+        minHeight: 82,
         textAlign: "left",
         boxShadow: "0 10px 26px rgba(0,0,0,0.06)",
         cursor: "pointer",
         display: "flex",
         flexDirection: "column",
         justifyContent: "space-between",
-        gap: 12,
+        gap: 8,
       }}
     >
-      <span style={{ fontSize: 25 }}>{item.icon}</span>
+      <span style={{ fontSize: 21 }}>{item.icon}</span>
       <span>
-        <strong style={{ display: "block", color: "var(--color-text-primary)", fontSize: 15, marginBottom: 4 }}>{item.label}</strong>
-        {subtitle && <small style={{ color: "var(--color-text-secondary)", fontSize: 12, lineHeight: 1.35 }}>{subtitle}</small>}
+        <strong style={{ display: "block", color: "var(--color-text-primary)", fontSize: 14, marginBottom: 2 }}>{item.label}</strong>
+        {subtitle && <small style={{ color: "var(--color-text-secondary)", fontSize: 11, lineHeight: 1.25 }}>{subtitle}</small>}
       </span>
     </button>
   );
+
+  const renderHomeKpiCard = ({ icon, label, value, detail, variation }) => {
+    const hasVar = Number.isFinite(Number(variation));
+    const positive = Number(variation) >= 0;
+    return (
+      <div style={{ border:"1px solid rgba(114,36,62,0.10)",background:"#fff",borderRadius:16,padding:isDesktopMenu?10:12,boxShadow:"0 6px 18px rgba(0,0,0,0.035)",minHeight:isDesktopMenu?76:100,display:"flex",flexDirection:"column",justifyContent:"space-between",gap:6 }}>
+        <div style={{ display:"flex",alignItems:"center",justifyContent:"space-between",gap:8 }}>
+          <span style={{ width:27,height:27,borderRadius:9,display:"grid",placeItems:"center",background:COLORS.pinkLight,fontSize:14 }}>{icon}</span>
+          {hasVar && <span style={{ fontSize:9.5,fontWeight:800,color:positive?COLORS.success:COLORS.danger,background:positive?COLORS.successLight:COLORS.dangerLight,borderRadius:999,padding:"3px 6px" }}>{positive?"▲":"▼"} {Math.abs(Number(variation)).toLocaleString("es-AR",{maximumFractionDigits:1})}%</span>}
+        </div>
+        <div>
+          <span style={{ display:"block",fontSize:10,color:"var(--color-text-secondary)",fontWeight:700,marginBottom:2 }}>{label}</span>
+          <strong style={{ display:"block",fontSize:isDesktopMenu?17:19,color:"var(--color-text-primary)",lineHeight:1.1 }}>{value}</strong>
+          {detail && <small style={{ display:"block",marginTop:2,fontSize:9.5,color:"var(--color-text-secondary)" }}>{detail}</small>}
+        </div>
+      </div>
+    );
+  };
 
   const renderMobileHome = () => {
     const quickBase = user.rol === "manicura"
@@ -12706,6 +13857,7 @@ export default function App() {
         ]
       : [
           [{ id: "turnos", label: "Turnos", icon: "📅" }, "Agenda y reservas"],
+          [{ id: "clientes_crm", label: "Clientes", icon: "♡" }, "Cartera y recuperación"],
           [{ id: "horarios", label: "Horarios", icon: "🗓️" }, "Carga del equipo"],
           [{ id: "bloqueo_horarios", label: "Bloqueos", icon: "🔐" }, "Habilitar edición mensual"],
           [{ id: "reportes_comisiones", label: "Comisiones", icon: "💰" }, "Reporte y cálculo"],
@@ -12725,35 +13877,61 @@ export default function App() {
     ];
 
     return (
-      <div style={{ display:"flex", flexDirection:"column", gap:18 }}>
-        <section style={{ position:"relative", overflow:"hidden", background:"linear-gradient(135deg, #fff 0%, #f7edf0 58%, #fff8fb 100%)", border:"1px solid rgba(114,36,62,0.10)", borderRadius:26, padding:isDesktopMenu?"42px 34px":"30px 22px", minHeight:isDesktopMenu?300:260, display:"flex", alignItems:"center", justifyContent:"center", textAlign:"center", boxShadow:"0 18px 44px rgba(114,36,62,0.08)" }}>
+      <div style={{ display:"flex", flexDirection:"column", gap:14 }}>
+        <section style={{ position:"relative", overflow:"hidden", background:"linear-gradient(135deg, #fff 0%, #f7edf0 58%, #fff8fb 100%)", border:"1px solid rgba(114,36,62,0.10)", borderRadius:26, padding:isDesktopMenu?"24px 30px":"26px 22px", minHeight:isDesktopMenu?222:245, display:"flex", alignItems:"center", justifyContent:"center", textAlign:"center", boxShadow:"0 18px 44px rgba(114,36,62,0.08)" }}>
           <div style={{ position:"absolute", width:240, height:240, borderRadius:"50%", background:"rgba(225,198,204,0.28)", right:-70, top:-80 }} />
           <div style={{ position:"absolute", width:160, height:160, borderRadius:"50%", background:"rgba(255,255,255,0.72)", left:-54, bottom:-58 }} />
           <div style={{ position:"relative", zIndex:1, maxWidth:760, display:"flex", flexDirection:"column", alignItems:"center" }}>
-            <div style={{ width:isDesktopMenu?150:126, height:isDesktopMenu?150:126, borderRadius:34, background:"#fff", display:"flex", alignItems:"center", justifyContent:"center", boxShadow:"0 16px 38px rgba(114,36,62,0.16)", marginBottom:18 }}>
-              <LogoMark size={isDesktopMenu?118:98} variant="light" />
+            <div style={{ width:isDesktopMenu?104:126, height:isDesktopMenu?104:126, borderRadius:isDesktopMenu?26:34, background:"#fff", display:"flex", alignItems:"center", justifyContent:"center", boxShadow:"0 14px 32px rgba(114,36,62,0.14)", marginBottom:isDesktopMenu?12:18 }}>
+              <LogoMark size={isDesktopMenu?82:98} variant="light" />
             </div>
-            <p style={{ margin:"0 0 8px", fontSize:12, letterSpacing:"0.12em", textTransform:"uppercase", color:COLORS.pinkDark, fontWeight:800 }}>{todayText}</p>
-            <h1 style={{ margin:"0 0 10px", fontSize:isDesktopMenu?34:26, lineHeight:1.08, fontWeight:700, color:COLORS.pinkDark }}>¡Hola, {userName}!</h1>
-            <p style={{ margin:0, fontSize:isDesktopMenu?16:14, lineHeight:1.6, color:"#65424f", maxWidth:620 }}>Este es el inicio de NIKI OS. Pronto vas a ver acá novedades, comunicados y publicaciones importantes para empezar el día con toda la información a mano.</p>
+            <p style={{ margin:"0 0 6px", fontSize:11.5, letterSpacing:"0.12em", textTransform:"uppercase", color:COLORS.pinkDark, fontWeight:800 }}>{todayText}</p>
+            <h1 style={{ margin:"0 0 7px", fontSize:isDesktopMenu?29:26, lineHeight:1.08, fontWeight:700, color:COLORS.pinkDark }}>¡Hola, {userName}!</h1>
+            <p style={{ margin:0, fontSize:isDesktopMenu?14:14, lineHeight:1.48, color:"#65424f", maxWidth:680 }}>Este es el inicio de NIKI OS. Pronto vas a ver acá novedades, comunicados y publicaciones importantes para empezar el día con toda la información a mano.</p>
           </div>
         </section>
 
-        <section style={{ display:"grid", gridTemplateColumns:isDesktopMenu?"1.15fr 0.85fr":"1fr", gap:14, alignItems:"stretch" }}>
-          <Card style={{ padding:isDesktopMenu?22:18, borderRadius:22, background:"#fff" }}>
-            <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", gap:12, marginBottom:14 }}>
+        {["admin","casa_matriz","franquiciado","encargada"].includes(user.rol) && (
+          <section style={{ display:"flex",flexDirection:"column",gap:8 }}>
+            <div style={{ display:"flex",alignItems:"flex-end",justifyContent:"space-between",gap:12,flexWrap:"wrap" }}>
+              <div>
+                <p style={{ margin:"0 0 2px",color:COLORS.pinkDark,fontSize:10.5,fontWeight:800,letterSpacing:"0.08em",textTransform:"uppercase" }}>Resumen del negocio</p>
+                <h2 style={{ margin:0,fontSize:17,fontWeight:700,color:"var(--color-text-primary)" }}>Así viene el mes</h2>
+                <p style={{ margin:"2px 0 0",fontSize:10.5,color:"var(--color-text-secondary)" }}>{homeKpis.fechaHasta?`Datos acumulados hasta ${homeKpis.fechaHasta.split("-").reverse().join("/")}`:"Último día cerrado disponible"}</p>
+              </div>
+              <div style={{ display:"flex",gap:8,flexWrap:"wrap" }}>
+                <button type="button" onClick={()=>goToSection("dashboard")} style={{ border:"1px solid rgba(114,36,62,.18)",background:"#fff",color:COLORS.pinkDark,borderRadius:10,padding:"6px 9px",fontSize:10.5,fontWeight:800,cursor:"pointer",boxShadow:"0 4px 12px rgba(114,36,62,.04)" }}>Dashboard →</button>
+                <button type="button" onClick={()=>goToSection("clientes_crm")} style={{ border:"1px solid rgba(114,36,62,.12)",background:"transparent",color:"var(--color-text-secondary)",borderRadius:10,padding:"6px 9px",fontSize:10.5,fontWeight:700,cursor:"pointer" }}>Clientes →</button>
+              </div>
+            </div>
+            {homeKpis.error ? (
+              <div style={{ border:"1px solid rgba(176,75,75,.18)",background:COLORS.dangerLight,borderRadius:14,padding:"11px 13px",fontSize:11.5,color:COLORS.danger }}>No se pudo cargar el resumen ahora. Podés seguir usando Inicio normalmente.</div>
+            ) : (
+              <div className="niki-dashboard-kpis" style={{ display:"grid",gridTemplateColumns:"repeat(4,minmax(0,1fr))",gap:8 }}>
+                {renderHomeKpiCard({ icon:"💳",label:"Ventas MTD",value:homeKpis.loading?"…":fmtMoney(homeKpis.ventas),detail:"mes actual",variation:homeKpis.ventasAnt?dashboardPct(homeKpis.ventas,homeKpis.ventasAnt):null })}
+                {renderHomeKpiCard({ icon:"👣",label:"Visitas MTD",value:homeKpis.loading?"…":new Intl.NumberFormat("es-AR").format(Number(homeKpis.visitas||0)),detail:"clientes atendidos",variation:homeKpis.visitasAnt?dashboardPct(homeKpis.visitas,homeKpis.visitasAnt):null })}
+                {renderHomeKpiCard({ icon:"🎟",label:"Ticket promedio",value:homeKpis.loading?"…":fmtMoney(homeKpis.ticket),detail:"ventas / visitas",variation:homeKpis.ticketAnt?dashboardPct(homeKpis.ticket,homeKpis.ticketAnt):null })}
+                {renderHomeKpiCard({ icon:"↗",label:"Variación ventas",value:homeKpis.loading?"…":dashboardPctLabel(homeKpis.ventasAnt?dashboardPct(homeKpis.ventas,homeKpis.ventasAnt):null),detail:"vs. mismo tramo mes anterior" })}
+              </div>
+            )}
+          </section>
+        )}
+
+        <section style={{ display:"grid", gridTemplateColumns:isDesktopMenu?"1.15fr 0.85fr":"1fr", gap:12, alignItems:"start" }}>
+          <Card style={{ padding:isDesktopMenu?18:18, borderRadius:22, background:"#fff" }}>
+            <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", gap:12, marginBottom:10 }}>
               <div>
                 <p style={{ margin:"0 0 4px", color:COLORS.pinkDark, fontSize:12, fontWeight:800, letterSpacing:"0.08em", textTransform:"uppercase" }}>Muro NIKI</p>
-                <h2 style={{ margin:0, fontSize:20, fontWeight:700, color:"var(--color-text-primary)" }}>Espacio de novedades</h2>
+                <h2 style={{ margin:0, fontSize:19, fontWeight:700, color:"var(--color-text-primary)" }}>Espacio de novedades</h2>
               </div>
               <Badge color="pink">Próximamente</Badge>
             </div>
-            <div style={{ display:"grid", gridTemplateColumns:isDesktopMenu?"repeat(3,1fr)":"1fr", gap:12 }}>
+            <div style={{ display:"grid", gridTemplateColumns:isDesktopMenu?"repeat(3,1fr)":"1fr", gap:10 }}>
               {novedades.map(n => (
-                <div key={n.title} style={{ border:"1px dashed rgba(114,36,62,0.22)", borderRadius:18, padding:16, background:"linear-gradient(180deg,#fff,#fff9fb)", minHeight:136 }}>
-                  <div style={{ width:38, height:38, borderRadius:14, background:COLORS.pinkLight, display:"grid", placeItems:"center", fontSize:19, marginBottom:10 }}>{n.icon}</div>
-                  <strong style={{ display:"block", fontSize:14, marginBottom:6, color:"var(--color-text-primary)" }}>{n.title}</strong>
-                  <p style={{ margin:0, fontSize:12, lineHeight:1.45, color:"var(--color-text-secondary)" }}>{n.text}</p>
+                <div key={n.title} style={{ border:"1px dashed rgba(114,36,62,0.22)", borderRadius:18, padding:13, background:"linear-gradient(180deg,#fff,#fff9fb)", minHeight:116 }}>
+                  <div style={{ width:34, height:34, borderRadius:12, background:COLORS.pinkLight, display:"grid", placeItems:"center", fontSize:17, marginBottom:7 }}>{n.icon}</div>
+                  <strong style={{ display:"block", fontSize:13.5, marginBottom:4, color:"var(--color-text-primary)" }}>{n.title}</strong>
+                  <p style={{ margin:0, fontSize:11.5, lineHeight:1.38, color:"var(--color-text-secondary)" }}>{n.text}</p>
                 </div>
               ))}
             </div>
@@ -12761,8 +13939,8 @@ export default function App() {
 
           <Card style={{ padding:isDesktopMenu?22:18, borderRadius:22, background:"#fff" }}>
             <p style={{ margin:"0 0 4px", color:COLORS.pinkDark, fontSize:12, fontWeight:800, letterSpacing:"0.08em", textTransform:"uppercase" }}>Accesos rápidos</p>
-            <h2 style={{ margin:"0 0 14px", fontSize:20, fontWeight:700, color:"var(--color-text-primary)" }}>¿Qué querés hacer?</h2>
-            <div style={{ display:"grid", gridTemplateColumns:"repeat(auto-fit, minmax(145px, 1fr))", gap:12 }}>
+            <h2 style={{ margin:"0 0 10px", fontSize:19, fontWeight:700, color:"var(--color-text-primary)" }}>¿Qué querés hacer?</h2>
+            <div style={{ display:"grid", gridTemplateColumns:"repeat(auto-fit, minmax(145px, 1fr))", gap:9 }}>
               {quick.slice(0, isDesktopMenu ? 6 : quick.length).map(([item, subtitle]) => renderHomeCard(item, subtitle))}
             </div>
           </Card>
@@ -12903,6 +14081,8 @@ export default function App() {
 
   const renderSeccion = () => {
     if (seccion==="inicio") return renderMobileHome();
+    if (seccion==="dashboard") return user.rol!=="manicura" ? <DashboardComercial data={data} user={user}/> : null;
+    if (seccion==="clientes_crm") return user.rol!=="manicura" ? <ClientesCrm data={data} user={user}/> : null;
     if (seccion==="asistencia") return <AsistenciaDiaria data={data} setData={setData} reloadData={reloadData} user={user}/>;
     if (seccion==="turnos") return user.rol==="admin" ? <AgendaTurnos data={data} reloadData={reloadData} user={user} agendaOpenRequest={agendaOpenRequest} onAgendaOpenRequestDone={() => setAgendaOpenRequest(null)}/> : null;
     if (seccion==="horarios") return <CalendarioHorarios data={data} setData={setData} reloadData={reloadData} user={user} agendaRequest={agendaRequest} savedState={screenState.horarios} onStateChange={(state)=>saveScreenState("horarios", state)} onBackToReport={()=>{ setSeccion("reportes_cobertura"); setMenuOpen(false); setMobileMenuGroup(null); }}/>;
