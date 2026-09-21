@@ -790,35 +790,28 @@ const api = {
   getComisionesPeriodo: (periodo) => sbAll(`comisiones_detalle?select=*&periodo=eq.${encodeURIComponent(periodo)}&order=fecha_pago.desc,id.desc`),
   getComisionesRango: (desde,hasta) => sbAll(`comisiones_detalle?select=*&fecha_pago=gte.${encodeURIComponent(desde)}&fecha_pago=lte.${encodeURIComponent(hasta)}&order=fecha_pago.desc,id.desc`),
   getComisionesAgendaProShadowRango: (desde,hasta) => sbAll(`comisiones_agendapro_shadow?select=*&fecha_pago=gte.${encodeURIComponent(desde)}&fecha_pago=lte.${encodeURIComponent(hasta)}&order=fecha_pago.desc,id.desc`),
-  getAgendaComisionesSinVincular: () => sbAll("vw_comisiones_agendapro_base?select=local_id,nombre_local,agendapro_provider_id,profesional_agendapro,fecha_pago,precio_efectivo&estado=eq.PROFESIONAL_NO_VINCULADA&order=fecha_pago.desc"),
-  getAgendaComisionesSinVincularRango: (desde,hasta) => sbAll(`vw_comisiones_agendapro_base?select=local_id,nombre_local,agendapro_provider_id,profesional_agendapro,fecha_pago,precio_efectivo&estado=eq.PROFESIONAL_NO_VINCULADA&fecha_pago=gte.${encodeURIComponent(desde)}&fecha_pago=lte.${encodeURIComponent(hasta)}&order=fecha_pago.desc`),
+  getAgendaComisionesSinVincular: () => sbAll("mv_comisiones_agendapro_no_vinculadas_dia?select=local_id,nombre_local,agendapro_provider_id,profesional_agendapro,fecha_pago,precio_efectivo,cantidad&order=fecha_pago.desc"),
+  getAgendaComisionesSinVincularRango: (desde,hasta) => sbAll(`mv_comisiones_agendapro_no_vinculadas_dia?select=local_id,nombre_local,agendapro_provider_id,profesional_agendapro,fecha_pago,precio_efectivo,cantidad&fecha_pago=gte.${encodeURIComponent(desde)}&fecha_pago=lte.${encodeURIComponent(hasta)}&order=fecha_pago.desc`),
   refrescarComisionesAgendaProShadow: () => sb("rpc/refrescar_comisiones_agendapro_shadow", { method:"POST", body:"{}" }),
   getDashboardKpiLocalMesActual: () => sbAll("vw_agendapro_kpi_local_mes_actual?select=*&order=ventas.desc"),
   getDashboardKpiLocalDia: (desde,hasta) => sbAll(`mv_agendapro_kpi_local_dia?select=*&fecha=gte.${encodeURIComponent(desde)}&fecha=lte.${encodeURIComponent(hasta)}&order=fecha.asc,local_id.asc`),
   getDashboardKpiLocalDiaTodo: () => sbAll("mv_agendapro_kpi_local_dia?select=*&order=fecha.asc,local_id.asc"),
   getClientesCrmScopePage: (filters = {}) => crmScopePage(filters),
   getClientesCrmScopeAll: async (localIds=[]) => {
-    const ids=Array.from(new Set((localIds||[]).map(Number).filter(Boolean)));
+    const ids=Array.from(new Set((localIds||[]).map(Number).filter(Boolean))).sort((a,b)=>a-b);
     if(!ids.length) return [];
-    // IMPORTANTE: crm_clientes_scope devuelve SETOF y Supabase limita las respuestas
-    // tabulares a 1.000 filas. El wrapper JSON agrega todo el alcance en un único
-    // valor JSONB, evitando truncar la cartera del franquiciado.
-    const res=await fetch(`${SUPABASE_URL}/rest/v1/rpc/crm_clientes_scope_json`,{
-      method:"POST",
-      headers:{ apikey:SUPABASE_KEY,Authorization:`Bearer ${SUPABASE_KEY}`,"Content-Type":"application/json" },
-      body:JSON.stringify({ p_local_ids:ids }),
-    });
-    if(!res.ok) throw new Error(await res.text());
-    const text=await res.text();
-    if(!text) return [];
-    const parsed=JSON.parse(text);
-    if(Array.isArray(parsed)) return parsed;
-    // Compatibilidad defensiva por si PostgREST envuelve el escalar.
-    if(Array.isArray(parsed?.crm_clientes_scope_json)) return parsed.crm_clientes_scope_json;
-    if(Array.isArray(parsed?.data)) return parsed.data;
-    return [];
+    const scopeKey=ids.join(",");
+
+    // El CRM interactivo lee EXCLUSIVAMENTE la cache precalculada.
+    // No hacemos fallback a crm_clientes_scope_json porque ese cálculo en vivo
+    // es justamente el que puede disparar 57014 con el histórico completo.
+    const cached=await sb(`crm_clientes_scope_cache?select=data,refreshed_at&scope_key=eq.${encodeURIComponent(scopeKey)}&limit=1`);
+    const row=Array.isArray(cached)?cached[0]:null;
+    if(Array.isArray(row?.data)) return row.data;
+
+    throw new Error(`No existe cache CRM para el alcance ${scopeKey}. Ejecutá refrescar_niki_caches_operativos().`);
   },
-  getClientesCrmGlobalAll: () => sbAll("mv_agendapro_clientes_estado?select=*&order=dias_atraso_estimado.desc,visitas.desc,ultima_visita.desc,client_id.asc",{ pageSize:1000 }),
+  getClientesCrmGlobalAll: async (localIds=[]) => api.getClientesCrmScopeAll(localIds),
   getClienteCrmVisitas: (clientId, localIds=[]) => {
     const ids=Array.from(new Set((localIds||[]).map(Number).filter(Boolean)));
     if(!ids.length) return Promise.resolve([]);
@@ -1074,7 +1067,7 @@ function agruparComisionesAgendaProSinVincular(rows = []) {
     const fecha = String(r.fecha_pago || "").slice(0,10);
     const key = `${localId || 0}|${providerId == null ? "sin-id" : providerId}|${profesional.toLowerCase()}`;
     const prev = map.get(key) || { key, localId, nombreLocal, providerId, profesional, cantidad:0, totalPrecio:0, fechaDesde:fecha, fechaHasta:fecha };
-    prev.cantidad += 1;
+    prev.cantidad += Math.max(1, Number(r.cantidad || 1));
     prev.totalPrecio += Number(r.precio_efectivo || 0);
     if (fecha && (!prev.fechaDesde || fecha < prev.fechaDesde)) prev.fechaDesde = fecha;
     if (fecha && (!prev.fechaHasta || fecha > prev.fechaHasta)) prev.fechaHasta = fecha;
@@ -5114,7 +5107,7 @@ function ABMManicuras({ data, setData, reloadData, user }) {
         cantidad:0,
         totalPrecio:0
       };
-      prev.cantidad += 1;
+      prev.cantidad += Math.max(1, Number(x.cantidad || 1));
       prev.totalPrecio += Number(x.precio_efectivo || 0);
       if (fecha && (!prev.fechaDesde || fecha < prev.fechaDesde)) prev.fechaDesde = fecha;
       if (fecha && (!prev.fechaHasta || fecha > prev.fechaHasta)) prev.fechaHasta = fecha;
@@ -6393,7 +6386,7 @@ function Reportes({ data, setData, user, onOpenAgenda, reportRestore, reloadData
         return true;
       });
     const agendaPendientesAgrupados = agruparComisionesAgendaProSinVincular(agendaPendientesVisibles);
-    const agendaPendientesCantidad = agendaPendientesVisibles.length;
+    const agendaPendientesCantidad = agendaPendientesVisibles.reduce((acc,r)=>acc+Math.max(1,Number(r.cantidad||1)),0);
     const agendaPendientesTotal = agendaPendientesVisibles.reduce((acc,r)=>acc+Number(r.precio_efectivo||0),0);
     const garantiaVisible = (g, tipo) => {
       const uid = tipo === "reparacion" ? g.manicuraReparacionId : g.manicuraOriginalId;
@@ -10921,6 +10914,7 @@ function ReportePagoComisiones({ data, setData, user }) {
     return true;
   });
   const agendaPendientesPagoAgrupados = agruparComisionesAgendaProSinVincular(agendaPendientesPagoVisibles);
+  const agendaPendientesPagoCantidad = agendaPendientesPagoVisibles.reduce((acc,r)=>acc+Math.max(1,Number(r.cantidad||1)),0);
   const agendaPendientesPagoTotal = agendaPendientesPagoVisibles.reduce((acc,r)=>acc+Number(r.precio_efectivo||0),0);
 
   const configGeneralPagoComisiones = (data.comisionesConfiguracion || []).find(c => c.activo) || { id:1, porcentajeBase:40, porcentajeReducido:35, horasObjetivoDefault:36, horasObjetivoFinSemana:null, maxLlegadasTarde:0, maxFaltasNoJustificadas:0, contarFaltasJustificadas:false, toleranciaLlegadaTardeMinutos:0, minimoSemanalEstandar:0, minimoSemanalPremiumExclusiva:0, minimoSemanalEstandarFinSemana:null, minimoSemanalPremiumExclusivaFinSemana:null };
@@ -11301,7 +11295,7 @@ function ReportePagoComisiones({ data, setData, user }) {
     </div>
 
     {agendaPendientesPagoVisibles.length>0&&<div style={{display:"flex",alignItems:"center",justifyContent:"space-between",gap:10,flexWrap:"wrap",padding:"11px 12px",background:COLORS.amberLight,border:`1px solid ${COLORS.amber}55`,borderRadius:10}}>
-      <div><strong style={{fontSize:12,color:COLORS.amber}}>⚠ {agendaPendientesPagoVisibles.length} prestación{agendaPendientesPagoVisibles.length===1?"":"es"} de AgendaPro sin manicura vinculada</strong><p style={{margin:"3px 0 0",fontSize:10,color:COLORS.amber}}>No están incluidas en esta liquidación · {agendaPendientesPagoAgrupados.length} profesional{agendaPendientesPagoAgrupados.length===1?"":"es"}/situación{agendaPendientesPagoAgrupados.length===1?"":"es"} · base {fmtMoney(agendaPendientesPagoTotal)}.</p></div>
+      <div><strong style={{fontSize:12,color:COLORS.amber}}>⚠ {agendaPendientesPagoCantidad} prestación{agendaPendientesPagoCantidad===1?"":"es"} de AgendaPro sin manicura vinculada</strong><p style={{margin:"3px 0 0",fontSize:10,color:COLORS.amber}}>No están incluidas en esta liquidación · {agendaPendientesPagoAgrupados.length} profesional{agendaPendientesPagoAgrupados.length===1?"":"es"}/situación{agendaPendientesPagoAgrupados.length===1?"":"es"} · base {fmtMoney(agendaPendientesPagoTotal)}.</p></div>
       <Btn size="sm" variant="secondary" onClick={()=>setAgendaPendientesPagoModal(true)}>Ver Manicura / Local</Btn>
     </div>}
 
@@ -13088,18 +13082,22 @@ function ClientesCrm({ data, user }) {
 
   const assignedIds=useMemo(()=>Array.from(new Set(getAssignedLocalIds(data,user).map(Number).filter(Boolean))),[data,user]);
   const activeLocalIds=useMemo(()=>Array.from(new Set((data.locales||[]).filter(localActivo).map(l=>Number(l.id)).filter(Boolean))),[data.locales]);
+  const assignedActiveIds=useMemo(()=>{
+    const active=new Set(activeLocalIds);
+    return assignedIds.filter(id=>active.has(id));
+  },[assignedIds,activeLocalIds]);
   const allowedLocals=useMemo(()=>{
-    const allowed=new Set(assignedIds);
+    const allowed=new Set(assignedActiveIds);
     return (data.locales||[]).filter(l=>allowed.has(Number(l.id)) && localActivo(l)).sort((a,b)=>String(a.nombre||"").localeCompare(String(b.nombre||""),"es"));
-  },[data.locales,assignedIds]);
+  },[data.locales,assignedActiveIds]);
 
   const currentScopeIds=useMemo(()=>{
     if(localId!=="TODOS") {
       const id=Number(localId);
-      return assignedIds.includes(id) ? [id] : [];
+      return assignedActiveIds.includes(id) ? [id] : [];
     }
-    return assignedIds;
-  },[assignedIds,localId]);
+    return assignedActiveIds;
+  },[assignedActiveIds,localId]);
 
   const isFullNetworkScope=useMemo(()=>{
     if(!currentScopeIds.length || !activeLocalIds.length) return false;
@@ -13118,12 +13116,9 @@ function ClientesCrm({ data, user }) {
         setScopeRows(scopeCacheRef.current.get(scopeKey));
         return;
       }
-      let raw;
-      if(isFullNetworkScope) {
-        raw=await api.getClientesCrmGlobalAll();
-      } else {
-        raw=await api.getClientesCrmScopeAll(currentScopeIds);
-      }
+      // Tanto la red completa como los alcances parciales se sirven desde
+      // crm_clientes_scope_cache. Nunca ejecutamos el cálculo pesado al navegar.
+      const raw=await api.getClientesCrmScopeAll(currentScopeIds);
       const normalized=(raw||[]).map(normalizeClienteCrm);
       // En alcance global no existe "otra sucursal fuera del alcance".
       const finalRows=isFullNetworkScope ? normalized.map(r=>({ ...r, atendidaDespuesOtroLocal:false, ultimaVisitaGlobal:r.ultimaVisitaGlobal||r.ultimaVisita, ultimoLocalGlobal:r.ultimoLocalGlobal||r.localPrincipal })) : normalized;
