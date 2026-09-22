@@ -724,8 +724,11 @@ const api = {
   },
   getHorarios: () => sbAll("horarios?select=*&order=id"),
   upsertHorario: (d) => patchOrPost("horarios", `user_id=eq.${d.user_id}&local_id=eq.${d.local_id}&fecha=eq.${d.fecha}`, d),
+<<<<<<< HEAD
   updateHorarioById: (id,d) => sb(`horarios?id=eq.${parseInt(id)}`, { method:"PATCH", prefer:"return=representation", body:JSON.stringify(d) }),
   deleteHorarioById: (id) => sb(`horarios?id=eq.${parseInt(id)}`, { method:"DELETE", prefer:"" }),
+=======
+>>>>>>> 3e62ee0b5e3e58ba9093cc7a27cbb3ded777d453
   deleteHorario: (userId, localId, fecha) => sb(`horarios?user_id=eq.${userId}&local_id=eq.${localId}&fecha=eq.${fecha}`, { method: "DELETE", prefer: "" }),
   getAsistencias: () => sbAll("asistencias?select=*&order=id"),
   upsertAsistencia: (d) => patchOrPost("asistencias", `user_id=eq.${d.user_id}&local_id=eq.${d.local_id}&fecha=eq.${d.fecha}`, d),
@@ -819,9 +822,15 @@ const api = {
     if(!ids.length) return Promise.resolve([]);
     return sb(`mv_agendapro_clientes_visitas?select=client_id,fecha,local_id,local,gasto_facturado,gasto_pagado,ventas_totales&client_id=eq.${parseInt(clientId)}&local_id=in.(${ids.join(",")})&order=fecha.desc&limit=80`);
   },
+<<<<<<< HEAD
   getComisionesFechaLocal: (fecha,localId) => sbAll(`comisiones_agendapro_shadow?select=*&fecha_pago=eq.${encodeURIComponent(fecha)}&local_id=eq.${parseInt(localId)}&user_id=not.is.null&order=id.desc`),
   buscarClientesComisionesLocal: (localId,query) => sb(`comisiones_agendapro_shadow?select=cliente,fecha_pago&local_id=eq.${parseInt(localId)}&user_id=not.is.null&cliente=ilike.${encodeURIComponent(`*${String(query||"").trim()}*`)}&cliente=not.is.null&order=fecha_pago.desc,id.desc&limit=80`),
   getUltimosServiciosClienteLocal: (localId,cliente,limit=5) => sb(`comisiones_agendapro_shadow?select=*&local_id=eq.${parseInt(localId)}&user_id=not.is.null&cliente=eq.${encodeURIComponent(cliente)}&order=fecha_pago.desc,id.desc&limit=${parseInt(limit)||5}`),
+=======
+  getComisionesFechaLocal: (fecha,localId) => sbAll(`comisiones_detalle?select=*&fecha_pago=eq.${encodeURIComponent(fecha)}&local_id=eq.${parseInt(localId)}&order=id.desc`),
+  buscarClientesComisionesLocal: (localId,query) => sb(`comisiones_detalle?select=cliente,fecha_pago&local_id=eq.${parseInt(localId)}&cliente=ilike.${encodeURIComponent(`*${String(query||"").trim()}*`)}&cliente=not.is.null&order=fecha_pago.desc,id.desc&limit=80`),
+  getUltimosServiciosClienteLocal: (localId,cliente,limit=5) => sb(`comisiones_detalle?select=*&local_id=eq.${parseInt(localId)}&cliente=eq.${encodeURIComponent(cliente)}&order=fecha_pago.desc,id.desc&limit=${parseInt(limit)||5}`),
+>>>>>>> 3e62ee0b5e3e58ba9093cc7a27cbb3ded777d453
   reconciliarComisiones: ({ userId=null, periodo=null, localIds=null } = {}) => sb("rpc/reconciliar_comisiones_manicura", { method:"POST", body:JSON.stringify({ p_user_id:userId, p_periodo:periodo, p_local_ids:Array.isArray(localIds)&&localIds.length?localIds:null }) }),
   getComisionesImportaciones: () => sb("comisiones_importaciones?select=*&order=creado_en.desc&limit=10"),
   getComisionesImportacionesPeriodo: (periodo) => sb(`comisiones_importaciones?select=*&periodo=eq.${encodeURIComponent(periodo)}&order=creado_en.desc&limit=10`),
@@ -845,6 +854,7 @@ const api = {
   createInformeReclamo: (d) => sb("informe_diario_reclamos", { method:"POST", body:JSON.stringify(d) }),
   updateInformeReclamo: (id,d) => sb(`informe_diario_reclamos?id=eq.${parseInt(id)}`, { method:"PATCH", body:JSON.stringify(d) }),
   deleteInformeReclamo: (id) => sb(`informe_diario_reclamos?id=eq.${parseInt(id)}`, { method:"DELETE", prefer:"" }),
+<<<<<<< HEAD
   getReclamosRango: (desde,hasta) => sbAll(`informe_diario_reclamos?select=*&fecha=gte.${encodeURIComponent(desde)}&fecha=lte.${encodeURIComponent(hasta)}&order=fecha.desc,id.desc`),
   getReclamosPendientes: () => sbAll("informe_diario_reclamos?select=*&estado=eq.pendiente&order=fecha.asc,id.asc"),
   getReclamosDiaLocal: (localId,fecha) => sbAll(`informe_diario_reclamos?select=*&local_id=eq.${parseInt(localId)}&fecha=eq.${encodeURIComponent(fecha)}&order=creado_en.asc,id.asc`),
@@ -876,6 +886,8 @@ const api = {
     if(!res.ok) throw new Error(await res.text());
     return { path, url:`${SUPABASE_URL}/storage/v1/object/public/garantias/${path}`, name:compressed.name, size:compressed.size, type:compressed.type, compressed:true };
   },
+=======
+>>>>>>> 3e62ee0b5e3e58ba9093cc7a27cbb3ded777d453
   getInformeGastoConceptos: () => sb("informe_diario_gasto_conceptos?select=*&order=orden.asc,nombre.asc,id.asc"),
   createInformeGastoConcepto: (d) => sb("informe_diario_gasto_conceptos", { method:"POST", body:JSON.stringify(d) }),
   updateInformeGastoConcepto: (id,d) => sb(`informe_diario_gasto_conceptos?id=eq.${parseInt(id)}`, { method:"PATCH", body:JSON.stringify(d) }),
@@ -1582,12 +1594,15 @@ function registroCoincideLocal(data, registro, userId, fecha, localId) {
   const ids = getActiveManicuraLocalIds(data, userId, fecha);
   return ids.length === 1 && Number(ids[0]) === Number(localId);
 }
+<<<<<<< HEAD
 function getHorarioEffectiveLocalId(data, horario) {
   if (!horario) return null;
   if (horario.localId != null) return Number(horario.localId);
   const ids = getActiveManicuraLocalIds(data, horario.userId, horario.fecha);
   return ids.length === 1 ? Number(ids[0]) : null;
 }
+=======
+>>>>>>> 3e62ee0b5e3e58ba9093cc7a27cbb3ded777d453
 function canSeeLocal(data, user, localId) {
   if (user?.rol === "admin") return true;
   return getAssignedLocalIds(data, user).includes(parseInt(localId));
@@ -2094,6 +2109,7 @@ function CalendarioHorarios({ data, setData, reloadData, user, agendaRequest, on
     if (nuevoDesde==null || nuevoHasta==null || nuevoHasta<=nuevoDesde) return null;
     return (data.horarios||[]).find(h => {
       if (Number(h.userId)!==Number(uid) || String(h.fecha)!==String(f) || !h.trabaja || !h.entrada || !h.salida) return false;
+<<<<<<< HEAD
       // Los horarios legacy con local_id NULL se muestran en el calendario usando
       // el único local histórico activo para esa manicura y fecha. La validación
       // debe resolver el local exactamente igual para no generar falsos conflictos.
@@ -2106,6 +2122,13 @@ function CalendarioHorarios({ data, setData, reloadData, user, agendaRequest, on
       return desde!=null && hasta!=null && nuevoDesde < hasta && nuevoHasta > desde;
     }) || null;
   }, [data]);
+=======
+      if (Number(h.localId)===Number(localId)) return false;
+      const desde=toMin(h.entrada), hasta=toMin(h.salida);
+      return desde!=null && hasta!=null && nuevoDesde < hasta && nuevoHasta > desde;
+    }) || null;
+  }, [data.horarios]);
+>>>>>>> 3e62ee0b5e3e58ba9093cc7a27cbb3ded777d453
   const validarSuperposicionHorario = useCallback((uid, f, localId, entrada, salida) => {
     const conflicto = buscarSuperposicionHorario(uid, f, localId, entrada, salida);
     if (!conflicto) return true;
@@ -9400,6 +9423,7 @@ function InformeDiario({ data, reloadData, user }) {
     }).join("\n");
   },[encCobertura,encHoursDiff,encUserName]);
 
+<<<<<<< HEAD
   const normalizeInformeReclamo = useCallback((r) => {
     const x=normalizeReclamo(r);
     return { ...x, tempId:r.tempId||null, informeId:r.informe_diario_id??r.informeId??null, motivo:x.motivoTipo||r.motivo||"", resuelto:x.estado!=="pendiente", acciones:x.detalle||r.acciones_realizar||r.acciones||"", _temp:r._temp===true };
@@ -9410,6 +9434,25 @@ function InformeDiario({ data, reloadData, user }) {
     setReclamosLoading(true);
     try {
       const rows=await api.getReclamosDiaLocal(localId,fecha);
+=======
+  const normalizeInformeReclamo = useCallback((r) => ({
+    id:r.id ?? null,
+    tempId:r.tempId || null,
+    informeId:r.informe_diario_id ?? r.informeId ?? null,
+    cliente:r.cliente || "",
+    motivo:r.motivo || "",
+    resuelto:r.resuelto === true,
+    acciones:r.acciones_realizar || r.acciones || "",
+    creadoEn:r.creado_en || "",
+    _temp:r._temp === true,
+  }), []);
+
+  const loadReclamos = useCallback(async (informeId) => {
+    if(!informeId){ setReclamosRows([]); return; }
+    setReclamosLoading(true);
+    try {
+      const rows=await api.getInformeReclamos(informeId);
+>>>>>>> 3e62ee0b5e3e58ba9093cc7a27cbb3ded777d453
       setReclamosRows((rows||[]).map(normalizeInformeReclamo));
     } catch(e){
       notifyToast("No se pudieron cargar los reclamos: "+(e.message||e),"error");
@@ -9419,8 +9462,14 @@ function InformeDiario({ data, reloadData, user }) {
 
   useEffect(()=>{
     if(!editorOpen){ setReclamosRows([]); return; }
+<<<<<<< HEAD
     loadReclamos(form?.id,form?.localId,form?.fecha);
   }, [editorOpen, form?.id, form?.localId, form?.fecha, loadReclamos]);
+=======
+    if(form?.id) loadReclamos(form.id);
+    else setReclamosRows([]);
+  }, [editorOpen, form?.id, loadReclamos]);
+>>>>>>> 3e62ee0b5e3e58ba9093cc7a27cbb3ded777d453
 
   const openNuevoReclamo = useCallback(() => setReclamoModal({
     id:null,tempId:null,cliente:"",motivo:"",resuelto:false,acciones:""
@@ -10053,7 +10102,19 @@ function InformeDiario({ data, reloadData, user }) {
       </div>
     </Modal>}
 
+<<<<<<< HEAD
     {reclamoModal && <ReclamoEditorModal data={data} user={user} initial={reclamoModal?.id?reclamoModal:null} forcedLocalId={form?.localId||null} defaultFecha={form?.fecha||dateKey(new Date())} informeId={form?.id||null} onClose={()=>setReclamoModal(null)} onSaved={async()=>{setReclamoModal(null);await loadReclamos(form?.id,form?.localId,form?.fecha);}}/>}
+=======
+    {reclamoModal && <Modal title={reclamoModal.id||reclamoModal.tempId?"Editar reclamo":"Nuevo reclamo"} onClose={()=>setReclamoModal(null)} width={560}>
+      <div style={{display:"grid",gap:12}}>
+        <div><label style={{fontSize:12,fontWeight:700,display:"block",marginBottom:5}}>Cliente</label><input className="niki-report-entry" list="niki-clientes-reclamo" value={reclamoModal.cliente||""} onChange={e=>setReclamoModal(r=>({...r,cliente:e.target.value}))} placeholder="Nombre de la clienta" style={{width:"100%",boxSizing:"border-box",borderRadius:8,padding:"9px 11px",fontSize:14}}/><datalist id="niki-clientes-reclamo">{(data.agendaClientes||[]).slice(0,500).map(c=><option key={c.id} value={`${c.nombre||""} ${c.apellido||""}`.trim()}/>)}</datalist></div>
+        <Field label="Motivo"><TextArea listMode rows={3} value={reclamoModal.motivo} onChange={v=>setReclamoModal(r=>({...r,motivo:v}))} placeholder="Qué ocurrió..."/></Field>
+        <div><label style={{fontSize:12,fontWeight:700,display:"block",marginBottom:5}}>¿Resuelto?</label><Select value={reclamoModal.resuelto?"si":"no"} onChange={v=>setReclamoModal(r=>({...r,resuelto:v==="si"}))}><option value="no">No</option><option value="si">Sí</option></Select></div>
+        <Field label="Acciones a realizar"><TextArea listMode rows={3} value={reclamoModal.acciones} onChange={v=>setReclamoModal(r=>({...r,acciones:v}))} placeholder="Próximos pasos, seguimiento, compensación..."/></Field>
+        <div style={{display:"flex",justifyContent:"flex-end",gap:8}}><Btn variant="secondary" onClick={()=>setReclamoModal(null)}>Cancelar</Btn><Btn onClick={saveReclamoModal}>Guardar reclamo</Btn></div>
+      </div>
+    </Modal>}
+>>>>>>> 3e62ee0b5e3e58ba9093cc7a27cbb3ded777d453
 
     {preview && <Modal title="Informe diario" onClose={()=>setPreview(null)} width={720}>
       <div style={{ display:"flex",justifyContent:"space-between",alignItems:"center",gap:8,flexWrap:"wrap",marginBottom:12 }}>
@@ -10085,8 +10146,13 @@ function AgendaTurnos({ data, reloadData, user, agendaOpenRequest, onAgendaOpenR
   const esCasaMatriz = user.rol === "casa_matriz";
   const hoyKey = dateKey(new Date());
   const allowedLocalIds = esEncargada ? (data.encargadoLocales||[]).filter(x=>x.userId===user.id).map(x=>x.localId) : [];
+<<<<<<< HEAD
   const localesPermitidos = (esAdmin || esCasaMatriz) ? data.locales.filter(localActivo) : data.locales.filter(l=>localActivo(l) && allowedLocalIds.includes(l.id));
   const manicurasPermitidas = data.users.filter(u=>u.rol==="manicura" && u.activo && (esAdmin || esCasaMatriz || allowedLocalIds.includes(u.localId)));
+=======
+  const localesPermitidos = esAdmin ? data.locales.filter(localActivo) : data.locales.filter(l=>localActivo(l) && allowedLocalIds.includes(l.id));
+  const manicurasPermitidas = data.users.filter(u=>u.rol==="manicura" && u.activo && (esAdmin || allowedLocalIds.includes(u.localId)));
+>>>>>>> 3e62ee0b5e3e58ba9093cc7a27cbb3ded777d453
 
   const [tab, setTab] = useState(forcedTab || "turnos");
   useEffect(()=>{ if(forcedTab) setTab(forcedTab); },[forcedTab]);
@@ -11649,10 +11715,14 @@ function BloqueoHorarios({ data, setData, reloadData, user, savedState = null, o
 function puedeVerReportePagoComisiones(data, user) {
   if (!user) return false;
   if (user.rol === "admin" || user.rol === "casa_matriz") return true;
+<<<<<<< HEAD
   // Las encargadas pueden gestionar el pago de comisiones de cualquiera de sus locales asignados,
   // aunque tengan un solo local. Franquiciados conservan la regla anterior de más de un local.
   if (user.rol === "encargada") return getAssignedLocalIds(data || { locales:[], encargadoLocales:[], usuarioLocales:[] }, user).length > 0;
   if (user.rol === "franquiciado") return getAssignedLocalIds(data || { locales:[], encargadoLocales:[], usuarioLocales:[] }, user).length > 1;
+=======
+  if (isScopedLocalManagerRole(user.rol)) return getAssignedLocalIds(data || { locales:[], encargadoLocales:[], usuarioLocales:[] }, user).length > 1;
+>>>>>>> 3e62ee0b5e3e58ba9093cc7a27cbb3ded777d453
   return false;
 }
 
@@ -11750,7 +11820,11 @@ function DetalleComisionesPago({ rows = [], title = "Detalle" }) {
 
 function ReportePagoComisiones({ data, setData, user }) {
   if (!puedeVerReportePagoComisiones(data, user)) {
+<<<<<<< HEAD
     return <Card><h2 style={{ marginTop:0 }}>Reporte de pago de comisiones</h2><p style={{ margin:0,color:"var(--color-text-secondary)" }}>Este reporte está disponible para Admin, Casa Matriz y encargadas con al menos un local asignado. Los franquiciados lo ven cuando tienen más de un local asignado.</p></Card>;
+=======
+    return <Card><h2 style={{ marginTop:0 }}>Reporte de pago de comisiones</h2><p style={{ margin:0,color:"var(--color-text-secondary)" }}>Este reporte está disponible para Admin, Casa Matriz, encargadas y franquiciados con más de un local asignado.</p></Card>;
+>>>>>>> 3e62ee0b5e3e58ba9093cc7a27cbb3ded777d453
   }
 
   const hoy = new Date();
@@ -13342,7 +13416,11 @@ function PizarraSemanal({ data, user }) {
     if(!localNum)return [];
     return (data.users||[]).filter(u=>u.rol==="manicura"&&u.activo&&weekKeys.some(f=>getActiveManicuraLocalIds(data,u.id,f).includes(localNum))).sort((a,b)=>(a.nombre||"").localeCompare(b.nombre||""));
   },[data.users,data.manicuraHistorialLocales,weekKeys,localNum]);
+<<<<<<< HEAD
   const scheduleMap=useMemo(()=>{const m=new Map();rows.forEach(h=>{const lid=getHorarioEffectiveLocalId(data,h);if(lid!=null)m.set(`${Number(h.userId)}|${Number(lid)}|${h.fecha}`,h);});return m;},[rows,data]);
+=======
+  const scheduleMap=useMemo(()=>{const m=new Map();rows.forEach(h=>m.set(`${Number(h.userId)}|${Number(h.localId)}|${h.fecha}`,h));return m;},[rows]);
+>>>>>>> 3e62ee0b5e3e58ba9093cc7a27cbb3ded777d453
   const dayNames=["Lun","Mar","Mié","Jue","Vie","Sáb","Dom"];
   const fmt=(v)=>String(v||"").slice(0,5);
   const canEdit=(uid)=>user.rol==="manicura"&&Number(uid)===Number(user.id);
@@ -13384,6 +13462,7 @@ function PizarraSemanal({ data, user }) {
     }catch(e){return notifyToast("No se pudo validar si el período está habilitado. Intentá nuevamente.","error");}
     if(!editCell.entrada||!editCell.salida)return notifyToast("Completá horario de ingreso y salida.","warning");
     if(editCell.entrada>=editCell.salida)return notifyToast("La hora de salida debe ser posterior al ingreso.","warning");
+<<<<<<< HEAD
     const conflict=rows.find(h=>{
       if(Number(h.userId)!==Number(editCell.userId)||h.fecha!==editCell.fecha||h.trabaja===false||!h.entrada||!h.salida)return false;
       const lid=getHorarioEffectiveLocalId(data,h);
@@ -13398,6 +13477,15 @@ function PizarraSemanal({ data, user }) {
       const saved=anterior?.id&&anterior.localId==null ? await api.updateHorarioById(anterior.id,payload) : await api.upsertHorario(payload);
       const nh=normalizeHorario(Array.isArray(saved)?saved[0]:saved||payload);
       setRows(prev=>[...prev.filter(h=>!(Number(h.userId)===Number(editCell.userId)&&h.fecha===editCell.fecha&&Number(getHorarioEffectiveLocalId(data,h))===Number(editCell.localId))),nh]);
+=======
+    const conflict=rows.find(h=>Number(h.userId)===Number(editCell.userId)&&h.fecha===editCell.fecha&&Number(h.localId)!==Number(editCell.localId)&&h.trabaja!==false&&h.entrada&&h.salida&&editCell.entrada<h.salida&&editCell.salida>h.entrada);
+    if(conflict){const loc=data.locales.find(l=>Number(l.id)===Number(conflict.localId));return notifyToast(`Ese horario se superpone con ${loc?.nombre||"otro local"} (${fmt(conflict.entrada)} a ${fmt(conflict.salida)}).`,"error",{title:"Horarios superpuestos"});}
+    setSaving(true);
+    try{
+      const payload={user_id:Number(editCell.userId),local_id:Number(editCell.localId),fecha:editCell.fecha,entrada:editCell.entrada,salida:editCell.salida,trabaja:true};
+      const saved=await api.upsertHorario(payload);const nh=normalizeHorario(Array.isArray(saved)?saved[0]:saved||payload);
+      setRows(prev=>[...prev.filter(h=>!(Number(h.userId)===Number(editCell.userId)&&Number(h.localId)===Number(editCell.localId)&&h.fecha===editCell.fecha)),nh]);
+>>>>>>> 3e62ee0b5e3e58ba9093cc7a27cbb3ded777d453
       setEditCell(null);notifyToast("Horario actualizado.","success");
     }catch(e){notifyToast(e.message||"No se pudo guardar el horario.","error");}finally{setSaving(false);}
   };
@@ -13409,12 +13497,19 @@ function PizarraSemanal({ data, user }) {
     }catch(e){return notifyToast("No se pudo validar si el período está habilitado. Intentá nuevamente.","error");}
     setSaving(true);
     try{
+<<<<<<< HEAD
       const anterior=rows.find(h=>Number(h.userId)===Number(editCell.userId)&&h.fecha===editCell.fecha&&Number(getHorarioEffectiveLocalId(data,h))===Number(editCell.localId))||null;
       if(anterior?.id) await api.deleteHorarioById(anterior.id);
       else await api.deleteHorario(editCell.userId,editCell.localId,editCell.fecha);
       setRows(prev=>prev.filter(h=>!(
         Number(h.userId)===Number(editCell.userId) &&
         Number(getHorarioEffectiveLocalId(data,h))===Number(editCell.localId) &&
+=======
+      await api.deleteHorario(editCell.userId,editCell.localId,editCell.fecha);
+      setRows(prev=>prev.filter(h=>!(
+        Number(h.userId)===Number(editCell.userId) &&
+        Number(h.localId)===Number(editCell.localId) &&
+>>>>>>> 3e62ee0b5e3e58ba9093cc7a27cbb3ded777d453
         h.fecha===editCell.fecha
       )));
       setEditCell(null);
@@ -14182,10 +14277,17 @@ function defaultSectionForRole(role) {
 
 function sectionAllowedForRole(section, role) {
   const reportesOperativos = ["reportes","reportes_horas","reportes_cobertura","reportes_comisiones","reporte_pago_comisiones"];
+<<<<<<< HEAD
   const admin = ["inicio","dashboard","clientes_crm","ayuda","roadmap","asistencia","horarios","pizarra_semanal","horarios_encargadas","bloqueo_horarios",...reportesOperativos,"preliquidacion_encargadas","turnos","servicios","listas_precios","adelantos","garantias","reclamos","auditorias","informes","informes_mensajeria","manicuras","encargadas","reclutamiento_busquedas","reclutamiento_candidatas","reclutamiento_calendario","reclutamiento_aprobaciones","reclutamiento_antiguedad","reclutamiento_config","locales","cobertura_config","perfil"];
   const casaMatriz = ["inicio","dashboard","clientes_crm","ayuda","roadmap","asistencia","horarios","pizarra_semanal","horarios_encargadas","bloqueo_horarios",...reportesOperativos,"preliquidacion_encargadas","servicios","listas_precios","adelantos","garantias","reclamos","auditorias","informes","informes_mensajeria","manicuras","encargadas","reclutamiento_busquedas","reclutamiento_candidatas","reclutamiento_calendario","reclutamiento_aprobaciones","reclutamiento_antiguedad","reclutamiento_config","locales","cobertura_config","perfil"];
   const franquiciado = ["inicio","dashboard","clientes_crm","ayuda","asistencia","horarios","pizarra_semanal","horarios_encargadas","bloqueo_horarios",...reportesOperativos,"preliquidacion_encargadas","adelantos","garantias","reclamos","auditorias","informes","informes_mensajeria","manicuras","encargadas","cobertura_config","perfil"];
   const encargada = ["inicio","dashboard","clientes_crm","ayuda","asistencia","horarios","pizarra_semanal","bloqueo_horarios",...reportesOperativos,"preliquidacion_encargadas","adelantos","garantias","reclamos","auditorias","informes","informes_mensajeria","manicuras","cobertura_config","perfil"];
+=======
+  const admin = ["inicio","dashboard","clientes_crm","ayuda","roadmap","asistencia","horarios","pizarra_semanal","horarios_encargadas","bloqueo_horarios",...reportesOperativos,"preliquidacion_encargadas","turnos","adelantos","garantias","informes","manicuras","encargadas","reclutamiento_busquedas","reclutamiento_candidatas","reclutamiento_calendario","reclutamiento_aprobaciones","reclutamiento_antiguedad","reclutamiento_config","locales","cobertura_config","perfil"];
+  const casaMatriz = ["inicio","dashboard","clientes_crm","ayuda","roadmap","asistencia","horarios","pizarra_semanal","horarios_encargadas","bloqueo_horarios",...reportesOperativos,"preliquidacion_encargadas","adelantos","garantias","informes","manicuras","encargadas","reclutamiento_busquedas","reclutamiento_candidatas","reclutamiento_calendario","reclutamiento_aprobaciones","reclutamiento_antiguedad","reclutamiento_config","locales","cobertura_config","perfil"];
+  const franquiciado = ["inicio","dashboard","clientes_crm","ayuda","asistencia","horarios","pizarra_semanal","horarios_encargadas","bloqueo_horarios",...reportesOperativos,"preliquidacion_encargadas","adelantos","garantias","informes","manicuras","encargadas","cobertura_config","perfil"];
+  const encargada = ["inicio","dashboard","clientes_crm","ayuda","asistencia","horarios","pizarra_semanal","bloqueo_horarios",...reportesOperativos,"preliquidacion_encargadas","adelantos","garantias","informes","manicuras","cobertura_config","perfil"];
+>>>>>>> 3e62ee0b5e3e58ba9093cc7a27cbb3ded777d453
   const manicura = ["inicio","ayuda","horarios","pizarra_semanal","reportes","reportes_horas","reportes_comisiones","perfil"];
   const allowed = role === "admin" ? admin : role === "casa_matriz" ? casaMatriz : role === "franquiciado" ? franquiciado : role === "encargada" ? encargada : manicura;
   return allowed.includes(section);
@@ -14300,7 +14402,10 @@ export default function App() {
     reportes: {},
   });
   const [homeKpis, setHomeKpis] = useState({ loading:false, error:"", ventas:0, ventasAnt:0, visitas:0, visitasAnt:0, ticket:0, ticketAnt:0, fechaHasta:"" });
+<<<<<<< HEAD
   const [homeReclamosPendientes, setHomeReclamosPendientes] = useState({ loading:false, error:"", rows:[] });
+=======
+>>>>>>> 3e62ee0b5e3e58ba9093cc7a27cbb3ded777d453
 
 
   const saveScreenState = useCallback((key, value) => {
@@ -14367,8 +14472,13 @@ export default function App() {
     // Comisiones de detalle, importaciones y criterios ya no se cargan completas al iniciar
     // NikiAsistencia. Son tablas que crecen continuamente y hacían pesado el estado global.
     // Cada reporte carga únicamente el período que necesita.
+<<<<<<< HEAD
     const [users, locales, horarios, asistencias, periodos, feriados, reglasCobertura, configCobertura, encargadoLocales, usuarioLocales, manicuraHistorialLocales, usuarioHistorialLaboral, personaDocumentos, comisionesConfiguracion, comisionesManicuraConfig, adelantos, garantias, informesDiarios, agendaServicios, agendaManicuraServicios, agendaListasPrecios, agendaLocalListas, agendaPreciosServicios, agendaListaVigencias, agendaPreciosVigencia, agendaClientes, agendaTurnos, agendaTurnosPagos, agendaTurnoServicios, agendaBloqueos, reclutamientoCandidatas] = await Promise.all([
       api.getUsers(), api.getLocales(), api.getHorarios(), api.getAsistencias(), api.getPeriodos(), api.getFeriados(), api.getReglasCobertura(), api.getConfigCobertura(), api.getEncargadoLocales(), api.getUsuarioLocales(), api.getManicuraHistorialLocales(), api.getUsuarioHistorialLaboral(), api.getPersonaDocumentos(), api.getComisionesConfiguracion(), api.getComisionesManicuraConfig(), api.getAdelantos(), api.getGarantias(), api.getInformesDiarios(), api.getAgendaServicios(), api.getAgendaManicuraServicios(), api.getAgendaListasPrecios(), api.getAgendaLocalListas(), api.getAgendaPreciosServicios(), api.getAgendaListaVigencias(), api.getAgendaPreciosVigencia(), api.getAgendaClientes(), api.getAgendaTurnos(), api.getAgendaTurnosPagos(), api.getAgendaTurnoServicios(), api.getAgendaBloqueos(), (api.getReclutamientoCandidatasDisponibles().catch(()=>[]))
+=======
+    const [users, locales, horarios, asistencias, periodos, feriados, reglasCobertura, configCobertura, encargadoLocales, usuarioLocales, manicuraHistorialLocales, usuarioHistorialLaboral, personaDocumentos, comisionesConfiguracion, comisionesManicuraConfig, adelantos, garantias, informesDiarios, agendaServicios, agendaManicuraServicios, agendaListasPrecios, agendaLocalListas, agendaPreciosServicios, agendaClientes, agendaTurnos, agendaTurnosPagos, agendaTurnoServicios, agendaBloqueos, reclutamientoCandidatas] = await Promise.all([
+      api.getUsers(), api.getLocales(), api.getHorarios(), api.getAsistencias(), api.getPeriodos(), api.getFeriados(), api.getReglasCobertura(), api.getConfigCobertura(), api.getEncargadoLocales(), api.getUsuarioLocales(), api.getManicuraHistorialLocales(), api.getUsuarioHistorialLaboral(), api.getPersonaDocumentos(), api.getComisionesConfiguracion(), api.getComisionesManicuraConfig(), api.getAdelantos(), api.getGarantias(), api.getInformesDiarios(), api.getAgendaServicios(), api.getAgendaManicuraServicios(), api.getAgendaListasPrecios(), api.getAgendaLocalListas(), api.getAgendaPreciosServicios(), api.getAgendaClientes(), api.getAgendaTurnos(), api.getAgendaTurnosPagos(), api.getAgendaTurnoServicios(), api.getAgendaBloqueos(), (api.getReclutamientoCandidatasDisponibles().catch(()=>[]))
+>>>>>>> 3e62ee0b5e3e58ba9093cc7a27cbb3ded777d453
     ]);
     const nextData = {
       users: await Promise.all((users || []).map(async raw => {
@@ -14585,6 +14695,7 @@ export default function App() {
     return () => { cancelled = true; };
   }, [user?.id, user?.rol, seccion, data?.locales, data?.usuarioLocales, data?.encargadoLocales]);
 
+<<<<<<< HEAD
   useEffect(() => {
     const rolesConAlerta = new Set(["admin","casa_matriz","franquiciado","encargada"]);
     if (!user || !data || seccion !== "inicio" || !rolesConAlerta.has(user.rol)) {
@@ -14609,6 +14720,8 @@ export default function App() {
     return () => { cancelled = true; };
   }, [user?.id, user?.rol, seccion, data?.locales, data?.usuarioLocales, data?.encargadoLocales]);
 
+=======
+>>>>>>> 3e62ee0b5e3e58ba9093cc7a27cbb3ded777d453
   const currentPublicHash = publicHash;
   if (!user && currentPublicHash === "ayuda") return <CentroAyuda onBack={() => { window.location.hash = ""; }}/>; 
 
@@ -14695,12 +14808,16 @@ export default function App() {
       icon: "📝",
       items: [
         { id: "informes", label: "Informe diario", icon: "📝" },
+<<<<<<< HEAD
         { id: "informes_mensajeria", label: "Informe de mensajeria", icon: "💬" },
         { id: "reclamos", label: "Reclamos", icon: "📣" },
+=======
+>>>>>>> 3e62ee0b5e3e58ba9093cc7a27cbb3ded777d453
         { id: "preliquidacion_encargadas", label: "Liquidación encargadas", icon: "💵" },
       ],
     },
     {
+<<<<<<< HEAD
       id: "auditorias",
       label: "Auditorias",
       icon: "✓",
@@ -14713,6 +14830,12 @@ export default function App() {
       label: "Reclutamiento",
       icon: "🎯",
       items: [
+=======
+      id: "reclutamiento",
+      label: "Reclutamiento",
+      icon: "🎯",
+      items: [
+>>>>>>> 3e62ee0b5e3e58ba9093cc7a27cbb3ded777d453
         { id: "reclutamiento_busquedas", label: "Búsquedas", icon: "🔎" },
         { id: "reclutamiento_candidatas", label: "Candidatas y procesos", icon: "👤" },
         { id: "reclutamiento_calendario", label: "Calendario", icon: "🗓️" },
@@ -14890,12 +15013,19 @@ export default function App() {
             {homeKpis.error ? (
               <div style={{ border:"1px solid rgba(176,75,75,.18)",background:COLORS.dangerLight,borderRadius:14,padding:"11px 13px",fontSize:11.5,color:COLORS.danger }}>No se pudo cargar el resumen ahora. Podés seguir usando Inicio normalmente.</div>
             ) : (
+<<<<<<< HEAD
               <div className="niki-dashboard-kpis" style={{ display:"grid",gridTemplateColumns:isDesktopMenu?"repeat(4,minmax(0,.92fr)) minmax(220px,1.15fr)":"1fr",gap:8 }}>
+=======
+              <div className="niki-dashboard-kpis" style={{ display:"grid",gridTemplateColumns:"repeat(4,minmax(0,1fr))",gap:8 }}>
+>>>>>>> 3e62ee0b5e3e58ba9093cc7a27cbb3ded777d453
                 {renderHomeKpiCard({ icon:"💳",label:"Ventas MTD",value:homeKpis.loading?"…":fmtMoney(homeKpis.ventas),detail:"mes actual",variation:homeKpis.ventasAnt?dashboardPct(homeKpis.ventas,homeKpis.ventasAnt):null })}
                 {renderHomeKpiCard({ icon:"👣",label:"Visitas MTD",value:homeKpis.loading?"…":new Intl.NumberFormat("es-AR").format(Number(homeKpis.visitas||0)),detail:"clientes atendidos",variation:homeKpis.visitasAnt?dashboardPct(homeKpis.visitas,homeKpis.visitasAnt):null })}
                 {renderHomeKpiCard({ icon:"🎟",label:"Ticket promedio",value:homeKpis.loading?"…":fmtMoney(homeKpis.ticket),detail:"ventas / visitas",variation:homeKpis.ticketAnt?dashboardPct(homeKpis.ticket,homeKpis.ticketAnt):null })}
                 {renderHomeKpiCard({ icon:"↗",label:"Variación ventas",value:homeKpis.loading?"…":dashboardPctLabel(homeKpis.ventasAnt?dashboardPct(homeKpis.ventas,homeKpis.ventasAnt):null),detail:"vs. mismo tramo mes anterior" })}
+<<<<<<< HEAD
                 {homeReclamosPendientes.rows.length > 0 ? (()=>{const pendingRows=homeReclamosPendientes.rows;const byLocal=new Map();pendingRows.forEach(r=>{const id=Number(r.localId);const name=(data.locales||[]).find(l=>Number(l.id)===id)?.nombre||"Local";byLocal.set(name,(byLocal.get(name)||0)+1);});const top=Array.from(byLocal.entries()).sort((a,b)=>b[1]-a[1])[0];return <button type="button" onClick={()=>goToSection("reclamos")} style={{border:"1px solid rgba(196,129,33,.26)",background:"linear-gradient(135deg,#fff8e8,#fffdf8)",borderRadius:18,padding:"11px 13px",display:"grid",gridTemplateColumns:"34px 1fr auto",gap:9,alignItems:"center",textAlign:"left",cursor:"pointer",minWidth:0,boxShadow:"0 4px 12px rgba(196,129,33,.05)"}}><span style={{width:32,height:32,borderRadius:10,display:"grid",placeItems:"center",background:"#fff0bf",fontSize:16}}>⚠️</span><span style={{minWidth:0}}><strong style={{display:"block",fontSize:12,color:"#8a5a00"}}>{pendingRows.length} pendiente{pendingRows.length===1?"":"s"}</strong><small style={{display:"block",fontSize:9.5,color:"#8a6a2f",whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{byLocal.size===1?`${top?.[0]||"Local"}: ${top?.[1]||0}`:`${byLocal.size} locales · mayor: ${top?.[0]||"—"} (${top?.[1]||0})`}</small></span><span style={{fontSize:16,color:"#8a5a00"}}>→</span></button>;})() : <div style={{border:"1px solid rgba(72,145,106,.16)",background:"#f7fcf9",borderRadius:18,padding:"11px 13px",display:"flex",alignItems:"center",gap:9}}><span style={{fontSize:17}}>✓</span><span><strong style={{display:"block",fontSize:11,color:COLORS.success}}>Sin reclamos pendientes</strong><small style={{fontSize:9.5,color:"var(--color-text-secondary)"}}>Todo al día</small></span></div>}
+=======
+>>>>>>> 3e62ee0b5e3e58ba9093cc7a27cbb3ded777d453
               </div>
             )}
           </section>
