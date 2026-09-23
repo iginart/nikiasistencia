@@ -8440,11 +8440,15 @@ function normalizeReclamo(r) {
   };
 }
 
-function ReclamoEditorModal({ data, user, initial=null, forcedLocalId=null, defaultFecha=null, informeId=null, onClose, onSaved }) {
+function ReclamoEditorModal({ data, user, initial=null, forcedLocalId=null, allowedLocalIdsOverride=null, defaultFecha=null, informeId=null, onClose, onSaved }) {
   const hoy = new Date();
   const esAdmin = isAdminLikeRole(user.rol);
-  const allowedLocalIds = esAdmin ? data.locales.map(l=>l.id) : getAssignedLocalIds(data,user);
-  const locales = data.locales.filter(l=>allowedLocalIds.includes(l.id));
+  const baseAllowedLocalIds = (esAdmin ? data.locales.map(l=>l.id) : getAssignedLocalIds(data,user)).map(Number);
+  const requestedLocalIds = Array.isArray(allowedLocalIdsOverride) && allowedLocalIdsOverride.length
+    ? new Set(allowedLocalIdsOverride.map(Number).filter(Boolean))
+    : null;
+  const allowedLocalIds = requestedLocalIds ? baseAllowedLocalIds.filter(id=>requestedLocalIds.has(id)) : baseAllowedLocalIds;
+  const locales = data.locales.filter(l=>allowedLocalIds.includes(Number(l.id)));
   const seed = initial ? normalizeReclamo(initial) : null;
   const initialLocal = forcedLocalId || seed?.localId || locales[0]?.id || "";
   const [form,setForm] = useState({
@@ -8580,8 +8584,11 @@ const MENSAJERIA_REPRO_MOTIVOS = [
 ];
 function normalizeMensajeriaInforme(r){
   const arr=v=>Array.isArray(v)?v:(v&&typeof v==="string"?(()=>{try{return JSON.parse(v);}catch{return [];}})():[]);
+  const legacyLocalId=r.local_id!=null?Number(r.local_id):null;
+  const localIds=arr(r.local_ids).map(Number).filter(Boolean);
+  if(!localIds.length&&legacyLocalId)localIds.push(legacyLocalId);
   return {
-    id:Number(r.id), localId:Number(r.local_id), fecha:r.fecha||"", responsableUserId:r.responsable_user_id?Number(r.responsable_user_id):null,
+    id:Number(r.id), localId:legacyLocalId||localIds[0]||null, localIds, fecha:r.fecha||"", responsableUserId:r.responsable_user_id?Number(r.responsable_user_id):null,
     estado:r.estado||"borrador", manychat:Number(r.mensajes_manychat||0), instagram:Number(r.mensajes_instagram||0), whatsapp:Number(r.mensajes_whatsapp||0),
     categorias:arr(r.consulta_categorias), resumen:r.resumen_consultas||"",
     noDispCantidad:Number(r.no_agenda_disponibilidad_cantidad||0), noDispLocales:arr(r.no_agenda_disponibilidad_locales).map(Number).filter(Boolean), noDispObs:r.no_agenda_disponibilidad_observacion||"",
@@ -8596,6 +8603,12 @@ function InformesMensajeriaPage({ data, user }) {
   const esAdmin=isAdminLikeRole(user.rol);
   const allowedIds=useMemo(()=>new Set((esAdmin?(data.locales||[]).map(l=>l.id):getAssignedLocalIds(data,user)).map(Number)),[data,user?.id,user?.rol]);
   const locales=useMemo(()=>(data.locales||[]).filter(l=>allowedIds.has(Number(l.id))).sort((a,b)=>(a.nombre||"").localeCompare(b.nombre||"")),[data.locales,allowedIds]);
+  const localTipoKey=l=>String(l?.tipoLocal||l?.tipo_local||"propio").trim().toLowerCase().startsWith("franqu")?"franquicia":"propio";
+  const propios=locales.filter(l=>localTipoKey(l)==="propio");
+  const franquicias=locales.filter(l=>localTipoKey(l)==="franquicia");
+  const tiposDisponibles=[...(propios.length?["propio"]:[]),...(franquicias.length?["franquicia"]:[])];
+  const usaTipoSelector=tiposDisponibles.length>1;
+  const defaultTipo=usaTipoSelector?(propios.length?"propio":"franquicia"):(tiposDisponibles[0]||"propio");
   const [desde,setDesde]=useState(dateKey(new Date(hoy.getFullYear(),hoy.getMonth(),1)));
   const [hasta,setHasta]=useState(dateKey(hoy));
   const [localFiltro,setLocalFiltro]=useState("todos");
@@ -8606,56 +8619,135 @@ function InformesMensajeriaPage({ data, user }) {
     setLoading(true);
     try{
       const raw=await api.getMensajeriaInformesRango(desde,hasta);
-      setRows((raw||[]).map(normalizeMensajeriaInforme).filter(r=>allowedIds.has(Number(r.localId))));
+      const normalized=(raw||[]).map(normalizeMensajeriaInforme);
+      setRows(normalized.filter(r=>{
+        const ids=(r.localIds?.length?r.localIds:[r.localId]).map(Number).filter(Boolean);
+        return ids.length&&ids.every(id=>allowedIds.has(id));
+      }));
     }catch(e){notifyToast("No se pudieron cargar los informes de mensajeria: "+(e.message||e),"error");}
     finally{setLoading(false);}
   },[desde,hasta,allowedIds]);
   useEffect(()=>{void load();},[load]);
 
-  const loadReclamos=useCallback(async(localId,fecha)=>{
-    if(!localId||!fecha){setReclamos([]);return;}
+  const loadReclamos=useCallback(async(localIds,fecha)=>{
+    const ids=Array.from(new Set((localIds||[]).map(Number).filter(Boolean)));
+    if(!ids.length||!fecha){setReclamos([]);return;}
     setReclamosLoading(true);
-    try{setReclamos(((await api.getReclamosDiaLocal(localId,fecha))||[]).map(normalizeReclamo));}
-    catch{setReclamos([]);} finally{setReclamosLoading(false);}
+    try{
+      const blocks=await Promise.all(ids.map(id=>api.getReclamosDiaLocal(id,fecha).catch(()=>[])));
+      const byId=new Map();
+      blocks.flat().map(normalizeReclamo).forEach(r=>byId.set(Number(r.id),r));
+      setReclamos(Array.from(byId.values()).sort((a,b)=>Number(b.id||0)-Number(a.id||0)));
+    }catch{setReclamos([]);} finally{setReclamosLoading(false);}
   },[]);
 
-  const blank=(lid=locales[0]?.id||"")=>({
-    id:null,localId:lid,fecha:dateKey(new Date()),estado:"borrador",manychat:0,instagram:0,whatsapp:0,categorias:[],resumen:"",
-    noDispCantidad:0,noDispLocales:[],noDispObs:"",noWebCantidad:0,noWebObs:"",giftcardsCantidad:0,giftcardsImporte:0,observaciones:""
-  });
-  const abrirNuevo=async()=>{const b=blank();setEditor(b);setRepros([]);await loadReclamos(b.localId,b.fecha);};
-  const abrirEditar=async(r)=>{
-    setEditor({...r});
-    try{setRepros(((await api.getMensajeriaReprogramaciones(r.id))||[]).map(x=>({id:x.id,cantidad:Number(x.cantidad||0),motivo:x.motivo||"otro",detalle:x.detalle||""})));}catch{setRepros([]);}
-    await loadReclamos(r.localId,r.fecha);
+  const resolverLocalesSeleccionados=(tiposSeleccionados=[],idsSeleccionados=[])=>{
+    if(!locales.length)return [];
+    if(locales.length===1)return [Number(locales[0].id)];
+    const selectedIds=(idsSeleccionados||[]).map(Number).filter(Boolean);
+    if(!usaTipoSelector){
+      const grupo=locales;
+      const idsGrupo=new Set(grupo.map(l=>Number(l.id)));
+      const explicitos=selectedIds.filter(id=>idsGrupo.has(id));
+      return explicitos.length?Array.from(new Set(explicitos)):grupo.map(l=>Number(l.id));
+    }
+    const tipos=(tiposSeleccionados||[]).filter(t=>tiposDisponibles.includes(t));
+    if(!tipos.length)return locales.map(l=>Number(l.id));
+    const out=[];
+    tipos.forEach(tipo=>{
+      const grupo=locales.filter(l=>localTipoKey(l)===tipo);
+      const idsGrupo=new Set(grupo.map(l=>Number(l.id)));
+      const explicitos=selectedIds.filter(id=>idsGrupo.has(id));
+      out.push(...(explicitos.length?explicitos:grupo.map(l=>Number(l.id))));
+    });
+    return Array.from(new Set(out));
   };
-  const cambiarContexto=async(patch)=>{
-    const next={...editor,...patch};setEditor(next);
-    if(patch.localId!==undefined||patch.fecha!==undefined) await loadReclamos(next.localId,next.fecha);
+  const tiposDeIds=ids=>Array.from(new Set((ids||[]).map(Number).map(id=>locales.find(l=>Number(l.id)===id)).filter(Boolean).map(localTipoKey)));
+  const toggleTipoCampo=(tipoField,idsField,tipo)=>setEditor(e=>{
+    const current=e?.[tipoField]||[];
+    const removing=current.includes(tipo);
+    const next=removing?current.filter(x=>x!==tipo):[...current,tipo];
+    const idsGrupo=new Set(locales.filter(l=>localTipoKey(l)===tipo).map(l=>Number(l.id)));
+    const nextIds=removing?(e?.[idsField]||[]).filter(id=>!idsGrupo.has(Number(id))):(e?.[idsField]||[]);
+    return {...e,[tipoField]:next,[idsField]:nextIds};
+  });
+  const toggleLocalCampo=(idsField,id)=>setEditor(e=>{
+    const n=Number(id), current=(e?.[idsField]||[]).map(Number);
+    return {...e,[idsField]:current.includes(n)?current.filter(x=>x!==n):[...current,n]};
+  });
+  const clearTipoLocales=(idsField,tipo)=>setEditor(e=>{
+    const idsGrupo=new Set(locales.filter(l=>localTipoKey(l)===tipo).map(l=>Number(l.id)));
+    return {...e,[idsField]:(e?.[idsField]||[]).filter(id=>!idsGrupo.has(Number(id)))};
+  });
+
+  const blank=()=>({
+    id:null,localId:locales.length===1?Number(locales[0].id):null,localIds:[],localTipos:usaTipoSelector?[defaultTipo]:[],fecha:dateKey(new Date()),estado:"borrador",manychat:0,instagram:0,whatsapp:0,categorias:[],resumen:"",
+    noDispCantidad:0,noDispLocales:[],noDispTipos:usaTipoSelector?[defaultTipo]:[],noDispObs:"",noWebCantidad:0,noWebObs:"",giftcardsCantidad:0,giftcardsImporte:0,observaciones:""
+  });
+  const abrirNuevo=()=>{const b=blank();setEditor(b);setRepros([]);};
+  const abrirEditar=async(r)=>{
+    const reportIds=(r.localIds?.length?r.localIds:[r.localId]).map(Number).filter(Boolean);
+    const reportTipos=tiposDeIds(reportIds);
+    const afectadosTipos=tiposDeIds(r.noDispLocales);
+    setEditor({...r,localIds:reportIds,localTipos:reportTipos,noDispTipos:afectadosTipos.length?afectadosTipos:(reportTipos.length?reportTipos:(usaTipoSelector?[defaultTipo]:[]))});
+    try{setRepros(((await api.getMensajeriaReprogramaciones(r.id))||[]).map(x=>({id:x.id,cantidad:Number(x.cantidad||0),motivo:x.motivo||"otro",detalle:x.detalle||""})));}catch{setRepros([]);}
   };
   const toggleCategoria=cod=>setEditor(e=>({...e,categorias:e.categorias.includes(cod)?e.categorias.filter(x=>x!==cod):[...e.categorias,cod]}));
-  const toggleNoDispLocal=id=>setEditor(e=>({...e,noDispLocales:e.noDispLocales.includes(Number(id))?e.noDispLocales.filter(x=>Number(x)!==Number(id)):[...e.noDispLocales,Number(id)]}));
   const addRepro=()=>setRepros(r=>[...r,{cantidad:1,motivo:"otro",detalle:""}]);
   const updRepro=(idx,patch)=>setRepros(r=>r.map((x,i)=>i===idx?{...x,...patch}:x));
   const delRepro=idx=>setRepros(r=>r.filter((_,i)=>i!==idx));
 
+  const localIdsEditor=editor?resolverLocalesSeleccionados(editor.localTipos||[],editor.localIds||[]):[];
+  const localIdsEditorKey=localIdsEditor.join(",");
+  useEffect(()=>{
+    if(editor?.fecha&&localIdsEditor.length)void loadReclamos(localIdsEditor,editor.fecha);
+    else setReclamos([]);
+  },[editor?.fecha,localIdsEditorKey,loadReclamos]);
+
+  const renderLocalScopePicker=({tipoField,idsField,compact=false})=>{
+    if(locales.length===1)return <div style={{display:"inline-flex",alignItems:"center",border:"1px solid #d8c9cf",background:"#fff",borderRadius:999,padding:compact?"4px 8px":"6px 10px",fontSize:compact?9:10,fontWeight:700}}>{locales[0].nombre}</div>;
+    const tiposSel=editor?.[tipoField]||[];
+    const idsSel=(editor?.[idsField]||[]).map(Number);
+    const tiposVisibles=usaTipoSelector?(tiposSel.length?tiposSel:[]):tiposDisponibles;
+    const pill=(active)=>({border:`1px solid ${active?COLORS.pinkDark:"#d8c9cf"}`,background:active?COLORS.pinkLight:"#fff",color:active?COLORS.pinkDark:"var(--color-text-primary)",borderRadius:999,padding:compact?"4px 8px":"5px 10px",fontSize:compact?9:10,fontWeight:700,cursor:"pointer"});
+    return <div style={{display:"grid",gap:compact?6:7}}>
+      {usaTipoSelector&&<div style={{display:"flex",gap:6,flexWrap:"wrap",alignItems:"center"}}>
+        {[[ "propio","Propios" ],[ "franquicia","Franquicias" ]].filter(([t])=>tiposDisponibles.includes(t)).map(([tipo,label])=><button key={tipo} type="button" onClick={()=>toggleTipoCampo(tipoField,idsField,tipo)} style={pill(tiposSel.includes(tipo))}>{label}</button>)}
+        {!tiposSel.length&&<span style={{fontSize:compact?8:9,color:"var(--color-text-secondary)"}}>Todos los locales habilitados</span>}
+      </div>}
+      {tiposVisibles.map(tipo=>{
+        const grupo=locales.filter(l=>localTipoKey(l)===tipo);
+        const idsGrupo=new Set(grupo.map(l=>Number(l.id)));
+        const seleccionGrupo=idsSel.filter(id=>idsGrupo.has(id));
+        return <div key={tipo} style={{display:"flex",gap:5,flexWrap:"wrap",alignItems:"center"}}>
+          {tiposVisibles.length>1&&<span style={{fontSize:8,fontWeight:800,textTransform:"uppercase",letterSpacing:".03em",color:"#7a5c6a",marginRight:2}}>{tipo==="propio"?"Propios":"Franquicias"}</span>}
+          {grupo.length>1&&<button type="button" onClick={()=>clearTipoLocales(idsField,tipo)} style={pill(seleccionGrupo.length===0)}>Todos</button>}
+          {grupo.map(l=><button type="button" key={l.id} onClick={()=>toggleLocalCampo(idsField,l.id)} style={pill(seleccionGrupo.includes(Number(l.id))||grupo.length===1)}>{l.nombre}</button>)}
+        </div>;
+      })}
+    </div>;
+  };
+
   const guardar=async(completar=false)=>{
-    if(!editor?.localId||!editor?.fecha)return notifyToast("Selecciona local y fecha.","warning");
-    if(!allowedIds.has(Number(editor.localId)))return notifyToast("No tienes acceso a ese local.","error");
+    if(!editor?.fecha)return notifyToast("Selecciona la fecha.","warning");
+    const targetLocalIds=localIdsEditor.map(Number).filter(Boolean);
+    if(!targetLocalIds.length)return notifyToast("Selecciona al menos un local.","warning");
+    if(targetLocalIds.some(id=>!allowedIds.has(id)))return notifyToast("No tienes acceso a uno de los locales seleccionados.","error");
     setSaving(true);
     try{
       const nonneg=v=>Math.max(0,Number(v)||0);
+      const afectados=nonneg(editor.noDispCantidad)>0?resolverLocalesSeleccionados(editor.noDispTipos||[],editor.noDispLocales||[]):[];
       const payload={
-        local_id:Number(editor.localId),fecha:editor.fecha,responsable_user_id:Number(user.id),estado:completar?"completo":(editor.estado||"borrador"),
+        local_id:Number(targetLocalIds[0]),local_ids:targetLocalIds,fecha:editor.fecha,responsable_user_id:Number(user.id),estado:completar?"completo":(editor.estado||"borrador"),
         mensajes_manychat:nonneg(editor.manychat),mensajes_instagram:nonneg(editor.instagram),mensajes_whatsapp:nonneg(editor.whatsapp),
         consulta_categorias:editor.categorias||[],resumen_consultas:String(editor.resumen||"").trim()||null,
-        no_agenda_disponibilidad_cantidad:nonneg(editor.noDispCantidad),no_agenda_disponibilidad_locales:editor.noDispLocales||[],no_agenda_disponibilidad_observacion:String(editor.noDispObs||"").trim()||null,
+        no_agenda_disponibilidad_cantidad:nonneg(editor.noDispCantidad),no_agenda_disponibilidad_locales:afectados,no_agenda_disponibilidad_observacion:String(editor.noDispObs||"").trim()||null,
         no_agenda_web_cantidad:nonneg(editor.noWebCantidad),no_agenda_web_observacion:String(editor.noWebObs||"").trim()||null,
         giftcards_cantidad:nonneg(editor.giftcardsCantidad),giftcards_importe:nonneg(editor.giftcardsImporte),observaciones:String(editor.observaciones||"").trim()||null,actualizado_en:new Date().toISOString()
       };
       const savedRaw=await api.upsertMensajeriaInforme(payload);
       let saved=Array.isArray(savedRaw)?savedRaw[0]:savedRaw;
-      if(!saved?.id){const q=await api.getMensajeriaInformeDiaLocal(editor.localId,editor.fecha);saved=Array.isArray(q)?q[0]:q;}
+      if(!saved?.id){const q=await api.getMensajeriaInformeDiaLocal(targetLocalIds[0],editor.fecha);saved=Array.isArray(q)?q[0]:q;}
       if(!saved?.id)throw new Error("No se pudo obtener el ID del informe guardado.");
       await api.deleteMensajeriaReprogramaciones(saved.id);
       const rr=repros.filter(x=>Number(x.cantidad||0)>0||String(x.detalle||"").trim()).map((x,i)=>({informe_id:Number(saved.id),cantidad:nonneg(x.cantidad),motivo:x.motivo||"otro",detalle:String(x.detalle||"").trim()||null,orden:i,actualizado_en:new Date().toISOString()}));
@@ -8666,11 +8758,15 @@ function InformesMensajeriaPage({ data, user }) {
     finally{setSaving(false);}
   };
 
-  const filtered=rows.filter(r=>localFiltro==="todos"||Number(r.localId)===Number(localFiltro));
+  const filtered=rows.filter(r=>localFiltro==="todos"||(r.localIds?.length?r.localIds:[r.localId]).some(id=>Number(id)===Number(localFiltro)));
   const totalMensajes=filtered.reduce((a,r)=>a+r.manychat+r.instagram+r.whatsapp,0);
   const completos=filtered.filter(r=>r.estado==="completo").length;
   const borradores=filtered.filter(r=>r.estado!=="completo").length;
   const localName=id=>(data.locales||[]).find(l=>Number(l.id)===Number(id))?.nombre||`Local ${id}`;
+  const localNames=ids=>{
+    const names=Array.from(new Set((ids||[]).map(Number).filter(Boolean).map(localName)));
+    return names.length<=3?names.join(", "):`${names.slice(0,2).join(", ")} +${names.length-2}`;
+  };
   const reclPend=reclamos.filter(r=>String(r.estado||"pendiente").toLowerCase()==="pendiente").length;
   const reclRes=reclamos.length-reclPend;
   const totalEditor=(Number(editor?.manychat)||0)+(Number(editor?.instagram)||0)+(Number(editor?.whatsapp)||0);
@@ -8684,7 +8780,7 @@ function InformesMensajeriaPage({ data, user }) {
 
   return <div style={{padding:"20px 22px 34px",maxWidth:1500,margin:"0 auto"}}>
     <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",gap:12,flexWrap:"wrap",marginBottom:14}}>
-      <div><h2 style={{margin:0,fontSize:20}}>Informe diario de Mensajeria</h2><p style={{margin:"4px 0 0",fontSize:11,color:"var(--color-text-secondary)"}}>Carga diaria por local de actividad de mensajeria, agenda, reprogramaciones, reclamos y Gift Cards.</p></div>
+      <div><h2 style={{margin:0,fontSize:20}}>Informe diario de Mensajeria</h2><p style={{margin:"4px 0 0",fontSize:11,color:"var(--color-text-secondary)"}}>Carga diaria para uno o varios locales de actividad de mensajeria, agenda, reprogramaciones, reclamos y Gift Cards.</p></div>
       <Btn size="sm" onClick={abrirNuevo}>+ Nuevo informe</Btn>
     </div>
     <div style={{display:"grid",gridTemplateColumns:"repeat(3,minmax(0,1fr))",gap:10,marginBottom:12}} className="niki-mobile-one-column">
@@ -8698,14 +8794,14 @@ function InformesMensajeriaPage({ data, user }) {
       <div><label style={{fontSize:10,fontWeight:700,display:"block",marginBottom:4}}>Local</label><Select value={localFiltro} onChange={setLocalFiltro}><option value="todos">Todos mis locales</option>{locales.map(l=><option key={l.id} value={l.id}>{l.nombre}</option>)}</Select></div>
       <Btn size="sm" variant="secondary" onClick={load} disabled={loading}>↻ Actualizar</Btn>
     </div></Card>
-    <Card style={{padding:0,overflow:"hidden"}}><div style={{overflowX:"auto"}}><table style={{width:"100%",borderCollapse:"collapse",minWidth:850,fontSize:11}}><thead><tr style={{background:"var(--color-background-secondary)",textAlign:"left"}}><th style={{padding:"9px 12px"}}>Fecha</th><th>Local</th><th style={{textAlign:"right"}}>ManyChat</th><th style={{textAlign:"right"}}>Instagram</th><th style={{textAlign:"right"}}>WhatsApp</th><th style={{textAlign:"right"}}>Total</th><th>Estado</th><th style={{width:90}}></th></tr></thead><tbody>{filtered.map(r=><tr key={r.id} style={{borderTop:"1px solid var(--color-border-tertiary)"}}><td style={{padding:"10px 12px"}}>{parseDateLabel(r.fecha)}</td><td style={{fontWeight:700}}>{localName(r.localId)}</td><td style={{textAlign:"right"}}>{r.manychat}</td><td style={{textAlign:"right"}}>{r.instagram}</td><td style={{textAlign:"right"}}>{r.whatsapp}</td><td style={{textAlign:"right",fontWeight:800}}>{r.manychat+r.instagram+r.whatsapp}</td><td><Badge color={r.estado==="completo"?"success":"amber"}>{r.estado==="completo"?"Completo":"Borrador"}</Badge></td><td><button type="button" onClick={()=>abrirEditar(r)} style={{border:"none",background:"transparent",color:COLORS.pinkDark,fontWeight:700,cursor:"pointer"}}>Abrir</button></td></tr>)}</tbody></table></div>{!filtered.length&&!loading&&<p style={{padding:14,margin:0,fontSize:11,color:"var(--color-text-secondary)"}}>No hay informes para los filtros seleccionados.</p>}</Card>
+    <Card style={{padding:0,overflow:"hidden"}}><div style={{overflowX:"auto"}}><table style={{width:"100%",borderCollapse:"collapse",minWidth:850,fontSize:11}}><thead><tr style={{background:"var(--color-background-secondary)",textAlign:"left"}}><th style={{padding:"9px 12px"}}>Fecha</th><th>Local</th><th style={{textAlign:"right"}}>ManyChat</th><th style={{textAlign:"right"}}>Instagram</th><th style={{textAlign:"right"}}>WhatsApp</th><th style={{textAlign:"right"}}>Total</th><th>Estado</th><th style={{width:90}}></th></tr></thead><tbody>{filtered.map(r=><tr key={r.id} style={{borderTop:"1px solid var(--color-border-tertiary)"}}><td style={{padding:"10px 12px"}}>{parseDateLabel(r.fecha)}</td><td style={{fontWeight:700}}>{localNames(r.localIds?.length?r.localIds:[r.localId])}</td><td style={{textAlign:"right"}}>{r.manychat}</td><td style={{textAlign:"right"}}>{r.instagram}</td><td style={{textAlign:"right"}}>{r.whatsapp}</td><td style={{textAlign:"right",fontWeight:800}}>{r.manychat+r.instagram+r.whatsapp}</td><td><Badge color={r.estado==="completo"?"success":"amber"}>{r.estado==="completo"?"Completo":"Borrador"}</Badge></td><td><button type="button" onClick={()=>abrirEditar(r)} style={{border:"none",background:"transparent",color:COLORS.pinkDark,fontWeight:700,cursor:"pointer"}}>Abrir</button></td></tr>)}</tbody></table></div>{!filtered.length&&!loading&&<p style={{padding:14,margin:0,fontSize:11,color:"var(--color-text-secondary)"}}>No hay informes para los filtros seleccionados.</p>}</Card>
 
     {editor&&<Modal title={`Informe de Mensajeria · ${editor.id?parseDateLabel(editor.fecha):"Nuevo"}`} onClose={()=>!saving&&setEditor(null)} width={1040}>
       <div style={{display:"grid",gap:16}}>
         <div style={{border:"1px solid #eadce3",borderRadius:14,background:"linear-gradient(180deg,#fff 0%,#fffafb 100%)",padding:14}}>
-          <div style={{display:"grid",gridTemplateColumns:"1.2fr 1fr auto",gap:10,alignItems:"end"}} className="niki-mobile-one-column">
-            <div><label style={{fontSize:11,fontWeight:800,display:"block",marginBottom:5,color:COLORS.pinkDark}}>Local</label><select disabled={!!editor.id} value={editor.localId||""} onChange={e=>cambiarContexto({localId:Number(e.target.value)})} style={{...inputBoxStyle,height:38,background:"#fff"}}>{locales.map(l=><option key={l.id} value={l.id}>{l.nombre}</option>)}</select></div>
-            <div><label style={{fontSize:11,fontWeight:800,display:"block",marginBottom:5,color:COLORS.pinkDark}}>Fecha</label><input disabled={!!editor.id} type="date" value={editor.fecha} onChange={e=>cambiarContexto({fecha:e.target.value})} style={{...inputBoxStyle,height:38}}/></div>
+          <div style={{display:"grid",gridTemplateColumns:"minmax(0,1.6fr) 260px auto",gap:10,alignItems:"end"}} className="niki-mobile-one-column">
+            <div><label style={{fontSize:11,fontWeight:800,display:"block",marginBottom:5,color:COLORS.pinkDark}}>Local{localIdsEditor.length===1?"":"es"}</label>{editor.id?<div style={{...inputBoxStyle,height:"auto",minHeight:38,display:"flex",alignItems:"center",fontWeight:700,padding:"8px 10px"}}>{localNames(editor.localIds?.length?editor.localIds:[editor.localId])}</div>:renderLocalScopePicker({tipoField:"localTipos",idsField:"localIds"})}</div>
+            <div><label style={{fontSize:11,fontWeight:800,display:"block",marginBottom:5,color:COLORS.pinkDark}}>Fecha</label><input disabled={!!editor.id} type="date" value={editor.fecha} onChange={e=>setEditor(v=>({...v,fecha:e.target.value}))} style={{...inputBoxStyle,height:38}}/></div>
             <div style={{display:"flex",justifyContent:"flex-end",alignItems:"center",height:"100%"}}><Badge color={editor.estado==="completo"?"success":"amber"}>{editor.estado==="completo"?"Completo":"Borrador"}</Badge></div>
           </div>
         </div>
@@ -8726,7 +8822,7 @@ function InformesMensajeriaPage({ data, user }) {
         <div style={formSectionStyle}>
           <div style={formSectionHeaderStyle}><div style={formSectionTitleStyle}>3. Agenda</div><div style={{fontSize:10,color:"var(--color-text-secondary)"}}>Indicá los problemas de agenda y dónde impactaron.</div></div>
           <div style={formSectionBodyStyle}><div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10}} className="niki-mobile-one-column">
-            <div style={{border:"1px solid #eadce3",borderRadius:12,padding:12,background:"#fff"}}><strong style={{fontSize:11,color:COLORS.pinkDark}}>No pudieron agendar por disponibilidad</strong><div style={{display:"grid",gridTemplateColumns:"110px 1fr",gap:8,marginTop:10,alignItems:"start"}}><div><label style={fieldLabelStyle}>Cantidad</label><input type="number" min="0" value={editor.noDispCantidad} onChange={e=>setEditor(v=>({...v,noDispCantidad:e.target.value}))} style={inputBoxStyle}/></div><div><label style={fieldLabelStyle}>Locales afectados</label><div style={{display:"flex",gap:5,flexWrap:"wrap",maxHeight:78,overflowY:"auto",paddingBottom:2}}>{locales.map(l=><button type="button" key={l.id} onClick={()=>toggleNoDispLocal(l.id)} style={{border:`1px solid ${editor.noDispLocales.includes(Number(l.id))?COLORS.pinkDark:"#d8c9cf"}`,background:editor.noDispLocales.includes(Number(l.id))?COLORS.pinkLight:"#fff",borderRadius:999,padding:"4px 7px",fontSize:9,cursor:"pointer"}}>{l.nombre}</button>)}</div></div></div><label style={{...fieldLabelStyle,marginTop:10}}>Observación</label><input value={editor.noDispObs} onChange={e=>setEditor(v=>({...v,noDispObs:e.target.value}))} placeholder="Detalle opcional" style={inputBoxStyle}/></div>
+            <div style={{border:"1px solid #eadce3",borderRadius:12,padding:12,background:"#fff"}}><strong style={{fontSize:11,color:COLORS.pinkDark}}>No pudieron agendar por disponibilidad</strong><div style={{display:"grid",gridTemplateColumns:"110px 1fr",gap:8,marginTop:10,alignItems:"start"}}><div><label style={fieldLabelStyle}>Cantidad</label><input type="number" min="0" value={editor.noDispCantidad} onChange={e=>setEditor(v=>({...v,noDispCantidad:e.target.value}))} style={inputBoxStyle}/></div><div><label style={fieldLabelStyle}>Locales afectados</label><div style={{maxHeight:100,overflowY:"auto",paddingBottom:2}}>{renderLocalScopePicker({tipoField:"noDispTipos",idsField:"noDispLocales",compact:true})}</div></div></div><label style={{...fieldLabelStyle,marginTop:10}}>Observación</label><input value={editor.noDispObs} onChange={e=>setEditor(v=>({...v,noDispObs:e.target.value}))} placeholder="Detalle opcional" style={inputBoxStyle}/></div>
             <div style={{border:"1px solid #eadce3",borderRadius:12,padding:12,background:"#fff"}}><strong style={{fontSize:11,color:COLORS.pinkDark}}>No pudieron agendar por web / autogestión</strong><div style={{marginTop:10}}><label style={fieldLabelStyle}>Cantidad</label><input type="number" min="0" value={editor.noWebCantidad} onChange={e=>setEditor(v=>({...v,noWebCantidad:e.target.value}))} style={{...inputBoxStyle,width:110}}/></div><label style={{...fieldLabelStyle,marginTop:10}}>Observación</label><input value={editor.noWebObs} onChange={e=>setEditor(v=>({...v,noWebObs:e.target.value}))} placeholder="Detalle opcional" style={inputBoxStyle}/></div>
           </div></div>
         </div>
@@ -8738,7 +8834,7 @@ function InformesMensajeriaPage({ data, user }) {
 
         <div style={formSectionStyle}>
           <div style={formSectionHeaderStyle}><div style={formSectionTitleStyle}>5. Reclamos del día</div><Btn size="sm" variant="secondary" onClick={()=>setReclamoModal({})}>+ Cargar reclamo</Btn></div>
-          <div style={formSectionBodyStyle}><div style={{border:"1px solid #eadce3",borderRadius:12,padding:12,display:"flex",justifyContent:"space-between",gap:10,alignItems:"center",flexWrap:"wrap",background:"#fff"}}><div>{reclamosLoading?<strong>Cargando...</strong>:<><strong style={{fontSize:15}}>{reclamos.length} reclamo{reclamos.length===1?"":"s"}</strong><span style={{fontSize:10,color:"var(--color-text-secondary)",marginLeft:8}}>{reclPend} pendiente{reclPend===1?"":"s"} · {reclRes} resuelto{reclRes===1?"":"s"}</span></>}</div><div style={{fontSize:10,color:"var(--color-text-secondary)"}}>Se toma del módulo de reclamos para ese local y fecha.</div></div>{reclamos.slice(0,4).map(r=><div key={r.id} style={{fontSize:10,padding:"9px 2px",borderBottom:"1px solid #eee2e7"}}><strong>{r.cliente||"Clienta"}</strong> · {r.servicio||r.motivoTipo||"Reclamo"} · {r.estado||"pendiente"}</div>)}</div>
+          <div style={formSectionBodyStyle}><div style={{border:"1px solid #eadce3",borderRadius:12,padding:12,display:"flex",justifyContent:"space-between",gap:10,alignItems:"center",flexWrap:"wrap",background:"#fff"}}><div>{reclamosLoading?<strong>Cargando...</strong>:<><strong style={{fontSize:15}}>{reclamos.length} reclamo{reclamos.length===1?"":"s"}</strong><span style={{fontSize:10,color:"var(--color-text-secondary)",marginLeft:8}}>{reclPend} pendiente{reclPend===1?"":"s"} · {reclRes} resuelto{reclRes===1?"":"s"}</span></>}</div><div style={{fontSize:10,color:"var(--color-text-secondary)"}}>Se toma del módulo de reclamos para los locales y la fecha del informe.</div></div>{reclamos.slice(0,4).map(r=><div key={r.id} style={{fontSize:10,padding:"9px 2px",borderBottom:"1px solid #eee2e7"}}><strong>{r.cliente||"Clienta"}</strong> · {r.servicio||r.motivoTipo||"Reclamo"} · {r.estado||"pendiente"}</div>)}</div>
         </div>
 
         <div style={formSectionStyle}>
@@ -8754,7 +8850,7 @@ function InformesMensajeriaPage({ data, user }) {
         <div style={{display:"flex",justifyContent:"flex-end",gap:8,flexWrap:"wrap"}}><Btn variant="secondary" onClick={()=>setEditor(null)} disabled={saving}>Cerrar</Btn><Btn variant="secondary" onClick={()=>guardar(false)} disabled={saving}>{saving?"Guardando...":"Guardar borrador"}</Btn><Btn onClick={()=>guardar(true)} disabled={saving}>{saving?"Guardando...":"Finalizar informe"}</Btn></div>
       </div>
     </Modal>}
-    {reclamoModal&&editor&&<ReclamoEditorModal data={data} user={user} initial={null} forcedLocalId={editor.localId} defaultFecha={editor.fecha} informeId={null} onClose={()=>setReclamoModal(null)} onSaved={async()=>{setReclamoModal(null);await loadReclamos(editor.localId,editor.fecha);}}/>}
+    {reclamoModal&&editor&&<ReclamoEditorModal data={data} user={user} initial={null} forcedLocalId={localIdsEditor.length===1?localIdsEditor[0]:null} allowedLocalIdsOverride={localIdsEditor} defaultFecha={editor.fecha} informeId={null} onClose={()=>setReclamoModal(null)} onSaved={async()=>{setReclamoModal(null);await loadReclamos(localIdsEditor,editor.fecha);}}/>}
   </div>;
 }
 
