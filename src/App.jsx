@@ -14160,6 +14160,300 @@ function DashboardComercial({ data, user }) {
   </div>;
 }
 
+// ── DASHBOARD DE MANICURAS ─────────────────────────────────────────
+function dashboardManicuraText(value) {
+  return String(value || "").trim().toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/\s+/g, " ");
+}
+
+function dashboardManicuraMinutes(value) {
+  const raw=String(value||"").slice(0,5);
+  const [h,m]=raw.split(":").map(Number);
+  if(!Number.isFinite(h)||!Number.isFinite(m)) return null;
+  return h*60+m;
+}
+
+function dashboardManicuraHours(from,to) {
+  const a=dashboardManicuraMinutes(from), b=dashboardManicuraMinutes(to);
+  if(a==null||b==null) return 0;
+  const diff=b-a;
+  return diff>0?diff/60:0;
+}
+
+function dashboardManicuraMonthMeta(periodo) {
+  const now=new Date(); now.setHours(12,0,0,0);
+  const [yy,mm]=String(periodo||dateKey(now).slice(0,7)).split("-").map(Number);
+  const year=Number.isFinite(yy)?yy:now.getFullYear();
+  const monthIndex=Number.isFinite(mm)?mm-1:now.getMonth();
+  const start=new Date(year,monthIndex,1,12,0,0,0);
+  const end=new Date(year,monthIndex+1,0,12,0,0,0);
+  const isCurrent=year===now.getFullYear()&&monthIndex===now.getMonth();
+  const effectiveEnd=isCurrent&&now<end?now:end;
+  const prevStart=new Date(year,monthIndex-1,1,12,0,0,0);
+  const prevEndFull=new Date(year,monthIndex,0,12,0,0,0);
+  const prevEnd=isCurrent?new Date(prevStart.getFullYear(),prevStart.getMonth(),Math.min(effectiveEnd.getDate(),prevEndFull.getDate()),12,0,0,0):prevEndFull;
+  const historyStart=new Date(start); historyStart.setDate(historyStart.getDate()-90);
+  return {
+    periodo:`${year}-${String(monthIndex+1).padStart(2,"0")}`,
+    desde:dateKey(start), hasta:dateKey(effectiveEnd), mesHasta:dateKey(end), isCurrent,
+    prevDesde:dateKey(prevStart), prevHasta:dateKey(prevEnd), historyDesde:dateKey(historyStart),
+    label:new Intl.DateTimeFormat("es-AR",{month:"long",year:"numeric"}).format(start),
+    cutoffLabel:new Intl.DateTimeFormat("es-AR",{day:"2-digit",month:"2-digit",year:"numeric"}).format(effectiveEnd),
+  };
+}
+
+function DashboardManicuraBarList({ rows, valueKey, formatter=(v)=>new Intl.NumberFormat("es-AR",{maximumFractionDigits:1}).format(v), secondary=null, maxRows=12, empty="Sin datos para el período" }) {
+  const visible=(rows||[]).slice(0,maxRows);
+  if(!visible.length) return <div style={{ minHeight:180,display:"grid",placeItems:"center",fontSize:12,color:"var(--color-text-secondary)" }}>{empty}</div>;
+  const max=Math.max(1,...visible.map(r=>Number(r[valueKey]||0)));
+  return <div style={{ display:"grid",gap:9,marginTop:10 }}>{visible.map((r,idx)=>{
+    const v=Number(r[valueKey]||0); const pct=Math.max(1,Math.min(100,v/max*100));
+    return <div key={`${r.userId||r.localId||idx}-${idx}`} style={{ display:"grid",gridTemplateColumns:"26px minmax(130px,1.05fr) minmax(160px,2fr) auto",gap:9,alignItems:"center",fontSize:11 }}>
+      <span style={{ width:22,height:22,borderRadius:8,display:"grid",placeItems:"center",background:idx<3?COLORS.pinkLight:"rgba(120,120,120,.07)",color:idx<3?COLORS.pinkDark:"var(--color-text-secondary)",fontWeight:900 }}>{idx+1}</span>
+      <div style={{ minWidth:0 }}><strong style={{ display:"block",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap" }}>{r.nombre||r.local||"Sin nombre"}</strong>{secondary&&<small style={{ display:"block",marginTop:2,color:"var(--color-text-secondary)",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap" }}>{secondary(r)}</small>}</div>
+      <div style={{ height:9,borderRadius:999,background:"rgba(114,36,62,.08)",overflow:"hidden" }}><div style={{ width:`${pct}%`,height:"100%",borderRadius:999,background:idx===0?COLORS.pinkDark:"#c98fa0" }}/></div>
+      <strong style={{ minWidth:62,textAlign:"right",color:COLORS.pinkDark }}>{formatter(v)}</strong>
+    </div>;
+  })}</div>;
+}
+
+function DashboardManicuras({ data, user }) {
+  const hoy=new Date();
+  const maxPeriodo=dateKey(hoy).slice(0,7);
+  const [periodo,setPeriodo]=useState(maxPeriodo);
+  const [selectedLocalIds,setSelectedLocalIds]=useState(null);
+  const [manicuraId,setManicuraId]=useState("todas");
+  const [loading,setLoading]=useState(true);
+  const [error,setError]=useState("");
+  const [rawComisiones,setRawComisiones]=useState([]);
+  const [rawHorarios,setRawHorarios]=useState([]);
+  const [rawAsistencias,setRawAsistencias]=useState([]);
+  const [rawReclamos,setRawReclamos]=useState([]);
+
+  const meta=useMemo(()=>dashboardManicuraMonthMeta(periodo),[periodo]);
+  const assignedIds=useMemo(()=>Array.from(new Set(getAssignedLocalIds(data,user).map(Number).filter(Boolean))),[data,user]);
+  const allowedLocals=useMemo(()=>{
+    const allowed=new Set(assignedIds);
+    return (data.locales||[]).filter(l=>allowed.has(Number(l.id))&&localActivo(l)).sort((a,b)=>String(a.nombre||"").localeCompare(String(b.nombre||""),"es"));
+  },[data.locales,assignedIds]);
+  const visibleLocalIds=useMemo(()=>{
+    const valid=new Set(allowedLocals.map(l=>Number(l.id)));
+    const selected=(selectedLocalIds||[]).map(Number).filter(id=>valid.has(id));
+    return selected.length?selected:Array.from(valid);
+  },[allowedLocals,selectedLocalIds]);
+  const visibleLocalSet=useMemo(()=>new Set(visibleLocalIds),[visibleLocalIds]);
+  const localName=id=>(data.locales||[]).find(l=>Number(l.id)===Number(id))?.nombre||`Local ${id}`;
+  const userName=id=>(data.users||[]).find(u=>Number(u.id)===Number(id))?.nombre||"";
+
+  const load=useCallback(async()=>{
+    if(!assignedIds.length){setRawComisiones([]);setRawHorarios([]);setRawAsistencias([]);setRawReclamos([]);setLoading(false);return;}
+    setLoading(true); setError("");
+    try{
+      const [comisiones,horarios,asistencias,reclamos]=await Promise.all([
+        api.getComisionesAgendaProShadowRango(meta.historyDesde,meta.hasta),
+        api.getHorariosRango(meta.prevDesde,meta.hasta),
+        api.getAsistenciasRango(meta.prevDesde,meta.hasta),
+        api.getReclamosRango(meta.prevDesde,meta.hasta),
+      ]);
+      setRawComisiones(comisiones||[]);
+      setRawHorarios(horarios||[]);
+      setRawAsistencias(asistencias||[]);
+      setRawReclamos(reclamos||[]);
+    }catch(e){setError(e?.message||String(e));}
+    finally{setLoading(false);}
+  },[meta.historyDesde,meta.hasta,meta.prevDesde,assignedIds.join("|")]);
+  useEffect(()=>{void load();},[load]);
+
+  const manicureUserIdSet=useMemo(()=>new Set((data.users||[]).filter(u=>u.rol==="manicura").map(u=>Number(u.id)).filter(Boolean)),[data.users]);
+  const comisiones=useMemo(()=>rawComisiones.map(r=>({
+    id:r.id, fecha:String(r.fecha_pago||"").slice(0,10), localId:Number(r.local_id||0)||null, userId:Number(r.user_id||0)||null,
+    nombre:r.nombre_manicura||userName(r.user_id)||"Sin manicura", servicio:r.servicio||"Sin servicio", cliente:r.cliente||"",
+    importe:Number(r.precio_cobrado_agendapro ?? r.precio ?? 0)||0,
+  })).filter(r=>r.fecha&&r.localId&&r.userId&&manicureUserIdSet.has(Number(r.userId))&&assignedIds.includes(Number(r.localId))),[rawComisiones,assignedIds,data.users,manicureUserIdSet]);
+
+  const horarios=useMemo(()=>rawHorarios.map(normalizeHorario).map(h=>({ ...h, effectiveLocalId:getManicuraLocalIdForDate(data,h.userId,h.fecha,h.localId) })).filter(h=>h.fecha&&h.userId&&manicureUserIdSet.has(Number(h.userId))&&h.effectiveLocalId&&assignedIds.includes(Number(h.effectiveLocalId))),[rawHorarios,data,assignedIds,manicureUserIdSet]);
+  const asistencias=useMemo(()=>rawAsistencias.map(normalizeAsistencia).map(a=>({ ...a, effectiveLocalId:getManicuraLocalIdForDate(data,a.userId,a.fecha,a.localId) })).filter(a=>a.fecha&&a.userId&&manicureUserIdSet.has(Number(a.userId))&&a.effectiveLocalId&&assignedIds.includes(Number(a.effectiveLocalId))),[rawAsistencias,data,assignedIds,manicureUserIdSet]);
+  const reclamos=useMemo(()=>rawReclamos.map(normalizeReclamo).filter(r=>r.localId&&assignedIds.includes(Number(r.localId))),[rawReclamos,assignedIds]);
+
+  const currentRows=useMemo(()=>comisiones.filter(r=>r.fecha>=meta.desde&&r.fecha<=meta.hasta&&visibleLocalSet.has(Number(r.localId))),[comisiones,meta.desde,meta.hasta,visibleLocalSet]);
+  const previousRows=useMemo(()=>comisiones.filter(r=>r.fecha>=meta.prevDesde&&r.fecha<=meta.prevHasta&&visibleLocalSet.has(Number(r.localId))),[comisiones,meta.prevDesde,meta.prevHasta,visibleLocalSet]);
+  const historyRows=useMemo(()=>comisiones.filter(r=>r.fecha>=meta.historyDesde&&r.fecha<meta.desde&&visibleLocalSet.has(Number(r.localId))),[comisiones,meta.historyDesde,meta.desde,visibleLocalSet]);
+
+  const activeManicureIds=useMemo(()=>{
+    const ids=new Set([...currentRows,...previousRows].map(r=>Number(r.userId)).filter(Boolean));
+    (data.users||[]).filter(u=>u.rol==="manicura"&&u.activo!==false).forEach(u=>{
+      const locs=getActiveManicuraLocalIds(data,u.id,meta.hasta);
+      if(locs.some(id=>visibleLocalSet.has(Number(id)))) ids.add(Number(u.id));
+    });
+    return Array.from(ids);
+  },[currentRows,previousRows,data,meta.hasta,visibleLocalSet]);
+  const manicureOptions=useMemo(()=>activeManicureIds.map(id=>({ id,nombre:userName(id)||currentRows.find(r=>r.userId===id)?.nombre||previousRows.find(r=>r.userId===id)?.nombre||`Manicura ${id}` })).sort((a,b)=>a.nombre.localeCompare(b.nombre,"es")),[activeManicureIds,currentRows,previousRows,data.users]);
+  useEffect(()=>{if(manicuraId!=="todas"&&!activeManicureIds.includes(Number(manicuraId)))setManicuraId("todas");},[activeManicureIds.join("|"),manicuraId]);
+
+  const filteredCurrent=useMemo(()=>manicuraId==="todas"?currentRows:currentRows.filter(r=>Number(r.userId)===Number(manicuraId)),[currentRows,manicuraId]);
+  const filteredPrevious=useMemo(()=>manicuraId==="todas"?previousRows:previousRows.filter(r=>Number(r.userId)===Number(manicuraId)),[previousRows,manicuraId]);
+
+  const attendanceMaps=useMemo(()=>{
+    const build=(desde,hasta)=>{
+      const sched=new Map();
+      horarios.filter(h=>h.fecha>=desde&&h.fecha<=hasta&&h.trabaja&&visibleLocalSet.has(Number(h.effectiveLocalId))).forEach(h=>{
+        if(manicuraId!=="todas"&&Number(h.userId)!==Number(manicuraId))return;
+        const key=`${h.userId}|${h.effectiveLocalId}|${h.fecha}`;
+        if(!sched.has(key))sched.set(key,{ userId:Number(h.userId),localId:Number(h.effectiveLocalId),fecha:h.fecha,entrada:h.entrada,salida:h.salida });
+      });
+      const att=new Map();
+      asistencias.filter(a=>a.fecha>=desde&&a.fecha<=hasta&&visibleLocalSet.has(Number(a.effectiveLocalId))).forEach(a=>{
+        if(manicuraId!=="todas"&&Number(a.userId)!==Number(manicuraId))return;
+        att.set(`${a.userId}|${a.effectiveLocalId}|${a.fecha}`,a);
+      });
+      const byUser=new Map(),byLocal=new Map();
+      const empty=()=>({ scheduled:0,attended:0,absent:0,late:0,pending:0,lateMinutes:0,lateWithMinutes:0,hours:0,workDays:0 });
+      const add=(map,id,row)=>{const x=map.get(id)||empty();Object.keys(x).forEach(k=>x[k]+=Number(row[k]||0));map.set(id,x);};
+      sched.forEach((s,key)=>{
+        const a=att.get(key); const schedHours=dashboardManicuraHours(s.entrada,s.salida);
+        const row=empty(); row.scheduled=1;
+        if(!a){row.pending=1;row.workDays=1;row.hours=schedHours;}
+        else if(a.estado==="ausente"){row.absent=1;}
+        else {
+          row.attended=1; row.workDays=1;
+          if(a.estado==="tarde"){
+            row.late=1;
+            const plan=dashboardManicuraMinutes(s.entrada),real=dashboardManicuraMinutes(a.entradaReal);
+            if(plan!=null&&real!=null){row.lateMinutes=Math.max(0,real-plan);row.lateWithMinutes=1;}
+          }
+          const realHours=dashboardManicuraHours(a.entradaReal,a.salidaReal);
+          row.hours=realHours>0?realHours:schedHours;
+        }
+        add(byUser,s.userId,row); add(byLocal,s.localId,row);
+      });
+      return { byUser,byLocal };
+    };
+    return { current:build(meta.desde,meta.hasta),previous:build(meta.prevDesde,meta.prevHasta) };
+  },[horarios,asistencias,visibleLocalSet,manicuraId,meta.desde,meta.hasta,meta.prevDesde,meta.prevHasta]);
+
+  const priorUsersByClient=useMemo(()=>{
+    const map=new Map();
+    historyRows.forEach(r=>{const k=dashboardManicuraText(r.cliente);if(!k)return;const set=map.get(k)||new Set();set.add(Number(r.userId));map.set(k,set);});
+    return map;
+  },[historyRows]);
+
+  const qualityByUser=useMemo(()=>{
+    const claims=new Map(),warranty=new Map();
+    const add=(map,id)=>{if(!id)return;map.set(Number(id),(map.get(Number(id))||0)+1);};
+    const userByName=new Map((data.users||[]).filter(u=>u.rol==="manicura").map(u=>[dashboardManicuraText(u.nombre),Number(u.id)]));
+    reclamos.filter(r=>visibleLocalSet.has(Number(r.localId))).forEach(r=>{
+      const f=String(r.fechaServicioOriginal||r.fecha||"").slice(0,10); if(f<meta.desde||f>meta.hasta)return;
+      add(claims,r.manicuraOriginalId||userByName.get(dashboardManicuraText(r.nombreManicuraOriginal)));
+    });
+    (data.garantias||[]).filter(g=>visibleLocalSet.has(Number(g.localId))).forEach(g=>{
+      const f=String(g.fechaServicioOriginal||g.fechaReparacion||"").slice(0,10); if(f<meta.desde||f>meta.hasta)return;
+      add(warranty,g.manicuraOriginalId||userByName.get(dashboardManicuraText(g.nombreManicuraOriginal)));
+    });
+    return {claims,warranty};
+  },[reclamos,data.garantias,data.users,visibleLocalSet,meta.desde,meta.hasta]);
+
+  const stats=useMemo(()=>{
+    const prevMap=new Map(); previousRows.forEach(r=>{const id=Number(r.userId);const x=prevMap.get(id)||{services:0,revenue:0};x.services++;x.revenue+=r.importe;prevMap.set(id,x);});
+    const map=new Map();
+    const seedIds=manicuraId==="todas"?activeManicureIds:[Number(manicuraId)].filter(Boolean);
+    seedIds.forEach(id=>map.set(Number(id),{userId:Number(id),nombre:userName(id)||`Manicura ${id}`,services:0,revenue:0,days:new Set(),clients:new Set(),serviceCounts:new Map(),localIds:new Set()}));
+    filteredCurrent.forEach(r=>{
+      const id=Number(r.userId); const x=map.get(id)||{userId:id,nombre:r.nombre||userName(id)||`Manicura ${id}`,services:0,revenue:0,days:new Set(),clients:new Set(),serviceCounts:new Map(),localIds:new Set()};
+      if((!x.nombre||x.nombre.startsWith("Manicura "))&&r.nombre)x.nombre=r.nombre;
+      x.services++; x.revenue+=r.importe; x.days.add(r.fecha); x.localIds.add(Number(r.localId));
+      const ck=dashboardManicuraText(r.cliente); if(ck)x.clients.add(ck);
+      x.serviceCounts.set(r.servicio,(x.serviceCounts.get(r.servicio)||0)+1); map.set(id,x);
+    });
+    return Array.from(map.values()).map(x=>{
+      const att=attendanceMaps.current.byUser.get(x.userId)||{scheduled:0,attended:0,absent:0,late:0,pending:0,lateMinutes:0,lateWithMinutes:0,hours:0,workDays:0};
+      const prev=prevMap.get(x.userId)||{services:0,revenue:0};
+      let returning=0,same=0;
+      x.clients.forEach(client=>{const prevUsers=priorUsersByClient.get(client);if(prevUsers?.size){returning++;if(prevUsers.has(x.userId))same++;}});
+      const topService=Array.from(x.serviceCounts.entries()).sort((a,b)=>b[1]-a[1])[0]||["—",0];
+      const workDays=att.workDays||x.days.size;
+      const hours=att.hours||0;
+      const claims=qualityByUser.claims.get(x.userId)||0,warranty=qualityByUser.warranty.get(x.userId)||0;
+      return {
+        ...x, prevServices:prev.services,prevRevenue:prev.revenue,variationServices:dashboardPct(x.services,prev.services),variationRevenue:dashboardPct(x.revenue,prev.revenue),
+        ticket:x.services?x.revenue/x.services:0,servicesPerDay:workDays?x.services/workDays:0,servicesPerHour:hours?x.services/hours:0,revenuePerHour:hours?x.revenue/hours:0,
+        scheduled:att.scheduled,attended:att.attended,absent:att.absent,late:att.late,pending:att.pending,hours,workDays,
+        absencePct:att.scheduled?att.absent/att.scheduled*100:0,latePct:att.attended?att.late/att.attended*100:0,avgLateMinutes:att.lateWithMinutes?att.lateMinutes/att.lateWithMinutes:0,
+        uniqueClients:x.clients.size,returningClients:returning,sameManicureClients:same,fidelityPct:returning?same/returning*100:0,loyalBasePct:x.clients.size?same/x.clients.size*100:0,
+        topService:topService[0],topServiceCount:topService[1],claims,warranty,claimsPer100:x.services?claims/x.services*100:0,warrantyPer100:x.services?warranty/x.services*100:0,
+      };
+    }).sort((a,b)=>b.services-a.services||a.nombre.localeCompare(b.nombre,"es"));
+  },[filteredCurrent,previousRows,attendanceMaps,priorUsersByClient,qualityByUser,data.users,activeManicureIds,manicuraId]);
+
+  const localStats=useMemo(()=>{
+    const map=new Map();
+    filteredCurrent.forEach(r=>{const id=Number(r.localId);const x=map.get(id)||{localId:id,local:localName(id),services:0,revenue:0,users:new Set()};x.services++;x.revenue+=r.importe;x.users.add(Number(r.userId));map.set(id,x);});
+    visibleLocalIds.forEach(id=>{if(!map.has(Number(id)))map.set(Number(id),{localId:Number(id),local:localName(id),services:0,revenue:0,users:new Set()});});
+    return Array.from(map.values()).map(x=>{const a=attendanceMaps.current.byLocal.get(x.localId)||{scheduled:0,attended:0,absent:0,late:0,pending:0,hours:0,workDays:0};return {...x,manicuras:x.users.size,ticket:x.services?x.revenue/x.services:0,servicesPerDay:a.workDays?x.services/a.workDays:0,servicesPerHour:a.hours?x.services/a.hours:0,absencePct:a.scheduled?a.absent/a.scheduled*100:0,latePct:a.attended?a.late/a.attended*100:0,scheduled:a.scheduled,absent:a.absent,late:a.late,pending:a.pending};}).sort((a,b)=>b.services-a.services);
+  },[filteredCurrent,visibleLocalIds,attendanceMaps,data.locales]);
+
+  const totals=useMemo(()=>{
+    const services=filteredCurrent.length, prevServices=filteredPrevious.length;
+    const revenue=filteredCurrent.reduce((a,x)=>a+Number(x.importe||0),0), prevRevenue=filteredPrevious.reduce((a,x)=>a+Number(x.importe||0),0);
+    const workDays=stats.reduce((a,x)=>a+x.workDays,0),hours=stats.reduce((a,x)=>a+x.hours,0);
+    const scheduled=stats.reduce((a,x)=>a+x.scheduled,0),absent=stats.reduce((a,x)=>a+x.absent,0),attended=stats.reduce((a,x)=>a+x.attended,0),late=stats.reduce((a,x)=>a+x.late,0);
+    const returning=stats.reduce((a,x)=>a+x.returningClients,0),same=stats.reduce((a,x)=>a+x.sameManicureClients,0);
+    return {services,prevServices,revenue,prevRevenue,ticket:services?revenue/services:0,servicesPerDay:workDays?services/workDays:0,servicesPerHour:hours?services/hours:0,absencePct:scheduled?absent/scheduled*100:0,latePct:attended?late/attended*100:0,fidelityPct:returning?same/returning*100:0,returning,same};
+  },[stats,filteredCurrent,filteredPrevious]);
+
+  const ranking=useMemo(()=>stats.filter(x=>x.services>0).slice().sort((a,b)=>b.services-a.services),[stats]);
+  const fidelityRanking=useMemo(()=>stats.filter(x=>x.returningClients>0).slice().sort((a,b)=>b.fidelityPct-a.fidelityPct||b.returningClients-a.returningClients),[stats]);
+  const productivityRanking=useMemo(()=>stats.filter(x=>x.workDays>0&&x.services>0).slice().sort((a,b)=>b.servicesPerDay-a.servicesPerDay),[stats]);
+  const attendanceRanking=useMemo(()=>stats.filter(x=>x.scheduled>0).slice().sort((a,b)=>b.absencePct-a.absencePct||b.latePct-a.latePct),[stats]);
+  const qualityRanking=useMemo(()=>stats.filter(x=>x.services>0).slice().sort((a,b)=>(a.claimsPer100+a.warrantyPer100)-(b.claimsPer100+b.warrantyPer100)||b.services-a.services),[stats]);
+  const fmt1=v=>new Intl.NumberFormat("es-AR",{minimumFractionDigits:1,maximumFractionDigits:1}).format(Number(v||0));
+  const fmtPct=v=>`${fmt1(v)}%`;
+  const scopeLabel=selectedLocalIds?.length?`${visibleLocalIds.length} local${visibleLocalIds.length===1?"":"es"}`:"Todos los locales habilitados";
+
+  if(loading) return <div style={{ padding:28 }}><Card><p style={{ margin:0 }}>Cargando Dashboard de Manicuras...</p></Card></div>;
+  return <div style={{ padding:"20px 22px 34px",maxWidth:1500,margin:"0 auto",display:"grid",gap:13 }}>
+    <div style={{ display:"flex",justifyContent:"space-between",alignItems:"flex-start",gap:12,flexWrap:"wrap" }}>
+      <div><p style={{ margin:"0 0 3px",fontSize:10.5,fontWeight:900,color:COLORS.pinkDark,textTransform:"uppercase",letterSpacing:".07em" }}>Personas · desempeño</p><h2 style={{ margin:0,fontSize:22 }}>Dashboard de Manicuras</h2><p style={{ margin:"4px 0 0",fontSize:11,color:"var(--color-text-secondary)" }}>Producción, productividad, asistencia, fidelización y calidad en una misma vista.</p></div>
+      <Btn size="sm" variant="secondary" onClick={load}>↻ Actualizar</Btn>
+    </div>
+
+    <Card style={{ padding:13 }}><div className="niki-dashboard-filters" style={{ display:"grid",gridTemplateColumns:"190px minmax(260px,1fr) minmax(220px,.8fr) auto",gap:10,alignItems:"end" }}>
+      <div><label style={{ fontSize:10,fontWeight:800,display:"block",marginBottom:4 }}>Mes</label><input type="month" max={maxPeriodo} value={periodo} onChange={e=>setPeriodo(e.target.value||maxPeriodo)} style={{ width:"100%",height:36,border:"0.5px solid rgba(120,120,120,.24)",borderRadius:8,padding:"7px 10px",background:"var(--color-background-primary)",color:"var(--color-text-primary)" }}/></div>
+      <div><label style={{ fontSize:10,fontWeight:800,display:"block",marginBottom:4 }}>Locales</label><DashboardLocalMultiSelect locales={allowedLocals} selectedIds={selectedLocalIds} onChange={setSelectedLocalIds}/></div>
+      <div><label style={{ fontSize:10,fontWeight:800,display:"block",marginBottom:4 }}>Manicura</label><select value={manicuraId} onChange={e=>setManicuraId(e.target.value)} style={{ width:"100%",height:36,border:"0.5px solid rgba(120,120,120,.24)",borderRadius:8,padding:"7px 10px",background:"var(--color-background-primary)",color:"var(--color-text-primary)" }}><option value="todas">Todas las manicuras</option>{manicureOptions.map(m=><option key={m.id} value={m.id}>{m.nombre}</option>)}</select></div>
+      <div style={{ fontSize:10.5,color:"var(--color-text-secondary)",paddingBottom:4 }}><strong style={{ color:COLORS.pinkDark }}>{meta.label}</strong><br/>{meta.isCurrent?`Datos hasta ${meta.cutoffLabel}`:"Mes cerrado"}<br/>{scopeLabel}</div>
+    </div></Card>
+
+    {error&&<Card style={{ padding:13,border:`1px solid ${COLORS.danger}33`,background:COLORS.dangerLight }}><strong style={{ color:COLORS.danger }}>No se pudo cargar el dashboard.</strong><span style={{ marginLeft:8,fontSize:11 }}>{error}</span></Card>}
+
+    <div className="niki-dashboard-kpis" style={{ display:"grid",gridTemplateColumns:"repeat(3,minmax(0,1fr))",gap:10 }}>
+      <DashboardMetricCard icon="💅" label="Servicios" value={new Intl.NumberFormat("es-AR").format(totals.services)} variation={dashboardPct(totals.services,totals.prevServices)} detail="vs. período anterior comparable" accent />
+      <DashboardMetricCard icon="$" label="Facturación servicios" value={fmtMoney(totals.revenue)} variation={dashboardPct(totals.revenue,totals.prevRevenue)} detail="precio cobrado en AgendaPro" accent />
+      <DashboardMetricCard icon="🎟" label="Ticket por servicio" value={fmtMoney(totals.ticket)} detail={`${fmt1(totals.servicesPerDay)} servicios por jornada`} />
+      <DashboardMetricCard icon="⚡" label="Productividad" value={`${fmt1(totals.servicesPerDay)} / día`} subValue={totals.servicesPerHour?`${fmt1(totals.servicesPerHour)} servicios/hora`:"Sin horas suficientes"} detail="jornadas planificadas, excluye ausencias" />
+      <DashboardMetricCard icon="⏰" label="Asistencia" value={`${fmtPct(totals.absencePct)} ausencias`} subValue={`${fmtPct(totals.latePct)} llegadas tarde`} detail="sobre jornadas con horario" />
+      <DashboardMetricCard icon="♡" label="Preferencia por manicura" value={totals.returning?fmtPct(totals.fidelityPct):"—"} subValue={totals.returning?`${totals.same} de ${totals.returning} clientas con historial`:"Sin base comparable"} detail="retorno a la misma profesional en los 90 días previos" />
+    </div>
+
+    <div className="niki-dashboard-two-col" style={{ display:"grid",gridTemplateColumns:"minmax(0,1.35fr) minmax(0,1fr)",gap:12 }}>
+      <Card style={{ padding:15 }}><div style={{ display:"flex",justifyContent:"space-between",gap:10,alignItems:"baseline",flexWrap:"wrap" }}><div><h3 style={{ margin:0,fontSize:14 }}>Ranking mensual de servicios</h3><p style={{ margin:"3px 0 0",fontSize:10.5,color:"var(--color-text-secondary)" }}>Volumen por manicura · incluye variación contra el período anterior comparable.</p></div><Badge color="pink">{ranking.length} manicuras</Badge></div><DashboardManicuraBarList rows={ranking} valueKey="services" formatter={v=>new Intl.NumberFormat("es-AR").format(v)} secondary={r=>`${r.variationServices==null?"Sin comparación":dashboardPctLabel(r.variationServices)} · ${fmt1(r.servicesPerDay)} por jornada`}/></Card>
+      <Card style={{ padding:15 }}><div><h3 style={{ margin:0,fontSize:14 }}>Productividad por jornada</h3><p style={{ margin:"3px 0 0",fontSize:10.5,color:"var(--color-text-secondary)" }}>Servicios realizados por jornada trabajada/planificada.</p></div><DashboardManicuraBarList rows={productivityRanking} valueKey="servicesPerDay" formatter={v=>fmt1(v)} secondary={r=>`${r.services} servicios · ${r.workDays} jornadas`}/></Card>
+    </div>
+
+    <Card style={{ padding:0,overflow:"hidden" }}><div style={{ padding:"14px 16px",borderBottom:"1px solid rgba(120,120,120,.12)",display:"flex",justifyContent:"space-between",gap:10,alignItems:"baseline",flexWrap:"wrap" }}><div><h3 style={{ margin:0,fontSize:14 }}>Productividad y valor por manicura</h3><p style={{ margin:"3px 0 0",fontSize:10.5,color:"var(--color-text-secondary)" }}>Volumen, días, horas, ticket y facturación por hora.</p></div><Badge color="gray">Ordenado por servicios</Badge></div><div style={{ overflowX:"auto",maxHeight:470 }}><table style={{ width:"100%",borderCollapse:"collapse",fontSize:10.5,minWidth:1050 }}><thead style={{ position:"sticky",top:0,zIndex:2,background:"#f5e8ec",color:COLORS.pinkDark,textTransform:"uppercase",fontSize:9 }}><tr><th style={{ textAlign:"left",padding:"9px 11px" }}>Manicura</th><th style={{ textAlign:"right" }}>Servicios</th><th style={{ textAlign:"right" }}>Jornadas</th><th style={{ textAlign:"right" }}>Serv./día</th><th style={{ textAlign:"right" }}>Horas</th><th style={{ textAlign:"right" }}>Serv./hora</th><th style={{ textAlign:"right" }}>Ticket</th><th style={{ textAlign:"right" }}>Facturación</th><th style={{ textAlign:"right",paddingRight:12 }}>$/hora</th><th style={{ textAlign:"left",paddingLeft:12 }}>Servicio principal</th></tr></thead><tbody>{ranking.map((r,i)=><tr key={r.userId} onClick={()=>setManicuraId(String(r.userId))} style={{ borderTop:"1px solid rgba(120,120,120,.09)",background:i%2?"rgba(120,120,120,.018)":"transparent",cursor:"pointer" }}><td style={{ padding:"9px 11px",fontWeight:800 }}>{r.nombre}</td><td style={{ textAlign:"right" }}>{r.services}</td><td style={{ textAlign:"right" }}>{r.workDays}</td><td style={{ textAlign:"right",fontWeight:800,color:COLORS.pinkDark }}>{fmt1(r.servicesPerDay)}</td><td style={{ textAlign:"right" }}>{fmt1(r.hours)}</td><td style={{ textAlign:"right" }}>{r.servicesPerHour?fmt1(r.servicesPerHour):"—"}</td><td style={{ textAlign:"right" }}>{fmtMoney(r.ticket)}</td><td style={{ textAlign:"right",fontWeight:700 }}>{fmtMoney(r.revenue)}</td><td style={{ textAlign:"right",paddingRight:12 }}>{r.revenuePerHour?fmtMoney(r.revenuePerHour):"—"}</td><td style={{ padding:"9px 11px",maxWidth:260 }}><span title={r.topService} style={{ display:"block",whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis" }}>{r.topService}</span><small style={{ color:"var(--color-text-secondary)" }}>{r.topServiceCount} servicio{r.topServiceCount===1?"":"s"}</small></td></tr>)}</tbody></table></div>{!ranking.length&&<p style={{ padding:14,fontSize:11,color:"var(--color-text-secondary)" }}>No hay servicios vinculados a manicuras para estos filtros.</p>}</Card>
+
+    <div className="niki-dashboard-two-col" style={{ display:"grid",gridTemplateColumns:"minmax(0,1.1fr) minmax(0,.9fr)",gap:12 }}>
+      <Card style={{ padding:15 }}><div style={{ display:"flex",justifyContent:"space-between",alignItems:"baseline",gap:8,flexWrap:"wrap" }}><div><h3 style={{ margin:0,fontSize:14 }}>Fidelización · preferencia por manicura</h3><p style={{ margin:"3px 0 0",fontSize:10.5,color:"var(--color-text-secondary)" }}>De las clientas del mes que ya tenían historial, qué porcentaje había sido atendido por la misma manicura durante los 90 días previos.</p></div><Badge color="amber">Beta</Badge></div><DashboardManicuraBarList rows={fidelityRanking} valueKey="fidelityPct" formatter={v=>fmtPct(v)} secondary={r=>`${r.sameManicureClients}/${r.returningClients} retornos · base fiel ${fmtPct(r.loyalBasePct)}`}/><div style={{ marginTop:11,padding:"9px 10px",borderRadius:10,background:COLORS.amberLight,fontSize:10,color:"#7b5a14",lineHeight:1.4 }}>Por ahora la clienta se identifica por su nombre en la tabla de comisiones. AgendaPro ya entrega <strong>client_id</strong> en el staging; en una siguiente iteración conviene llevarlo al shadow para que la fidelización sea exacta.</div></Card>
+      <Card style={{ padding:15 }}><div><h3 style={{ margin:0,fontSize:14 }}>Asistencia y puntualidad</h3><p style={{ margin:"3px 0 0",fontSize:10.5,color:"var(--color-text-secondary)" }}>Ranking por mayor ausentismo; la tardanza se calcula sobre asistencias registradas.</p></div><DashboardManicuraBarList rows={attendanceRanking} valueKey="absencePct" formatter={v=>fmtPct(v)} secondary={r=>`${fmtPct(r.latePct)} tarde · ${r.avgLateMinutes?`${fmt1(r.avgLateMinutes)} min prom.`:"sin demora medible"} · ${r.pending} pendientes`}/></Card>
+    </div>
+
+    <Card style={{ padding:0,overflow:"hidden" }}><div style={{ padding:"14px 16px",borderBottom:"1px solid rgba(120,120,120,.12)" }}><h3 style={{ margin:0,fontSize:14 }}>Asistencia y productividad por local</h3><p style={{ margin:"3px 0 0",fontSize:10.5,color:"var(--color-text-secondary)" }}>Permite detectar diferencias operativas entre sucursales y contextualizar los rankings individuales.</p></div><div style={{ overflowX:"auto" }}><table style={{ width:"100%",borderCollapse:"collapse",fontSize:10.5,minWidth:900 }}><thead style={{ background:"#f5e8ec",color:COLORS.pinkDark,textTransform:"uppercase",fontSize:9 }}><tr><th style={{ textAlign:"left",padding:"9px 11px" }}>Local</th><th style={{ textAlign:"right" }}>Servicios</th><th style={{ textAlign:"right" }}>Manicuras</th><th style={{ textAlign:"right" }}>Serv./jornada</th><th style={{ textAlign:"right" }}>Serv./hora</th><th style={{ textAlign:"right" }}>Ticket</th><th style={{ textAlign:"right" }}>Ausencias</th><th style={{ textAlign:"right" }}>Tardes</th><th style={{ textAlign:"right",paddingRight:12 }}>Pendientes</th></tr></thead><tbody>{localStats.map((r,i)=><tr key={r.localId} style={{ borderTop:"1px solid rgba(120,120,120,.09)",background:i%2?"rgba(120,120,120,.018)":"transparent" }}><td style={{ padding:"9px 11px",fontWeight:800 }}>{r.local}</td><td style={{ textAlign:"right" }}>{r.services}</td><td style={{ textAlign:"right" }}>{r.manicuras}</td><td style={{ textAlign:"right",fontWeight:800,color:COLORS.pinkDark }}>{fmt1(r.servicesPerDay)}</td><td style={{ textAlign:"right" }}>{r.servicesPerHour?fmt1(r.servicesPerHour):"—"}</td><td style={{ textAlign:"right" }}>{fmtMoney(r.ticket)}</td><td style={{ textAlign:"right",color:r.absencePct>0?COLORS.danger:"var(--color-text-primary)" }}>{fmtPct(r.absencePct)}</td><td style={{ textAlign:"right",color:r.latePct>0?COLORS.amber:"var(--color-text-primary)" }}>{fmtPct(r.latePct)}</td><td style={{ textAlign:"right",paddingRight:12 }}>{r.pending}</td></tr>)}</tbody></table></div></Card>
+
+    <Card style={{ padding:0,overflow:"hidden" }}><div style={{ padding:"14px 16px",borderBottom:"1px solid rgba(120,120,120,.12)",display:"flex",justifyContent:"space-between",gap:10,alignItems:"baseline",flexWrap:"wrap" }}><div><h3 style={{ margin:0,fontSize:14 }}>Calidad · reclamos y garantías</h3><p style={{ margin:"3px 0 0",fontSize:10.5,color:"var(--color-text-secondary)" }}>Tasa cada 100 servicios, atribuida a la manicura original cuando el dato está disponible.</p></div><Badge color="gray">Menor es mejor</Badge></div><div style={{ overflowX:"auto" }}><table style={{ width:"100%",borderCollapse:"collapse",fontSize:10.5,minWidth:860 }}><thead style={{ background:"#f5e8ec",color:COLORS.pinkDark,textTransform:"uppercase",fontSize:9 }}><tr><th style={{ textAlign:"left",padding:"9px 11px" }}>Manicura</th><th style={{ textAlign:"right" }}>Servicios</th><th style={{ textAlign:"right" }}>Reclamos</th><th style={{ textAlign:"right" }}>Reclamos / 100</th><th style={{ textAlign:"right" }}>Garantías</th><th style={{ textAlign:"right" }}>Garantías / 100</th><th style={{ textAlign:"right",paddingRight:12 }}>Incidencias / 100</th></tr></thead><tbody>{qualityRanking.map((r,i)=>{const totalRate=r.claimsPer100+r.warrantyPer100;return <tr key={r.userId} style={{ borderTop:"1px solid rgba(120,120,120,.09)",background:i%2?"rgba(120,120,120,.018)":"transparent" }}><td style={{ padding:"9px 11px",fontWeight:800 }}>{r.nombre}</td><td style={{ textAlign:"right" }}>{r.services}</td><td style={{ textAlign:"right" }}>{r.claims}</td><td style={{ textAlign:"right" }}>{fmt1(r.claimsPer100)}</td><td style={{ textAlign:"right" }}>{r.warranty}</td><td style={{ textAlign:"right" }}>{fmt1(r.warrantyPer100)}</td><td style={{ textAlign:"right",paddingRight:12,fontWeight:800,color:totalRate>3?COLORS.danger:totalRate>1?COLORS.amber:COLORS.success }}>{fmt1(totalRate)}</td></tr>;})}</tbody></table></div></Card>
+
+    <p style={{ margin:"-3px 2px 0",fontSize:10,color:"var(--color-text-secondary)",lineHeight:1.45 }}>Criterios: servicios y facturación provienen de <strong>comisiones_agendapro_shadow</strong>; productividad divide por jornadas planificadas no ausentes y usa horas reales cuando están informadas; ausentismo = ausencias / jornadas planificadas; tardanza = llegadas tarde / asistencias registradas. Los registros de horario legacy sin local se resuelven con el historial de locales de la manicura.</p>
+  </div>;
+}
+
+
 // ── CLIENTES CRM AGENDA PRO ──────────────────────────────────────────
 function normalizeCrmText(value) {
   return String(value || "").trim().toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/\s+/g, " ");
@@ -14367,10 +14661,10 @@ function defaultSectionForRole(role) {
 
 function sectionAllowedForRole(section, role) {
   const reportesOperativos = ["reportes","reportes_horas","reportes_cobertura","reportes_comisiones","reporte_pago_comisiones"];
-  const admin = ["inicio","dashboard","clientes_crm","ayuda","roadmap","asistencia","horarios","pizarra_semanal","horarios_encargadas","bloqueo_horarios",...reportesOperativos,"preliquidacion_encargadas","turnos","servicios","listas_precios","adelantos","garantias","reclamos","auditorias","informes","informes_mensajeria","manicuras","encargadas","reclutamiento_busquedas","reclutamiento_candidatas","reclutamiento_calendario","reclutamiento_aprobaciones","reclutamiento_antiguedad","reclutamiento_config","locales","cobertura_config","perfil"];
-  const casaMatriz = ["inicio","dashboard","clientes_crm","ayuda","roadmap","asistencia","horarios","pizarra_semanal","horarios_encargadas","bloqueo_horarios",...reportesOperativos,"preliquidacion_encargadas","servicios","listas_precios","adelantos","garantias","reclamos","auditorias","informes","informes_mensajeria","manicuras","encargadas","reclutamiento_busquedas","reclutamiento_candidatas","reclutamiento_calendario","reclutamiento_aprobaciones","reclutamiento_antiguedad","reclutamiento_config","locales","cobertura_config","perfil"];
-  const franquiciado = ["inicio","dashboard","clientes_crm","ayuda","asistencia","horarios","pizarra_semanal","horarios_encargadas","bloqueo_horarios",...reportesOperativos,"preliquidacion_encargadas","adelantos","garantias","reclamos","informes","informes_mensajeria","manicuras","encargadas","cobertura_config","perfil"];
-  const encargada = ["inicio","dashboard","clientes_crm","ayuda","asistencia","horarios","pizarra_semanal","bloqueo_horarios",...reportesOperativos,"preliquidacion_encargadas","adelantos","garantias","reclamos","informes","informes_mensajeria","manicuras","cobertura_config","perfil"];
+  const admin = ["inicio","dashboard","dashboard_manicuras","clientes_crm","ayuda","roadmap","asistencia","horarios","pizarra_semanal","horarios_encargadas","bloqueo_horarios",...reportesOperativos,"preliquidacion_encargadas","turnos","servicios","listas_precios","adelantos","garantias","reclamos","auditorias","informes","informes_mensajeria","manicuras","encargadas","reclutamiento_busquedas","reclutamiento_candidatas","reclutamiento_calendario","reclutamiento_aprobaciones","reclutamiento_antiguedad","reclutamiento_config","locales","cobertura_config","perfil"];
+  const casaMatriz = ["inicio","dashboard","dashboard_manicuras","clientes_crm","ayuda","roadmap","asistencia","horarios","pizarra_semanal","horarios_encargadas","bloqueo_horarios",...reportesOperativos,"preliquidacion_encargadas","servicios","listas_precios","adelantos","garantias","reclamos","auditorias","informes","informes_mensajeria","manicuras","encargadas","reclutamiento_busquedas","reclutamiento_candidatas","reclutamiento_calendario","reclutamiento_aprobaciones","reclutamiento_antiguedad","reclutamiento_config","locales","cobertura_config","perfil"];
+  const franquiciado = ["inicio","dashboard","dashboard_manicuras","clientes_crm","ayuda","asistencia","horarios","pizarra_semanal","horarios_encargadas","bloqueo_horarios",...reportesOperativos,"preliquidacion_encargadas","adelantos","garantias","reclamos","informes","informes_mensajeria","manicuras","encargadas","cobertura_config","perfil"];
+  const encargada = ["inicio","dashboard","dashboard_manicuras","clientes_crm","ayuda","asistencia","horarios","pizarra_semanal","bloqueo_horarios",...reportesOperativos,"preliquidacion_encargadas","adelantos","garantias","reclamos","informes","informes_mensajeria","manicuras","cobertura_config","perfil"];
   const manicura = ["inicio","ayuda","horarios","pizarra_semanal","reportes","reportes_horas","reportes_comisiones","perfil"];
   const allowed = role === "admin" ? admin : role === "casa_matriz" ? casaMatriz : role === "franquiciado" ? franquiciado : role === "encargada" ? encargada : manicura;
   return allowed.includes(section);
@@ -14821,7 +15115,8 @@ export default function App() {
       label: "Indicadores",
       icon: "📊",
       items: [
-        { id: "dashboard", label: "Dashboard", icon: "📊" },
+        { id: "dashboard", label: "Dashboard comercial", icon: "📊" },
+        { id: "dashboard_manicuras", label: "Dashboard de manicuras", icon: "💅" },
       ],
     },
     {
@@ -15251,6 +15546,7 @@ export default function App() {
   const renderSeccion = () => {
     if (seccion==="inicio") return renderMobileHome();
     if (seccion==="dashboard") return user.rol!=="manicura" ? <DashboardComercial data={data} user={user}/> : null;
+    if (seccion==="dashboard_manicuras") return user.rol!=="manicura" ? <DashboardManicuras data={data} user={user}/> : null;
     if (seccion==="clientes_crm") return user.rol!=="manicura" ? <ClientesCrm data={data} user={user}/> : null;
     if (seccion==="asistencia") return <AsistenciaDiaria data={data} setData={setData} reloadData={reloadData} user={user}/>;
     if (seccion==="turnos") return user.rol==="admin" ? <AgendaTurnos data={data} reloadData={reloadData} user={user} agendaOpenRequest={agendaOpenRequest} onAgendaOpenRequestDone={() => setAgendaOpenRequest(null)}/> : null;
