@@ -1155,6 +1155,7 @@ function normalizeClienteCrm(c) { return {
   umbralPerdida:c.dias_umbral_perdida == null ? null : Number(c.dias_umbral_perdida),
   estado:c.estado_cliente || "SIN_CLASIFICAR", diasAtraso:Number(c.dias_atraso_estimado || 0), confianza:c.confianza_frecuencia || "SIN_HISTORIA",
   ultimaVisitaGlobal:c.ultima_visita_global || "", ultimoLocalGlobal:c.ultimo_local_global || "",
+  ultimaManicura:c.ultima_manicura || c.ultima_manicura_agendapro || "",
   atendidaDespuesOtroLocal:c.atendida_despues_otro_local === true,
   diasDespuesOtroLocal:c.dias_desde_visita_otro_local == null ? null : Number(c.dias_desde_visita_otro_local),
 }; }
@@ -10312,16 +10313,18 @@ function InformeDiario({ data, reloadData, user }) {
 
   return <div>
     <div style={{ display:"flex",alignItems:"center",justifyContent:"space-between",gap:12,flexWrap:"wrap",marginBottom:16 }}>
-      <div>
+      <div style={{ minWidth:0 }}>
         <h2 style={{ margin:0,fontSize:22,fontWeight:700 }}>Informes diarios</h2>
         <p style={{ margin:"4px 0 0",fontSize:13,color:"var(--color-text-secondary)" }}>{editorOpen ? "Los cambios del borrador se guardan automáticamente mientras trabajás." : "Primero ves los informes existentes. Desde acá podés generar uno nuevo, editar, ver o imprimir."}</p>
-      </div>
-      <div style={{ display:"flex",gap:8,flexWrap:"wrap",alignItems:"center" }}>
-        {editorOpen ? <>
-          <span style={{ display:"inline-flex",alignItems:"center",gap:6,borderRadius:999,padding:"7px 10px",background:autoSaveTone.bg,color:autoSaveTone.fg,fontSize:10.5,fontWeight:800,whiteSpace:"nowrap" }}>
+        {editorOpen&&<div style={{ marginTop:8,minHeight:29,display:"flex",alignItems:"center" }}>
+          <span style={{ display:"inline-flex",alignItems:"center",justifyContent:"center",gap:6,borderRadius:999,padding:"7px 12px",minWidth:286,boxSizing:"border-box",background:autoSaveTone.bg,color:autoSaveTone.fg,fontSize:10.5,fontWeight:800,whiteSpace:"nowrap" }}>
             <span style={{ width:7,height:7,borderRadius:"50%",background:"currentColor",opacity:autoSaveState==="saving" ? 0.65 : 1 }}/>
             {autoSaveLabel}
           </span>
+        </div>}
+      </div>
+      <div style={{ display:"flex",gap:8,flexWrap:"wrap",alignItems:"center",flexShrink:0 }}>
+        {editorOpen ? <>
           <Btn variant="secondary" onClick={closeEditorSafely} disabled={saving||autoSaveState==="saving"}>Volver al listado</Btn>
           <Btn onClick={()=>save(false)} disabled={saving||autoSaveState==="saving"}>{saving?"Guardando...":"Guardar ahora"}</Btn>
           <Btn onClick={()=>save(true)} variant="success" disabled={saving||autoSaveState==="saving"}>Guardar como enviado</Btn>
@@ -14876,6 +14879,17 @@ function CrmKpiCard({ estado, value, active, onClick, subtitle }) {
     <p style={{ margin:0,fontSize:10.5,color:"var(--color-text-secondary)" }}>{subtitle}</p>
   </button>;
 }
+const CRM_CLIENT_COLUMN_ORDER_DEFAULT = [
+  "cliente","estado","local","visitas","ultimaVisita","ultimaManicura","frecuencia","diasSinVenir","ticket","valorHistorico","redNiki"
+];
+function normalizeCrmClientColumnOrder(value) {
+  const valid=new Set(CRM_CLIENT_COLUMN_ORDER_DEFAULT);
+  const incoming=Array.isArray(value)?value.filter(x=>valid.has(x)):[];
+  const unique=Array.from(new Set(incoming));
+  CRM_CLIENT_COLUMN_ORDER_DEFAULT.forEach(x=>{ if(!unique.includes(x)) unique.push(x); });
+  return unique;
+}
+
 function ClientesCrm({ data, user }) {
   const [scopeRows,setScopeRows]=useState([]);
   const [loading,setLoading]=useState(true);
@@ -14886,7 +14900,18 @@ function ClientesCrm({ data, user }) {
   const [selected,setSelected]=useState(null);
   const [visitas,setVisitas]=useState([]);
   const [visitasLoading,setVisitasLoading]=useState(false);
+  const [columnConfigOpen,setColumnConfigOpen]=useState(false);
+  const [exporting,setExporting]=useState(false);
+  const columnStorageKey=`niki_crm_column_order_v1_${user?.id||"anon"}`;
+  const [columnOrder,setColumnOrder]=useState(()=>{
+    try { return normalizeCrmClientColumnOrder(JSON.parse(localStorage.getItem(columnStorageKey)||"null")); }
+    catch { return [...CRM_CLIENT_COLUMN_ORDER_DEFAULT]; }
+  });
   const scopeCacheRef=useRef(new Map());
+
+  useEffect(()=>{
+    try { localStorage.setItem(columnStorageKey,JSON.stringify(columnOrder)); } catch {}
+  },[columnOrder,columnStorageKey]);
 
   const assignedIds=useMemo(()=>Array.from(new Set(getAssignedLocalIds(data,user).map(Number).filter(Boolean))),[data,user]);
   const activeLocalIds=useMemo(()=>Array.from(new Set((data.locales||[]).filter(localActivo).map(l=>Number(l.id)).filter(Boolean))),[data.locales]);
@@ -14957,7 +14982,7 @@ function ClientesCrm({ data, user }) {
     return scopeRows.filter(r=>{
       if(estado!=="TODOS" && r.estado!==estado) return false;
       if(!q) return true;
-      const hay=`${r.cliente||""} ${r.email||""} ${r.localPrincipal||""} ${r.ultimoLocalGlobal||""}`.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g,"");
+      const hay=`${r.cliente||""} ${r.email||""} ${r.localPrincipal||""} ${r.ultimoLocalGlobal||""} ${r.ultimaManicura||""}`.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g,"");
       return hay.includes(q);
     }).sort((a,b)=>b.diasAtraso-a.diasAtraso || b.visitas-a.visitas || String(b.ultimaVisita||"").localeCompare(String(a.ultimaVisita||"")));
   },[scopeRows,estado,query]);
@@ -14989,6 +15014,85 @@ function ClientesCrm({ data, user }) {
     Se atendió después en otra sucursal: <strong>{r.ultimoLocalGlobal || "otro local"}</strong>{r.ultimaVisitaGlobal?` · ${fechaFmt(r.ultimaVisitaGlobal)}`:""}
   </div> : null;
 
+  const moveColumn=(key,direction)=>setColumnOrder(prev=>{
+    const next=[...prev];
+    const idx=next.indexOf(key);
+    const target=idx+direction;
+    if(idx<0||target<0||target>=next.length) return prev;
+    [next[idx],next[target]]=[next[target],next[idx]];
+    return next;
+  });
+
+  const crmColumnMeta={
+    cliente:{
+      key:"cliente",label:"Clienta",align:"left",minWidth:180,
+      render:r=><><strong style={{ display:"block",fontSize:11.5 }}>{r.cliente}</strong><span style={{ color:"var(--color-text-secondary)",fontSize:10 }}>{r.email || "Sin email"}</span></>,
+      exportValue:r=>r.cliente||"",
+    },
+    estado:{ key:"estado",label:"Estado",align:"left",minWidth:105,render:r=><CrmEstadoBadge estado={r.estado}/>,exportValue:r=>crmEstadoMeta(r.estado).label },
+    local:{ key:"local",label:"Local",align:"left",minWidth:115,render:r=>r.localPrincipal||"—",exportValue:r=>r.localPrincipal||"" },
+    visitas:{ key:"visitas",label:"Visitas",align:"right",minWidth:70,render:r=><strong>{r.visitas}</strong>,exportValue:r=>Number(r.visitas||0) },
+    ultimaVisita:{ key:"ultimaVisita",label:"Última visita",align:"right",minWidth:98,render:r=>fechaFmt(r.ultimaVisita),exportValue:r=>fechaFmt(r.ultimaVisita) },
+    ultimaManicura:{ key:"ultimaManicura",label:"Última manicura",align:"left",minWidth:130,render:r=><span style={{ fontWeight:r.ultimaManicura?700:400,color:r.ultimaManicura?"inherit":"var(--color-text-secondary)" }}>{r.ultimaManicura||"—"}</span>,exportValue:r=>r.ultimaManicura||"" },
+    frecuencia:{ key:"frecuencia",label:"Frecuencia",align:"right",minWidth:92,render:r=>frecuenciaTxt(r),exportValue:r=>frecuenciaTxt(r) },
+    diasSinVenir:{ key:"diasSinVenir",label:"Días sin venir",align:"right",minWidth:92,render:r=><strong style={{ color:r.estado==="EN_RIESGO"?COLORS.amber:r.estado==="PERDIDA"?COLORS.gray:"inherit" }}>{r.diasDesdeUltima}</strong>,exportValue:r=>Number(r.diasDesdeUltima||0) },
+    ticket:{ key:"ticket",label:"Ticket",align:"right",minWidth:90,render:r=>fmtMoney(r.ticketPagado),exportValue:r=>Number(r.ticketPagado||0) },
+    valorHistorico:{ key:"valorHistorico",label:"Valor histórico",align:"right",minWidth:105,render:r=>fmtMoney(r.gastoPagado),exportValue:r=>Number(r.gastoPagado||0) },
+    redNiki:{
+      key:"redNiki",label:"Red Niki",align:"left",minWidth:185,
+      render:r=>r.atendidaDespuesOtroLocal?<span style={{ display:"inline-block",background:COLORS.infoLight,color:COLORS.info,borderRadius:999,padding:"3px 7px",fontSize:9.5,fontWeight:700 }}>Luego: {r.ultimoLocalGlobal} · {fechaFmt(r.ultimaVisitaGlobal)}</span>:<span style={{ color:"var(--color-text-secondary)",fontSize:10 }}>Sin visita posterior afuera</span>,
+      exportValue:r=>r.atendidaDespuesOtroLocal?`Luego: ${r.ultimoLocalGlobal||"otro local"}${r.ultimaVisitaGlobal?` · ${fechaFmt(r.ultimaVisitaGlobal)}`:""}`:"Sin visita posterior afuera",
+    },
+  };
+  const orderedColumns=columnOrder.map(key=>crmColumnMeta[key]).filter(Boolean);
+
+  const loadCrmXlsx=()=>new Promise((resolve,reject)=>{
+    if(window.XLSX) return resolve(window.XLSX);
+    const existing=document.querySelector('script[data-niki-crm-xlsx="1"]');
+    if(existing){
+      existing.addEventListener("load",()=>resolve(window.XLSX),{once:true});
+      existing.addEventListener("error",()=>reject(new Error("No se pudo cargar el generador de Excel.")),{once:true});
+      return;
+    }
+    const script=document.createElement("script");
+    script.dataset.nikiCrmXlsx="1";
+    script.src="https://cdn.sheetjs.com/xlsx-0.20.2/package/dist/xlsx.full.min.js";
+    script.onload=()=>resolve(window.XLSX);
+    script.onerror=()=>reject(new Error("No se pudo cargar el generador de Excel."));
+    document.head.appendChild(script);
+  });
+
+  const exportClientesExcel=async()=>{
+    if(!filteredRows.length) return notifyToast("No hay clientas para exportar con los filtros actuales.","warning");
+    setExporting(true);
+    try{
+      const XLSX=await loadCrmXlsx();
+      const exportRows=filteredRows.map(r=>{
+        const out={};
+        columnOrder.forEach(key=>{
+          const def=crmColumnMeta[key];
+          if(!def) return;
+          out[def.label]=def.exportValue(r);
+          if(key==="cliente") out.Email=r.email||"";
+        });
+        return out;
+      });
+      const ws=XLSX.utils.json_to_sheet(exportRows);
+      const headers=Object.keys(exportRows[0]||{});
+      const widths={"Clienta":28,"Email":34,"Estado":18,"Local":20,"Visitas":10,"Última visita":14,"Última manicura":24,"Frecuencia":14,"Días sin venir":14,"Ticket":16,"Valor histórico":18,"Red Niki":34};
+      ws["!cols"]=headers.map(h=>({wch:widths[h]||18}));
+      const wb=XLSX.utils.book_new();
+      XLSX.utils.book_append_sheet(wb,ws,"Cartera de clientes");
+      const localLabel=localId==="TODOS"?"todos-los-locales":(allowedLocals.find(x=>Number(x.id)===Number(localId))?.nombre||`local-${localId}`);
+      const estadoLabel=estado==="TODOS"?"todos-los-estados":crmEstadoMeta(estado).label;
+      const safe=v=>String(v||"").normalize("NFD").replace(/[\u0300-\u036f]/g,"").replace(/[^a-zA-Z0-9_-]+/g,"-").replace(/^-+|-+$/g,"").toLowerCase();
+      XLSX.writeFile(wb,`cartera-clientes_${safe(localLabel)}_${safe(estadoLabel)}_${dateKey(new Date())}.xlsx`);
+      notifyToast(`${new Intl.NumberFormat("es-AR").format(filteredRows.length)} clientas exportadas.`,"success",{title:"Excel generado"});
+    }catch(e){
+      notifyToast("No se pudo exportar a Excel: "+(e?.message||e),"error");
+    }finally{ setExporting(false); }
+  };
+
   return <div style={{ display:"flex",flexDirection:"column",gap:12 }}>
     <div style={{ display:"flex",justifyContent:"space-between",gap:10,alignItems:"flex-start",flexWrap:"wrap" }}>
       <div><h2 style={{ margin:0,fontSize:20,color:COLORS.pinkDark }}>Clientes</h2><p style={{ margin:"4px 0 0",fontSize:11,color:"var(--color-text-secondary)",maxWidth:760 }}>Cartera y recuperación por tus locales. Si una clienta se atendió después en otra sucursal Niki, la seguimos mostrando pero lo indicamos para no confundir una migración interna con una pérdida de la marca.</p></div>
@@ -15011,24 +15115,32 @@ function ClientesCrm({ data, user }) {
     </div>
 
     <Card style={{ padding:15 }}>
-      <div style={{ display:"flex",justifyContent:"space-between",alignItems:"flex-end",gap:10,flexWrap:"wrap",marginBottom:12 }}><div><h3 style={{ margin:0,fontSize:14 }}>Cartera de clientes</h3><p style={{ margin:"3px 0 0",fontSize:10.5,color:"var(--color-text-secondary)" }}>La cartera se calcula dentro del alcance seleccionado; la actividad posterior en otra sucursal se muestra sólo como aviso.</p></div><span style={{ fontSize:11,color:"var(--color-text-secondary)" }}>{`Mostrando ${visibleCount} de ${new Intl.NumberFormat("es-AR").format(total)}`}</span></div>
+      <div style={{ display:"flex",justifyContent:"space-between",alignItems:"flex-end",gap:10,flexWrap:"wrap",marginBottom:12 }}><div><h3 style={{ margin:0,fontSize:14 }}>Cartera de clientes</h3><p style={{ margin:"3px 0 0",fontSize:10.5,color:"var(--color-text-secondary)" }}>La cartera se calcula dentro del alcance seleccionado; la actividad posterior en otra sucursal se muestra sólo como aviso.</p></div><div style={{ display:"flex",alignItems:"center",justifyContent:"flex-end",gap:7,flexWrap:"wrap" }}><span style={{ fontSize:11,color:"var(--color-text-secondary)" }}>{`Mostrando ${visibleCount} de ${new Intl.NumberFormat("es-AR").format(total)}`}</span><Btn size="sm" variant="secondary" onClick={()=>setColumnConfigOpen(true)}>↕ Columnas</Btn><Btn size="sm" variant="secondary" onClick={exportClientesExcel} disabled={exporting||!filteredRows.length}>{exporting?"Exportando...":"⬇ Excel"}</Btn></div></div>
       <div className="niki-crm-filters" style={{ display:"grid",gridTemplateColumns:"minmax(240px,1.6fr) minmax(170px,.7fr) minmax(210px,.9fr)",gap:8,marginBottom:12 }}>
-        <Input value={query} onChange={setQuery} placeholder="Buscar por nombre, email o local..."/>
+        <Input value={query} onChange={setQuery} placeholder="Buscar por nombre, email, local o manicura..."/>
         <Select value={estado} onChange={setEstado}><option value="TODOS">Todos los estados</option><option value="ACTIVA">Activas</option><option value="EN_RIESGO">En riesgo</option><option value="NUEVA">Nuevas</option><option value="NUEVA_SIN_RETORNO">Sin retorno</option><option value="PERDIDA">Perdidas</option></Select>
         <Select value={localId} onChange={setLocalId}><option value="TODOS">Todos mis locales</option>{allowedLocals.map(x=><option key={x.id} value={x.id}>{x.nombre}</option>)}</Select>
       </div>
       {error&&<div style={{ marginBottom:10,padding:"9px 11px",borderRadius:10,background:COLORS.dangerLight,color:COLORS.danger,fontSize:11 }}>{error}</div>}
-      <div style={{ overflowX:"auto",maxHeight:540 }}><table style={{ width:"100%",borderCollapse:"separate",borderSpacing:0,fontSize:11,minWidth:1120 }}><thead style={{ position:"sticky",top:0,zIndex:2 }}><tr style={{ background:"#f5e8ec",color:COLORS.pinkDark,textTransform:"uppercase",fontSize:9.5 }}><th style={{ textAlign:"left",padding:9 }}>Clienta</th><th style={{ textAlign:"left",padding:9 }}>Estado</th><th style={{ textAlign:"left",padding:9 }}>Local</th><th style={{ textAlign:"right",padding:9 }}>Visitas</th><th style={{ textAlign:"right",padding:9 }}>Última visita</th><th style={{ textAlign:"right",padding:9 }}>Frecuencia</th><th style={{ textAlign:"right",padding:9 }}>Días sin venir</th><th style={{ textAlign:"right",padding:9 }}>Ticket</th><th style={{ textAlign:"right",padding:9 }}>Valor histórico</th><th style={{ textAlign:"left",padding:9 }}>Red Niki</th><th style={{ width:62 }}></th></tr></thead><tbody>{rows.map((r,i)=><tr key={r.clientId} style={{ background:i%2?"rgba(120,120,120,.018)":"transparent" }}><td style={{ padding:9,borderTop:"1px solid rgba(120,120,120,.08)" }}><strong style={{ display:"block",fontSize:11.5 }}>{r.cliente}</strong><span style={{ color:"var(--color-text-secondary)",fontSize:10 }}>{r.email || "Sin email"}</span></td><td style={{ padding:9,borderTop:"1px solid rgba(120,120,120,.08)" }}><CrmEstadoBadge estado={r.estado}/></td><td style={{ padding:9,borderTop:"1px solid rgba(120,120,120,.08)" }}>{r.localPrincipal || "—"}</td><td style={{ padding:9,textAlign:"right",borderTop:"1px solid rgba(120,120,120,.08)",fontWeight:700 }}>{r.visitas}</td><td style={{ padding:9,textAlign:"right",borderTop:"1px solid rgba(120,120,120,.08)" }}>{fechaFmt(r.ultimaVisita)}</td><td style={{ padding:9,textAlign:"right",borderTop:"1px solid rgba(120,120,120,.08)" }}>{frecuenciaTxt(r)}</td><td style={{ padding:9,textAlign:"right",borderTop:"1px solid rgba(120,120,120,.08)",fontWeight:700,color:r.estado==="EN_RIESGO"?COLORS.amber:r.estado==="PERDIDA"?COLORS.gray:"inherit" }}>{r.diasDesdeUltima}</td><td style={{ padding:9,textAlign:"right",borderTop:"1px solid rgba(120,120,120,.08)" }}>{fmtMoney(r.ticketPagado)}</td><td style={{ padding:9,textAlign:"right",borderTop:"1px solid rgba(120,120,120,.08)" }}>{fmtMoney(r.gastoPagado)}</td><td style={{ padding:9,borderTop:"1px solid rgba(120,120,120,.08)",minWidth:185 }}>{r.atendidaDespuesOtroLocal?<span style={{ display:"inline-block",background:COLORS.infoLight,color:COLORS.info,borderRadius:999,padding:"3px 7px",fontSize:9.5,fontWeight:700 }}>Luego: {r.ultimoLocalGlobal} · {fechaFmt(r.ultimaVisitaGlobal)}</span>:<span style={{ color:"var(--color-text-secondary)",fontSize:10 }}>Sin visita posterior afuera</span>}</td><td style={{ padding:7,textAlign:"right",borderTop:"1px solid rgba(120,120,120,.08)" }}><Btn size="sm" variant="ghost" onClick={()=>openClient(r)}>Ver</Btn></td></tr>)}</tbody></table></div>
+      <div style={{ overflowX:"auto",maxHeight:540 }}><table style={{ width:"100%",borderCollapse:"separate",borderSpacing:0,fontSize:11,minWidth:Math.max(1180,orderedColumns.length*112) }}><thead style={{ position:"sticky",top:0,zIndex:2 }}><tr style={{ background:"#f5e8ec",color:COLORS.pinkDark,textTransform:"uppercase",fontSize:9.5 }}>{orderedColumns.map(col=><th key={col.key} style={{ textAlign:col.align||"left",padding:9,minWidth:col.minWidth||undefined }}>{col.label}</th>)}<th style={{ width:62 }}></th></tr></thead><tbody>{rows.map((r,i)=><tr key={r.clientId} style={{ background:i%2?"rgba(120,120,120,.018)":"transparent" }}>{orderedColumns.map(col=><td key={col.key} style={{ padding:9,textAlign:col.align||"left",borderTop:"1px solid rgba(120,120,120,.08)",minWidth:col.minWidth||undefined }}>{col.render(r)}</td>)}<td style={{ padding:7,textAlign:"right",borderTop:"1px solid rgba(120,120,120,.08)" }}><Btn size="sm" variant="ghost" onClick={()=>openClient(r)}>Ver</Btn></td></tr>)}</tbody></table></div>
       {!rows.length&&<p style={{ margin:"14px 0 0",fontSize:12,color:"var(--color-text-secondary)" }}>No hay clientas para los filtros seleccionados.</p>}
       {total>250&&<p style={{ margin:"10px 0 0",fontSize:10.5,color:"var(--color-text-secondary)" }}>Se muestran los primeros 250 resultados de esta búsqueda. La búsqueda se realiza sobre toda la cartera cargada del alcance.</p>}
     </Card>
+
+    {columnConfigOpen&&<Modal title="Orden de columnas" onClose={()=>setColumnConfigOpen(false)} width={520}>
+      <div style={{ display:"flex",flexDirection:"column",gap:10 }}>
+        <p style={{ margin:0,fontSize:11,color:"var(--color-text-secondary)",lineHeight:1.45 }}>Elegí el orden en que querés ver las columnas de la cartera. El orden queda guardado para tu usuario en este navegador y también se respeta al exportar a Excel.</p>
+        <div style={{ display:"flex",flexDirection:"column",gap:6 }}>{columnOrder.map((key,idx)=>{const col=crmColumnMeta[key];return <div key={key} style={{ display:"grid",gridTemplateColumns:"28px minmax(0,1fr) auto auto",alignItems:"center",gap:7,padding:"8px 9px",border:"1px solid rgba(120,120,120,.12)",borderRadius:10,background:"var(--color-background-primary)" }}><span style={{ width:24,height:24,borderRadius:8,display:"grid",placeItems:"center",background:COLORS.pinkLight,color:COLORS.pinkDark,fontSize:10,fontWeight:900 }}>{idx+1}</span><strong style={{ fontSize:11.5 }}>{col?.label||key}</strong><Btn size="sm" variant="ghost" onClick={()=>moveColumn(key,-1)} disabled={idx===0}>↑</Btn><Btn size="sm" variant="ghost" onClick={()=>moveColumn(key,1)} disabled={idx===columnOrder.length-1}>↓</Btn></div>})}</div>
+        <div style={{ display:"flex",justifyContent:"space-between",gap:8,flexWrap:"wrap",marginTop:4 }}><Btn variant="ghost" onClick={()=>setColumnOrder([...CRM_CLIENT_COLUMN_ORDER_DEFAULT])}>Restablecer</Btn><Btn onClick={()=>setColumnConfigOpen(false)}>Listo</Btn></div>
+      </div>
+    </Modal>}
 
     {selected&&<Modal title={selected.cliente} onClose={()=>setSelected(null)} width={760}>
       <div style={{ display:"flex",flexDirection:"column",gap:10 }}>
         <div style={{ display:"flex",justifyContent:"space-between",alignItems:"center",gap:8,flexWrap:"wrap" }}><CrmEstadoBadge estado={selected.estado}/><span style={{ fontSize:11,color:"var(--color-text-secondary)" }}>Última visita en este alcance: <strong>{fechaFmt(selected.ultimaVisita)}</strong> · hace {selected.diasDesdeUltima} días</span></div>
         {migrationNotice(selected,false)}
         <div className="niki-dashboard-two-col" style={{ display:"grid",gridTemplateColumns:"repeat(2,minmax(0,1fr))",gap:8 }}>
-          <Card style={{ padding:12 }}><h4 style={{ margin:"0 0 8px",fontSize:12 }}>Relación con tus locales</h4><div style={{ display:"grid",gridTemplateColumns:"1fr auto",gap:"6px 12px",fontSize:11 }}><span>Primera visita</span><strong>{fechaFmt(selected.primeraVisita)}</strong><span>Locales del alcance visitados</span><strong>{selected.localesVisitados}</strong><span>Local principal</span><strong>{selected.localPrincipal||"—"}</strong><span>Confianza frecuencia</span><strong>{selected.confianza}</strong>{selected.umbralRiesgo!=null&&<><span>Umbral de riesgo</span><strong>{selected.umbralRiesgo} días</strong></>}</div></Card>
+          <Card style={{ padding:12 }}><h4 style={{ margin:"0 0 8px",fontSize:12 }}>Relación con tus locales</h4><div style={{ display:"grid",gridTemplateColumns:"1fr auto",gap:"6px 12px",fontSize:11 }}><span>Primera visita</span><strong>{fechaFmt(selected.primeraVisita)}</strong><span>Locales del alcance visitados</span><strong>{selected.localesVisitados}</strong><span>Local principal</span><strong>{selected.localPrincipal||"—"}</strong><span>Última manicura</span><strong>{selected.ultimaManicura||"—"}</strong><span>Confianza frecuencia</span><strong>{selected.confianza}</strong>{selected.umbralRiesgo!=null&&<><span>Umbral de riesgo</span><strong>{selected.umbralRiesgo} días</strong></>}</div></Card>
           <Card style={{ padding:12 }}><h4 style={{ margin:"0 0 8px",fontSize:12 }}>Valor en tus locales</h4><div style={{ display:"grid",gridTemplateColumns:"1fr auto",gap:"6px 12px",fontSize:11 }}><span>Gasto pagado</span><strong>{fmtMoney(selected.gastoPagado)}</strong><span>Ticket por visita</span><strong>{fmtMoney(selected.ticketPagado)}</strong><span>Visitas</span><strong>{selected.visitas}</strong><span>Estado</span><strong>{selected.estado.replaceAll("_"," ")}</strong></div></Card>
         </div>
         <Card style={{ padding:12 }}><div style={{ display:"flex",justifyContent:"space-between",gap:8,alignItems:"baseline" }}><div><h4 style={{ margin:0,fontSize:12 }}>Últimas visitas visibles</h4><p style={{ margin:"2px 0 0",fontSize:10,color:"var(--color-text-secondary)" }}>{selected.email || "Sin email registrado"}</p></div><small style={{ color:"var(--color-text-secondary)" }}>{visitas.length} registros</small></div>{visitasLoading?<p style={{ fontSize:12,color:"var(--color-text-secondary)" }}>Cargando historial...</p>:<div style={{ marginTop:8,maxHeight:260,overflowY:"auto" }}>{visitas.slice(0,30).map((v,idx)=><div key={`${v.client_id}-${v.local_id}-${v.fecha}-${idx}`} style={{ display:"grid",gridTemplateColumns:"90px minmax(0,1fr) auto",gap:8,padding:"7px 4px",borderTop:"1px solid rgba(120,120,120,.08)",fontSize:11 }}><span>{fechaFmt(v.fecha)}</span><span>{v.local || "Sin local"}</span><strong>{fmtMoney(v.gasto_pagado)}</strong></div>)}{!visitas.length&&<p style={{ margin:"10px 0",fontSize:11,color:"var(--color-text-secondary)" }}>No hay visitas visibles en el alcance de este usuario.</p>}</div>}</Card>
