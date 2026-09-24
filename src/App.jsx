@@ -7885,14 +7885,16 @@ function AdelantosManicuras({ data, reloadData, user }) {
   const localesPermitidos = esAdmin ? data.locales : data.locales.filter(l => allowedLocalIds.includes(l.id));
   const [periodo, setPeriodo] = useState(fmtPeriodo(hoy));
   const [localId, setLocalId] = useState(localesPermitidos[0]?.id || "");
-  const manicurasPermitidas = data.users.filter(u => u.rol === "manicura" && u.activo && (!localId || u.localId === parseInt(localId)) && (esAdmin || allowedLocalIds.includes(u.localId)));
   const defaultFecha = dateKey(hoy);
-  const [form, setForm] = useState({ fecha:defaultFecha, userId:"", importe:"", concepto:"Adelanto", observacion:"", plan:"semana", cuotasTotal:"2", primeraFechaDescuento:defaultFecha, cuotas:[{ fecha:defaultFecha, importe:"" }] });
+  const [form, setForm] = useState({ fecha:defaultFecha, localId:localesPermitidos[0]?.id || "", userId:"", importe:"", concepto:"Adelanto", observacion:"", plan:"semana", cuotasTotal:"2", primeraFechaDescuento:defaultFecha, cuotas:[{ fecha:defaultFecha, importe:"" }] });
+  const [newOpen, setNewOpen] = useState(false);
+  const [summaryPlan, setSummaryPlan] = useState(null);
   const [editing, setEditing] = useState(null);
   const [planEditing, setPlanEditing] = useState(null);
   const [confirmDeletePlan, setConfirmDeletePlan] = useState(null);
   const [saving, setSaving] = useState(false);
   const [err, setErr] = useState("");
+  const manicurasFormulario = data.users.filter(u => u.rol === "manicura" && u.activo && (!form.localId || u.localId === parseInt(form.localId)) && (esAdmin || allowedLocalIds.includes(u.localId)));
 
   const addWeeks = (fecha, n) => {
     const d = parseDateLocal(fecha) || new Date();
@@ -7907,24 +7909,45 @@ function AdelantosManicuras({ data, reloadData, user }) {
     .filter(a => !localId || a.localId === parseInt(localId))
     .filter(a => esAdmin || allowedLocalIds.includes(a.localId))
     .sort((a,b)=>(a.fechaDescuento||a.fecha||"").localeCompare(b.fechaDescuento||b.fecha||"") || (a.fecha||"").localeCompare(b.fecha||""));
-  const total = adelantos.reduce((acc,a)=>acc+a.importe,0);
-  const porManicura = Array.from(adelantos.reduce((map,a)=>{
-    const m=data.users.find(u=>u.id===a.userId); const key=a.userId;
-    const prev=map.get(key)||{ nombre:m?.nombre||"Sin manicura", importe:0, cantidad:0 };
-    prev.importe+=a.importe; prev.cantidad+=1; map.set(key,prev); return map;
-  }, new Map()).values()).sort((a,b)=>b.importe-a.importe);
+  const todayKey = dateKey(hoy);
+  const totalPeriodo = adelantos.reduce((acc,a)=>acc+Number(a.importe||0),0);
+  const descontadoPeriodo = adelantos.filter(a => (a.fechaDescuento||a.fecha||"") <= todayKey).reduce((acc,a)=>acc+Number(a.importe||0),0);
+  const pendientePeriodo = adelantos.filter(a => (a.fechaDescuento||a.fecha||"") > todayKey).reduce((acc,a)=>acc+Number(a.importe||0),0);
   const adelantosPlanesScope = (data.adelantos||[])
     .filter(a => !localId || a.localId === parseInt(localId))
     .filter(a => esAdmin || allowedLocalIds.includes(a.localId));
-  const planesAdelantos = buildAdelantoPlanes(adelantosPlanesScope);
+  const planesAdelantos = buildAdelantoPlanes(adelantosPlanesScope, todayKey);
   const planesActivos = planesAdelantos.filter(p => p.saldoPendiente > 0 || p.cuotas.some(c => (c.fecha||"").slice(0,7) === periodo));
   const saldoPendienteTotal = planesAdelantos.reduce((acc,p)=>acc + Number(p.saldoPendiente || 0), 0);
+  const cuotasPendientesTotal = planesAdelantos.reduce((acc,p)=>acc + Number(p.cuotasPendientes || 0), 0);
+  const proximasCuotas = planesAdelantos.flatMap(p => p.cuotas.filter(c => c.fecha && c.fecha > todayKey).map(c => ({ ...c, userId:p.userId, grupoId:p.grupoId }))).sort((a,b)=>a.fecha.localeCompare(b.fecha) || a.cuotaNum-b.cuotaNum);
+  const proximaFecha = proximasCuotas[0]?.fecha || "";
+  const proximasMismaFecha = proximaFecha ? proximasCuotas.filter(c=>c.fecha===proximaFecha) : [];
+  const proximoImporte = proximasMismaFecha.reduce((acc,c)=>acc + Number(c.importe||0),0);
+  const pendientePorManicura = Array.from(planesAdelantos.filter(p=>p.saldoPendiente>0).reduce((map,p)=>{
+    const m=data.users.find(u=>u.id===p.userId); const key=p.userId;
+    const prev=map.get(key)||{ userId:key,nombre:m?.nombre||"Sin manicura",saldo:0,cuotas:0,proxima:"" };
+    prev.saldo += Number(p.saldoPendiente||0);
+    prev.cuotas += Number(p.cuotasPendientes||0);
+    if(p.proximoDescuento && (!prev.proxima || p.proximoDescuento<prev.proxima)) prev.proxima=p.proximoDescuento;
+    map.set(key,prev); return map;
+  }, new Map()).values()).sort((a,b)=>b.saldo-a.saldo);
+  const fmtFechaAdelanto = f => f ? String(f).split("-").reverse().join("/") : "—";
+  const cuotaDescontada = fecha => !!fecha && String(fecha) <= todayKey;
 
   useEffect(() => {
-    if (!manicurasPermitidas.some(m => m.id === parseInt(form.userId))) {
-      setForm(f => ({ ...f, userId: manicurasPermitidas[0]?.id || "" }));
+    if (!manicurasFormulario.some(m => m.id === parseInt(form.userId))) {
+      setForm(f => ({ ...f, userId: manicurasFormulario[0]?.id || "" }));
     }
-  }, [localId, data.users]);
+  }, [form.localId, data.users]);
+
+  const openNewAdelanto = () => {
+    const lid = parseInt(localId || localesPermitidos[0]?.id || 0) || "";
+    const disponibles = data.users.filter(u => u.rol === "manicura" && u.activo && (!lid || u.localId === Number(lid)) && (esAdmin || allowedLocalIds.includes(u.localId)));
+    setErr("");
+    setForm({ fecha:defaultFecha, localId:lid, userId:disponibles[0]?.id || "", importe:"", concepto:"Adelanto", observacion:"", plan:"semana", cuotasTotal:"2", primeraFechaDescuento:defaultFecha, cuotas:[{ fecha:defaultFecha, importe:"" }] });
+    setNewOpen(true);
+  };
 
   const buildCuotasFromForm = () => {
     const importeTotal = moneyInputToNumber(form.importe);
@@ -7951,9 +7974,11 @@ function AdelantosManicuras({ data, reloadData, user }) {
     setErr("");
     if (!form.fecha || !form.userId || !form.importe) { setErr("Completá fecha, manicura e importe."); return; }
     const manicura = data.users.find(u=>u.id===parseInt(form.userId));
+    const formLocalId = parseInt(form.localId);
     if (!manicura) { setErr("Seleccioná una manicura válida."); return; }
-    if (manicura.localId !== parseInt(localId)) { setErr("La manicura no corresponde al local seleccionado."); return; }
-    if (!esAdmin && !allowedLocalIds.includes(manicura.localId)) { setErr("No tenés permiso para cargar adelantos en ese local."); return; }
+    if (!formLocalId) { setErr("Seleccioná un local válido."); return; }
+    if (manicura.localId !== formLocalId) { setErr("La manicura no corresponde al local seleccionado."); return; }
+    if (!esAdmin && !allowedLocalIds.includes(formLocalId)) { setErr("No tenés permiso para cargar adelantos en ese local."); return; }
     const plan = buildCuotasFromForm();
     if (plan.error) { setErr(plan.error); return; }
     const grupoId = makeGrupoId();
@@ -7979,8 +8004,10 @@ function AdelantosManicuras({ data, reloadData, user }) {
         });
       }
       await reloadData();
+      setLocalId(formLocalId);
       setPeriodo((plan.cuotas[0]?.fecha || form.fecha).slice(0,7));
-      setForm(f => ({ ...f, importe:"", observacion:"", plan:"semana", cuotasTotal:"2", primeraFechaDescuento:f.fecha, cuotas:[{ fecha:f.fecha, importe:"" }] }));
+      setNewOpen(false);
+      setForm(f => ({ ...f, localId:formLocalId, importe:"", observacion:"", plan:"semana", cuotasTotal:"2", primeraFechaDescuento:f.fecha, cuotas:[{ fecha:f.fecha, importe:"" }] }));
     } catch(e) { setErr("Error al guardar: " + e.message); }
     setSaving(false);
   };
@@ -7996,6 +8023,7 @@ function AdelantosManicuras({ data, reloadData, user }) {
     const manicura = data.users.find(u => u.id === a.userId);
     const local = data.locales.find(l => l.id === a.localId);
     setErr("");
+    const planRows = (a.grupoId ? (data.adelantos||[]).filter(x=>x.grupoId===a.grupoId) : [a]).sort((x,y)=>(x.cuotaNum||1)-(y.cuotaNum||1) || (x.fechaDescuento||x.fecha||"").localeCompare(y.fechaDescuento||y.fecha||""));
     setEditing({
       id: a.id,
       fecha: a.fecha || dateKey(hoy),
@@ -8009,6 +8037,7 @@ function AdelantosManicuras({ data, reloadData, user }) {
       cuotaNum: a.cuotaNum || 1,
       cuotasTotal: a.cuotasTotal || 1,
       importeTotal: a.importeTotal || a.importe || 0,
+      planCuotas: planRows.map(x=>({ id:x.id, cuotaNum:x.cuotaNum||1, fecha:x.fechaDescuento||x.fecha||"", importe:Number(x.importe||0) })),
     });
   };
 
@@ -8062,6 +8091,7 @@ function AdelantosManicuras({ data, reloadData, user }) {
       plan: "cuotas_personalizadas",
       cuotasTotal: String(rows.length || 1),
       primeraFechaDescuento: first.fechaDescuento || first.fecha || dateKey(hoy),
+      originalCuotas: rows.map(x => ({ id:x.id, cuotaNum:x.cuotaNum||1, fecha:x.fechaDescuento||x.fecha||"", importe:Number(x.importe||0) })),
       cuotas: rows.map(x => ({ fecha:x.fechaDescuento || x.fecha || dateKey(hoy), importe:String(x.importe || "") })),
     });
   };
@@ -8164,8 +8194,8 @@ function AdelantosManicuras({ data, reloadData, user }) {
   if (!esAdmin && !esGestorLocal) return null;
 
   return <div>
-    <div style={{ display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:16,flexWrap:"wrap",gap:8 }}>
-      <h2 style={{ margin:0,fontSize:18,fontWeight:500 }}>Adelantos a manicuras</h2>
+    <div style={{ display:"flex",alignItems:"flex-start",justifyContent:"space-between",marginBottom:16,flexWrap:"wrap",gap:10 }}>
+      <div><h2 style={{ margin:0,fontSize:18,fontWeight:500 }}>Adelantos a manicuras</h2><p style={{ margin:"4px 0 0",fontSize:12,color:"var(--color-text-secondary)" }}>Seguimiento de adelantos, cuotas ya descontadas y saldos pendientes.</p></div>
       <div style={{ display:"flex",gap:8,alignItems:"center",flexWrap:"wrap" }}>
         <Select value={periodo} onChange={setPeriodo} style={{ width:140 }}>
           {Array.from(new Set([fmtPeriodo(hoy), ...(data.adelantos||[]).map(a=>a.periodo).filter(Boolean)])).sort().reverse().map(p=><option key={p} value={p}>{p}</option>)}
@@ -8173,50 +8203,62 @@ function AdelantosManicuras({ data, reloadData, user }) {
         <Select value={localId} onChange={v=>setLocalId(v)} style={{ minWidth:180 }}>
           {localesPermitidos.map(l=><option key={l.id} value={l.id}>{l.nombre}</option>)}
         </Select>
+        <Btn onClick={openNewAdelanto}>+ Nuevo adelanto</Btn>
       </div>
     </div>
-    <div style={{ display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(220px,1fr))",gap:12,marginBottom:14 }}>
-      <Card><p style={{ margin:"0 0 4px",fontSize:11,color:"var(--color-text-secondary)",textTransform:"uppercase",letterSpacing:"0.04em" }}>Total a descontar</p><p style={{ margin:0,fontSize:24,fontWeight:600,color:COLORS.amber }}>{fmtMoney(total)}</p><p style={{ margin:"3px 0 0",fontSize:11,color:"var(--color-text-secondary)" }}>Según período de descuento seleccionado</p></Card>
-      <Card><p style={{ margin:"0 0 4px",fontSize:11,color:"var(--color-text-secondary)",textTransform:"uppercase",letterSpacing:"0.04em" }}>Cuotas / descuentos</p><p style={{ margin:0,fontSize:24,fontWeight:600 }}>{adelantos.length}</p></Card>
-      <Card><p style={{ margin:"0 0 4px",fontSize:11,color:"var(--color-text-secondary)",textTransform:"uppercase",letterSpacing:"0.04em" }}>Local</p><p style={{ margin:0,fontSize:18,fontWeight:600 }}>{localActual?.nombre || "—"}</p></Card>
+    <div style={{ display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(210px,1fr))",gap:12,marginBottom:14 }}>
+      <Card><p style={{ margin:"0 0 4px",fontSize:11,color:"var(--color-text-secondary)",textTransform:"uppercase",letterSpacing:"0.04em" }}>Saldo pendiente</p><p style={{ margin:0,fontSize:24,fontWeight:650,color:saldoPendienteTotal>0?COLORS.amber:COLORS.success }}>{fmtMoney(saldoPendienteTotal)}</p><p style={{ margin:"3px 0 0",fontSize:11,color:"var(--color-text-secondary)" }}>{cuotasPendientesTotal} cuota{cuotasPendientesTotal===1?"":"s"} por descontar en {localActual?.nombre || "el local"}</p></Card>
+      <Card><p style={{ margin:"0 0 4px",fontSize:11,color:"var(--color-text-secondary)",textTransform:"uppercase",letterSpacing:"0.04em" }}>Pendiente en {periodo}</p><p style={{ margin:0,fontSize:24,fontWeight:650,color:pendientePeriodo>0?COLORS.amber:COLORS.success }}>{fmtMoney(pendientePeriodo)}</p><p style={{ margin:"3px 0 0",fontSize:11,color:"var(--color-text-secondary)" }}>De {fmtMoney(totalPeriodo)} programados en el período</p></Card>
+      <Card><p style={{ margin:"0 0 4px",fontSize:11,color:"var(--color-text-secondary)",textTransform:"uppercase",letterSpacing:"0.04em" }}>Descontado en {periodo}</p><p style={{ margin:0,fontSize:24,fontWeight:650,color:COLORS.success }}>{fmtMoney(descontadoPeriodo)}</p><p style={{ margin:"3px 0 0",fontSize:11,color:"var(--color-text-secondary)" }}>Cuotas con fecha de descuento hasta hoy</p></Card>
+      <Card><p style={{ margin:"0 0 4px",fontSize:11,color:"var(--color-text-secondary)",textTransform:"uppercase",letterSpacing:"0.04em" }}>Próximo descuento</p><p style={{ margin:0,fontSize:20,fontWeight:650 }}>{proximaFecha?fmtFechaAdelanto(proximaFecha):"Sin pendientes"}</p><p style={{ margin:"3px 0 0",fontSize:11,color:"var(--color-text-secondary)" }}>{proximaFecha?`${fmtMoney(proximoImporte)} · ${proximasMismaFecha.length} cuota${proximasMismaFecha.length===1?"":"s"}`:"No hay cuotas futuras programadas"}</p></Card>
     </div>
-    <Card style={{ marginBottom:14 }}>
-      <h3 style={{ margin:"0 0 12px",fontSize:15,fontWeight:500 }}>Cargar adelanto</h3>
-      <div style={{ display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(160px,1fr))",gap:10,alignItems:"end" }}>
-        <div><label style={{ fontSize:12,color:"var(--color-text-secondary)",display:"block",marginBottom:4 }}>Fecha del adelanto</label><input type="date" value={form.fecha} onChange={e=>setForm(f=>({...f,fecha:e.target.value,primeraFechaDescuento:f.primeraFechaDescuento||e.target.value,cuotas:(f.cuotas||[]).map((c,i)=>i===0?{...c,fecha:c.fecha||e.target.value}:c)}))} style={{ width:"100%",border:"0.5px solid var(--color-border-secondary)",borderRadius:8,padding:"8px 12px",fontSize:14,background:"var(--color-background-primary)",color:"var(--color-text-primary)" }}/></div>
-        <div><label style={{ fontSize:12,color:"var(--color-text-secondary)",display:"block",marginBottom:4 }}>Local del adelanto</label><Select value={localId} onChange={v=>setLocalId(v)}>{localesPermitidos.map(l=><option key={l.id} value={l.id}>{l.nombre}</option>)}</Select></div>
-        <div><label style={{ fontSize:12,color:"var(--color-text-secondary)",display:"block",marginBottom:4 }}>Manicura</label><Select value={form.userId} onChange={v=>setForm(f=>({...f,userId:v}))}>{manicurasPermitidas.map(m=><option key={m.id} value={m.id}>{m.nombre}</option>)}</Select></div>
-        <div><label style={{ fontSize:12,color:"var(--color-text-secondary)",display:"block",marginBottom:4 }}>Importe total adelantado</label><Input value={form.importe} onChange={v=>setForm(f=>({...f,importe:v,cuotas:f.plan==="cuotas_personalizadas"&&f.cuotas?.length===1?[{...f.cuotas[0],importe:v}]:f.cuotas}))} placeholder="0"/></div>
-        <div><label style={{ fontSize:12,color:"var(--color-text-secondary)",display:"block",marginBottom:4 }}>Concepto</label><Input value={form.concepto} onChange={v=>setForm(f=>({...f,concepto:v}))}/></div>
-        <div><label style={{ fontSize:12,color:"var(--color-text-secondary)",display:"block",marginBottom:4 }}>Descuento</label><Select value={form.plan} onChange={v=>setForm(f=>({...f,plan:v, primeraFechaDescuento:f.primeraFechaDescuento||f.fecha, cuotas:v==="cuotas_personalizadas"?(f.cuotas?.length?f.cuotas:[{fecha:f.fecha,importe:f.importe}]):f.cuotas }))}><option value="semana">Descontar esta semana</option><option value="cuotas_iguales">Descontar en cuotas iguales</option><option value="cuotas_personalizadas">Descuento personalizado</option></Select></div>
-        {(form.plan === "semana" || form.plan === "cuotas_iguales") && <div><label style={{ fontSize:12,color:"var(--color-text-secondary)",display:"block",marginBottom:4 }}>{form.plan === "semana" ? "Semana de descuento" : "Primera semana de descuento"}</label><input type="date" value={form.primeraFechaDescuento||form.fecha} onChange={e=>setForm(f=>({...f,primeraFechaDescuento:e.target.value}))} style={{ width:"100%",border:"0.5px solid var(--color-border-secondary)",borderRadius:8,padding:"8px 12px",fontSize:14,background:"var(--color-background-primary)",color:"var(--color-text-primary)" }}/></div>}
-        {form.plan === "cuotas_iguales" && <div><label style={{ fontSize:12,color:"var(--color-text-secondary)",display:"block",marginBottom:4 }}>Cantidad de cuotas</label><Input type="number" value={form.cuotasTotal} onChange={v=>setForm(f=>({...f,cuotasTotal:v}))}/></div>}
-        <div style={{ gridColumn:"1 / -1" }}><label style={{ fontSize:12,color:"var(--color-text-secondary)",display:"block",marginBottom:4 }}>Observación</label><Input value={form.observacion} onChange={v=>setForm(f=>({...f,observacion:v}))} placeholder="Opcional"/></div>
-      </div>
-      {form.plan === "cuotas_personalizadas" && <div style={{ marginTop:12,border:"0.5px solid var(--color-border-tertiary)",borderRadius:10,overflow:"hidden" }}>
-        <div style={{ padding:"9px 12px",background:"var(--color-background-secondary)",display:"flex",justifyContent:"space-between",alignItems:"center",gap:8 }}><strong style={{ fontSize:13 }}>Cuotas personalizadas</strong><Btn size="sm" variant="secondary" onClick={()=>setForm(f=>({...f,cuotas:[...(f.cuotas||[]),{fecha:addWeeks((f.cuotas||[]).slice(-1)[0]?.fecha||f.fecha,1),importe:""}]}))}>+ Agregar cuota</Btn></div>
-        {(form.cuotas||[]).map((c,i)=><div key={i} style={{ display:"grid",gridTemplateColumns:"140px 1fr 70px",gap:8,padding:"8px 12px",alignItems:"center",borderTop:"0.5px solid var(--color-border-tertiary)" }}><input type="date" value={c.fecha} onChange={e=>setForm(f=>({...f,cuotas:(f.cuotas||[]).map((x,idx)=>idx===i?{...x,fecha:e.target.value}:x)}))} style={{ border:"0.5px solid var(--color-border-secondary)",borderRadius:8,padding:"8px 10px",fontSize:13,background:"var(--color-background-primary)",color:"var(--color-text-primary)" }}/><Input value={c.importe} onChange={v=>setForm(f=>({...f,cuotas:(f.cuotas||[]).map((x,idx)=>idx===i?{...x,importe:v}:x)}))} placeholder="Importe"/><Btn size="sm" variant="ghost" style={{ color:COLORS.danger }} onClick={()=>setForm(f=>({...f,cuotas:(f.cuotas||[]).filter((_,idx)=>idx!==i)}))}>Quitar</Btn></div>)}
-      </div>}
-      {planPreview && !planPreview.error && <div style={{ marginTop:12,background:COLORS.infoLight,borderRadius:10,padding:"10px 12px" }}><p style={{ margin:"0 0 6px",fontSize:13,fontWeight:500,color:COLORS.info }}>Plan de descuento</p><div style={{ display:"flex",flexDirection:"column",gap:4 }}>{planPreview.cuotas.map((c,i)=><div key={i} style={{ display:"flex",justifyContent:"space-between",fontSize:12,color:COLORS.info }}><span>Cuota {i+1} · {weekOfMonthLabel(c.fecha)} · {(c.fecha||"").split("-").reverse().join("/")}</span><strong>{fmtMoney(c.importe)}</strong></div>)}</div></div>}
-      {err && <p style={{ margin:"10px 0 0",fontSize:13,color:COLORS.danger,background:COLORS.dangerLight,padding:"8px 12px",borderRadius:8 }}>{err}</p>}
-      <Btn onClick={save} disabled={saving} style={{ marginTop:12 }}>{saving?"Guardando...":"Guardar adelanto"}</Btn>
-    </Card>
-    {porManicura.length>0&&<Card style={{ marginBottom:14 }}><h3 style={{ margin:"0 0 10px",fontSize:15,fontWeight:500 }}>Resumen por manicura</h3><div style={{ display:"flex",flexDirection:"column",gap:6 }}>{porManicura.map((r,i)=><div key={i} style={{ display:"grid",gridTemplateColumns:"1fr 80px 120px",gap:8,alignItems:"center",padding:"7px 8px",borderRadius:8,background:"var(--color-background-secondary)" }}><span style={{ fontSize:13,fontWeight:500 }}>{r.nombre}</span><span style={{ fontSize:12,color:"var(--color-text-secondary)",textAlign:"right" }}>{r.cantidad} desc.</span><strong style={{ textAlign:"right",color:COLORS.amber }}>{fmtMoney(r.importe)}</strong></div>)}</div></Card>}
+    {pendientePorManicura.length>0&&<Card style={{ marginBottom:14 }}><div style={{ display:"flex",justifyContent:"space-between",alignItems:"baseline",gap:8,marginBottom:9 }}><h3 style={{ margin:0,fontSize:15,fontWeight:500 }}>Pendiente por manicura</h3><span style={{ fontSize:11,color:"var(--color-text-secondary)" }}>Saldo total, sin limitar al mes seleccionado</span></div><div style={{ display:"flex",flexDirection:"column",gap:5 }}>{pendientePorManicura.map((r,i)=><div key={r.userId||i} style={{ display:"grid",gridTemplateColumns:"minmax(180px,1fr) 110px 130px 130px",gap:10,alignItems:"center",padding:"8px 9px",borderRadius:8,background:"var(--color-background-secondary)" }}><span style={{ fontSize:13,fontWeight:600 }}>{r.nombre}</span><span style={{ fontSize:12,color:"var(--color-text-secondary)",textAlign:"right" }}>{r.cuotas} cuota{r.cuotas===1?"":"s"}</span><span style={{ fontSize:12,textAlign:"right" }}>Próx. {fmtFechaAdelanto(r.proxima)}</span><strong style={{ textAlign:"right",color:COLORS.amber }}>{fmtMoney(r.saldo)}</strong></div>)}</div></Card>}
     <Card style={{ marginBottom:14,padding:0,overflow:"hidden" }}>
-      <div style={{ padding:"12px 14px",borderBottom:"1px solid rgba(120,120,120,0.16)",display:"flex",justifyContent:"space-between",alignItems:"center",gap:8,flexWrap:"wrap" }}><div><h3 style={{ margin:0,fontSize:15,fontWeight:500 }}>Evolución de adelantos</h3><p style={{ margin:"3px 0 0",fontSize:12,color:"var(--color-text-secondary)" }}>Importe total, descontado según fecha prevista, cuotas pendientes y saldo por plan.</p></div><strong style={{ color:saldoPendienteTotal>0?COLORS.amber:COLORS.success }}>{fmtMoney(saldoPendienteTotal)} pendiente</strong></div>
-      {planesActivos.length===0 ? <p style={{ margin:0,padding:16,fontSize:13,color:"var(--color-text-secondary)",textAlign:"center" }}>Sin planes de adelantos para el local seleccionado.</p> : <div style={{ overflowX:"auto" }}><div style={{ minWidth:860 }}>
-        <div style={{ display:"grid",gridTemplateColumns:"90px 1fr 1fr 120px 120px 90px 120px 90px",gap:8,padding:"8px 12px",fontSize:11,fontWeight:700,color:"var(--color-text-secondary)",textTransform:"uppercase",borderBottom:"1px solid rgba(120,120,120,0.14)" }}><span>Fecha</span><span>Manicura</span><span>Concepto</span><span style={{ textAlign:"right" }}>Total</span><span style={{ textAlign:"right" }}>Descontado</span><span style={{ textAlign:"right" }}>Pend.</span><span style={{ textAlign:"right" }}>Saldo</span><span></span></div>
-        {planesActivos.map(p=>{ const m=data.users.find(u=>u.id===p.userId); return <div key={p.grupoId} style={{ display:"grid",gridTemplateColumns:"90px 1fr 1fr 120px 120px 90px 120px 90px",gap:8,padding:"8px 12px",fontSize:12,alignItems:"center",borderBottom:"1px solid rgba(120,120,120,0.10)" }}><span>{p.fecha ? p.fecha.split("-").reverse().join("/") : "—"}</span><span style={{ fontWeight:600 }}>{m?.nombre||"—"}</span><span>{p.concepto||"Adelanto"}</span><strong style={{ textAlign:"right" }}>{fmtMoney(p.importeTotal)}</strong><strong style={{ textAlign:"right",color:COLORS.success }}>{fmtMoney(p.descontado)}</strong><span style={{ textAlign:"right" }}>{p.cuotasPendientes}</span><strong style={{ textAlign:"right",color:p.saldoPendiente>0?COLORS.amber:COLORS.success }}>{fmtMoney(p.saldoPendiente)}</strong><AdelantoPlanTooltip planes={[p]}><button style={{ border:"none",background:COLORS.pinkLight,color:COLORS.pinkDark,borderRadius:999,padding:"4px 8px",fontSize:11,fontWeight:700,cursor:"pointer" }}>Resumen</button></AdelantoPlanTooltip></div>;})}
+      <div style={{ padding:"12px 14px",borderBottom:"1px solid rgba(120,120,120,0.16)",display:"flex",justifyContent:"space-between",alignItems:"center",gap:8,flexWrap:"wrap" }}><div><h3 style={{ margin:0,fontSize:15,fontWeight:500 }}>Estado de adelantos</h3><p style={{ margin:"3px 0 0",fontSize:12,color:"var(--color-text-secondary)" }}>Cada plan muestra cuánto ya se descontó, qué saldo falta y la próxima cuota programada.</p></div><strong style={{ color:saldoPendienteTotal>0?COLORS.amber:COLORS.success }}>{fmtMoney(saldoPendienteTotal)} pendiente</strong></div>
+      {planesActivos.length===0 ? <p style={{ margin:0,padding:16,fontSize:13,color:"var(--color-text-secondary)",textAlign:"center" }}>Sin planes de adelantos para el local seleccionado.</p> : <div style={{ overflowX:"auto" }}><div style={{ minWidth:980 }}>
+        <div style={{ display:"grid",gridTemplateColumns:"90px minmax(150px,1fr) 115px 115px 100px 145px 115px 100px",gap:8,padding:"8px 12px",fontSize:11,fontWeight:700,color:"var(--color-text-secondary)",textTransform:"uppercase",borderBottom:"1px solid rgba(120,120,120,0.14)" }}><span>Adelanto</span><span>Manicura</span><span style={{ textAlign:"right" }}>Total</span><span style={{ textAlign:"right" }}>Descontado</span><span style={{ textAlign:"right" }}>Pendientes</span><span>Próxima cuota</span><span style={{ textAlign:"right" }}>Saldo</span><span></span></div>
+        {planesActivos.map(p=>{ const m=data.users.find(u=>u.id===p.userId); const next=p.cuotas.find(c=>c.fecha&&c.fecha>todayKey); return <div key={p.grupoId} style={{ display:"grid",gridTemplateColumns:"90px minmax(150px,1fr) 115px 115px 100px 145px 115px 100px",gap:8,padding:"9px 12px",fontSize:12,alignItems:"center",borderBottom:"1px solid rgba(120,120,120,0.10)" }}><span>{fmtFechaAdelanto(p.fecha)}</span><div><span style={{ fontWeight:600 }}>{m?.nombre||"—"}</span><br/><small style={{ color:"var(--color-text-secondary)" }}>{p.concepto||"Adelanto"}</small></div><strong style={{ textAlign:"right" }}>{fmtMoney(p.importeTotal)}</strong><strong style={{ textAlign:"right",color:COLORS.success }}>{fmtMoney(p.descontado)}</strong><span style={{ textAlign:"right" }}>{p.cuotasPendientes} cuota{p.cuotasPendientes===1?"":"s"}</span><span>{next?<><strong>{fmtFechaAdelanto(next.fecha)}</strong><br/><small style={{ color:"var(--color-text-secondary)" }}>{fmtMoney(next.importe)}</small></>:<span style={{ color:COLORS.success }}>Completo</span>}</span><strong style={{ textAlign:"right",color:p.saldoPendiente>0?COLORS.amber:COLORS.success }}>{fmtMoney(p.saldoPendiente)}</strong><button type="button" onClick={()=>setSummaryPlan(p)} style={{ border:"none",background:COLORS.pinkLight,color:COLORS.pinkDark,borderRadius:999,padding:"5px 9px",fontSize:11,fontWeight:700,cursor:"pointer" }}>Ver detalle</button></div>;})}
       </div></div>}
     </Card>
     <Card style={{ padding:0,overflow:"hidden" }}>
-      <div style={{ padding:"12px 14px",borderBottom:"1px solid rgba(120,120,120,0.16)",display:"flex",justifyContent:"space-between",alignItems:"center" }}><h3 style={{ margin:0,fontSize:15,fontWeight:500 }}>Detalle de descuentos de adelantos</h3><span style={{ fontSize:12,color:"var(--color-text-secondary)" }}>{adelantos.length} descuentos</span></div>
-      {adelantos.length===0 ? <p style={{ margin:0,padding:18,textAlign:"center",fontSize:13,color:"var(--color-text-secondary)" }}>Sin descuentos para el período/local seleccionado.</p> : <div style={{ overflowX:"auto" }}><div style={{ minWidth:980 }}>
-        <div style={{ display:"grid",gridTemplateColumns:"90px 110px 1fr 1fr 110px 80px 110px 1fr 220px",gap:8,padding:"8px 12px",fontSize:11,fontWeight:600,color:"var(--color-text-secondary)",borderBottom:"1px solid rgba(120,120,120,0.14)",textTransform:"uppercase" }}><span>Adelanto</span><span>Descuento</span><span>Local</span><span>Manicura</span><span style={{ textAlign:"right" }}>Importe</span><span>Cuota</span><span>Total adel.</span><span>Concepto / Obs.</span><span></span></div>
-        {adelantos.map(a=>{ const m=data.users.find(u=>u.id===a.userId), l=data.locales.find(x=>x.id===a.localId); return <div key={a.id} style={{ display:"grid",gridTemplateColumns:"90px 110px 1fr 1fr 110px 80px 110px 1fr 220px",gap:8,padding:"8px 12px",fontSize:12,alignItems:"center",borderBottom:"1px solid rgba(120,120,120,0.10)" }}><span>{(a.fecha||"").split("-").reverse().join("/")}</span><span><strong>{(a.fechaDescuento||a.fecha||"").split("-").reverse().join("/")}</strong><br/><small style={{ color:"var(--color-text-secondary)" }}>{weekOfMonthLabel(a.fechaDescuento||a.fecha)}</small></span><span>{l?.nombre||"—"}</span><span>{m?.nombre||"—"}</span><strong style={{ textAlign:"right",color:COLORS.amber }}>{fmtMoney(a.importe)}</strong><span>{a.cuotaNum}/{a.cuotasTotal}</span><span>{fmtMoney(a.importeTotal)}</span><span>{a.concepto}{a.observacion?` · ${a.observacion}`:""}</span><div style={{ display:"flex",gap:6,justifyContent:"flex-end",flexWrap:"wrap" }}><Btn onClick={()=>openEdit(a)} variant="ghost" size="sm">Editar cuota</Btn><Btn onClick={()=>openPlanEdit(a)} variant="secondary" size="sm">Editar plan</Btn><Btn onClick={()=>askDeletePlan(a)} variant="ghost" size="sm" style={{ color:COLORS.danger }}>Eliminar plan</Btn></div></div>;})}
+      <div style={{ padding:"12px 14px",borderBottom:"1px solid rgba(120,120,120,0.16)",display:"flex",justifyContent:"space-between",alignItems:"center",gap:8,flexWrap:"wrap" }}><div><h3 style={{ margin:0,fontSize:15,fontWeight:500 }}>Cuotas del período {periodo}</h3><p style={{ margin:"3px 0 0",fontSize:12,color:"var(--color-text-secondary)" }}>El estado se determina por la fecha prevista de descuento: hasta hoy se considera descontada; las fechas futuras quedan pendientes.</p></div><span style={{ fontSize:12,color:"var(--color-text-secondary)" }}>{adelantos.length} cuota{adelantos.length===1?"":"s"}</span></div>
+      {adelantos.length===0 ? <p style={{ margin:0,padding:18,textAlign:"center",fontSize:13,color:"var(--color-text-secondary)" }}>Sin cuotas para el período/local seleccionado.</p> : <div style={{ overflowX:"auto" }}><div style={{ minWidth:1080 }}>
+        <div style={{ display:"grid",gridTemplateColumns:"90px 110px 100px minmax(140px,1fr) 110px 70px 110px minmax(180px,1fr) 220px",gap:8,padding:"8px 12px",fontSize:11,fontWeight:600,color:"var(--color-text-secondary)",borderBottom:"1px solid rgba(120,120,120,0.14)",textTransform:"uppercase" }}><span>Adelanto</span><span>Descuento</span><span>Estado</span><span>Manicura</span><span style={{ textAlign:"right" }}>Importe</span><span>Cuota</span><span>Total adel.</span><span>Concepto / Obs.</span><span></span></div>
+        {adelantos.map(a=>{ const m=data.users.find(u=>u.id===a.userId); const fechaDesc=a.fechaDescuento||a.fecha||""; const descontada=cuotaDescontada(fechaDesc); return <div key={a.id} style={{ display:"grid",gridTemplateColumns:"90px 110px 100px minmax(140px,1fr) 110px 70px 110px minmax(180px,1fr) 220px",gap:8,padding:"9px 12px",fontSize:12,alignItems:"center",borderBottom:"1px solid rgba(120,120,120,0.10)" }}><span>{fmtFechaAdelanto(a.fecha)}</span><span><strong>{fmtFechaAdelanto(fechaDesc)}</strong><br/><small style={{ color:"var(--color-text-secondary)" }}>{weekOfMonthLabel(fechaDesc)}</small></span><Badge color={descontada?"success":"amber"}>{descontada?"Descontada":"Pendiente"}</Badge><span style={{ fontWeight:600 }}>{m?.nombre||"—"}</span><strong style={{ textAlign:"right",color:descontada?COLORS.success:COLORS.amber }}>{fmtMoney(a.importe)}</strong><span>{a.cuotaNum}/{a.cuotasTotal}</span><span>{fmtMoney(a.importeTotal)}</span><span>{a.concepto}{a.observacion?` · ${a.observacion}`:""}</span><div style={{ display:"flex",gap:6,justifyContent:"flex-end",flexWrap:"wrap" }}><Btn onClick={()=>openEdit(a)} variant="ghost" size="sm">Editar cuota</Btn><Btn onClick={()=>openPlanEdit(a)} variant="secondary" size="sm">Editar plan</Btn><Btn onClick={()=>askDeletePlan(a)} variant="ghost" size="sm" style={{ color:COLORS.danger }}>Eliminar plan</Btn></div></div>;})}
       </div></div>}
     </Card>
 
+    {newOpen && <Modal title="Nuevo adelanto" onClose={()=>{setNewOpen(false);setErr("");}} width={760}>
+      <div style={{ display:"flex",flexDirection:"column",gap:14 }}>
+        <div style={{ display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(190px,1fr))",gap:10,alignItems:"end" }}>
+          <div><label style={{ fontSize:12,color:"var(--color-text-secondary)",display:"block",marginBottom:4 }}>Fecha del adelanto</label><input type="date" value={form.fecha} onChange={e=>setForm(f=>({...f,fecha:e.target.value,primeraFechaDescuento:f.primeraFechaDescuento||e.target.value,cuotas:(f.cuotas||[]).map((c,i)=>i===0?{...c,fecha:c.fecha||e.target.value}:c)}))} style={{ width:"100%",border:"1.5px solid #e0e0e0",borderRadius:8,padding:"9px 12px",fontSize:14,background:"#fafafa",color:"#1a1a1a",boxSizing:"border-box" }}/></div>
+          <div><label style={{ fontSize:12,color:"var(--color-text-secondary)",display:"block",marginBottom:4 }}>Local</label><Select value={form.localId} onChange={v=>setForm(f=>({...f,localId:v,userId:""}))}>{localesPermitidos.map(l=><option key={l.id} value={l.id}>{l.nombre}</option>)}</Select></div>
+          <div><label style={{ fontSize:12,color:"var(--color-text-secondary)",display:"block",marginBottom:4 }}>Manicura</label><Select value={form.userId} onChange={v=>setForm(f=>({...f,userId:v}))}>{manicurasFormulario.map(m=><option key={m.id} value={m.id}>{m.nombre}</option>)}</Select></div>
+          <div><label style={{ fontSize:12,color:"var(--color-text-secondary)",display:"block",marginBottom:4 }}>Importe total adelantado</label><Input value={form.importe} onChange={v=>setForm(f=>({...f,importe:v,cuotas:f.plan==="cuotas_personalizadas"&&f.cuotas?.length===1?[{...f.cuotas[0],importe:v}]:f.cuotas}))} placeholder="0"/></div>
+          <div><label style={{ fontSize:12,color:"var(--color-text-secondary)",display:"block",marginBottom:4 }}>Concepto</label><Input value={form.concepto} onChange={v=>setForm(f=>({...f,concepto:v}))}/></div>
+          <div><label style={{ fontSize:12,color:"var(--color-text-secondary)",display:"block",marginBottom:4 }}>Plan de descuento</label><Select value={form.plan} onChange={v=>setForm(f=>({...f,plan:v,primeraFechaDescuento:f.primeraFechaDescuento||f.fecha,cuotas:v==="cuotas_personalizadas"?(f.cuotas?.length?f.cuotas:[{fecha:f.fecha,importe:f.importe}]):f.cuotas}))}><option value="semana">Descontar en una semana</option><option value="cuotas_iguales">Descontar en cuotas iguales</option><option value="cuotas_personalizadas">Descuento personalizado</option></Select></div>
+          {(form.plan === "semana" || form.plan === "cuotas_iguales") && <div><label style={{ fontSize:12,color:"var(--color-text-secondary)",display:"block",marginBottom:4 }}>{form.plan === "semana" ? "Fecha de descuento" : "Primera fecha de descuento"}</label><input type="date" value={form.primeraFechaDescuento||form.fecha} onChange={e=>setForm(f=>({...f,primeraFechaDescuento:e.target.value}))} style={{ width:"100%",border:"1.5px solid #e0e0e0",borderRadius:8,padding:"9px 12px",fontSize:14,background:"#fafafa",color:"#1a1a1a",boxSizing:"border-box" }}/></div>}
+          {form.plan === "cuotas_iguales" && <ModalInput label="Cantidad de cuotas" type="number" value={form.cuotasTotal} onChange={v=>setForm(f=>({...f,cuotasTotal:v}))}/>} 
+          <div style={{ gridColumn:"1 / -1" }}><ModalInput label="Observación" value={form.observacion} onChange={v=>setForm(f=>({...f,observacion:v}))}/></div>
+        </div>
+        {form.plan === "cuotas_personalizadas" && <div style={{ border:"0.5px solid var(--color-border-tertiary)",borderRadius:10,overflow:"hidden" }}>
+          <div style={{ padding:"9px 12px",background:"var(--color-background-secondary)",display:"flex",justifyContent:"space-between",alignItems:"center",gap:8 }}><strong style={{ fontSize:13 }}>Cuotas personalizadas</strong><Btn size="sm" variant="secondary" onClick={()=>setForm(f=>({...f,cuotas:[...(f.cuotas||[]),{fecha:addWeeks((f.cuotas||[]).slice(-1)[0]?.fecha||f.fecha,1),importe:""}]}))}>+ Agregar cuota</Btn></div>
+          {(form.cuotas||[]).map((c,i)=><div key={i} style={{ display:"grid",gridTemplateColumns:"38px 150px 1fr 70px",gap:8,padding:"8px 12px",alignItems:"center",borderTop:"0.5px solid var(--color-border-tertiary)" }}><span style={{ fontSize:12,color:"var(--color-text-secondary)" }}>#{i+1}</span><input type="date" value={c.fecha} onChange={e=>setForm(f=>({...f,cuotas:(f.cuotas||[]).map((x,idx)=>idx===i?{...x,fecha:e.target.value}:x)}))} style={{ border:"0.5px solid var(--color-border-secondary)",borderRadius:8,padding:"8px 10px",fontSize:13,background:"var(--color-background-primary)",color:"var(--color-text-primary)" }}/><Input value={c.importe} onChange={v=>setForm(f=>({...f,cuotas:(f.cuotas||[]).map((x,idx)=>idx===i?{...x,importe:v}:x)}))} placeholder="Importe"/><Btn size="sm" variant="ghost" style={{ color:COLORS.danger }} onClick={()=>setForm(f=>({...f,cuotas:(f.cuotas||[]).filter((_,idx)=>idx!==i)}))}>Quitar</Btn></div>)}
+        </div>}
+        {planPreview && !planPreview.error && <div style={{ background:COLORS.infoLight,borderRadius:10,padding:"10px 12px" }}><p style={{ margin:"0 0 6px",fontSize:13,fontWeight:500,color:COLORS.info }}>Vista previa del plan</p><div style={{ display:"flex",flexDirection:"column",gap:4 }}>{planPreview.cuotas.map((c,i)=><div key={i} style={{ display:"flex",justifyContent:"space-between",gap:10,fontSize:12,color:COLORS.info }}><span>Cuota {i+1} · {fmtFechaAdelanto(c.fecha)}</span><strong>{fmtMoney(c.importe)}</strong></div>)}</div></div>}
+        {err && <p style={{ margin:0,fontSize:13,color:COLORS.danger,background:COLORS.dangerLight,padding:"8px 12px",borderRadius:8 }}>{err}</p>}
+        <div style={{ display:"flex",gap:8,justifyContent:"flex-end" }}><Btn onClick={()=>{setNewOpen(false);setErr("");}} variant="secondary">Cancelar</Btn><Btn onClick={save} disabled={saving}>{saving?"Guardando...":"Guardar adelanto"}</Btn></div>
+      </div>
+    </Modal>}
+    {summaryPlan && <Modal title="Detalle del adelanto" onClose={()=>setSummaryPlan(null)} width={700}>
+      <div style={{ display:"flex",flexDirection:"column",gap:14 }}>
+        <div><h3 style={{ margin:0,fontSize:16 }}>{data.users.find(u=>u.id===summaryPlan.userId)?.nombre||"Manicura"}</h3><p style={{ margin:"3px 0 0",fontSize:12,color:"var(--color-text-secondary)" }}>{summaryPlan.concepto||"Adelanto"} · otorgado el {fmtFechaAdelanto(summaryPlan.fecha)}</p>{summaryPlan.observacion&&<p style={{ margin:"4px 0 0",fontSize:12,color:"var(--color-text-secondary)" }}>{summaryPlan.observacion}</p>}</div>
+        <div style={{ display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:8 }}><div style={{ background:"var(--color-background-secondary)",borderRadius:10,padding:"10px 12px" }}><small style={{ color:"var(--color-text-secondary)" }}>TOTAL</small><strong style={{ display:"block",fontSize:18,marginTop:3 }}>{fmtMoney(summaryPlan.importeTotal)}</strong></div><div style={{ background:"var(--color-background-secondary)",borderRadius:10,padding:"10px 12px" }}><small style={{ color:"var(--color-text-secondary)" }}>DESCONTADO</small><strong style={{ display:"block",fontSize:18,marginTop:3,color:COLORS.success }}>{fmtMoney(summaryPlan.descontado)}</strong></div><div style={{ background:"var(--color-background-secondary)",borderRadius:10,padding:"10px 12px" }}><small style={{ color:"var(--color-text-secondary)" }}>PENDIENTE</small><strong style={{ display:"block",fontSize:18,marginTop:3,color:summaryPlan.saldoPendiente>0?COLORS.amber:COLORS.success }}>{fmtMoney(summaryPlan.saldoPendiente)}</strong></div></div>
+        <div style={{ border:"1px solid rgba(120,120,120,.14)",borderRadius:10,overflow:"hidden" }}><div style={{ display:"grid",gridTemplateColumns:"70px 130px 120px 1fr",gap:8,padding:"8px 10px",fontSize:10,fontWeight:800,textTransform:"uppercase",color:"var(--color-text-secondary)",background:"var(--color-background-secondary)" }}><span>Cuota</span><span>Fecha</span><span>Estado</span><span style={{ textAlign:"right" }}>Importe</span></div>{summaryPlan.cuotas.map((c,i)=>{const done=cuotaDescontada(c.fecha);return <div key={c.id||i} style={{ display:"grid",gridTemplateColumns:"70px 130px 120px 1fr",gap:8,padding:"9px 10px",alignItems:"center",fontSize:12,borderTop:"1px solid rgba(120,120,120,.1)" }}><strong>{c.cuotaNum||i+1}/{c.cuotasTotal||summaryPlan.cuotas.length}</strong><span>{fmtFechaAdelanto(c.fecha)}</span><Badge color={done?"success":"amber"}>{done?"Descontada":"Pendiente"}</Badge><strong style={{ textAlign:"right",color:done?COLORS.success:COLORS.amber }}>{fmtMoney(c.importe)}</strong></div>})}</div>
+        <p style={{ margin:0,fontSize:11,color:"var(--color-text-secondary)" }}>El estado se calcula según la fecha prevista de descuento.</p>
+        <div style={{ display:"flex",justifyContent:"flex-end",gap:8 }}><Btn variant="secondary" onClick={()=>setSummaryPlan(null)}>Cerrar</Btn><Btn onClick={()=>{const raw=(data.adelantos||[]).find(a=>summaryPlan.cuotas.some(c=>Number(c.id)===Number(a.id)));setSummaryPlan(null);if(raw)openPlanEdit(raw);}}>Editar plan</Btn></div>
+      </div>
+    </Modal>}
     {planEditing && <Modal title="Editar plan de descuento" onClose={()=>setPlanEditing(null)} width={620}>
       <div style={{ display:"flex",flexDirection:"column",gap:14 }}>
         <div style={{ background:"var(--color-background-secondary)",border:"0.5px solid var(--color-border-tertiary)",borderRadius:10,padding:"10px 12px" }}>
@@ -8237,12 +8279,13 @@ function AdelantosManicuras({ data, reloadData, user }) {
             <div><strong style={{ fontSize:13 }}>Plan personalizado</strong><p style={{ margin:"2px 0 0",fontSize:11,color:"var(--color-text-secondary)" }}>Para saltear una semana, quitá esa cuota y agregá otra al final con la fecha correspondiente.</p></div>
             <Btn size="sm" variant="secondary" onClick={()=>setPlanEditing(x=>({...x,cuotas:[...(x.cuotas||[]),{fecha:addWeeks((x.cuotas||[]).slice(-1)[0]?.fecha||x.fecha,1),importe:""}]}))}>+ Agregar cuota</Btn>
           </div>
-          {(planEditing.cuotas||[]).map((c,i)=><div key={i} style={{ display:"grid",gridTemplateColumns:"38px 150px 1fr 70px",gap:8,padding:"8px 12px",alignItems:"center",borderTop:"0.5px solid var(--color-border-tertiary)" }}>
+          {(planEditing.cuotas||[]).map((c,i)=>{const done=cuotaDescontada(c.fecha);return <div key={i} style={{ display:"grid",gridTemplateColumns:"38px 150px 1fr 105px 70px",gap:8,padding:"8px 12px",alignItems:"center",borderTop:"0.5px solid var(--color-border-tertiary)" }}>
             <span style={{ fontSize:12,color:"var(--color-text-secondary)" }}>#{i+1}</span>
             <input type="date" value={c.fecha} onChange={e=>setPlanEditing(x=>({...x,cuotas:(x.cuotas||[]).map((q,idx)=>idx===i?{...q,fecha:e.target.value}:q)}))} style={{ border:"0.5px solid var(--color-border-secondary)",borderRadius:8,padding:"8px 10px",fontSize:13,background:"var(--color-background-primary)",color:"var(--color-text-primary)" }}/>
             <Input value={c.importe} onChange={v=>setPlanEditing(x=>({...x,cuotas:(x.cuotas||[]).map((q,idx)=>idx===i?{...q,importe:v}:q)}))} placeholder="Importe"/>
+            <Badge color={done?"success":"amber"}>{done?"Descontada":"Pendiente"}</Badge>
             <Btn size="sm" variant="ghost" style={{ color:COLORS.danger }} onClick={()=>setPlanEditing(x=>({...x,cuotas:(x.cuotas||[]).filter((_,idx)=>idx!==i)}))}>Quitar</Btn>
-          </div>)}
+          </div>})}
         </div>}
         {planEditPreview && !planEditPreview.error && <div style={{ background:COLORS.infoLight,borderRadius:10,padding:"10px 12px" }}><p style={{ margin:"0 0 6px",fontSize:13,fontWeight:500,color:COLORS.info }}>Nuevo plan de descuento</p><div style={{ display:"flex",flexDirection:"column",gap:4 }}>{planEditPreview.cuotas.map((c,i)=><div key={i} style={{ display:"flex",justifyContent:"space-between",fontSize:12,color:COLORS.info }}><span>Cuota {i+1} · {weekOfMonthLabel(c.fecha)} · {(c.fecha||"").split("-").reverse().join("/")}</span><strong>{fmtMoney(c.importe)}</strong></div>)}</div></div>}
         {err && <p style={{ margin:0,fontSize:13,color:COLORS.danger,background:COLORS.dangerLight,padding:"8px 12px",borderRadius:8 }}>{err}</p>}
@@ -8259,6 +8302,7 @@ function AdelantosManicuras({ data, reloadData, user }) {
           <p style={{ margin:0,fontSize:13,fontWeight:500 }}>{editing.manicuraNombre}</p>
           <p style={{ margin:"2px 0 0",fontSize:12,color:"var(--color-text-secondary)" }}>{editing.localNombre} · Cuota {editing.cuotaNum}/{editing.cuotasTotal} · Adelanto total {fmtMoney(editing.importeTotal)}</p>
         </div>
+        {editing.planCuotas?.length>0&&<div style={{ border:"1px solid rgba(120,120,120,.14)",borderRadius:10,overflow:"hidden" }}><div style={{ padding:"8px 10px",fontSize:11,fontWeight:700,background:"var(--color-background-secondary)" }}>Estado de todas las cuotas del adelanto</div>{editing.planCuotas.map((c,i)=>{const done=cuotaDescontada(c.fecha);return <div key={c.id||i} style={{ display:"grid",gridTemplateColumns:"65px 120px 110px 1fr",gap:8,padding:"8px 10px",alignItems:"center",borderTop:"1px solid rgba(120,120,120,.1)",fontSize:12 }}><span>Cuota {c.cuotaNum}</span><span>{fmtFechaAdelanto(c.fecha)}</span><Badge color={done?"success":"amber"}>{done?"Descontada":"Pendiente"}</Badge><strong style={{ textAlign:"right" }}>{fmtMoney(c.importe)}</strong></div>})}</div>}
         <div><label style={{ fontSize:12,color:"var(--color-text-secondary)",display:"block",marginBottom:4 }}>Fecha del adelanto</label><input type="date" value={editing.fecha} onChange={e=>setEditing(x=>({...x,fecha:e.target.value}))} style={{ width:"100%",border:"1.5px solid #e0e0e0",borderRadius:8,padding:"9px 12px",fontSize:14,background:"#fafafa",color:"#1a1a1a",boxSizing:"border-box" }}/></div>
         <div><label style={{ fontSize:12,color:"var(--color-text-secondary)",display:"block",marginBottom:4 }}>Fecha en la que se descuenta</label><input type="date" value={editing.fechaDescuento} onChange={e=>setEditing(x=>({...x,fechaDescuento:e.target.value}))} style={{ width:"100%",border:"1.5px solid #e0e0e0",borderRadius:8,padding:"9px 12px",fontSize:14,background:"#fafafa",color:"#1a1a1a",boxSizing:"border-box" }}/></div>
         <ModalInput label="Importe a descontar" value={editing.importe} onChange={v=>setEditing(x=>({...x,importe:v}))}/>
@@ -14201,19 +14245,26 @@ function dashboardManicuraMonthMeta(periodo) {
   };
 }
 
-function DashboardManicuraBarList({ rows, valueKey, formatter=(v)=>new Intl.NumberFormat("es-AR",{maximumFractionDigits:1}).format(v), secondary=null, maxRows=12, empty="Sin datos para el período" }) {
+function DashboardManicuraBarList({ rows, valueKey, formatter=(v)=>new Intl.NumberFormat("es-AR",{maximumFractionDigits:1}).format(v), secondary=null, personMeta=null, maxRows=12, empty="Sin datos para el período", onRowClick=null, extraHeader=null, extraRenderer=null }) {
   const visible=(rows||[]).slice(0,maxRows);
   if(!visible.length) return <div style={{ minHeight:180,display:"grid",placeItems:"center",fontSize:12,color:"var(--color-text-secondary)" }}>{empty}</div>;
   const max=Math.max(1,...visible.map(r=>Number(r[valueKey]||0)));
-  return <div style={{ display:"grid",gap:9,marginTop:10 }}>{visible.map((r,idx)=>{
-    const v=Number(r[valueKey]||0); const pct=Math.max(1,Math.min(100,v/max*100));
-    return <div key={`${r.userId||r.localId||idx}-${idx}`} style={{ display:"grid",gridTemplateColumns:"26px minmax(130px,1.05fr) minmax(160px,2fr) auto",gap:9,alignItems:"center",fontSize:11 }}>
-      <span style={{ width:22,height:22,borderRadius:8,display:"grid",placeItems:"center",background:idx<3?COLORS.pinkLight:"rgba(120,120,120,.07)",color:idx<3?COLORS.pinkDark:"var(--color-text-secondary)",fontWeight:900 }}>{idx+1}</span>
-      <div style={{ minWidth:0 }}><strong style={{ display:"block",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap" }}>{r.nombre||r.local||"Sin nombre"}</strong>{secondary&&<small style={{ display:"block",marginTop:2,color:"var(--color-text-secondary)",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap" }}>{secondary(r)}</small>}</div>
-      <div style={{ height:9,borderRadius:999,background:"rgba(114,36,62,.08)",overflow:"hidden" }}><div style={{ width:`${pct}%`,height:"100%",borderRadius:999,background:idx===0?COLORS.pinkDark:"#c98fa0" }}/></div>
-      <strong style={{ minWidth:62,textAlign:"right",color:COLORS.pinkDark }}>{formatter(v)}</strong>
-    </div>;
-  })}</div>;
+  const gridTemplate=extraRenderer
+    ? "26px minmax(145px,1.05fr) minmax(145px,1.55fr) minmax(130px,.8fr) auto"
+    : "26px minmax(145px,1.05fr) minmax(160px,2fr) auto";
+  return <div style={{ display:"grid",gap:7,marginTop:10 }}>
+    {extraRenderer&&<div style={{ display:"grid",gridTemplateColumns:gridTemplate,gap:9,alignItems:"end",fontSize:8.5,fontWeight:900,textTransform:"uppercase",letterSpacing:".04em",color:"var(--color-text-secondary)",padding:"0 2px 2px" }}><span></span><span>Manicura</span><span></span><span>{extraHeader||"Dato"}</span><span style={{ textAlign:"right" }}>Servicios</span></div>}
+    {visible.map((r,idx)=>{
+      const v=Number(r[valueKey]||0); const pct=Math.max(1,Math.min(100,v/max*100));
+      return <div key={`${r.userId||r.localId||idx}-${idx}`} onClick={()=>onRowClick?.(r)} style={{ display:"grid",gridTemplateColumns:gridTemplate,gap:9,alignItems:"center",fontSize:11,padding:"4px 2px",borderRadius:9,cursor:onRowClick?"pointer":"default" }} title={onRowClick?"Ver ficha de performance":""}>
+        <span style={{ width:22,height:22,borderRadius:8,display:"grid",placeItems:"center",background:idx<3?COLORS.pinkLight:"rgba(120,120,120,.07)",color:idx<3?COLORS.pinkDark:"var(--color-text-secondary)",fontWeight:900 }}>{idx+1}</span>
+        <div style={{ minWidth:0 }}><strong style={{ display:"block",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap" }}>{r.nombre||r.local||"Sin nombre"}</strong>{personMeta&&<small style={{ display:"block",marginTop:1,color:COLORS.pinkDark,fontWeight:700,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap" }}>{personMeta(r)}</small>}{secondary&&<small style={{ display:"block",marginTop:2,color:"var(--color-text-secondary)",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap" }}>{secondary(r)}</small>}</div>
+        <div style={{ height:9,borderRadius:999,background:"rgba(114,36,62,.08)",overflow:"hidden" }}><div style={{ width:`${pct}%`,height:"100%",borderRadius:999,background:idx===0?COLORS.pinkDark:"#c98fa0" }}/></div>
+        {extraRenderer&&<div style={{ minWidth:0 }}>{extraRenderer(r)}</div>}
+        <strong style={{ minWidth:62,textAlign:"right",color:COLORS.pinkDark }}>{formatter(v)}</strong>
+      </div>;
+    })}
+  </div>;
 }
 
 function DashboardManicuras({ data, user }) {
@@ -14228,6 +14279,7 @@ function DashboardManicuras({ data, user }) {
   const [rawHorarios,setRawHorarios]=useState([]);
   const [rawAsistencias,setRawAsistencias]=useState([]);
   const [rawReclamos,setRawReclamos]=useState([]);
+  const [selectedManicuraId,setSelectedManicuraId]=useState(null);
 
   const meta=useMemo(()=>dashboardManicuraMonthMeta(periodo),[periodo]);
   const assignedIds=useMemo(()=>Array.from(new Set(getAssignedLocalIds(data,user).map(Number).filter(Boolean))),[data,user]);
@@ -14296,16 +14348,14 @@ function DashboardManicuras({ data, user }) {
     const build=(desde,hasta)=>{
       const sched=new Map();
       horarios.filter(h=>h.fecha>=desde&&h.fecha<=hasta&&h.trabaja&&visibleLocalSet.has(Number(h.effectiveLocalId))).forEach(h=>{
-        if(manicuraId!=="todas"&&Number(h.userId)!==Number(manicuraId))return;
         const key=`${h.userId}|${h.effectiveLocalId}|${h.fecha}`;
         if(!sched.has(key))sched.set(key,{ userId:Number(h.userId),localId:Number(h.effectiveLocalId),fecha:h.fecha,entrada:h.entrada,salida:h.salida });
       });
       const att=new Map();
       asistencias.filter(a=>a.fecha>=desde&&a.fecha<=hasta&&visibleLocalSet.has(Number(a.effectiveLocalId))).forEach(a=>{
-        if(manicuraId!=="todas"&&Number(a.userId)!==Number(manicuraId))return;
         att.set(`${a.userId}|${a.effectiveLocalId}|${a.fecha}`,a);
       });
-      const byUser=new Map(),byLocal=new Map();
+      const byUser=new Map(),byLocal=new Map(),byUserLocal=new Map();
       const empty=()=>({ scheduled:0,attended:0,absent:0,late:0,pending:0,lateMinutes:0,lateWithMinutes:0,hours:0,workDays:0 });
       const add=(map,id,row)=>{const x=map.get(id)||empty();Object.keys(x).forEach(k=>x[k]+=Number(row[k]||0));map.set(id,x);};
       sched.forEach((s,key)=>{
@@ -14323,12 +14373,12 @@ function DashboardManicuras({ data, user }) {
           const realHours=dashboardManicuraHours(a.entradaReal,a.salidaReal);
           row.hours=realHours>0?realHours:schedHours;
         }
-        add(byUser,s.userId,row); add(byLocal,s.localId,row);
+        add(byUser,s.userId,row); add(byLocal,s.localId,row); add(byUserLocal,`${s.userId}|${s.localId}`,row);
       });
-      return { byUser,byLocal };
+      return { byUser,byLocal,byUserLocal };
     };
     return { current:build(meta.desde,meta.hasta),previous:build(meta.prevDesde,meta.prevHasta) };
-  },[horarios,asistencias,visibleLocalSet,manicuraId,meta.desde,meta.hasta,meta.prevDesde,meta.prevHasta]);
+  },[horarios,asistencias,visibleLocalSet,meta.desde,meta.hasta,meta.prevDesde,meta.prevHasta]);
 
   const priorUsersByClient=useMemo(()=>{
     const map=new Map();
@@ -14351,15 +14401,21 @@ function DashboardManicuras({ data, user }) {
     return {claims,warranty};
   },[reclamos,data.garantias,data.users,visibleLocalSet,meta.desde,meta.hasta]);
 
-  const stats=useMemo(()=>{
+  const localTotalsById=useMemo(()=>{
+    const map=new Map();
+    currentRows.forEach(r=>map.set(Number(r.localId),(map.get(Number(r.localId))||0)+1));
+    return map;
+  },[currentRows]);
+
+  const statsAll=useMemo(()=>{
     const prevMap=new Map(); previousRows.forEach(r=>{const id=Number(r.userId);const x=prevMap.get(id)||{services:0,revenue:0};x.services++;x.revenue+=r.importe;prevMap.set(id,x);});
     const map=new Map();
-    const seedIds=manicuraId==="todas"?activeManicureIds:[Number(manicuraId)].filter(Boolean);
-    seedIds.forEach(id=>map.set(Number(id),{userId:Number(id),nombre:userName(id)||`Manicura ${id}`,services:0,revenue:0,days:new Set(),clients:new Set(),serviceCounts:new Map(),localIds:new Set()}));
-    filteredCurrent.forEach(r=>{
-      const id=Number(r.userId); const x=map.get(id)||{userId:id,nombre:r.nombre||userName(id)||`Manicura ${id}`,services:0,revenue:0,days:new Set(),clients:new Set(),serviceCounts:new Map(),localIds:new Set()};
+    activeManicureIds.forEach(id=>map.set(Number(id),{userId:Number(id),nombre:userName(id)||`Manicura ${id}`,services:0,revenue:0,days:new Set(),clients:new Set(),serviceCounts:new Map(),localIds:new Set(),localCounts:new Map()}));
+    currentRows.forEach(r=>{
+      const id=Number(r.userId); const x=map.get(id)||{userId:id,nombre:r.nombre||userName(id)||`Manicura ${id}`,services:0,revenue:0,days:new Set(),clients:new Set(),serviceCounts:new Map(),localIds:new Set(),localCounts:new Map()};
       if((!x.nombre||x.nombre.startsWith("Manicura "))&&r.nombre)x.nombre=r.nombre;
       x.services++; x.revenue+=r.importe; x.days.add(r.fecha); x.localIds.add(Number(r.localId));
+      x.localCounts.set(Number(r.localId),(x.localCounts.get(Number(r.localId))||0)+1);
       const ck=dashboardManicuraText(r.cliente); if(ck)x.clients.add(ck);
       x.serviceCounts.set(r.servicio,(x.serviceCounts.get(r.servicio)||0)+1); map.set(id,x);
     });
@@ -14372,8 +14428,17 @@ function DashboardManicuras({ data, user }) {
       const workDays=att.workDays||x.days.size;
       const hours=att.hours||0;
       const claims=qualityByUser.claims.get(x.userId)||0,warranty=qualityByUser.warranty.get(x.userId)||0;
+      const localIds=Array.from(new Set([
+        ...Array.from(x.localIds||[]).map(Number),
+        ...getActiveManicuraLocalIds(data,x.userId,meta.hasta).map(Number).filter(id=>visibleLocalSet.has(id)),
+      ])).filter(id=>visibleLocalSet.has(Number(id))).sort((a,b)=>localName(a).localeCompare(localName(b),"es"));
+      const localParticipation=Array.from(x.localCounts.entries()).map(([localId,count])=>{
+        const total=localTotalsById.get(Number(localId))||0;
+        return {localId:Number(localId),local:localName(localId),services:Number(count||0),total,pct:total?Number(count||0)/total*100:0};
+      }).sort((a,b)=>a.local.localeCompare(b.local,"es"));
       return {
-        ...x, prevServices:prev.services,prevRevenue:prev.revenue,variationServices:dashboardPct(x.services,prev.services),variationRevenue:dashboardPct(x.revenue,prev.revenue),
+        ...x, localIds, localLabel:localIds.length?localIds.map(localName).join(" · "):"Sin sucursal en el período",localParticipation,
+        prevServices:prev.services,prevRevenue:prev.revenue,variationServices:dashboardPct(x.services,prev.services),variationRevenue:dashboardPct(x.revenue,prev.revenue),
         ticket:x.services?x.revenue/x.services:0,servicesPerDay:workDays?x.services/workDays:0,servicesPerHour:hours?x.services/hours:0,revenuePerHour:hours?x.revenue/hours:0,
         scheduled:att.scheduled,attended:att.attended,absent:att.absent,late:att.late,pending:att.pending,hours,workDays,
         absencePct:att.scheduled?att.absent/att.scheduled*100:0,latePct:att.attended?att.late/att.attended*100:0,avgLateMinutes:att.lateWithMinutes?att.lateMinutes/att.lateWithMinutes:0,
@@ -14381,14 +14446,21 @@ function DashboardManicuras({ data, user }) {
         topService:topService[0],topServiceCount:topService[1],claims,warranty,claimsPer100:x.services?claims/x.services*100:0,warrantyPer100:x.services?warranty/x.services*100:0,
       };
     }).sort((a,b)=>b.services-a.services||a.nombre.localeCompare(b.nombre,"es"));
-  },[filteredCurrent,previousRows,attendanceMaps,priorUsersByClient,qualityByUser,data.users,activeManicureIds,manicuraId]);
+  },[currentRows,previousRows,attendanceMaps,priorUsersByClient,qualityByUser,data.users,data.manicuraHistorialLocales,activeManicureIds,meta.hasta,visibleLocalSet,localTotalsById]);
+
+  const stats=useMemo(()=>manicuraId==="todas"?statsAll:statsAll.filter(x=>Number(x.userId)===Number(manicuraId)),[statsAll,manicuraId]);
 
   const localStats=useMemo(()=>{
     const map=new Map();
     filteredCurrent.forEach(r=>{const id=Number(r.localId);const x=map.get(id)||{localId:id,local:localName(id),services:0,revenue:0,users:new Set()};x.services++;x.revenue+=r.importe;x.users.add(Number(r.userId));map.set(id,x);});
     visibleLocalIds.forEach(id=>{if(!map.has(Number(id)))map.set(Number(id),{localId:Number(id),local:localName(id),services:0,revenue:0,users:new Set()});});
-    return Array.from(map.values()).map(x=>{const a=attendanceMaps.current.byLocal.get(x.localId)||{scheduled:0,attended:0,absent:0,late:0,pending:0,hours:0,workDays:0};return {...x,manicuras:x.users.size,ticket:x.services?x.revenue/x.services:0,servicesPerDay:a.workDays?x.services/a.workDays:0,servicesPerHour:a.hours?x.services/a.hours:0,absencePct:a.scheduled?a.absent/a.scheduled*100:0,latePct:a.attended?a.late/a.attended*100:0,scheduled:a.scheduled,absent:a.absent,late:a.late,pending:a.pending};}).sort((a,b)=>b.services-a.services);
-  },[filteredCurrent,visibleLocalIds,attendanceMaps,data.locales]);
+    return Array.from(map.values()).map(x=>{
+      const a=manicuraId==="todas"
+        ? (attendanceMaps.current.byLocal.get(x.localId)||{scheduled:0,attended:0,absent:0,late:0,pending:0,hours:0,workDays:0})
+        : (attendanceMaps.current.byUserLocal.get(`${Number(manicuraId)}|${x.localId}`)||{scheduled:0,attended:0,absent:0,late:0,pending:0,hours:0,workDays:0});
+      return {...x,manicuras:x.users.size,ticket:x.services?x.revenue/x.services:0,servicesPerDay:a.workDays?x.services/a.workDays:0,servicesPerHour:a.hours?x.services/a.hours:0,absencePct:a.scheduled?a.absent/a.scheduled*100:0,latePct:a.attended?a.late/a.attended*100:0,scheduled:a.scheduled,absent:a.absent,late:a.late,pending:a.pending};
+    }).sort((a,b)=>b.services-a.services);
+  },[filteredCurrent,visibleLocalIds,attendanceMaps,data.locales,manicuraId]);
 
   const totals=useMemo(()=>{
     const services=filteredCurrent.length, prevServices=filteredPrevious.length;
@@ -14404,6 +14476,25 @@ function DashboardManicuras({ data, user }) {
   const productivityRanking=useMemo(()=>stats.filter(x=>x.workDays>0&&x.services>0).slice().sort((a,b)=>b.servicesPerDay-a.servicesPerDay),[stats]);
   const attendanceRanking=useMemo(()=>stats.filter(x=>x.scheduled>0).slice().sort((a,b)=>b.absencePct-a.absencePct||b.latePct-a.latePct),[stats]);
   const qualityRanking=useMemo(()=>stats.filter(x=>x.services>0).slice().sort((a,b)=>(a.claimsPer100+a.warrantyPer100)-(b.claimsPer100+b.warrantyPer100)||b.services-a.services),[stats]);
+  const selectedPerformance=useMemo(()=>statsAll.find(x=>Number(x.userId)===Number(selectedManicuraId))||null,[statsAll,selectedManicuraId]);
+  const rankFor=(row,getValue,{lowerBetter=false,eligible=()=>true}={})=>{
+    if(!row||!eligible(row))return null;
+    const cohort=statsAll.filter(eligible);
+    if(!cohort.length)return null;
+    const normalized=v=>Math.round(Number(v||0)*10000)/10000;
+    const target=normalized(getValue(row));
+    const better=cohort.filter(x=>lowerBetter?normalized(getValue(x))<target:normalized(getValue(x))>target).length;
+    const tied=cohort.filter(x=>normalized(getValue(x))===target).length;
+    return {position:better+1,total:cohort.length,tied};
+  };
+  const localParticipationRank=(row,p)=>{
+    if(!row||!p)return null;
+    const cohort=statsAll.map(x=>({row:x,p:x.localParticipation.find(q=>Number(q.localId)===Number(p.localId))})).filter(x=>x.p&&x.p.services>0);
+    const better=cohort.filter(x=>Number(x.p.pct)>Number(p.pct)).length;
+    const tied=cohort.filter(x=>Math.round(Number(x.p.pct)*10000)===Math.round(Number(p.pct)*10000)).length;
+    return {position:better+1,total:cohort.length,tied};
+  };
+  const rankBadge=(rank)=>rank?<span style={{ display:"inline-flex",alignItems:"center",gap:4,borderRadius:999,padding:"3px 7px",background:COLORS.pinkLight,color:COLORS.pinkDark,fontSize:9,fontWeight:900 }}>#{rank.position} de {rank.total}{rank.tied>1?" · empate":""}</span>:<span style={{ fontSize:9,color:"var(--color-text-secondary)" }}>Sin base para ranking</span>;
   const fmt1=v=>new Intl.NumberFormat("es-AR",{minimumFractionDigits:1,maximumFractionDigits:1}).format(Number(v||0));
   const fmtPct=v=>`${fmt1(v)}%`;
   const scopeLabel=selectedLocalIds?.length?`${visibleLocalIds.length} local${visibleLocalIds.length===1?"":"es"}`:"Todos los locales habilitados";
@@ -14434,22 +14525,51 @@ function DashboardManicuras({ data, user }) {
     </div>
 
     <div className="niki-dashboard-two-col" style={{ display:"grid",gridTemplateColumns:"minmax(0,1.35fr) minmax(0,1fr)",gap:12 }}>
-      <Card style={{ padding:15 }}><div style={{ display:"flex",justifyContent:"space-between",gap:10,alignItems:"baseline",flexWrap:"wrap" }}><div><h3 style={{ margin:0,fontSize:14 }}>Ranking mensual de servicios</h3><p style={{ margin:"3px 0 0",fontSize:10.5,color:"var(--color-text-secondary)" }}>Volumen por manicura · incluye variación contra el período anterior comparable.</p></div><Badge color="pink">{ranking.length} manicuras</Badge></div><DashboardManicuraBarList rows={ranking} valueKey="services" formatter={v=>new Intl.NumberFormat("es-AR").format(v)} secondary={r=>`${r.variationServices==null?"Sin comparación":dashboardPctLabel(r.variationServices)} · ${fmt1(r.servicesPerDay)} por jornada`}/></Card>
-      <Card style={{ padding:15 }}><div><h3 style={{ margin:0,fontSize:14 }}>Productividad por jornada</h3><p style={{ margin:"3px 0 0",fontSize:10.5,color:"var(--color-text-secondary)" }}>Servicios realizados por jornada trabajada/planificada.</p></div><DashboardManicuraBarList rows={productivityRanking} valueKey="servicesPerDay" formatter={v=>fmt1(v)} secondary={r=>`${r.services} servicios · ${r.workDays} jornadas`}/></Card>
+      <Card style={{ padding:15 }}><div style={{ display:"flex",justifyContent:"space-between",gap:10,alignItems:"baseline",flexWrap:"wrap" }}><div><h3 style={{ margin:0,fontSize:14 }}>Ranking mensual de servicios</h3><p style={{ margin:"3px 0 0",fontSize:10.5,color:"var(--color-text-secondary)" }}>Volumen por manicura · participación calculada sobre el total de servicios de cada sucursal.</p></div><Badge color="pink">{ranking.length} manicuras</Badge></div><DashboardManicuraBarList rows={ranking} valueKey="services" formatter={v=>new Intl.NumberFormat("es-AR").format(v)} personMeta={r=>r.localLabel} secondary={r=>`${r.variationServices==null?"Sin comparación":dashboardPctLabel(r.variationServices)} · ${fmt1(r.servicesPerDay)} por jornada`} onRowClick={r=>setSelectedManicuraId(r.userId)} extraHeader="Participación local" extraRenderer={r=><div style={{ display:"grid",gap:2 }}>{r.localParticipation.length?r.localParticipation.map(p=><span key={p.localId} style={{ fontSize:9.5,fontWeight:800,color:COLORS.pinkDark,whiteSpace:"nowrap" }}>{p.local}: {fmtPct(p.pct)}</span>):<span style={{ fontSize:9,color:"var(--color-text-secondary)" }}>—</span>}</div>}/></Card>
+      <Card style={{ padding:15 }}><div><h3 style={{ margin:0,fontSize:14 }}>Productividad por jornada</h3><p style={{ margin:"3px 0 0",fontSize:10.5,color:"var(--color-text-secondary)" }}>Servicios realizados por jornada trabajada/planificada.</p></div><DashboardManicuraBarList rows={productivityRanking} valueKey="servicesPerDay" formatter={v=>fmt1(v)} personMeta={r=>r.localLabel} secondary={r=>`${r.services} servicios · ${r.workDays} jornadas`} onRowClick={r=>setSelectedManicuraId(r.userId)}/></Card>
     </div>
 
-    <Card style={{ padding:0,overflow:"hidden" }}><div style={{ padding:"14px 16px",borderBottom:"1px solid rgba(120,120,120,.12)",display:"flex",justifyContent:"space-between",gap:10,alignItems:"baseline",flexWrap:"wrap" }}><div><h3 style={{ margin:0,fontSize:14 }}>Productividad y valor por manicura</h3><p style={{ margin:"3px 0 0",fontSize:10.5,color:"var(--color-text-secondary)" }}>Volumen, días, horas, ticket y facturación por hora.</p></div><Badge color="gray">Ordenado por servicios</Badge></div><div style={{ overflowX:"auto",maxHeight:470 }}><table style={{ width:"100%",borderCollapse:"collapse",fontSize:10.5,minWidth:1050 }}><thead style={{ position:"sticky",top:0,zIndex:2,background:"#f5e8ec",color:COLORS.pinkDark,textTransform:"uppercase",fontSize:9 }}><tr><th style={{ textAlign:"left",padding:"9px 11px" }}>Manicura</th><th style={{ textAlign:"right" }}>Servicios</th><th style={{ textAlign:"right" }}>Jornadas</th><th style={{ textAlign:"right" }}>Serv./día</th><th style={{ textAlign:"right" }}>Horas</th><th style={{ textAlign:"right" }}>Serv./hora</th><th style={{ textAlign:"right" }}>Ticket</th><th style={{ textAlign:"right" }}>Facturación</th><th style={{ textAlign:"right",paddingRight:12 }}>$/hora</th><th style={{ textAlign:"left",paddingLeft:12 }}>Servicio principal</th></tr></thead><tbody>{ranking.map((r,i)=><tr key={r.userId} onClick={()=>setManicuraId(String(r.userId))} style={{ borderTop:"1px solid rgba(120,120,120,.09)",background:i%2?"rgba(120,120,120,.018)":"transparent",cursor:"pointer" }}><td style={{ padding:"9px 11px",fontWeight:800 }}>{r.nombre}</td><td style={{ textAlign:"right" }}>{r.services}</td><td style={{ textAlign:"right" }}>{r.workDays}</td><td style={{ textAlign:"right",fontWeight:800,color:COLORS.pinkDark }}>{fmt1(r.servicesPerDay)}</td><td style={{ textAlign:"right" }}>{fmt1(r.hours)}</td><td style={{ textAlign:"right" }}>{r.servicesPerHour?fmt1(r.servicesPerHour):"—"}</td><td style={{ textAlign:"right" }}>{fmtMoney(r.ticket)}</td><td style={{ textAlign:"right",fontWeight:700 }}>{fmtMoney(r.revenue)}</td><td style={{ textAlign:"right",paddingRight:12 }}>{r.revenuePerHour?fmtMoney(r.revenuePerHour):"—"}</td><td style={{ padding:"9px 11px",maxWidth:260 }}><span title={r.topService} style={{ display:"block",whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis" }}>{r.topService}</span><small style={{ color:"var(--color-text-secondary)" }}>{r.topServiceCount} servicio{r.topServiceCount===1?"":"s"}</small></td></tr>)}</tbody></table></div>{!ranking.length&&<p style={{ padding:14,fontSize:11,color:"var(--color-text-secondary)" }}>No hay servicios vinculados a manicuras para estos filtros.</p>}</Card>
+    <Card style={{ padding:0,overflow:"hidden" }}><div style={{ padding:"14px 16px",borderBottom:"1px solid rgba(120,120,120,.12)",display:"flex",justifyContent:"space-between",gap:10,alignItems:"baseline",flexWrap:"wrap" }}><div><h3 style={{ margin:0,fontSize:14 }}>Productividad y valor por manicura</h3><p style={{ margin:"3px 0 0",fontSize:10.5,color:"var(--color-text-secondary)" }}>Volumen, días, horas, ticket y facturación por hora.</p></div><Badge color="gray">Ordenado por servicios</Badge></div><div style={{ overflowX:"auto",maxHeight:470 }}><table style={{ width:"100%",borderCollapse:"collapse",fontSize:10.5,minWidth:1050 }}><thead style={{ position:"sticky",top:0,zIndex:2,background:"#f5e8ec",color:COLORS.pinkDark,textTransform:"uppercase",fontSize:9 }}><tr><th style={{ textAlign:"left",padding:"9px 11px" }}>Manicura</th><th style={{ textAlign:"right" }}>Servicios</th><th style={{ textAlign:"right" }}>Jornadas</th><th style={{ textAlign:"right" }}>Serv./día</th><th style={{ textAlign:"right" }}>Horas</th><th style={{ textAlign:"right" }}>Serv./hora</th><th style={{ textAlign:"right" }}>Ticket</th><th style={{ textAlign:"right" }}>Facturación</th><th style={{ textAlign:"right",paddingRight:12 }}>$/hora</th><th style={{ textAlign:"left",paddingLeft:12 }}>Servicio principal</th></tr></thead><tbody>{ranking.map((r,i)=><tr key={r.userId} onClick={()=>setSelectedManicuraId(r.userId)} title="Ver ficha de performance" style={{ borderTop:"1px solid rgba(120,120,120,.09)",background:i%2?"rgba(120,120,120,.018)":"transparent",cursor:"pointer" }}><td style={{ padding:"9px 11px" }}><strong style={{ display:"block" }}>{r.nombre}</strong><small style={{ display:"block",marginTop:2,color:COLORS.pinkDark,fontWeight:700 }}>{r.localLabel}</small></td><td style={{ textAlign:"right" }}>{r.services}</td><td style={{ textAlign:"right" }}>{r.workDays}</td><td style={{ textAlign:"right",fontWeight:800,color:COLORS.pinkDark }}>{fmt1(r.servicesPerDay)}</td><td style={{ textAlign:"right" }}>{fmt1(r.hours)}</td><td style={{ textAlign:"right" }}>{r.servicesPerHour?fmt1(r.servicesPerHour):"—"}</td><td style={{ textAlign:"right" }}>{fmtMoney(r.ticket)}</td><td style={{ textAlign:"right",fontWeight:700 }}>{fmtMoney(r.revenue)}</td><td style={{ textAlign:"right",paddingRight:12 }}>{r.revenuePerHour?fmtMoney(r.revenuePerHour):"—"}</td><td style={{ padding:"9px 11px",maxWidth:260 }}><span title={r.topService} style={{ display:"block",whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis" }}>{r.topService}</span><small style={{ color:"var(--color-text-secondary)" }}>{r.topServiceCount} servicio{r.topServiceCount===1?"":"s"}</small></td></tr>)}</tbody></table></div>{!ranking.length&&<p style={{ padding:14,fontSize:11,color:"var(--color-text-secondary)" }}>No hay servicios vinculados a manicuras para estos filtros.</p>}</Card>
 
     <div className="niki-dashboard-two-col" style={{ display:"grid",gridTemplateColumns:"minmax(0,1.1fr) minmax(0,.9fr)",gap:12 }}>
-      <Card style={{ padding:15 }}><div style={{ display:"flex",justifyContent:"space-between",alignItems:"baseline",gap:8,flexWrap:"wrap" }}><div><h3 style={{ margin:0,fontSize:14 }}>Fidelización · preferencia por manicura</h3><p style={{ margin:"3px 0 0",fontSize:10.5,color:"var(--color-text-secondary)" }}>De las clientas del mes que ya tenían historial, qué porcentaje había sido atendido por la misma manicura durante los 90 días previos.</p></div><Badge color="amber">Beta</Badge></div><DashboardManicuraBarList rows={fidelityRanking} valueKey="fidelityPct" formatter={v=>fmtPct(v)} secondary={r=>`${r.sameManicureClients}/${r.returningClients} retornos · base fiel ${fmtPct(r.loyalBasePct)}`}/><div style={{ marginTop:11,padding:"9px 10px",borderRadius:10,background:COLORS.amberLight,fontSize:10,color:"#7b5a14",lineHeight:1.4 }}>Por ahora la clienta se identifica por su nombre en la tabla de comisiones. AgendaPro ya entrega <strong>client_id</strong> en el staging; en una siguiente iteración conviene llevarlo al shadow para que la fidelización sea exacta.</div></Card>
-      <Card style={{ padding:15 }}><div><h3 style={{ margin:0,fontSize:14 }}>Asistencia y puntualidad</h3><p style={{ margin:"3px 0 0",fontSize:10.5,color:"var(--color-text-secondary)" }}>Ranking por mayor ausentismo; la tardanza se calcula sobre asistencias registradas.</p></div><DashboardManicuraBarList rows={attendanceRanking} valueKey="absencePct" formatter={v=>fmtPct(v)} secondary={r=>`${fmtPct(r.latePct)} tarde · ${r.avgLateMinutes?`${fmt1(r.avgLateMinutes)} min prom.`:"sin demora medible"} · ${r.pending} pendientes`}/></Card>
+      <Card style={{ padding:15 }}><div style={{ display:"flex",justifyContent:"space-between",alignItems:"baseline",gap:8,flexWrap:"wrap" }}><div><h3 style={{ margin:0,fontSize:14 }}>Fidelización · preferencia por manicura</h3><p style={{ margin:"3px 0 0",fontSize:10.5,color:"var(--color-text-secondary)" }}>De las clientas del mes que ya tenían historial, qué porcentaje había sido atendido por la misma manicura durante los 90 días previos.</p></div><Badge color="amber">Beta</Badge></div><DashboardManicuraBarList rows={fidelityRanking} valueKey="fidelityPct" formatter={v=>fmtPct(v)} personMeta={r=>r.localLabel} secondary={r=>`${r.sameManicureClients}/${r.returningClients} retornos · base fiel ${fmtPct(r.loyalBasePct)}`} onRowClick={r=>setSelectedManicuraId(r.userId)}/><div style={{ marginTop:11,padding:"9px 10px",borderRadius:10,background:COLORS.amberLight,fontSize:10,color:"#7b5a14",lineHeight:1.4 }}>Por ahora la clienta se identifica por su nombre en la tabla de comisiones. AgendaPro ya entrega <strong>client_id</strong> en el staging; en una siguiente iteración conviene llevarlo al shadow para que la fidelización sea exacta.</div></Card>
+      <Card style={{ padding:15 }}><div><h3 style={{ margin:0,fontSize:14 }}>Asistencia y puntualidad</h3><p style={{ margin:"3px 0 0",fontSize:10.5,color:"var(--color-text-secondary)" }}>Ranking por mayor ausentismo; la tardanza se calcula sobre asistencias registradas.</p></div><DashboardManicuraBarList rows={attendanceRanking} valueKey="absencePct" formatter={v=>fmtPct(v)} personMeta={r=>r.localLabel} secondary={r=>`${fmtPct(r.latePct)} tarde · ${r.avgLateMinutes?`${fmt1(r.avgLateMinutes)} min prom.`:"sin demora medible"} · ${r.pending} pendientes`} onRowClick={r=>setSelectedManicuraId(r.userId)}/></Card>
     </div>
 
     <Card style={{ padding:0,overflow:"hidden" }}><div style={{ padding:"14px 16px",borderBottom:"1px solid rgba(120,120,120,.12)" }}><h3 style={{ margin:0,fontSize:14 }}>Asistencia y productividad por local</h3><p style={{ margin:"3px 0 0",fontSize:10.5,color:"var(--color-text-secondary)" }}>Permite detectar diferencias operativas entre sucursales y contextualizar los rankings individuales.</p></div><div style={{ overflowX:"auto" }}><table style={{ width:"100%",borderCollapse:"collapse",fontSize:10.5,minWidth:900 }}><thead style={{ background:"#f5e8ec",color:COLORS.pinkDark,textTransform:"uppercase",fontSize:9 }}><tr><th style={{ textAlign:"left",padding:"9px 11px" }}>Local</th><th style={{ textAlign:"right" }}>Servicios</th><th style={{ textAlign:"right" }}>Manicuras</th><th style={{ textAlign:"right" }}>Serv./jornada</th><th style={{ textAlign:"right" }}>Serv./hora</th><th style={{ textAlign:"right" }}>Ticket</th><th style={{ textAlign:"right" }}>Ausencias</th><th style={{ textAlign:"right" }}>Tardes</th><th style={{ textAlign:"right",paddingRight:12 }}>Pendientes</th></tr></thead><tbody>{localStats.map((r,i)=><tr key={r.localId} style={{ borderTop:"1px solid rgba(120,120,120,.09)",background:i%2?"rgba(120,120,120,.018)":"transparent" }}><td style={{ padding:"9px 11px",fontWeight:800 }}>{r.local}</td><td style={{ textAlign:"right" }}>{r.services}</td><td style={{ textAlign:"right" }}>{r.manicuras}</td><td style={{ textAlign:"right",fontWeight:800,color:COLORS.pinkDark }}>{fmt1(r.servicesPerDay)}</td><td style={{ textAlign:"right" }}>{r.servicesPerHour?fmt1(r.servicesPerHour):"—"}</td><td style={{ textAlign:"right" }}>{fmtMoney(r.ticket)}</td><td style={{ textAlign:"right",color:r.absencePct>0?COLORS.danger:"var(--color-text-primary)" }}>{fmtPct(r.absencePct)}</td><td style={{ textAlign:"right",color:r.latePct>0?COLORS.amber:"var(--color-text-primary)" }}>{fmtPct(r.latePct)}</td><td style={{ textAlign:"right",paddingRight:12 }}>{r.pending}</td></tr>)}</tbody></table></div></Card>
 
-    <Card style={{ padding:0,overflow:"hidden" }}><div style={{ padding:"14px 16px",borderBottom:"1px solid rgba(120,120,120,.12)",display:"flex",justifyContent:"space-between",gap:10,alignItems:"baseline",flexWrap:"wrap" }}><div><h3 style={{ margin:0,fontSize:14 }}>Calidad · reclamos y garantías</h3><p style={{ margin:"3px 0 0",fontSize:10.5,color:"var(--color-text-secondary)" }}>Tasa cada 100 servicios, atribuida a la manicura original cuando el dato está disponible.</p></div><Badge color="gray">Menor es mejor</Badge></div><div style={{ overflowX:"auto" }}><table style={{ width:"100%",borderCollapse:"collapse",fontSize:10.5,minWidth:860 }}><thead style={{ background:"#f5e8ec",color:COLORS.pinkDark,textTransform:"uppercase",fontSize:9 }}><tr><th style={{ textAlign:"left",padding:"9px 11px" }}>Manicura</th><th style={{ textAlign:"right" }}>Servicios</th><th style={{ textAlign:"right" }}>Reclamos</th><th style={{ textAlign:"right" }}>Reclamos / 100</th><th style={{ textAlign:"right" }}>Garantías</th><th style={{ textAlign:"right" }}>Garantías / 100</th><th style={{ textAlign:"right",paddingRight:12 }}>Incidencias / 100</th></tr></thead><tbody>{qualityRanking.map((r,i)=>{const totalRate=r.claimsPer100+r.warrantyPer100;return <tr key={r.userId} style={{ borderTop:"1px solid rgba(120,120,120,.09)",background:i%2?"rgba(120,120,120,.018)":"transparent" }}><td style={{ padding:"9px 11px",fontWeight:800 }}>{r.nombre}</td><td style={{ textAlign:"right" }}>{r.services}</td><td style={{ textAlign:"right" }}>{r.claims}</td><td style={{ textAlign:"right" }}>{fmt1(r.claimsPer100)}</td><td style={{ textAlign:"right" }}>{r.warranty}</td><td style={{ textAlign:"right" }}>{fmt1(r.warrantyPer100)}</td><td style={{ textAlign:"right",paddingRight:12,fontWeight:800,color:totalRate>3?COLORS.danger:totalRate>1?COLORS.amber:COLORS.success }}>{fmt1(totalRate)}</td></tr>;})}</tbody></table></div></Card>
+    <Card style={{ padding:0,overflow:"hidden" }}><div style={{ padding:"14px 16px",borderBottom:"1px solid rgba(120,120,120,.12)",display:"flex",justifyContent:"space-between",gap:10,alignItems:"baseline",flexWrap:"wrap" }}><div><h3 style={{ margin:0,fontSize:14 }}>Calidad · reclamos y garantías</h3><p style={{ margin:"3px 0 0",fontSize:10.5,color:"var(--color-text-secondary)" }}>Tasa cada 100 servicios, atribuida a la manicura original cuando el dato está disponible.</p></div><Badge color="gray">Menor es mejor</Badge></div><div style={{ overflowX:"auto" }}><table style={{ width:"100%",borderCollapse:"collapse",fontSize:10.5,minWidth:860 }}><thead style={{ background:"#f5e8ec",color:COLORS.pinkDark,textTransform:"uppercase",fontSize:9 }}><tr><th style={{ textAlign:"left",padding:"9px 11px" }}>Manicura</th><th style={{ textAlign:"right" }}>Servicios</th><th style={{ textAlign:"right" }}>Reclamos</th><th style={{ textAlign:"right" }}>Reclamos / 100</th><th style={{ textAlign:"right" }}>Garantías</th><th style={{ textAlign:"right" }}>Garantías / 100</th><th style={{ textAlign:"right",paddingRight:12 }}>Incidencias / 100</th></tr></thead><tbody>{qualityRanking.map((r,i)=>{const totalRate=r.claimsPer100+r.warrantyPer100;return <tr key={r.userId} onClick={()=>setSelectedManicuraId(r.userId)} title="Ver ficha de performance" style={{ borderTop:"1px solid rgba(120,120,120,.09)",background:i%2?"rgba(120,120,120,.018)":"transparent",cursor:"pointer" }}><td style={{ padding:"9px 11px" }}><strong style={{ display:"block" }}>{r.nombre}</strong><small style={{ display:"block",marginTop:2,color:COLORS.pinkDark,fontWeight:700 }}>{r.localLabel}</small></td><td style={{ textAlign:"right" }}>{r.services}</td><td style={{ textAlign:"right" }}>{r.claims}</td><td style={{ textAlign:"right" }}>{fmt1(r.claimsPer100)}</td><td style={{ textAlign:"right" }}>{r.warranty}</td><td style={{ textAlign:"right" }}>{fmt1(r.warrantyPer100)}</td><td style={{ textAlign:"right",paddingRight:12,fontWeight:800,color:totalRate>3?COLORS.danger:totalRate>1?COLORS.amber:COLORS.success }}>{fmt1(totalRate)}</td></tr>;})}</tbody></table></div></Card>
 
-    <p style={{ margin:"-3px 2px 0",fontSize:10,color:"var(--color-text-secondary)",lineHeight:1.45 }}>Criterios: servicios y facturación provienen de <strong>comisiones_agendapro_shadow</strong>; productividad divide por jornadas planificadas no ausentes y usa horas reales cuando están informadas; ausentismo = ausencias / jornadas planificadas; tardanza = llegadas tarde / asistencias registradas. Los registros de horario legacy sin local se resuelven con el historial de locales de la manicura.</p>
+    {selectedPerformance&&<Modal title={`Performance · ${selectedPerformance.nombre}`} onClose={()=>setSelectedManicuraId(null)} width={940}>
+      <div style={{ display:"grid",gap:12 }}>
+        <div style={{ display:"flex",justifyContent:"space-between",alignItems:"flex-start",gap:10,flexWrap:"wrap" }}>
+          <div><div style={{ display:"flex",alignItems:"center",gap:10 }}><Avatar nombre={selectedPerformance.nombre} userId={selectedPerformance.userId} size={44}/><div><h3 style={{ margin:0,fontSize:17 }}>{selectedPerformance.nombre}</h3><p style={{ margin:"3px 0 0",fontSize:11,color:COLORS.pinkDark,fontWeight:800 }}>{selectedPerformance.localLabel}</p></div></div></div>
+          <div style={{ textAlign:"right",fontSize:10.5,color:"var(--color-text-secondary)" }}><strong style={{ color:COLORS.pinkDark }}>{meta.label}</strong><br/>{meta.isCurrent?`Datos hasta ${meta.cutoffLabel}`:"Mes cerrado"}<br/>Ranking dentro del alcance seleccionado</div>
+        </div>
+
+        <div className="niki-dashboard-kpis" style={{ display:"grid",gridTemplateColumns:"repeat(3,minmax(0,1fr))",gap:8 }}>
+          {[
+            {label:"Servicios",value:new Intl.NumberFormat("es-AR").format(selectedPerformance.services),detail:`${selectedPerformance.variationServices==null?"Sin comparación":dashboardPctLabel(selectedPerformance.variationServices)} vs. período anterior`,rank:rankFor(selectedPerformance,x=>x.services,{eligible:x=>x.services>0})},
+            {label:"Facturación",value:fmtMoney(selectedPerformance.revenue),detail:`Ticket ${fmtMoney(selectedPerformance.ticket)}`,rank:rankFor(selectedPerformance,x=>x.revenue,{eligible:x=>x.services>0})},
+            {label:"Ticket por servicio",value:fmtMoney(selectedPerformance.ticket),detail:`${selectedPerformance.uniqueClients} clientas únicas`,rank:rankFor(selectedPerformance,x=>x.ticket,{eligible:x=>x.services>0})},
+            {label:"Servicios por jornada",value:fmt1(selectedPerformance.servicesPerDay),detail:`${selectedPerformance.workDays} jornadas`,rank:rankFor(selectedPerformance,x=>x.servicesPerDay,{eligible:x=>x.workDays>0&&x.services>0})},
+            {label:"Servicios por hora",value:selectedPerformance.servicesPerHour?fmt1(selectedPerformance.servicesPerHour):"—",detail:`${fmt1(selectedPerformance.hours)} horas`,rank:rankFor(selectedPerformance,x=>x.servicesPerHour,{eligible:x=>x.hours>0&&x.services>0})},
+            {label:"Facturación por hora",value:selectedPerformance.revenuePerHour?fmtMoney(selectedPerformance.revenuePerHour):"—",detail:"Sobre horas trabajadas/planificadas",rank:rankFor(selectedPerformance,x=>x.revenuePerHour,{eligible:x=>x.hours>0&&x.services>0})},
+            {label:"Preferencia / fidelización",value:selectedPerformance.returningClients?fmtPct(selectedPerformance.fidelityPct):"—",detail:selectedPerformance.returningClients?`${selectedPerformance.sameManicureClients} de ${selectedPerformance.returningClients} retornos`:"Sin base comparable",rank:rankFor(selectedPerformance,x=>x.fidelityPct,{eligible:x=>x.returningClients>0})},
+            {label:"Ausentismo",value:selectedPerformance.scheduled?fmtPct(selectedPerformance.absencePct):"—",detail:`${selectedPerformance.absent} ausencias / ${selectedPerformance.scheduled} jornadas`,rank:rankFor(selectedPerformance,x=>x.absencePct,{lowerBetter:true,eligible:x=>x.scheduled>0})},
+            {label:"Llegadas tarde",value:selectedPerformance.attended?fmtPct(selectedPerformance.latePct):"—",detail:selectedPerformance.late?`${selectedPerformance.late} casos · ${fmt1(selectedPerformance.avgLateMinutes)} min prom.`:`${selectedPerformance.attended} asistencias sin tardanza`,rank:rankFor(selectedPerformance,x=>x.latePct,{lowerBetter:true,eligible:x=>x.attended>0})},
+            {label:"Incidencias / 100",value:fmt1(selectedPerformance.claimsPer100+selectedPerformance.warrantyPer100),detail:`${selectedPerformance.claims} reclamos · ${selectedPerformance.warranty} garantías`,rank:rankFor(selectedPerformance,x=>x.claimsPer100+x.warrantyPer100,{lowerBetter:true,eligible:x=>x.services>0})},
+          ].map((m,idx)=><Card key={`${m.label}-${idx}`} style={{ padding:11 }}><div style={{ display:"flex",justifyContent:"space-between",alignItems:"flex-start",gap:6 }}><span style={{ fontSize:9,fontWeight:900,textTransform:"uppercase",letterSpacing:".04em",color:"var(--color-text-secondary)" }}>{m.label}</span>{rankBadge(m.rank)}</div><strong style={{ display:"block",marginTop:5,fontSize:19,color:COLORS.pinkDark }}>{m.value}</strong><small style={{ display:"block",marginTop:3,color:"var(--color-text-secondary)",lineHeight:1.35 }}>{m.detail}</small></Card>)}
+        </div>
+
+        <div className="niki-dashboard-two-col" style={{ display:"grid",gridTemplateColumns:"minmax(0,1fr) minmax(0,1fr)",gap:9 }}>
+          <Card style={{ padding:12 }}><h4 style={{ margin:"0 0 8px",fontSize:12 }}>Participación por sucursal</h4>{selectedPerformance.localParticipation.length?<div style={{ display:"grid",gap:7 }}>{selectedPerformance.localParticipation.map(p=>{const rank=localParticipationRank(selectedPerformance,p);return <div key={p.localId} style={{ display:"grid",gridTemplateColumns:"minmax(0,1fr) auto auto",gap:8,alignItems:"center",fontSize:10.5 }}><span><strong>{p.local}</strong><small style={{ display:"block",color:"var(--color-text-secondary)" }}>{p.services} de {p.total} servicios del local</small></span><strong style={{ color:COLORS.pinkDark }}>{fmtPct(p.pct)}</strong>{rankBadge(rank)}</div>;})}</div>:<p style={{ margin:0,fontSize:11,color:"var(--color-text-secondary)" }}>Sin servicios en el período seleccionado.</p>}</Card>
+          <Card style={{ padding:12 }}><h4 style={{ margin:"0 0 8px",fontSize:12 }}>Servicio principal</h4><strong style={{ display:"block",fontSize:13 }}>{selectedPerformance.topService}</strong><p style={{ margin:"4px 0 0",fontSize:11,color:"var(--color-text-secondary)" }}>{selectedPerformance.topServiceCount} servicio{selectedPerformance.topServiceCount===1?"":"s"} · {selectedPerformance.services?fmtPct(selectedPerformance.topServiceCount/selectedPerformance.services*100):"0,0%"} de su producción</p><div style={{ marginTop:10,paddingTop:8,borderTop:"1px solid rgba(120,120,120,.10)",fontSize:10.5,color:"var(--color-text-secondary)" }}>Los puestos usan ranking de competencia: si dos manicuras tienen exactamente el mismo valor, comparten posición y el siguiente puesto salta la cantidad correspondiente.</div></Card>
+        </div>
+      </div>
+    </Modal>}
+
+    <p style={{ margin:"-3px 2px 0",fontSize:10,color:"var(--color-text-secondary)",lineHeight:1.45 }}>Criterios: <strong>Servicios cuenta servicios individuales</strong> (una fila de servicio/comisión), no visitas; una misma visita con varios servicios suma varios servicios. Servicios y facturación provienen de <strong>comisiones_agendapro_shadow</strong>; productividad divide por jornadas planificadas no ausentes y usa horas reales cuando están informadas; ausentismo = ausencias / jornadas planificadas; tardanza = llegadas tarde / asistencias registradas. Los registros de horario legacy sin local se resuelven con el historial de locales de la manicura.</p>
   </div>;
 }
 
