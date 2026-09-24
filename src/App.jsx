@@ -9324,11 +9324,41 @@ function InformeDiario({ data, reloadData, user }) {
   const [vistaListado, setVistaListado] = useState("mes");
   const [fechaFiltroDia, setFechaFiltroDia] = useState(dateKey(hoy));
   const [localDiaAbierto, setLocalDiaAbierto] = useState(null);
+  const [autoSaveState, setAutoSaveState] = useState("idle");
+  const [autoSavedAt, setAutoSavedAt] = useState(null);
+  const autoSaveTimerRef = useRef(null);
+  const autoSaveBusyRef = useRef(false);
+  const autoSaveQueuedRef = useRef(false);
+  const autoSaveLastSignatureRef = useRef("");
+  const autoSaveContextRef = useRef("");
+  const autoSaveErrorNotifiedRef = useRef(false);
+  const autoSaveFormRef = useRef(null);
+  const autoSaveReclamosRef = useRef([]);
+  const autoSaveGastosRef = useRef([]);
+  const autoSaveEncCoberturaRef = useRef([]);
+  const manualSavingRef = useRef(false);
+  const runAutoSaveRef = useRef(null);
 
   useEffect(() => {
     if (!localId && locales[0]?.id) setLocalId(locales[0].id);
     if (!localFiltro && locales[0]?.id) setLocalFiltro(locales[0].id);
   }, [locales, localId, localFiltro]);
+
+  useEffect(() => { autoSaveFormRef.current = form; }, [form]);
+  useEffect(() => { autoSaveReclamosRef.current = reclamosRows; }, [reclamosRows]);
+  useEffect(() => { autoSaveGastosRef.current = gastosRows; }, [gastosRows]);
+  useEffect(() => { autoSaveEncCoberturaRef.current = encCobertura; }, [encCobertura]);
+
+  useEffect(() => {
+    if (!editorOpen || !form?.fecha || !form?.localId) return;
+    const contextKey = `${form.fecha}|${form.localId}|${form.turno || "manana"}`;
+    if (contextKey === autoSaveContextRef.current) return;
+    autoSaveContextRef.current = contextKey;
+    autoSaveLastSignatureRef.current = "";
+    setAutoSaveState(form.estado === "enviado" ? "sent" : "idle");
+    setAutoSavedAt(form.actualizadoEn ? new Date(form.actualizadoEn) : null);
+    autoSaveErrorNotifiedRef.current = false;
+  }, [editorOpen, form?.fecha, form?.localId, form?.turno]);
 
   const parseMoneyInforme = useCallback((v) => {
     if (typeof v === "number") return Number.isFinite(v) ? v : 0;
@@ -9867,50 +9897,283 @@ function InformeDiario({ data, reloadData, user }) {
     ].join("\n");
   };
 
+  const buildInformePayload = useCallback((source, markSent = false) => {
+    const nowIso = new Date().toISOString();
+    const keepSent = source?.estado === "enviado" && !markSent;
+    return {
+      fecha: source.fecha,
+      local_id: parseInt(source.localId),
+      turno: source.turno || "manana",
+      importante_manana: source.importanteManana || "",
+      urgentes_generales: source.urgentesGenerales || "",
+      saldo_efectivo_anterior: parseMoneyInforme(source.saldoEfectivoAnterior),
+      coincide_efectivo_inicial: !!source.coincideEfectivoInicial,
+      efectivo_caja: parseMoneyInforme(source.efectivoCaja),
+      coincide_caja: !!source.coincideCaja,
+      mercado_pago_total_reservas: source.mercadoPagoTotalReservas || "",
+      pagos_realizados: source.pagosRealizados || "",
+      saldo_anterior: parseMoneyInforme(source.saldoAnterior),
+      traspaso_caja_general: parseMoneyInforme(source.traspasoCajaGeneral),
+      traspaso_caja_efectivo: parseMoneyInforme(source.traspasoCajaEfectivo),
+      reclamos: source.reclamos || "",
+      novedades_salon_manicuras: source.novedadesSalonManicuras || "",
+      observaciones_extras: source.observacionesExtras || "",
+      estado: markSent ? "enviado" : (keepSent ? "enviado" : "borrador"),
+      enviado_en: markSent ? nowIso : (source.enviadoEn || null),
+      cerrado_en: markSent ? nowIso : (source.cerradoEn || null),
+      creado_por_user_id: source.creadoPor || user.id,
+      cerrado_por_user_id: markSent ? user.id : (source.cerradoPor || null),
+      actualizado_en: nowIso,
+    };
+  }, [parseMoneyInforme, user.id]);
+
+  const buildAutoSaveSignature = useCallback((source, reclRows, gastoRows, coberturaRows) => {
+    if (!source) return "";
+    return JSON.stringify({
+      informe: {
+        fecha: source.fecha || "",
+        localId: Number(source.localId || 0),
+        turno: source.turno || "manana",
+        importanteManana: source.importanteManana || "",
+        urgentesGenerales: source.urgentesGenerales || "",
+        saldoEfectivoAnterior: source.saldoEfectivoAnterior ?? "",
+        coincideEfectivoInicial: !!source.coincideEfectivoInicial,
+        efectivoCaja: source.efectivoCaja ?? "",
+        coincideCaja: !!source.coincideCaja,
+        mercadoPagoTotalReservas: source.mercadoPagoTotalReservas || "",
+        pagosRealizados: source.pagosRealizados || "",
+        saldoAnterior: source.saldoAnterior ?? "",
+        traspasoCajaGeneral: source.traspasoCajaGeneral ?? "",
+        traspasoCajaEfectivo: source.traspasoCajaEfectivo ?? "",
+        reclamos: source.reclamos || "",
+        novedadesSalonManicuras: source.novedadesSalonManicuras || "",
+        observacionesExtras: source.observacionesExtras || "",
+        estado: source.estado || "borrador",
+      },
+      reclamosTemp: (reclRows || []).filter(r => r?._temp).map(r => ({
+        tempId:r.tempId, cliente:r.cliente || "", motivo:r.motivo || "", resuelto:r.resuelto === true, acciones:r.acciones || ""
+      })),
+      gastosTemp: (gastoRows || []).filter(r => r?._temp).map(r => ({
+        tempId:r.tempId, conceptoId:Number(r.conceptoId || 0), detalle:r.detalle || "", importe:Number(r.importe || 0),
+        medioPago:r.medioPago || "", comprobanteNombre:r.comprobanteNombre || "", comprobantePath:r.comprobantePath || ""
+      })),
+      encargadasDirty: (coberturaRows || []).filter(r => r?.dirty).map(r => ({
+        userId:Number(r.userId || 0), horaPlanDesde:r.horaPlanDesde || "", horaPlanHasta:r.horaPlanHasta || "",
+        horaRealDesde:r.horaRealDesde || "", horaRealHasta:r.horaRealHasta || "", estado:r.estado || "",
+        reemplazaUserId:Number(r.reemplazaUserId || 0), comentario:r.comentario || ""
+      })),
+    });
+  }, []);
+
+  const resolveSavedInforme = useCallback(async (source, savedRows, payload) => {
+    let savedRaw = Array.isArray(savedRows) ? savedRows[0] : savedRows;
+    if (!savedRaw?.id && source?.id) return { ...source, id:source.id, estado:payload.estado, actualizadoEn:payload.actualizado_en };
+    if (!savedRaw?.id) {
+      const rows = await api.getInformesDiarios();
+      savedRaw = (rows || []).find(r =>
+        String(r.fecha || "") === String(payload.fecha || "") &&
+        Number(r.local_id) === Number(payload.local_id) &&
+        String(r.turno || "dia") === String(payload.turno || "dia")
+      ) || null;
+    }
+    return savedRaw ? normalizeInformeDiario(savedRaw) : null;
+  }, []);
+
+  const sendKeepaliveDraft = useCallback((source) => {
+    if (!source?.fecha || !source?.localId || source.estado === "enviado") return;
+    const payload = buildInformePayload({ ...source, estado:"borrador" }, false);
+    payload.estado = "borrador";
+    payload.enviado_en = null;
+    payload.cerrado_en = null;
+    payload.cerrado_por_user_id = null;
+    const headers = {
+      apikey: SUPABASE_KEY,
+      Authorization: `Bearer ${SUPABASE_KEY}`,
+      "Content-Type":"application/json",
+      Prefer: source.id ? "return=minimal" : "resolution=merge-duplicates,return=minimal",
+    };
+    const path = source.id
+      ? `informes_diarios?id=eq.${parseInt(source.id)}`
+      : "informes_diarios?on_conflict=fecha,local_id,turno";
+    try {
+      fetch(`${SUPABASE_URL}/rest/v1/${path}`, {
+        method: source.id ? "PATCH" : "POST",
+        headers,
+        body: JSON.stringify(payload),
+        keepalive:true,
+      }).catch(() => {});
+    } catch {}
+  }, [buildInformePayload]);
+
+  const runAutoSave = useCallback(async ({ force = false } = {}) => {
+    const source = autoSaveFormRef.current;
+    if (!editorOpen || !source?.fecha || !source?.localId || source.estado === "enviado" || manualSavingRef.current) return false;
+
+    const reclRows = autoSaveReclamosRef.current || [];
+    const gastoRows = autoSaveGastosRef.current || [];
+    const coberturaRows = autoSaveEncCoberturaRef.current || [];
+    const signature = buildAutoSaveSignature(source, reclRows, gastoRows, coberturaRows);
+
+    if (!force && signature === autoSaveLastSignatureRef.current) return true;
+    if (autoSaveBusyRef.current) {
+      autoSaveQueuedRef.current = true;
+      return false;
+    }
+
+    autoSaveBusyRef.current = true;
+    setAutoSaveState("saving");
+    try {
+      const payload = buildInformePayload({ ...source, estado:"borrador" }, false);
+      payload.estado = "borrador";
+      payload.enviado_en = null;
+      payload.cerrado_en = null;
+      payload.cerrado_por_user_id = null;
+
+      const savedRows = source.id
+        ? await api.updateInformeDiario(source.id, payload)
+        : await api.upsertInformeDiario(payload);
+
+      const savedNormalized = await resolveSavedInforme(source, savedRows, payload);
+      const savedId = savedNormalized?.id || source.id || null;
+      if (!savedId) throw new Error("No se pudo obtener el ID del borrador autoguardado.");
+
+      setForm(prev => {
+        if (!prev || prev.estado === "enviado") return prev;
+        const sameContext = String(prev.fecha) === String(source.fecha) &&
+          Number(prev.localId) === Number(source.localId) &&
+          String(prev.turno || "manana") === String(source.turno || "manana");
+        if (!sameContext) return prev;
+        return {
+          ...prev,
+          id:savedId,
+          estado:"borrador",
+          creadoPor:savedNormalized?.creadoPor || prev.creadoPor || user.id,
+          creadoEn:savedNormalized?.creadoEn || prev.creadoEn || "",
+          actualizadoEn:savedNormalized?.actualizadoEn || payload.actualizado_en,
+        };
+      });
+
+      if (coberturaRows.some(r => r?.dirty)) await persistEncCobertura(savedId);
+      if (reclRows.some(r => r?._temp)) await persistTempReclamos(savedId);
+      if (gastoRows.some(r => r?._temp)) await persistTempGastos(savedId);
+
+      autoSaveLastSignatureRef.current = signature;
+      autoSaveErrorNotifiedRef.current = false;
+      setAutoSavedAt(new Date());
+      setAutoSaveState("saved");
+      return true;
+    } catch (e) {
+      console.warn("Autoguardado Informe Diario:", e);
+      setAutoSaveState("error");
+      if (!autoSaveErrorNotifiedRef.current) {
+        autoSaveErrorNotifiedRef.current = true;
+        notifyToast("No se pudo guardar autom\u00e1ticamente el borrador. Tus cambios siguen en pantalla y se volver\u00e1 a intentar.", "warning", { title:"Autoguardado" });
+      }
+      return false;
+    } finally {
+      autoSaveBusyRef.current = false;
+      if (autoSaveQueuedRef.current) {
+        autoSaveQueuedRef.current = false;
+        window.setTimeout(() => runAutoSaveRef.current?.(), 0);
+      }
+    }
+  }, [editorOpen, buildAutoSaveSignature, buildInformePayload, resolveSavedInforme, persistEncCobertura, persistTempReclamos, persistTempGastos, user.id]);
+
+  runAutoSaveRef.current = runAutoSave;
+
+  useEffect(() => {
+    if (!editorOpen || !form?.fecha || !form?.localId || form.estado === "enviado") {
+      if (autoSaveTimerRef.current) window.clearTimeout(autoSaveTimerRef.current);
+      return;
+    }
+    const signature = buildAutoSaveSignature(form, reclamosRows, gastosRows, encCobertura);
+    if (signature === autoSaveLastSignatureRef.current) return;
+    setAutoSaveState(prev => prev === "saving" ? prev : "pending");
+    if (autoSaveTimerRef.current) window.clearTimeout(autoSaveTimerRef.current);
+    autoSaveTimerRef.current = window.setTimeout(() => {
+      runAutoSaveRef.current?.();
+    }, 700);
+    return () => {
+      if (autoSaveTimerRef.current) window.clearTimeout(autoSaveTimerRef.current);
+    };
+  }, [editorOpen, form, reclamosRows, gastosRows, encCobertura, buildAutoSaveSignature]);
+
+  useEffect(() => {
+    if (!editorOpen) return;
+    const interval = window.setInterval(() => {
+      const source = autoSaveFormRef.current;
+      if (source && source.estado !== "enviado") runAutoSaveRef.current?.();
+    }, 5000);
+    const flushIfLeaving = () => {
+      const source = autoSaveFormRef.current;
+      if (source && source.estado !== "enviado") sendKeepaliveDraft(source);
+    };
+    const onVisibility = () => {
+      if (document.visibilityState === "hidden") flushIfLeaving();
+    };
+    window.addEventListener("pagehide", flushIfLeaving);
+    document.addEventListener("visibilitychange", onVisibility);
+    return () => {
+      window.clearInterval(interval);
+      window.removeEventListener("pagehide", flushIfLeaving);
+      document.removeEventListener("visibilitychange", onVisibility);
+      flushIfLeaving();
+    };
+  }, [editorOpen, sendKeepaliveDraft]);
+
   const save = async (markSent = false) => {
-    if (!form?.fecha || !form?.localId) return notifyToast("Seleccioná fecha y local.", "warning");
+    if (!form?.fecha || !form?.localId) return notifyToast("Seleccion\u00e1 fecha y local.", "warning");
+    if (autoSaveTimerRef.current) window.clearTimeout(autoSaveTimerRef.current);
+    manualSavingRef.current = true;
     setSaving(true);
     try {
-      const payload = {
-        fecha: form.fecha,
-        local_id: parseInt(form.localId),
-        turno: form.turno || "manana",
-        importante_manana: form.importanteManana || "",
-        urgentes_generales: form.urgentesGenerales || "",
-        saldo_efectivo_anterior: parseMoneyInforme(form.saldoEfectivoAnterior),
-        coincide_efectivo_inicial: !!form.coincideEfectivoInicial,
-        efectivo_caja: parseMoneyInforme(form.efectivoCaja),
-        coincide_caja: !!form.coincideCaja,
-        mercado_pago_total_reservas: form.mercadoPagoTotalReservas || "",
-        pagos_realizados: form.pagosRealizados || "",
-        saldo_anterior: parseMoneyInforme(form.saldoAnterior),
-        traspaso_caja_general: parseMoneyInforme(form.traspasoCajaGeneral),
-        traspaso_caja_efectivo: parseMoneyInforme(form.traspasoCajaEfectivo),
-        reclamos: form.reclamos || "",
-        novedades_salon_manicuras: form.novedadesSalonManicuras || "",
-        observaciones_extras: form.observacionesExtras || "",
-        estado: markSent ? "enviado" : (form.estado || "borrador"),
-        enviado_en: markSent ? new Date().toISOString() : (form.enviadoEn || null),
-        cerrado_en: markSent ? new Date().toISOString() : (form.cerradoEn || null),
-        creado_por_user_id: form.creadoPor || user.id,
-        cerrado_por_user_id: markSent ? user.id : (form.cerradoPor || null),
-        actualizado_en: new Date().toISOString(),
-      };
+      const payload = buildInformePayload(form, markSent);
       const savedRows = form.id
         ? await api.updateInformeDiario(form.id, payload)
         : await api.upsertInformeDiario(payload);
-      const savedRaw = Array.isArray(savedRows) ? savedRows[0] : null;
-      const savedNormalized = savedRaw ? normalizeInformeDiario(savedRaw) : { ...form, ...payload, localId: payload.local_id, estado: payload.estado, enviadoEn: payload.enviado_en };
+      const savedNormalized = await resolveSavedInforme(form, savedRows, payload) || { ...form, id:form.id, estado:payload.estado, actualizadoEn:payload.actualizado_en };
       setForm(savedNormalized);
       await persistEncCobertura(savedNormalized?.id || form?.id || null);
       await persistTempReclamos(savedNormalized?.id || form?.id || null);
       await persistTempGastos(savedNormalized?.id || form?.id || null);
       await reloadData();
+      autoSaveLastSignatureRef.current = buildAutoSaveSignature(savedNormalized, [], [], []);
+      setAutoSavedAt(new Date());
+      setAutoSaveState(markSent ? "sent" : "saved");
       notifyToast(markSent ? "Informe guardado como enviado." : "Informe guardado.", "success", { title:"Informe diario" });
       if (markSent) setPreview(savedNormalized);
-    } catch(e) { notifyToast("Error al guardar informe: " + e.message, "error"); }
-    setSaving(false);
+    } catch(e) {
+      notifyToast("Error al guardar informe: " + e.message, "error");
+      if (!markSent) setAutoSaveState("error");
+    } finally {
+      manualSavingRef.current = false;
+      setSaving(false);
+    }
   };
+
+  const closeEditorSafely = useCallback(async () => {
+    if (autoSaveTimerRef.current) window.clearTimeout(autoSaveTimerRef.current);
+    if (form?.estado !== "enviado") await runAutoSaveRef.current?.({ force:true });
+    await reloadData();
+    setEditorOpen(false);
+  }, [form?.estado, reloadData]);
+
+  const autoSaveLabel = autoSaveState === "saving"
+    ? "Guardando borrador..."
+    : autoSaveState === "pending"
+      ? "Cambios pendientes..."
+      : autoSaveState === "error"
+        ? "Error de autoguardado"
+        : autoSaveState === "sent"
+          ? "Informe enviado"
+          : autoSavedAt
+            ? `Guardado autom\u00e1ticamente ${new Intl.DateTimeFormat("es-AR",{hour:"2-digit",minute:"2-digit",second:"2-digit"}).format(autoSavedAt)}`
+            : "Autoguardado activado";
+
+  const autoSaveTone = autoSaveState === "error" ? { bg:COLORS.dangerLight, fg:COLORS.danger }
+    : autoSaveState === "saving" || autoSaveState === "pending" ? { bg:COLORS.amberLight, fg:COLORS.amber }
+    : autoSaveState === "sent" ? { bg:COLORS.successLight, fg:COLORS.success }
+    : { bg:COLORS.infoLight, fg:COLORS.info };
 
   const del = async () => {
     if (!deleteTarget) return;
@@ -10051,13 +10314,17 @@ function InformeDiario({ data, reloadData, user }) {
     <div style={{ display:"flex",alignItems:"center",justifyContent:"space-between",gap:12,flexWrap:"wrap",marginBottom:16 }}>
       <div>
         <h2 style={{ margin:0,fontSize:22,fontWeight:700 }}>Informes diarios</h2>
-        <p style={{ margin:"4px 0 0",fontSize:13,color:"var(--color-text-secondary)" }}>Primero ves los informes existentes. Desde acá podés generar uno nuevo, editar, ver o imprimir.</p>
+        <p style={{ margin:"4px 0 0",fontSize:13,color:"var(--color-text-secondary)" }}>{editorOpen ? "Los cambios del borrador se guardan automáticamente mientras trabajás." : "Primero ves los informes existentes. Desde acá podés generar uno nuevo, editar, ver o imprimir."}</p>
       </div>
       <div style={{ display:"flex",gap:8,flexWrap:"wrap",alignItems:"center" }}>
         {editorOpen ? <>
-          <Btn variant="secondary" onClick={()=>setEditorOpen(false)} disabled={saving}>Volver al listado</Btn>
-          <Btn onClick={()=>save(false)} disabled={saving}>{saving?"Guardando...":"Guardar"}</Btn>
-          <Btn onClick={()=>save(true)} variant="success" disabled={saving}>Guardar como enviado</Btn>
+          <span style={{ display:"inline-flex",alignItems:"center",gap:6,borderRadius:999,padding:"7px 10px",background:autoSaveTone.bg,color:autoSaveTone.fg,fontSize:10.5,fontWeight:800,whiteSpace:"nowrap" }}>
+            <span style={{ width:7,height:7,borderRadius:"50%",background:"currentColor",opacity:autoSaveState==="saving" ? 0.65 : 1 }}/>
+            {autoSaveLabel}
+          </span>
+          <Btn variant="secondary" onClick={closeEditorSafely} disabled={saving||autoSaveState==="saving"}>Volver al listado</Btn>
+          <Btn onClick={()=>save(false)} disabled={saving||autoSaveState==="saving"}>{saving?"Guardando...":"Guardar ahora"}</Btn>
+          <Btn onClick={()=>save(true)} variant="success" disabled={saving||autoSaveState==="saving"}>Guardar como enviado</Btn>
         </> : <Btn onClick={startNewInforme} style={{ fontWeight:800 }}>+ Generar nuevo informe</Btn>}
       </div>
     </div>
