@@ -25,70 +25,22 @@ function cleanText(value: unknown) {
   return String(value ?? "").trim();
 }
 
-function normalizeEmail(value: unknown) {
-  return cleanText(value).toLowerCase();
-}
-
-function normalizePhone(value: unknown) {
-  return cleanText(value);
-}
-
-function phoneDigits(value: string) {
-  return value.replace(/\D/g, "");
-}
-
-function todayKey() {
-  const parts = new Intl.DateTimeFormat("en-CA", {
-    timeZone: TIME_ZONE,
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-  }).formatToParts(new Date());
-  const get = (type: string) => parts.find((part) => part.type === type)?.value || "00";
-  return `${get("year")}-${get("month")}-${get("day")}`;
-}
-
-const supabaseUrl = Deno.env.get("SUPABASE_URL") || "";
-const serviceRoleKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") || Deno.env.get("SERVICE_ROLE_KEY") || "";
-
-async function db(path: string) {
-  if (!supabaseUrl || !serviceRoleKey) throw new Error("Faltan SUPABASE_URL o SUPABASE_SERVICE_ROLE_KEY.");
-  const res = await fetch(`${supabaseUrl}/rest/v1/${path}`, {
-    method: "GET",
-    headers: {
-      apikey: serviceRoleKey,
-      Authorization: `Bearer ${serviceRoleKey}`,
-      "Content-Type": "application/json",
-    },
+async function getAuthUser(req: Request) {
+  const token = (req.headers.get("Authorization") || "").replace(/^Bearer\s+/i, "").trim();
+  if (!token) publicError("Necesitás verificar tu email para consultar tus turnos.", 401);
+  const res = await fetch(`${supabaseUrl}/auth/v1/user`, {
+    headers: { apikey: serviceRoleKey, Authorization: `Bearer ${token}` },
   });
-  const text = await res.text();
-  if (!res.ok) throw new Error(text || `Error Supabase ${res.status}`);
-  return text ? JSON.parse(text) : [];
+  if (!res.ok) publicError("Tu sesión venció. Verificá nuevamente tu email.", 401);
+  const user = await res.json();
+  if (!user?.id) publicError("No pudimos validar tu identidad.", 401);
+  return { id: String(user.id) };
 }
 
-async function first(path: string) {
-  const rows = await db(path);
-  return Array.isArray(rows) ? rows[0] || null : rows;
-}
-
-async function findClient(email: string, telefono: string) {
-  if (email) {
-    const byEmail = await first(`agenda_clientes?select=id,nombre,apellido&email=ilike.${encodeURIComponent(email)}&limit=1`);
-    if (byEmail?.id) return byEmail;
-  }
-
-  if (telefono) {
-    const byPhone = await first(`agenda_clientes?select=id,nombre,apellido&telefono=eq.${encodeURIComponent(telefono)}&limit=1`);
-    if (byPhone?.id) return byPhone;
-
-    const digits = phoneDigits(telefono);
-    if (digits && digits !== telefono) {
-      const byDigits = await first(`agenda_clientes?select=id,nombre,apellido&telefono=eq.${encodeURIComponent(digits)}&limit=1`);
-      if (byDigits?.id) return byDigits;
-    }
-  }
-
-  return null;
+async function findClient(authUserId: string) {
+  return await first(
+    `agenda_clientes?select=id,nombre,apellido&auth_user_id=eq.${encodeURIComponent(authUserId)}&limit=1`
+  );
 }
 
 async function mapByIds(table: string, select: string, ids: Array<number>) {
@@ -103,21 +55,13 @@ Deno.serve(async (req) => {
   if (req.method !== "POST") return jsonResponse({ ok: false, error: "Metodo no permitido." }, 405);
 
   try {
-    const body = await req.json().catch(() => null);
-    if (!body || typeof body !== "object") publicError("Ingresá email o teléfono para consultar tus turnos.");
-
-    const email = normalizeEmail(body.email);
-    const telefono = normalizePhone(body.telefono);
-
-    if (!email && !telefono) publicError("Ingresá email o teléfono para consultar tus turnos.");
-    if (email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) publicError("El email no parece válido.");
-
-    const cliente = await findClient(email, telefono);
+    const authUser = await getAuthUser(req);
+    const cliente = await findClient(authUser.id);
     if (!cliente?.id) {
       return jsonResponse({
         ok: true,
         cliente_encontrado: false,
-        mensaje: "No encontramos turnos asociados a ese contacto. Revisá el email o teléfono ingresado.",
+        mensaje: "Todavía no encontramos un perfil de clienta asociado a tu cuenta.",
         turnos: [],
       });
     }
