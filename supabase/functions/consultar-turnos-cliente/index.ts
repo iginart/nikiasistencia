@@ -25,6 +25,18 @@ function cleanText(value: unknown) {
   return String(value ?? "").trim();
 }
 
+function normalizeEmail(value: unknown) {
+  return cleanText(value).toLowerCase();
+}
+
+function normalizePhone(value: unknown) {
+  return cleanText(value);
+}
+
+function phoneDigits(value: string) {
+  return value.replace(/\D/g, "");
+}
+
 function todayKey() {
   const parts = new Intl.DateTimeFormat("en-CA", {
     timeZone: TIME_ZONE,
@@ -59,22 +71,24 @@ async function first(path: string) {
   return Array.isArray(rows) ? rows[0] || null : rows;
 }
 
-async function getAuthUser(req: Request) {
-  const token = (req.headers.get("Authorization") || "").replace(/^Bearer\s+/i, "").trim();
-  if (!token) publicError("Necesitás verificar tu email para consultar tus turnos.", 401);
-  const res = await fetch(`${supabaseUrl}/auth/v1/user`, {
-    headers: { apikey: serviceRoleKey, Authorization: `Bearer ${token}` },
-  });
-  if (!res.ok) publicError("Tu sesión venció. Verificá nuevamente tu email.", 401);
-  const user = await res.json();
-  if (!user?.id) publicError("No pudimos validar tu identidad.", 401);
-  return { id: String(user.id) };
-}
+async function findClient(email: string, telefono: string) {
+  if (email) {
+    const byEmail = await first(`agenda_clientes?select=id,nombre,apellido&email=ilike.${encodeURIComponent(email)}&limit=1`);
+    if (byEmail?.id) return byEmail;
+  }
 
-async function findClient(authUserId: string) {
-  return await first(
-    `agenda_clientes?select=id,nombre,apellido&auth_user_id=eq.${encodeURIComponent(authUserId)}&limit=1`
-  );
+  if (telefono) {
+    const byPhone = await first(`agenda_clientes?select=id,nombre,apellido&telefono=eq.${encodeURIComponent(telefono)}&limit=1`);
+    if (byPhone?.id) return byPhone;
+
+    const digits = phoneDigits(telefono);
+    if (digits && digits !== telefono) {
+      const byDigits = await first(`agenda_clientes?select=id,nombre,apellido&telefono=eq.${encodeURIComponent(digits)}&limit=1`);
+      if (byDigits?.id) return byDigits;
+    }
+  }
+
+  return null;
 }
 
 async function mapByIds(table: string, select: string, ids: Array<number>) {
@@ -89,13 +103,21 @@ Deno.serve(async (req) => {
   if (req.method !== "POST") return jsonResponse({ ok: false, error: "Metodo no permitido." }, 405);
 
   try {
-    const authUser = await getAuthUser(req);
-    const cliente = await findClient(authUser.id);
+    const body = await req.json().catch(() => null);
+    if (!body || typeof body !== "object") publicError("Ingresá email o teléfono para consultar tus turnos.");
+
+    const email = normalizeEmail(body.email);
+    const telefono = normalizePhone(body.telefono);
+
+    if (!email && !telefono) publicError("Ingresá email o teléfono para consultar tus turnos.");
+    if (email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) publicError("El email no parece válido.");
+
+    const cliente = await findClient(email, telefono);
     if (!cliente?.id) {
       return jsonResponse({
         ok: true,
         cliente_encontrado: false,
-        mensaje: "Todavía no encontramos un perfil de clienta asociado a tu cuenta.",
+        mensaje: "No encontramos turnos asociados a ese contacto. Revisá el email o teléfono ingresado.",
         turnos: [],
       });
     }
