@@ -130,41 +130,14 @@ async function getDefaultListAndPrice(localId: number, serviceId: number) {
   };
 }
 
-async function getAuthUser(req: Request) {
-  const token = (req.headers.get("Authorization") || "").replace(/^Bearer\s+/i, "").trim();
-  if (!token) publicError("Necesitás verificar tu email para reservar.", 401);
-  const res = await fetch(`${supabaseUrl}/auth/v1/user`, {
-    headers: { apikey: serviceRoleKey, Authorization: `Bearer ${token}` },
-  });
-  if (!res.ok) publicError("Tu sesión venció. Verificá nuevamente tu email.", 401);
-  const user = await res.json();
-  const email = cleanText(user?.email).toLowerCase();
-  if (!user?.id || !email) publicError("No pudimos validar tu identidad.", 401);
-  return { id: String(user.id), email };
-}
-
-async function findOrCreateClient(
-  cliente: { nombre: string; email: string; telefono: string },
-  authUser: { id: string; email: string }
-) {
-  const byAuth = await first(`agenda_clientes?select=*&auth_user_id=eq.${encodeURIComponent(authUser.id)}&limit=1`);
-  if (byAuth?.id) return byAuth;
-
-  const byEmail = await first(`agenda_clientes?select=*&email_normalizado=eq.${encodeURIComponent(authUser.email)}&order=id.asc&limit=1`);
-  if (byEmail?.id) {
-    if (byEmail.auth_user_id && String(byEmail.auth_user_id) !== authUser.id) {
-      publicError("Ese email ya está asociado a otra identidad.", 409);
-    }
-    const updated = await db(`agenda_clientes?id=eq.${byEmail.id}`, {
-      method: "PATCH",
-      body: {
-        auth_user_id: authUser.id,
-        email: authUser.email,
-        email_normalizado: authUser.email,
-        email_verificado_en: new Date().toISOString(),
-      },
-    });
-    return Array.isArray(updated) ? updated[0] : updated;
+async function findOrCreateClient(cliente: { nombre: string; email: string; telefono: string }) {
+  if (cliente.email) {
+    const byEmail = await first(`agenda_clientes?select=*&email=ilike.${encodeURIComponent(cliente.email)}&limit=1`);
+    if (byEmail?.id) return byEmail;
+  }
+  if (cliente.telefono) {
+    const byPhone = await first(`agenda_clientes?select=*&telefono=eq.${encodeURIComponent(cliente.telefono)}&limit=1`);
+    if (byPhone?.id) return byPhone;
   }
 
   const name = splitClientName(cliente.nombre);
@@ -173,11 +146,8 @@ async function findOrCreateClient(
     body: {
       nombre: name.nombre,
       apellido: name.apellido,
-      email: authUser.email,
+      email: cliente.email,
       telefono: cliente.telefono,
-      auth_user_id: authUser.id,
-      email_normalizado: authUser.email,
-      email_verificado_en: new Date().toISOString(),
       activo: true,
     },
   });
@@ -222,7 +192,6 @@ Deno.serve(async (req) => {
   if (req.method !== "POST") return jsonResponse({ ok: false, error: "Metodo no permitido." }, 405);
 
   try {
-    const authUser = await getAuthUser(req);
     const body = await req.json().catch(() => null);
     if (!body || typeof body !== "object") publicError("Datos incompletos.");
 
@@ -234,14 +203,15 @@ Deno.serve(async (req) => {
     const requestedUserId = toInt(body.user_id);
     const cliente = {
       nombre: cleanText(body.cliente?.nombre),
-      email: authUser.email,
+      email: cleanText(body.cliente?.email).toLowerCase(),
       telefono: cleanText(body.cliente?.telefono),
     };
 
     if (!localId || !serviceId || !fecha || !inicio) publicError("Datos incompletos.");
     if (!["sin_preferencia", "manicura"].includes(modalidad)) publicError("Datos incompletos: modalidad invalida.");
     if (modalidad === "manicura" && !requestedUserId) publicError("Datos incompletos: manicura requerida.");
-    if (!cliente.nombre) publicError("Cliente invalido: completa nombre y apellido.");
+    if (!cliente.nombre || (!cliente.email && !cliente.telefono)) publicError("Cliente invalido: completa nombre y un contacto.");
+    if (cliente.email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(cliente.email)) publicError("Cliente invalido: email invalido.");
 
     const now = localNow();
     if (fecha < now.date) publicError("Horario no disponible: la fecha ya paso.", 409);
@@ -287,7 +257,7 @@ Deno.serve(async (req) => {
     if (!selectedManicura) publicError("Horario no disponible. Elegi otro horario.", 409);
 
     const price = await getDefaultListAndPrice(localId, serviceId);
-    const client = await findOrCreateClient(cliente, authUser);
+    const client = await findOrCreateClient(cliente);
     if (!client?.id) publicError("Cliente invalido: no se pudo crear o reutilizar el cliente.", 400);
 
     const turnoPayload = {
