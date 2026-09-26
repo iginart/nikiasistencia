@@ -262,7 +262,7 @@ async function refreshPublicSession(refreshToken) {
 }
 
 async function fetchClientProfile(accessToken) {
-  const res = await fetch(`${SUPABASE_URL}/functions/v1/cliente-publico`, {
+  const res = await fetch(`${SUPABASE_URL}/functions/v1/cliente-publico-v2`, {
     method: "POST",
     headers: {
       apikey: SUPABASE_KEY,
@@ -278,7 +278,7 @@ async function fetchClientProfile(accessToken) {
 }
 
 async function createPublicBooking(payload, accessToken) {
-  const res = await fetch(`${SUPABASE_URL}/functions/v1/crear-turno-publico`, {
+  const res = await fetch(`${SUPABASE_URL}/functions/v1/crear-turno-publico-v2`, {
     method: "POST",
     headers: {
       apikey: SUPABASE_KEY,
@@ -296,7 +296,7 @@ async function createPublicBooking(payload, accessToken) {
 }
 
 async function fetchClientBookings(accessToken) {
-  const res = await fetch(`${SUPABASE_URL}/functions/v1/consultar-turnos-cliente`, {
+  const res = await fetch(`${SUPABASE_URL}/functions/v1/consultar-turnos-cliente-v2`, {
     method: "POST",
     headers: {
       apikey: SUPABASE_KEY,
