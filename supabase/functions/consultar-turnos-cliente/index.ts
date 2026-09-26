@@ -25,6 +25,40 @@ function cleanText(value: unknown) {
   return String(value ?? "").trim();
 }
 
+function todayKey() {
+  const parts = new Intl.DateTimeFormat("en-CA", {
+    timeZone: TIME_ZONE,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).formatToParts(new Date());
+  const get = (type: string) => parts.find((part) => part.type === type)?.value || "00";
+  return `${get("year")}-${get("month")}-${get("day")}`;
+}
+
+const supabaseUrl = Deno.env.get("SUPABASE_URL") || "";
+const serviceRoleKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") || Deno.env.get("SERVICE_ROLE_KEY") || "";
+
+async function db(path: string) {
+  if (!supabaseUrl || !serviceRoleKey) throw new Error("Faltan SUPABASE_URL o SUPABASE_SERVICE_ROLE_KEY.");
+  const res = await fetch(`${supabaseUrl}/rest/v1/${path}`, {
+    method: "GET",
+    headers: {
+      apikey: serviceRoleKey,
+      Authorization: `Bearer ${serviceRoleKey}`,
+      "Content-Type": "application/json",
+    },
+  });
+  const text = await res.text();
+  if (!res.ok) throw new Error(text || `Error Supabase ${res.status}`);
+  return text ? JSON.parse(text) : [];
+}
+
+async function first(path: string) {
+  const rows = await db(path);
+  return Array.isArray(rows) ? rows[0] || null : rows;
+}
+
 async function getAuthUser(req: Request) {
   const token = (req.headers.get("Authorization") || "").replace(/^Bearer\s+/i, "").trim();
   if (!token) publicError("Necesitás verificar tu email para consultar tus turnos.", 401);
