@@ -956,16 +956,12 @@ export default function PublicBookingApp() {
     setActionError("");
     setCopyFeedback("");
     setCopiedTurnId("");
-    if (!normalizeText(lookup.email) && !normalizeText(lookup.telefono)) {
-      setLookupError("Ingresá email o teléfono para consultar tus turnos.");
+    if (!clientSession?.access_token) {
+      setLookupError("Verificá tu email para consultar tus turnos.");
       return;
     }
     setLookupLoading(true);
     try {
-      if (!clientSession?.access_token) {
-        setLookupError("Verificá tu email para consultar tus turnos.");
-        return;
-      }
       const result = await fetchClientBookings(clientSession.access_token);
       setLookupResult(result);
     } catch (err) {
