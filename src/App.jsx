@@ -8529,7 +8529,14 @@ function ReclamoEditorModal({ data, user, initial=null, forcedLocalId=null, allo
   const [files,setFiles]=useState([]);
   const [saving,setSaving]=useState(false);
   const [err,setErr]=useState("");
-  const manicurasLocal=(data.users||[]).filter(u=>u.rol==="manicura"&&u.activo!==false&&Number(u.localId)===Number(form.localId));
+  const fechaReferenciaManicuraArreglo = form.fechaArreglo || form.fecha || dateKey(hoy);
+  const manicurasLocal=(data.users||[]).filter(u=>{
+    if(u.rol!=="manicura" || u.activo===false) return false;
+    const localesActivos=getActiveManicuraLocalIds(data,u.id,fechaReferenciaManicuraArreglo);
+    if(localesActivos.length) return localesActivos.includes(Number(form.localId));
+    // Compatibilidad con manicuras que todavía no tengan historial por local.
+    return Number(u.localId)===Number(form.localId);
+  });
 
   useEffect(()=>{
     if(!form.localId || clienteQuery.trim().length<2 || clienteSeleccionado===clienteQuery.trim()) { setClienteOpciones([]); return; }
@@ -13984,6 +13991,13 @@ function dashboardMovingAverage(rows, valueKey, windowSize = 3) {
 }
 
 function DashboardBars({ rows, valueKey, money = false, height = 210, trendWindow = 3, compareKey = null, currentLabel = "Actual", compareLabel = "Período anterior", highlightIncomplete = false }) {
+  const scrollRef = useRef(null);
+  useLayoutEffect(()=>{
+    const el=scrollRef.current;
+    if(!el)return;
+    const raf=requestAnimationFrame(()=>{ el.scrollLeft=Math.max(0,el.scrollWidth-el.clientWidth); });
+    return ()=>cancelAnimationFrame(raf);
+  },[rows,valueKey,compareKey]);
   if (!rows?.length) return <div style={{ height,display:"grid",placeItems:"center",fontSize:12,color:"var(--color-text-secondary)" }}>Sin datos</div>;
   const trend = dashboardMovingAverage(rows, valueKey, trendWindow);
   const values = rows.flatMap((r,i)=>[Number(r[valueKey]||0),compareKey?Number(r[compareKey]||0):0,Number(trend[i]||0)]);
@@ -14005,7 +14019,7 @@ function DashboardBars({ rows, valueKey, money = false, height = 210, trendWindo
       {compareKey&&<span style={{ display:"inline-flex",alignItems:"center",gap:5 }}><i style={{ width:18,height:2,borderRadius:2,background:"#aaa8a2",display:"inline-block",borderTop:"1px dashed #aaa8a2" }}/>{compareLabel}</span>}
       {highlightIncomplete&&rows.some(r=>r.incomplete)&&<span style={{ display:"inline-flex",alignItems:"center",gap:5 }}><i style={{ width:12,height:8,borderRadius:2,background:COLORS.amber,display:"inline-block" }}/>Semana en curso</span>}
     </div>
-    <div style={{ overflowX:"auto",overflowY:"hidden" }}>
+    <div ref={scrollRef} style={{ overflowX:"auto",overflowY:"hidden",scrollbarGutter:"stable" }}>
       <svg viewBox={`0 0 ${width} ${chartH}`} style={{ width:"100%",minWidth:Math.min(width,620),height:chartH,display:"block" }} preserveAspectRatio="none">
         {[.25,.5,.75].map(n=><line key={n} x1={left} x2={width-right} y1={top+innerH*n} y2={top+innerH*n} stroke="rgba(120,120,120,.10)" strokeWidth="1" vectorEffect="non-scaling-stroke" />)}
         {rows.map((r,i)=>{
@@ -14028,13 +14042,20 @@ function DashboardBars({ rows, valueKey, money = false, height = 210, trendWindo
 
 function DashboardCompareLine({ rows, currentKey, previousKey, money = false, height = 230, currentLabel = "Mes actual", previousLabel = "Mes anterior", xLabelPrefix = "Día" }) {
   if (!rows?.length) return <div style={{ height,display:"grid",placeItems:"center",fontSize:12,color:"var(--color-text-secondary)" }}>Sin datos</div>;
-  const w=760, h=height-34, pad=22;
+  const w=760, h=height-34, pad=28;
   const allVals=rows.flatMap(r=>[Number(r[currentKey]||0),Number(r[previousKey]||0)]);
   const min=0, max=Math.max(1,...allVals);
   const yFor=v=>pad + (1-(Number(v||0)-min)/(max-min||1))*(h-pad*2);
   const pts=(key)=>rows.map((r,i)=>({x:pad+(rows.length===1?0:(i/(rows.length-1))*(w-pad*2)),y:yFor(r[key]),r}));
   const cur=pts(currentKey), prev=pts(previousKey);
   const path=arr=>arr.map((p,i)=>`${i?"L":"M"}${p.x.toFixed(1)},${p.y.toFixed(1)}`).join(" ");
+  const labelStep=rows.length<=12?1:(rows.length<=18?3:4);
+  const showLabel=i=>i===0||i===rows.length-1||i%labelStep===0;
+  const labelValue=v=>{
+    const n=Number(v||0);
+    if(money)return `$ ${new Intl.NumberFormat("es-AR",{notation:"compact",maximumFractionDigits:1}).format(n)}`;
+    return new Intl.NumberFormat("es-AR",{notation:Math.abs(n)>=10000?"compact":"standard",maximumFractionDigits:1}).format(n);
+  };
   return <div>
     <div style={{ display:"flex",gap:14,alignItems:"center",flexWrap:"wrap",margin:"8px 0 2px",fontSize:10.5,color:"var(--color-text-secondary)" }}>
       <span style={{ display:"inline-flex",alignItems:"center",gap:6 }}><i style={{ width:20,height:3,borderRadius:3,background:COLORS.pinkDark,display:"inline-block" }}/><strong>{currentLabel}</strong></span>
@@ -14045,6 +14066,9 @@ function DashboardCompareLine({ rows, currentKey, previousKey, money = false, he
         {[0.25,0.5,0.75].map(n=><line key={n} x1={pad} x2={w-pad} y1={pad+(h-pad*2)*n} y2={pad+(h-pad*2)*n} stroke="rgba(120,120,120,.11)" strokeWidth="1" />)}
         <path d={path(prev)} fill="none" stroke="#b5b3ad" strokeWidth="2" vectorEffect="non-scaling-stroke" strokeDasharray="6 5" strokeLinejoin="round" strokeLinecap="round" />
         <path d={path(cur)} fill="none" stroke={COLORS.pinkDark} strokeWidth="3" vectorEffect="non-scaling-stroke" strokeLinejoin="round" strokeLinecap="round" />
+        {prev.map((p,i)=>showLabel(i)&&(Number(p.r[previousKey]||0)!==0||i===0||i===rows.length-1)?<text key={`pv-${i}`} x={p.x} y={Math.min(h-7,p.y+14)} textAnchor="middle" fontSize="9.2" fontWeight="650" fill="#8f8b84" paintOrder="stroke" stroke="#fff" strokeWidth="3" strokeLinejoin="round">{labelValue(p.r[previousKey])}</text>:null)}
+        {cur.map((p,i)=>showLabel(i)&&(Number(p.r[currentKey]||0)!==0||i===0||i===rows.length-1)?<text key={`cv-${i}`} x={p.x} y={Math.max(10,p.y-10)} textAnchor="middle" fontSize="9.6" fontWeight="750" fill={COLORS.pinkDark} paintOrder="stroke" stroke="#fff" strokeWidth="3.2" strokeLinejoin="round">{labelValue(p.r[currentKey])}</text>:null)}
+        {prev.map((p,i)=><circle key={`p-${i}`} cx={p.x} cy={p.y} r="2.6" fill="#fff" stroke="#aaa8a2" strokeWidth="1.5" vectorEffect="non-scaling-stroke"><title>{`${p.r.label}: ${money?fmtMoney(p.r[previousKey]):new Intl.NumberFormat("es-AR").format(Number(p.r[previousKey]||0))}`}</title></circle>)}
         {cur.map((p,i)=><circle key={`c-${i}`} cx={p.x} cy={p.y} r="3.4" fill="#fff" stroke={COLORS.pinkDark} strokeWidth="2" vectorEffect="non-scaling-stroke"><title>{`${p.r.label}: ${money?fmtMoney(p.r[currentKey]):new Intl.NumberFormat("es-AR").format(Number(p.r[currentKey]||0))}`}</title></circle>)}
       </svg>
       <div style={{ display:"flex",justifyContent:"space-between",gap:6,fontSize:9.5,color:"var(--color-text-secondary)",padding:"0 8px" }}>
@@ -14102,6 +14126,44 @@ function DashboardLocalMultiSelect({ locales, selectedIds, onChange }) {
 }
 
 
+function dashboardCalendarDailyCompare(currentRows, previousRows, actualHasta) {
+  const aggregateByDay=(rows)=>{
+    const map=new Map();
+    (rows||[]).forEach(r=>{
+      const d=parseDateLocal(r.fecha);
+      if(!d)return;
+      const day=d.getDate();
+      const prev=map.get(day)||{ventas:0,visitas:0};
+      prev.ventas+=Number(r.ventas||0);
+      prev.visitas+=Number(r.visitas||0);
+      map.set(day,prev);
+    });
+    return map;
+  };
+  const currentByDay=aggregateByDay(currentRows);
+  const previousByDay=aggregateByDay(previousRows);
+  const fallbackDays=Math.max(0,...Array.from(currentByDay.keys()),...Array.from(previousByDay.keys()));
+  const dayLimit=Number(String(actualHasta||"").slice(8,10))||fallbackDays;
+  let curSales=0,prevSales=0,curVisits=0,prevVisits=0;
+  return Array.from({length:dayLimit},(_,i)=>{
+    const day=i+1;
+    const c=currentByDay.get(day)||{ventas:0,visitas:0};
+    const p=previousByDay.get(day)||{ventas:0,visitas:0};
+    curSales+=Number(c.ventas||0);
+    prevSales+=Number(p.ventas||0);
+    curVisits+=Number(c.visitas||0);
+    prevVisits+=Number(p.visitas||0);
+    return {
+      label:String(day),
+      ventas:Number(c.ventas||0),ventasAnt:Number(p.ventas||0),
+      visitas:Number(c.visitas||0),visitasAnt:Number(p.visitas||0),
+      ventasAcum:curSales,ventasAcumAnt:prevSales,
+      visitasAcum:curVisits,visitasAcumAnt:prevVisits,
+    };
+  });
+}
+
+
 function DashboardLocalDrilldown({ row, diaRows, onClose }) {
   if(!row) return null;
   const localId=Number(row.local_id);
@@ -14112,11 +14174,7 @@ function DashboardLocalDrilldown({ row, diaRows, onClose }) {
   const localDia=(diaRows||[]).filter(x=>Number(x.local_id)===localId);
   const current=localDia.filter(x=>x.fecha>=actualDesde&&x.fecha<=actualHasta).sort((a,b)=>String(a.fecha).localeCompare(String(b.fecha)));
   const previous=localDia.filter(x=>x.fecha>=anteriorDesde&&x.fecha<=anteriorHasta).sort((a,b)=>String(a.fecha).localeCompare(String(b.fecha)));
-  const daily=Array.from({length:Math.max(current.length,previous.length)},(_,i)=>{
-    const c=current[i]||{},p=previous[i]||{};
-    const d=parseDateLocal(c.fecha||"");
-    return { label:d?String(d.getDate()):String(i+1), ventas:Number(c.ventas||0), ventasAnt:Number(p.ventas||0), visitas:Number(c.visitas||0), visitasAnt:Number(p.visitas||0) };
-  });
+  const daily=dashboardCalendarDailyCompare(current,previous,actualHasta);
   const ventas=Number(row.ventas||0), ventasAnt=Number(row.ventas_mes_anterior||0), visitas=Number(row.visitas||0), visitasAnt=Number(row.visitas_mes_anterior||0);
   const ticket=Number(row.ticket_promedio||0), ticketAnt=Number(row.ticket_mes_anterior||0);
   const fmtInt=n=>new Intl.NumberFormat("es-AR").format(Math.round(Number(n||0)));
@@ -14293,17 +14351,7 @@ function DashboardComercial({ data, user }) {
   const dailyCurrent=useMemo(()=>aggregateRange(actualDesde,actualHasta),[aggregateRange,actualDesde,actualHasta]);
   const dailyPrevious=useMemo(()=>aggregateRange(anteriorDesde,anteriorHasta),[aggregateRange,anteriorDesde,anteriorHasta]);
 
-  const dailyCompare=useMemo(()=>{
-    let curSales=0,prevSales=0,curVisits=0,prevVisits=0;
-    const len=Math.max(dailyCurrent.length,dailyPrevious.length);
-    return Array.from({length:len},(_,i)=>{
-      const c=dailyCurrent[i]||{}, p=dailyPrevious[i]||{};
-      curSales+=Number(c.ventas||0); prevSales+=Number(p.ventas||0); curVisits+=Number(c.visitas||0); prevVisits+=Number(p.visitas||0);
-      const d=parseDateLocal(c.fecha||"");
-      const label=d?String(d.getDate()):String(i+1);
-      return {label,ventas:Number(c.ventas||0),ventasAnt:Number(p.ventas||0),visitas:Number(c.visitas||0),visitasAnt:Number(p.visitas||0),ventasAcum:curSales,ventasAcumAnt:prevSales,visitasAcum:curVisits,visitasAcumAnt:prevVisits};
-    });
-  },[dailyCurrent,dailyPrevious]);
+  const dailyCompare=useMemo(()=>dashboardCalendarDailyCompare(dailyCurrent,dailyPrevious,actualHasta),[dailyCurrent,dailyPrevious,actualHasta]);
 
   const weekly=useMemo(()=>{
     const map=new Map();
@@ -14455,13 +14503,14 @@ function DashboardComercial({ data, user }) {
       <Card style={{ padding:14,boxShadow:"0 8px 26px rgba(0,0,0,.035)" }}><div style={{ display:"flex",alignItems:"baseline",justifyContent:"space-between",gap:8,flexWrap:"wrap" }}><div><h3 style={{ margin:0,fontSize:14 }}>Evolución mensual de ventas</h3><p style={{ margin:"3px 0 0",fontSize:10.5,color:"var(--color-text-secondary)" }}>Últimos 12 meses hasta {periodoTxt} · comparación con el mismo mes del año anterior</p></div></div><DashboardCompareLine rows={monthlyEvolution} currentKey="ventas" previousKey="ventasYoY" money height={250} currentLabel="Ventas" previousLabel="Mismo mes año anterior" xLabelPrefix="" /></Card>
       <Card style={{ padding:14,boxShadow:"0 8px 26px rgba(0,0,0,.035)" }}><div style={{ display:"flex",alignItems:"baseline",justifyContent:"space-between",gap:8,flexWrap:"wrap" }}><div><h3 style={{ margin:0,fontSize:14 }}>Evolución mensual de visitas</h3><p style={{ margin:"3px 0 0",fontSize:10.5,color:"var(--color-text-secondary)" }}>Últimos 12 meses hasta {periodoTxt} · comparación con el mismo mes del año anterior</p></div></div><DashboardCompareLine rows={monthlyEvolution} currentKey="visitas" previousKey="visitasYoY" height={250} currentLabel="Visitas" previousLabel="Mismo mes año anterior" xLabelPrefix="" /></Card>
     </div>
-    <div className="niki-dashboard-two-col" style={{ display:"grid",gridTemplateColumns:"minmax(0,1.35fr) minmax(0,1fr)",gap:12 }}>
-      <Card style={{ padding:15,boxShadow:"0 10px 30px rgba(0,0,0,.04)" }}><div style={{ display:"flex",alignItems:"baseline",justifyContent:"space-between",gap:8,flexWrap:"wrap" }}><div><h3 style={{ margin:0,fontSize:14 }}>Ventas acumuladas · actual vs anterior</h3><p style={{ margin:"3px 0 0",fontSize:10.5,color:"var(--color-text-secondary)" }}>{isCurrentPeriod?"Mismo número de días del mes":"Mes completo vs mes anterior"}</p></div><Badge color={totals.varVentas>=0?"success":"danger"}>{dashboardPctLabel(totals.varVentas)}</Badge></div><DashboardCompareLine rows={dailyCompare} currentKey="ventasAcum" previousKey="ventasAcumAnt" money height={250} currentLabel={periodoTxt} previousLabel="Mes anterior" /></Card>
-      <Card style={{ padding:15,boxShadow:"0 10px 30px rgba(0,0,0,.04)" }}><div style={{ display:"flex",alignItems:"baseline",justifyContent:"space-between",gap:8,flexWrap:"wrap" }}><div><h3 style={{ margin:0,fontSize:14 }}>Visitas acumuladas</h3><p style={{ margin:"3px 0 0",fontSize:10.5,color:"var(--color-text-secondary)" }}>{isCurrentPeriod?"Actual vs mismo tramo anterior":"Mes completo vs mes anterior"}</p></div><Badge color={totals.varVisitas>=0?"success":"danger"}>{dashboardPctLabel(totals.varVisitas)}</Badge></div><DashboardCompareLine rows={dailyCompare} currentKey="visitasAcum" previousKey="visitasAcumAnt" height={250} currentLabel={periodoTxt} previousLabel="Mes anterior" /></Card>
-      <Card style={{ padding:14,boxShadow:"0 8px 26px rgba(0,0,0,.035)" }}><div style={{ display:"flex",alignItems:"baseline",justifyContent:"space-between",gap:8 }}><div><h3 style={{ margin:0,fontSize:14 }}>Ventas diarias</h3><p style={{ margin:"3px 0 0",fontSize:10.5,color:"var(--color-text-secondary)" }}>{periodoTxt} · barras actuales, línea gris período anterior</p></div><Badge color="pink">{fmtMoney(totals.ventas)}</Badge></div><DashboardBars rows={dailyCompare} valueKey="ventas" compareKey="ventasAnt" money trendWindow={3} currentLabel={periodoTxt} compareLabel="Mismo tramo anterior" /></Card>
-      <Card style={{ padding:14,boxShadow:"0 8px 26px rgba(0,0,0,.035)" }}><div style={{ display:"flex",alignItems:"baseline",justifyContent:"space-between",gap:8 }}><div><h3 style={{ margin:0,fontSize:14 }}>Ventas semanales</h3><p style={{ margin:"3px 0 0",fontSize:10.5,color:"var(--color-text-secondary)" }}>Últimas semanas disponibles · la semana abierta se destaca</p></div></div><DashboardBars rows={weekly} valueKey="ventas" money trendWindow={3} highlightIncomplete /></Card>
+    <div className="niki-dashboard-two-col" style={{ display:"grid",gridTemplateColumns:"repeat(2,minmax(0,1fr))",gap:12 }}>
+      <Card style={{ padding:15,boxShadow:"0 10px 30px rgba(0,0,0,.04)" }}><div style={{ display:"flex",alignItems:"baseline",justifyContent:"space-between",gap:8,flexWrap:"wrap" }}><div><h3 style={{ margin:0,fontSize:14 }}>Ventas acumuladas · actual vs anterior</h3><p style={{ margin:"3px 0 0",fontSize:10.5,color:"var(--color-text-secondary)" }}>{isCurrentPeriod?"Mismos días calendario del mes":"Mes completo vs mes anterior"}</p></div><Badge color={totals.varVentas>=0?"success":"danger"}>{dashboardPctLabel(totals.varVentas)}</Badge></div><DashboardCompareLine rows={dailyCompare} currentKey="ventasAcum" previousKey="ventasAcumAnt" money height={250} currentLabel={periodoTxt} previousLabel="Mes anterior" /></Card>
+      <Card style={{ padding:15,boxShadow:"0 10px 30px rgba(0,0,0,.04)" }}><div style={{ display:"flex",alignItems:"baseline",justifyContent:"space-between",gap:8,flexWrap:"wrap" }}><div><h3 style={{ margin:0,fontSize:14 }}>Visitas acumuladas</h3><p style={{ margin:"3px 0 0",fontSize:10.5,color:"var(--color-text-secondary)" }}>{isCurrentPeriod?"Actual vs mismos días calendario":"Mes completo vs mes anterior"}</p></div><Badge color={totals.varVisitas>=0?"success":"danger"}>{dashboardPctLabel(totals.varVisitas)}</Badge></div><DashboardCompareLine rows={dailyCompare} currentKey="visitasAcum" previousKey="visitasAcumAnt" height={250} currentLabel={periodoTxt} previousLabel="Mes anterior" /></Card>
       <Card style={{ padding:14,boxShadow:"0 8px 26px rgba(0,0,0,.035)" }}><div style={{ display:"flex",alignItems:"baseline",justifyContent:"space-between",gap:8 }}><div><h3 style={{ margin:0,fontSize:14 }}>Visitas semanales</h3><p style={{ margin:"3px 0 0",fontSize:10.5,color:"var(--color-text-secondary)" }}>Atenciones por semana · tendencia móvil</p></div></div><DashboardBars rows={weekly} valueKey="visitas" trendWindow={3} highlightIncomplete /></Card>
+      <Card style={{ padding:14,boxShadow:"0 8px 26px rgba(0,0,0,.035)" }}><div style={{ display:"flex",alignItems:"baseline",justifyContent:"space-between",gap:8 }}><div><h3 style={{ margin:0,fontSize:14 }}>Ventas semanales</h3><p style={{ margin:"3px 0 0",fontSize:10.5,color:"var(--color-text-secondary)" }}>Últimas semanas disponibles · la semana abierta se destaca</p></div></div><DashboardBars rows={weekly} valueKey="ventas" money trendWindow={3} highlightIncomplete /></Card>
     </div>
+
+    <Card style={{ padding:14,boxShadow:"0 8px 26px rgba(0,0,0,.035)" }}><div style={{ display:"flex",alignItems:"baseline",justifyContent:"space-between",gap:8,flexWrap:"wrap" }}><div><h3 style={{ margin:0,fontSize:14 }}>Ventas diarias</h3><p style={{ margin:"3px 0 0",fontSize:10.5,color:"var(--color-text-secondary)" }}>{periodoTxt} · barras actuales, línea gris del mismo día calendario del período anterior</p></div><Badge color="pink">{fmtMoney(totals.ventas)}</Badge></div><DashboardBars rows={dailyCompare} valueKey="ventas" compareKey="ventasAnt" money height={245} trendWindow={3} currentLabel={periodoTxt} compareLabel="Mismo día del mes anterior" /></Card>
 
     <Card style={{ padding:0,overflow:"hidden",boxShadow:"0 10px 30px rgba(0,0,0,.04)" }}>
       <div style={{ padding:"14px 16px",display:"flex",alignItems:"center",justifyContent:"space-between",gap:10,borderBottom:"1px solid rgba(120,120,120,.12)",flexWrap:"wrap" }}><div><h3 style={{ margin:0,fontSize:14 }}>Comparativo por sucursal</h3><p style={{ margin:"3px 0 0",fontSize:10.5,color:"var(--color-text-secondary)" }}>Sin tildes se muestran todas las sucursales. Tildá una o más para analizar sólo esas. Abrí el nombre para ver el detalle.</p></div><div style={{ display:"flex",gap:7,alignItems:"center" }}>{selectedLocalIds!==null&&<Btn size="sm" variant="ghost" onClick={()=>setSelectedLocalIds(null)}>Ver todos</Btn>}<Badge color="gray">{branchRows.length} locales visibles</Badge></div></div>
@@ -14469,7 +14518,7 @@ function DashboardComercial({ data, user }) {
         <th style={{ width:34,padding:"10px 5px",textAlign:"center" }}>✓</th><th onClick={()=>toggleSort("local")} style={{ textAlign:"left",padding:"10px",cursor:"pointer" }}>Sucursal{sortMark("local")}</th><th onClick={()=>toggleSort("ventas")} style={{ textAlign:"right",padding:"10px",cursor:"pointer" }}>Ventas{sortMark("ventas")}</th><th onClick={()=>toggleSort("variacion_ventas_pct")} style={{ textAlign:"right",padding:"10px",cursor:"pointer" }}>Var. ventas{sortMark("variacion_ventas_pct")}</th><th onClick={()=>toggleSort("visitas")} style={{ textAlign:"right",padding:"10px",cursor:"pointer" }}>Visitas{sortMark("visitas")}</th><th onClick={()=>toggleSort("variacion_visitas_pct")} style={{ textAlign:"right",padding:"10px",cursor:"pointer" }}>Var. visitas{sortMark("variacion_visitas_pct")}</th><th onClick={()=>toggleSort("ticket_promedio")} style={{ textAlign:"right",padding:"10px",cursor:"pointer" }}>Ticket{sortMark("ticket_promedio")}</th><th onClick={()=>toggleSort("variacion_ticket_pct")} style={{ textAlign:"right",padding:"10px",cursor:"pointer" }}>Var. ticket{sortMark("variacion_ticket_pct")}</th><th onClick={()=>toggleSort(isCurrentPeriod?"proyeccion_ventas":"ventas_mes_anterior")} style={{ textAlign:"right",padding:"10px",cursor:"pointer" }}>{isCurrentPeriod?"Proyección":"Mes anterior"}{sortMark(isCurrentPeriod?"proyeccion_ventas":"ventas_mes_anterior")}</th><th style={{ width:72,padding:"10px",textAlign:"center" }}>Detalle</th>
       </tr></thead><tbody>{branchRows.map((r,i)=>{const vv=Number(r.variacion_ventas_pct),qv=Number(r.variacion_visitas_pct),tv=Number(r.variacion_ticket_pct);const pct=(n)=><span style={{ fontWeight:800,color:Number.isFinite(n)?(n>=0?COLORS.success:COLORS.danger):"var(--color-text-secondary)" }}>{Number.isFinite(n)?dashboardPctLabel(n):"—"}</span>;const salesPct=Math.max(2,Math.min(100,Number(r.ventas||0)/branchMaxSales*100));const visitsPct=Math.max(2,Math.min(100,Number(r.visitas||0)/branchMaxVisits*100));const allLocals=selectedLocalIds===null||!(selectedLocalIds||[]).length;const selected=!allLocals&&visibleIds.has(Number(r.local_id));return <tr key={r.local_id} style={{ borderTop:"1px solid rgba(120,120,120,.09)",background:selected?"rgba(225,198,204,.30)":(i%2?"rgba(120,120,120,.018)":"transparent") }}><td onClick={()=>toggleLocalFromTable(r.local_id)} title={selected?"Quitar de la selección":"Seleccionar sucursal"} style={{ padding:"10px 5px",textAlign:"center",cursor:"pointer" }}><input type="checkbox" checked={selected} readOnly style={{ accentColor:COLORS.pinkDark,pointerEvents:"none" }}/></td><td style={{ padding:"10px",fontWeight:800 }}><button type="button" onClick={()=>setDrillLocalId(Number(r.local_id))} style={{ border:"none",background:"transparent",padding:0,color:selected&&selectedLocalIds!==null?COLORS.pinkDark:"var(--color-text-primary)",fontWeight:800,cursor:"pointer",textDecoration:"underline",textDecorationColor:"rgba(114,36,62,.28)",textUnderlineOffset:3 }}>{r.local}</button></td><td style={{ padding:"10px",textAlign:"right",minWidth:145 }}><div>{fmtMoney(r.ventas)}</div><div style={{ height:4,marginTop:4,borderRadius:999,background:"rgba(114,36,62,.08)",overflow:"hidden" }}><div style={{ width:`${salesPct}%`,height:"100%",background:COLORS.pinkDark,borderRadius:999 }}/></div></td><td style={{ padding:"10px",textAlign:"right" }}>{pct(vv)}</td><td style={{ padding:"10px",textAlign:"right",minWidth:105 }}><div>{new Intl.NumberFormat("es-AR").format(Number(r.visitas||0))}</div><div style={{ height:4,marginTop:4,borderRadius:999,background:"rgba(114,36,62,.08)",overflow:"hidden" }}><div style={{ width:`${visitsPct}%`,height:"100%",background:"#c98fa0",borderRadius:999 }}/></div></td><td style={{ padding:"10px",textAlign:"right" }}>{pct(qv)}</td><td style={{ padding:"10px",textAlign:"right" }}>{fmtMoney(r.ticket_promedio)}</td><td style={{ padding:"10px",textAlign:"right" }}>{pct(tv)}</td><td style={{ padding:"10px",textAlign:"right",fontWeight:800 }}>{fmtMoney(isCurrentPeriod?r.proyeccion_ventas:r.ventas_mes_anterior)}</td><td style={{ padding:"8px",textAlign:"center" }}><button type="button" onClick={()=>setDrillLocalId(Number(r.local_id))} style={{ border:"1px solid rgba(114,36,62,.18)",background:COLORS.pinkLight,color:COLORS.pinkDark,borderRadius:8,padding:"5px 8px",fontSize:10.5,fontWeight:800,cursor:"pointer" }}>Ver</button></td></tr>})}</tbody></table></div>
     </Card>
-    <p style={{ margin:"-4px 2px 0",fontSize:10.5,color:"var(--color-text-secondary)" }}>Venta = total pagado en AgendaPro. Visita = atención consolidada por local, día y cliente. En el mes actual, el día en curso no se incluye en comparativos ni proyecciones. Los meses anteriores se muestran cerrados. Las líneas de tendencia usan media móvil de 3 puntos.</p>
+    <p style={{ margin:"-4px 2px 0",fontSize:10.5,color:"var(--color-text-secondary)" }}>Venta = total pagado en AgendaPro. Visita = atención consolidada por local, día y cliente. Las comparaciones diarias se alinean por día calendario: un día sin actividad vale 0 y no desplaza la serie. En el mes actual, el día en curso no se incluye en comparativos ni proyecciones. Los meses anteriores se muestran cerrados. Las líneas de tendencia usan media móvil de 3 puntos.</p>
     {drillRow&&<DashboardLocalDrilldown row={drillRow} diaRows={diaRows} onClose={()=>setDrillLocalId(null)}/>} 
   </div>;
 }
