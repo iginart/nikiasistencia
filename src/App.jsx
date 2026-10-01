@@ -5148,7 +5148,6 @@ function ABMManicuras({ data, setData, reloadData, user }) {
   const [multiLocalConfirm, setMultiLocalConfirm] = useState(null);
   const documentosPersona=(data.personaDocumentos||[]);
   const [filtroLocal, setFiltroLocal] = useState("todos");
-  const [filtroEstado, setFiltroEstado] = useState("activas");
   const [agrupacion, setAgrupacion] = useState("local");
   const [vistaEquipo, setVistaEquipo] = useState("equipo");
   const [busqueda, setBusqueda] = useState("");
@@ -5168,13 +5167,21 @@ function ABMManicuras({ data, setData, reloadData, user }) {
   const [savingMovimiento, setSavingMovimiento] = useState(false);
   const [encargadaEquipoEdit, setEncargadaEquipoEdit] = useState(null);
   const [dragCandidateId, setDragCandidateId] = useState(null);
+  const candidatePointerDrag = useRef(null);
+  const [candidateDragGhost, setCandidateDragGhost] = useState(null);
   const [candidateIncorpModal, setCandidateIncorpModal] = useState(null);
   const [savingCandidateIncorp, setSavingCandidateIncorp] = useState(false);
   const [agendaComisionesSinVincular, setAgendaComisionesSinVincular] = useState([]);
   const [agendaPendientesLoading, setAgendaPendientesLoading] = useState(false);
   const [agendaPendientesError, setAgendaPendientesError] = useState("");
   const [agendaLinkConfirm, setAgendaLinkConfirm] = useState(null);
-  useEffect(()=>{api.getReclutamientoCandidatasDisponibles().then(rows=>setData(prev=>prev?{...prev,reclutamientoCandidatas:rows||[]}:prev)).catch(()=>{});},[setData]);
+  useEffect(()=>{
+    if(!isAdminLikeRole(user.rol)){
+      setData(prev=>prev?{...prev,reclutamientoCandidatas:[]}:prev);
+      return;
+    }
+    api.getReclutamientoCandidatasDisponibles().then(rows=>setData(prev=>prev?{...prev,reclutamientoCandidatas:rows||[]}:prev)).catch(()=>{});
+  },[setData,user.rol]);
   const cargarAgendaPendientes = useCallback(async () => {
     setAgendaPendientesLoading(true);
     setAgendaPendientesError("");
@@ -5195,6 +5202,8 @@ function ABMManicuras({ data, setData, reloadData, user }) {
       setDragCompacto(false);
       setDragUserId(null);
       setDragCandidateId(null);
+      candidatePointerDrag.current = null;
+      setCandidateDragGhost(null);
       setDropLocalId(null);
     };
     const onKeyDown = (e) => {
@@ -5208,9 +5217,10 @@ function ABMManicuras({ data, setData, reloadData, user }) {
     };
   }, []);
   const esAdmin = isAdminLikeRole(user.rol);
+  const puedeGestionarReclutamiento = isAdminLikeRole(user.rol);
   const allowedLocalIds = getAssignedLocalIds(data, user);
   const localesPermitidos = esAdmin ? data.locales.filter(localActivo) : data.locales.filter(l => localActivo(l) && allowedLocalIds.includes(l.id));
-  const manicuras = data.users.filter(u => u.rol === "manicura" && (esAdmin || getActiveManicuraLocalIds(data,u.id).some(id=>allowedLocalIds.includes(Number(id))) || (!getActiveManicuraLocalIds(data,u.id).length && allowedLocalIds.includes(Number(u.localId))) || !u.localId));
+  const manicuras = data.users.filter(u => u.rol === "manicura" && u.activo !== false && (esAdmin || getActiveManicuraLocalIds(data,u.id).some(id=>allowedLocalIds.includes(Number(id))) || (!getActiveManicuraLocalIds(data,u.id).length && allowedLocalIds.includes(Number(u.localId)))));
   const encargadasEquipo = data.users.filter(u => u.activo && isEncargadaOperativa(data,u.id));
   const normalizeSearch = value => String(value || "").toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
   const agendaPendientesAgrupados = useMemo(() => {
@@ -5309,9 +5319,8 @@ function ABMManicuras({ data, setData, reloadData, user }) {
 
   const manicurasFiltradas = useMemo(() => manicuras
     .filter(m => filtroLocal === "todos" || getActiveManicuraLocalIds(data,m.id).some(id=>String(id)===String(filtroLocal)) || (!getActiveManicuraLocalIds(data,m.id).length && String(m.localId || "") === String(filtroLocal)))
-    .filter(m => filtroEstado === "todas" || (filtroEstado === "activas" ? m.activo : !m.activo))
     .filter(coincideBusqueda)
-    .sort((a,b) => (a.nombre || "").localeCompare(b.nombre || "")), [manicuras, filtroLocal, filtroEstado]);
+    .sort((a,b) => (a.nombre || "").localeCompare(b.nombre || "")), [manicuras, filtroLocal, busqueda, data.manicuraHistorialLocales]);
   const gruposManicuras = useMemo(() => {
     if (agrupacion !== "local") return [{ key:"todas", label:"Todas las manicuras", items:manicurasFiltradas }];
     const grupos = new Map();
@@ -5465,11 +5474,66 @@ function ABMManicuras({ data, setData, reloadData, user }) {
   };
   const localesActivosDe = m => {const ids=periodosActivosDe(m?.id).map(h=>Number(h.localId)).filter(Boolean);return ids.length?Array.from(new Set(ids)):(m?.localId?[Number(m.localId)]:[]);};
   const encargadasDeLocal = localId => encargadasEquipo.filter(e => (data.encargadoLocales||[]).some(x=>parseInt(x.userId)===parseInt(e.id)&&parseInt(x.localId)===parseInt(localId)) && coincideBusqueda(e)).sort((a,b)=>(a.nombre||"").localeCompare(b.nombre||""));
-  const manicurasDeLocal = localId => manicuras.filter(m=>m.activo&&localesActivosDe(m).some(id=>Number(id)===Number(localId))&&coincideBusqueda(m)).sort((a,b)=>(a.nombre||"").localeCompare(b.nombre||""));
-  const inactivasEquipo = manicuras.filter(m=>!m.activo&&coincideBusqueda(m)).sort((a,b)=>(a.nombre||"").localeCompare(b.nombre||""));
-  const candidatasDisponiblesEquipo = (data.reclutamientoCandidatas||[]).filter(c=>c.estado==="disponible"&&c.puesto==="manicura"&&(!queryEquipo||normalizeSearch(`${c.nombre||""} ${c.email||""}`).includes(queryEquipo))).sort((a,b)=>(a.nombre||"").localeCompare(b.nombre||""));
-  const abrirIncorporacionCandidata = (c,destinoId) => setCandidateIncorpModal({candidata:c,destinoId:Number(destinoId),fechaInicio:hoy,usuario:String(c.email||"").split("@")[0].replace(/[^a-zA-Z0-9._-]/g,"").toLowerCase(),email:c.email||"",password:"niki123",tipoRelacion:"a_resolver"});
-  const confirmarIncorporacionCandidata = async () => {const x=candidateIncorpModal;if(!x)return;if(!x.fechaInicio||!x.usuario||!isValidEmail(x.email))return notifyToast("Completá fecha de ingreso, usuario y email válido.","warning");if(usuarioEnUso(data.users,x.usuario)||emailEnUso(data.users,x.email))return notifyToast("El usuario o email ya están en uso.","warning");setSavingCandidateIncorp(true);try{const c=x.candidata;const rows=await api.createUser({nombre:c.nombre,usuario:normalizeUsuarioValue(x.usuario),email:normalizeEmailValue(x.email),password:x.password||"niki123",rol:"manicura",local_id:x.destinoId,activo:true,telefono:c.telefono||null,tipo_relacion:x.tipoRelacion||"a_resolver"});const uid=Array.isArray(rows)?rows[0]?.id:rows?.id;if(!uid)throw new Error("No se obtuvo el usuario creado.");const hr=await api.createManicuraHistorialLocal({user_id:uid,local_id:x.destinoId,fecha_inicio:x.fechaInicio,fecha_fin:null,motivo_fin:null,observacion:`Incorporada desde reclutamiento · candidata ${c.id}`});await api.marcarReclutamientoIncorporada(c.id,uid);try{await api.enviarInvitacionUsuario({actor_id:user.id,session_token:user.sessionToken,target_user_id:uid});}catch{}const rawH=Array.isArray(hr)?hr[0]:hr;const newUser=normalizeUser(Array.isArray(rows)?rows[0]:rows);setData(prev=>({...prev,users:[...(prev.users||[]),newUser],manicuraHistorialLocales:rawH?[...(prev.manicuraHistorialLocales||[]),normalizeManicuraHistorialLocal(rawH)]:(prev.manicuraHistorialLocales||[]),reclutamientoCandidatas:(prev.reclutamientoCandidatas||[]).filter(z=>Number(z.id)!==Number(c.id))}));setCandidateIncorpModal(null);notifyToast("Candidata incorporada como manicura.","success");}catch(e){notifyToast("No se pudo incorporar: "+(e.message||e),"error");}setSavingCandidateIncorp(false);};
+  const manicurasDeLocal = localId => manicuras.filter(m=>localesActivosDe(m).some(id=>Number(id)===Number(localId))&&coincideBusqueda(m)).sort((a,b)=>(a.nombre||"").localeCompare(b.nombre||""));
+  const candidatasDisponiblesEquipo = puedeGestionarReclutamiento ? (data.reclutamientoCandidatas||[]).filter(c=>c.estado==="disponible"&&c.puesto==="manicura"&&(!queryEquipo||normalizeSearch(`${c.nombre||""} ${c.email||""}`).includes(queryEquipo))).sort((a,b)=>(a.nombre||"").localeCompare(b.nombre||"")) : [];
+  const abrirIncorporacionCandidata = (c,destinoId) => {
+    if(!puedeGestionarReclutamiento) return;
+    setCandidateIncorpModal({candidata:c,destinoId:Number(destinoId),fechaInicio:hoy,usuario:String(c.email||"").split("@")[0].replace(/[^a-zA-Z0-9._-]/g,"").toLowerCase(),email:c.email||"",password:"niki123",tipoRelacion:"a_resolver"});
+  };
+  const localIdEnPunto = (clientX, clientY) => {
+    if (typeof document === "undefined") return null;
+    const target = (document.elementsFromPoint(clientX, clientY) || []).find(el => el?.dataset?.nikiLocalId);
+    const id = target?.dataset?.nikiLocalId;
+    return id ? Number(id) : null;
+  };
+  const iniciarArrastreCandidata = (e, candidata) => {
+    if (!puedeGestionarReclutamiento || !candidata) return;
+    if (e.pointerType === "mouse" && e.button !== 0) return;
+    candidatePointerDrag.current = {
+      pointerId:e.pointerId,
+      candidata,
+      startX:e.clientX,
+      startY:e.clientY,
+      active:false,
+    };
+    try { e.currentTarget.setPointerCapture?.(e.pointerId); } catch {}
+    e.preventDefault();
+  };
+  const moverArrastreCandidata = e => {
+    const drag = candidatePointerDrag.current;
+    if (!drag || drag.pointerId !== e.pointerId) return;
+    const distancia = Math.hypot(e.clientX-drag.startX,e.clientY-drag.startY);
+    if (!drag.active && distancia < 5) return;
+    if (!drag.active) {
+      drag.active = true;
+      setDragCandidateId(String(drag.candidata.id));
+    }
+    setCandidateDragGhost({x:e.clientX,y:e.clientY,nombre:drag.candidata.nombre||"Candidata"});
+    setDropLocalId(localIdEnPunto(e.clientX,e.clientY));
+    e.preventDefault();
+  };
+  const finalizarArrastreCandidata = e => {
+    const drag = candidatePointerDrag.current;
+    if (!drag || drag.pointerId !== e.pointerId) return;
+    const localId = drag.active ? localIdEnPunto(e.clientX,e.clientY) : null;
+    try { e.currentTarget.releasePointerCapture?.(e.pointerId); } catch {}
+    candidatePointerDrag.current = null;
+    setCandidateDragGhost(null);
+    setDragCandidateId(null);
+    setDropLocalId(null);
+    if (drag.active && localId) abrirIncorporacionCandidata(drag.candidata,localId);
+    e.preventDefault();
+  };
+  const cancelarArrastreCandidataPointer = e => {
+    const drag = candidatePointerDrag.current;
+    if (drag && (!e || drag.pointerId === e.pointerId)) {
+      candidatePointerDrag.current = null;
+      setCandidateDragGhost(null);
+      setDragCandidateId(null);
+      setDropLocalId(null);
+    }
+  };
+  const confirmarIncorporacionCandidata = async () => {const x=candidateIncorpModal;if(!puedeGestionarReclutamiento||!x)return;if(!x.fechaInicio||!x.usuario||!isValidEmail(x.email))return notifyToast("Completá fecha de ingreso, usuario y email válido.","warning");if(usuarioEnUso(data.users,x.usuario)||emailEnUso(data.users,x.email))return notifyToast("El usuario o email ya están en uso.","warning");setSavingCandidateIncorp(true);try{const c=x.candidata;const rows=await api.createUser({nombre:c.nombre,usuario:normalizeUsuarioValue(x.usuario),email:normalizeEmailValue(x.email),password:x.password||"niki123",rol:"manicura",local_id:x.destinoId,activo:true,telefono:c.telefono||null,tipo_relacion:x.tipoRelacion||"a_resolver"});const uid=Array.isArray(rows)?rows[0]?.id:rows?.id;if(!uid)throw new Error("No se obtuvo el usuario creado.");const hr=await api.createManicuraHistorialLocal({user_id:uid,local_id:x.destinoId,fecha_inicio:x.fechaInicio,fecha_fin:null,motivo_fin:null,observacion:`Incorporada desde reclutamiento · candidata ${c.id}`});await api.marcarReclutamientoIncorporada(c.id,uid);try{await api.enviarInvitacionUsuario({actor_id:user.id,session_token:user.sessionToken,target_user_id:uid});}catch{}const rawH=Array.isArray(hr)?hr[0]:hr;const newUser=normalizeUser(Array.isArray(rows)?rows[0]:rows);setData(prev=>({...prev,users:[...(prev.users||[]),newUser],manicuraHistorialLocales:rawH?[...(prev.manicuraHistorialLocales||[]),normalizeManicuraHistorialLocal(rawH)]:(prev.manicuraHistorialLocales||[]),reclutamientoCandidatas:(prev.reclutamientoCandidatas||[]).filter(z=>Number(z.id)!==Number(c.id))}));setCandidateIncorpModal(null);notifyToast("Candidata incorporada como manicura.","success");}catch(e){notifyToast("No se pudo incorporar: "+(e.message||e),"error");}setSavingCandidateIncorp(false);};
   const toggleLocalColapsado = localId => setLocalesColapsados(prev=>({...prev,[localId]:!prev[localId]}));
   const abrirMovimiento = (m,destinoId) => {
     const origenId = localActualIdDe(m);
@@ -5539,8 +5603,8 @@ function ABMManicuras({ data, setData, reloadData, user }) {
           <div style={{display:"flex",gap:7,flexWrap:"wrap"}}>{localesTipoEquipo.map(l=>{const selected=localesEquipoSeleccionados.some(id=>Number(id)===Number(l.id));return <button key={l.id} type="button" onClick={()=>toggleLocalEquipo(l.id)} style={{border:`1px solid ${selected?COLORS.pink:"rgba(120,120,120,.18)"}`,background:selected?COLORS.pinkLight:"#fff",borderRadius:999,padding:"6px 10px",fontSize:11,fontWeight:700,cursor:"pointer",color:selected?COLORS.pinkDark:"var(--color-text-primary)"}}>{selected?"✓ ":""}{l.nombre}</button>})}</div>
         </div>
       </Card>
-      <div style={{display:"grid",gridTemplateColumns:dragCompacto?"repeat(auto-fit,minmax(150px,1fr))":"repeat(auto-fit,minmax(300px,1fr))",gap:dragCompacto?8:12,alignItems:"start",transition:"all .18s ease",paddingBottom:(dragUserId||dragCandidateId)?86:0}}>
-        {localesVisiblesEquipo.map(local=>{const ms=manicurasDeLocal(local.id),es=encargadasDeLocal(local.id),horasLocal=ms.reduce((acc,m)=>acc+horasTeoricasEquipo(m.id,local.id),0),colapsado=!!localesColapsados[local.id],compacto=dragCompacto;return <Card key={local.id} onDragOver={e=>{e.preventDefault();setDropLocalId(local.id);}} onDragLeave={()=>setDropLocalId(null)} onDrop={e=>{e.preventDefault();const raw=e.dataTransfer.getData("text/plain")||"";setDropLocalId(null);setDragCompacto(false);setDragUserId(null);setDragCandidateId(null);if(raw.startsWith("candidate:")){const cid=Number(raw.split(":")[1]);const c=candidatasDisponiblesEquipo.find(x=>Number(x.id)===cid);if(c)abrirIncorporacionCandidata(c,local.id);return;}const uid=parseInt(raw||dragUserId||0);const m=manicuras.find(x=>parseInt(x.id)===uid);if(m)abrirMovimiento(m,local.id);}} style={{padding:compacto?9:12,border:dropLocalId===local.id?`2px solid ${COLORS.pink}`:"1px solid rgba(120,120,120,.16)",minHeight:compacto?82:120,transition:"all .18s ease",background:dropLocalId===local.id?COLORS.pinkLight:"var(--color-background-primary)"}}>
+      <div style={{display:"grid",gridTemplateColumns:dragCompacto?"repeat(auto-fit,minmax(150px,1fr))":"repeat(auto-fit,minmax(300px,1fr))",gap:dragCompacto?8:12,alignItems:"start",transition:"all .18s ease",paddingBottom:dragUserId?86:0}}>
+        {localesVisiblesEquipo.map(local=>{const ms=manicurasDeLocal(local.id),es=encargadasDeLocal(local.id),horasLocal=ms.reduce((acc,m)=>acc+horasTeoricasEquipo(m.id,local.id),0),colapsado=!!localesColapsados[local.id],compacto=dragCompacto;return <Card key={local.id} data-niki-local-id={local.id} onDragOver={e=>{e.preventDefault();e.dataTransfer.dropEffect="move";setDropLocalId(local.id);}} onDragLeave={()=>setDropLocalId(null)} onDrop={e=>{e.preventDefault();const candidateRaw=e.dataTransfer.getData("application/x-niki-candidate")||"";const raw=e.dataTransfer.getData("text/plain")||"";setDropLocalId(null);setDragCompacto(false);setDragUserId(null);setDragCandidateId(null);const candidateId=candidateRaw||(raw.startsWith("candidate:")?raw.slice("candidate:".length):"");if(candidateId){if(!puedeGestionarReclutamiento)return;const c=candidatasDisponiblesEquipo.find(x=>String(x.id)===String(candidateId));if(c)abrirIncorporacionCandidata(c,local.id);else notifyToast("No se pudo identificar la candidata arrastrada. Actualizá la pantalla e intentá nuevamente.","warning");return;}const uid=parseInt(raw||dragUserId||0);const m=manicuras.find(x=>parseInt(x.id)===uid);if(m)abrirMovimiento(m,local.id);}} style={{padding:compacto?9:12,border:dropLocalId===local.id?`2px solid ${COLORS.pink}`:"1px solid rgba(120,120,120,.16)",minHeight:compacto?82:120,transition:"all .18s ease",background:dropLocalId===local.id?COLORS.pinkLight:"var(--color-background-primary)"}}>
           <div style={{display:"flex",justifyContent:"space-between",gap:8,alignItems:"center",marginBottom:(compacto||colapsado)?0:10}}><div style={{minWidth:0}}><h3 style={{margin:0,fontSize:compacto?12:14,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{local.nombre}</h3><p style={{margin:"2px 0 0",fontSize:compacto?9:11,color:"var(--color-text-secondary)",whiteSpace:"nowrap"}}>{ms.length} manicura{ms.length===1?"":"s"} · {es.length} encargada{es.length===1?"":"s"} · <strong>{horasLocal.toFixed(1)} h</strong></p></div><div style={{display:"flex",alignItems:"center",gap:5}}><Badge color="info">{ms.length+es.length}</Badge>{!compacto&&<button type="button" onClick={()=>toggleLocalColapsado(local.id)} title={colapsado?"Expandir local":"Contraer local"} style={{border:"none",background:COLORS.grayLight,color:"#555",width:25,height:25,borderRadius:7,cursor:"pointer",fontSize:13}}>{colapsado?"▾":"▴"}</button>}</div></div>
           {compacto&&<div style={{marginTop:8,border:`1px dashed ${dropLocalId===local.id?COLORS.pink:"#d8d8d8"}`,borderRadius:8,padding:"8px 5px",textAlign:"center",fontSize:10,fontWeight:600,color:dropLocalId===local.id?COLORS.pinkDark:"#777",background:dropLocalId===local.id?COLORS.pinkLight:"transparent"}}>Soltar aquí</div>}
           {!colapsado&&<div style={{display:compacto?"block":"block",position:compacto?"absolute":"static",width:compacto?1:"auto",height:compacto?1:"auto",overflow:compacto?"hidden":"visible",opacity:compacto?0:1,pointerEvents:compacto?"none":"auto"}} aria-hidden={compacto?"true":undefined}>
@@ -5549,15 +5613,15 @@ function ABMManicuras({ data, setData, reloadData, user }) {
           </div>}
         </Card>})}
       </div>
-      {!dragUserId&&inactivasEquipo.length>0&&<Card style={{marginTop:12,padding:12,background:"var(--color-background-secondary)"}}><div style={{display:"flex",justifyContent:"space-between",gap:8,alignItems:"center",marginBottom:8}}><div><h3 style={{margin:0,fontSize:13}}>Inactivas / sin local</h3><p style={{margin:"2px 0 0",fontSize:10,color:"var(--color-text-secondary)"}}>Arrastralas a un local para reactivarlas.</p></div><Badge color="gray">{inactivasEquipo.length}</Badge></div><div style={{display:"flex",flexWrap:"wrap",gap:6}}>{inactivasEquipo.map(m=><div key={m.id} draggable onDragStart={e=>{e.dataTransfer.effectAllowed="move";e.dataTransfer.setData("text/plain",String(m.id));setDragUserId(m.id);if(dragCompactTimer.current)clearTimeout(dragCompactTimer.current);dragCompactTimer.current=setTimeout(()=>setDragCompacto(true),120);}} onDragEnd={()=>{if(dragCompactTimer.current)clearTimeout(dragCompactTimer.current);dragCompactTimer.current=null;setDragCompacto(false);setDragUserId(null);setDropLocalId(null);}} style={{display:"flex",alignItems:"center",gap:6,padding:"6px 8px",border:"1px solid #ddd",borderRadius:10,background:"#fff",cursor:"grab",userSelect:"none",WebkitUserSelect:"none",minWidth:135}}><Avatar nombre={m.nombre} userId={m.id} photoUrl={m.fotoPerfilUrl} size={25}/><span style={{fontSize:11,fontWeight:600}}>{m.nombre}</span></div>)}</div></Card>}
-      {!dragUserId&&!dragCandidateId&&candidatasDisponiblesEquipo.length>0&&<Card style={{marginTop:12,padding:12,background:COLORS.successLight,border:`1px solid ${COLORS.success}55`}}><div style={{display:"flex",justifyContent:"space-between",alignItems:"center",gap:8,marginBottom:8}}><div><h3 style={{margin:0,fontSize:13,color:COLORS.success}}>Bolsa de candidatas aprobadas</h3><p style={{margin:"2px 0 0",fontSize:10,color:"var(--color-text-secondary)"}}>Arrastrá una candidata aprobada a un local para incorporarla como manicura.</p></div><Badge color="success">{candidatasDisponiblesEquipo.length}</Badge></div><div style={{display:"flex",flexWrap:"wrap",gap:6}}>{candidatasDisponiblesEquipo.map(c=><div key={`cand-${c.id}`} draggable onDragStart={e=>{e.dataTransfer.effectAllowed="move";e.dataTransfer.setData("text/plain",`candidate:${c.id}`);setDragCandidateId(c.id);if(dragCompactTimer.current)clearTimeout(dragCompactTimer.current);dragCompactTimer.current=setTimeout(()=>setDragCompacto(true),120);}} onDragEnd={()=>{if(dragCompactTimer.current)clearTimeout(dragCompactTimer.current);dragCompactTimer.current=null;setDragCompacto(false);setDragCandidateId(null);setDropLocalId(null);}} style={{display:"flex",alignItems:"center",gap:6,padding:"7px 9px",border:`1px solid ${COLORS.success}`,borderRadius:10,background:"#fff",cursor:"grab",userSelect:"none",minWidth:150}}><div style={{width:25,height:25,borderRadius:"50%",background:COLORS.successLight,color:COLORS.success,display:"flex",alignItems:"center",justifyContent:"center",fontWeight:800,fontSize:10}}>C</div><div><p style={{margin:0,fontSize:11,fontWeight:700}}>{c.nombre}</p><p style={{margin:0,fontSize:9,color:COLORS.success}}>Aprobada · lista para ingresar</p></div></div>)}</div></Card>}
+      {puedeGestionarReclutamiento&&candidatasDisponiblesEquipo.length>0&&<Card style={{marginTop:12,padding:12,background:COLORS.successLight,border:`1px solid ${COLORS.success}55`}}><div style={{display:"flex",justifyContent:"space-between",alignItems:"center",gap:8,marginBottom:8}}><div><h3 style={{margin:0,fontSize:13,color:COLORS.success}}>Bolsa de candidatas aprobadas</h3><p style={{margin:"2px 0 0",fontSize:10,color:"var(--color-text-secondary)"}}>Arrastrá una candidata aprobada a un local para incorporarla como manicura.</p></div><Badge color="success">{candidatasDisponiblesEquipo.length}</Badge></div><div style={{display:"flex",flexWrap:"wrap",gap:6}}>{candidatasDisponiblesEquipo.map(c=><div key={`cand-${c.id}`} onPointerDown={e=>iniciarArrastreCandidata(e,c)} onPointerMove={moverArrastreCandidata} onPointerUp={finalizarArrastreCandidata} onPointerCancel={cancelarArrastreCandidataPointer} style={{display:"flex",alignItems:"center",gap:6,padding:"7px 9px",border:`1px solid ${COLORS.success}`,borderRadius:10,background:"#fff",cursor:String(dragCandidateId||"")===String(c.id)?"grabbing":"grab",userSelect:"none",WebkitUserSelect:"none",WebkitUserDrag:"none",touchAction:"none",minWidth:150,position:"relative",zIndex:2,opacity:String(dragCandidateId||"")===String(c.id)?0.72:1,transition:"opacity .15s ease"}}><div style={{width:25,height:25,borderRadius:"50%",background:COLORS.successLight,color:COLORS.success,display:"flex",alignItems:"center",justifyContent:"center",fontWeight:800,fontSize:10,pointerEvents:"none"}}>C</div><div style={{pointerEvents:"none"}}><p style={{margin:0,fontSize:11,fontWeight:700}}>{c.nombre}</p><p style={{margin:0,fontSize:9,color:COLORS.success}}>Aprobada · lista para ingresar</p></div></div>)}</div></Card>}
       {dragUserId&&<div style={{position:"fixed",left:"50%",bottom:18,transform:"translateX(-50%)",zIndex:25000,width:"min(650px,calc(100vw - 28px))",display:"flex",gap:8,alignItems:"stretch"}}><div onDragOver={e=>e.preventDefault()} onDrop={e=>{e.preventDefault();const uid=parseInt(e.dataTransfer.getData("text/plain")||dragUserId||0);const m=manicuras.find(x=>parseInt(x.id)===uid);setDragCompacto(false);setDragUserId(null);setDropLocalId(null);if(m?.activo)abrirBaja(m);}} style={{flex:1,background:COLORS.dangerLight,border:`2px dashed ${COLORS.danger}`,borderRadius:14,padding:"12px 16px",boxShadow:"0 10px 30px rgba(0,0,0,.22)",textAlign:"center",color:COLORS.danger,fontWeight:700,fontSize:13}}>⊘ Dar de baja · soltá acá la manicura</div><button type="button" onClick={()=>{if(dragCompactTimer.current)clearTimeout(dragCompactTimer.current);dragCompactTimer.current=null;setDragCompacto(false);setDragUserId(null);setDropLocalId(null);}} style={{border:"1px solid rgba(120,120,120,.2)",background:"#fff",borderRadius:14,padding:"0 16px",fontWeight:700,cursor:"pointer",boxShadow:"0 10px 30px rgba(0,0,0,.16)"}}>Cancelar</button></div>}
-      {dragCandidateId&&<div style={{position:"fixed",left:"50%",bottom:18,transform:"translateX(-50%)",zIndex:25000,width:"min(520px,calc(100vw - 28px))",background:"#fff",border:`1px solid ${COLORS.success}`,borderRadius:14,padding:"11px 14px",boxShadow:"0 10px 30px rgba(0,0,0,.2)",display:"flex",justifyContent:"space-between",alignItems:"center",gap:10}}><span style={{fontSize:11,fontWeight:700,color:COLORS.success}}>Candidata aprobada · soltala sobre el local de ingreso</span><button onClick={()=>{setDragCompacto(false);setDragCandidateId(null);setDropLocalId(null);}} style={{border:"none",background:COLORS.grayLight,borderRadius:8,padding:"6px 10px",cursor:"pointer"}}>Cancelar</button></div>}
+      {candidateDragGhost&&<div style={{position:"fixed",left:candidateDragGhost.x+14,top:candidateDragGhost.y+14,zIndex:30000,pointerEvents:"none",background:"#fff",border:`2px solid ${COLORS.success}`,borderRadius:10,padding:"7px 10px",boxShadow:"0 8px 24px rgba(0,0,0,.18)",fontSize:11,fontWeight:800,color:COLORS.success,maxWidth:240,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>↗ {candidateDragGhost.nombre}</div>}
+      {puedeGestionarReclutamiento&&dragCandidateId&&<div style={{position:"fixed",left:"50%",bottom:18,transform:"translateX(-50%)",zIndex:25000,width:"min(520px,calc(100vw - 28px))",background:"#fff",border:`1px solid ${COLORS.success}`,borderRadius:14,padding:"11px 14px",boxShadow:"0 10px 30px rgba(0,0,0,.2)",display:"flex",justifyContent:"space-between",alignItems:"center",gap:10}}><span style={{fontSize:11,fontWeight:700,color:COLORS.success}}>Candidata aprobada · soltala sobre el local de ingreso</span><button onClick={()=>{setDragCompacto(false);candidatePointerDrag.current=null;setCandidateDragGhost(null);setDragCandidateId(null);setDropLocalId(null);}} style={{border:"none",background:COLORS.grayLight,borderRadius:8,padding:"6px 10px",cursor:"pointer"}}>Cancelar</button></div>}
     </div>:<>
-      <Card style={{marginBottom:12,padding:12}}><div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(180px,1fr))",gap:10}}><div><label style={{fontSize:11,color:"var(--color-text-secondary)"}}>Local</label><Select value={filtroLocal} onChange={setFiltroLocal}><option value="todos">Todos</option>{localesPermitidos.map(l=><option key={l.id} value={l.id}>{l.nombre}</option>)}</Select></div><div><label style={{fontSize:11,color:"var(--color-text-secondary)"}}>Estado</label><Select value={filtroEstado} onChange={setFiltroEstado}><option value="activas">Activas</option><option value="inactivas">Inactivas</option><option value="todas">Todas</option></Select></div><div><label style={{fontSize:11,color:"var(--color-text-secondary)"}}>Agrupar</label><Select value={agrupacion} onChange={setAgrupacion}><option value="local">Por local</option><option value="ninguna">Sin agrupar</option></Select></div></div></Card>
-      <div style={{display:"flex",flexDirection:"column",gap:14}}>{gruposManicuras.map(grupo=><div key={grupo.key}><div style={{display:"flex",alignItems:"center",gap:8,marginBottom:7}}><h3 style={{margin:0,fontSize:13}}>{grupo.label}</h3><Badge color="gray">{grupo.items.length}</Badge></div><div style={{display:"flex",flexDirection:"column",gap:8}}>{grupo.items.map(m=>{const local=data.locales.find(l=>l.id===localActualIdDe(m));return <Card key={m.id} style={{display:"flex",alignItems:"center",gap:12,flexWrap:"wrap"}}><Avatar nombre={m.nombre} userId={m.id} photoUrl={m.fotoPerfilUrl}/><div style={{flex:1,minWidth:0}}><p style={{margin:0,fontWeight:500,fontSize:14}}>{m.nombre}</p><p style={{margin:0,fontSize:12,color:"var(--color-text-secondary)"}}>{m.usuario} · {m.email||"Sin mail"} · {local?.nombre||"Sin local"}</p></div><Badge color={m.activo?"success":"gray"}>{m.activo?"Activa":"Inactiva"}</Badge><Btn onClick={()=>openEdit(m)} variant="ghost" size="sm">Editar</Btn><Btn onClick={()=>reenviarInvitacion(m)} variant="ghost" size="sm" disabled={!m.email}>Invitar</Btn><Btn onClick={()=>openEdit(m,"antiguedad")} variant="ghost" size="sm">Antigüedad</Btn></Card>})}</div></div>)}</div>
+      <Card style={{marginBottom:12,padding:12}}><div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(220px,1fr))",gap:10}}><div><label style={{fontSize:11,color:"var(--color-text-secondary)"}}>Local</label><Select value={filtroLocal} onChange={setFiltroLocal}><option value="todos">Todos</option>{localesPermitidos.map(l=><option key={l.id} value={l.id}>{l.nombre}</option>)}</Select></div><div><label style={{fontSize:11,color:"var(--color-text-secondary)"}}>Agrupar</label><Select value={agrupacion} onChange={setAgrupacion}><option value="local">Por local</option><option value="ninguna">Sin agrupar</option></Select></div></div></Card>
+      <div style={{display:"flex",flexDirection:"column",gap:14}}>{gruposManicuras.map(grupo=><div key={grupo.key}><div style={{display:"flex",alignItems:"center",gap:8,marginBottom:7}}><h3 style={{margin:0,fontSize:13}}>{grupo.label}</h3><Badge color="gray">{grupo.items.length}</Badge></div><div style={{display:"flex",flexDirection:"column",gap:8}}>{grupo.items.map(m=>{const local=data.locales.find(l=>l.id===localActualIdDe(m));return <Card key={m.id} style={{display:"flex",alignItems:"center",gap:12,flexWrap:"wrap"}}><Avatar nombre={m.nombre} userId={m.id} photoUrl={m.fotoPerfilUrl}/><div style={{flex:1,minWidth:0}}><p style={{margin:0,fontWeight:500,fontSize:14}}>{m.nombre}</p><p style={{margin:0,fontSize:12,color:"var(--color-text-secondary)"}}>{m.usuario} · {m.email||"Sin mail"} · {local?.nombre||"Sin local"}</p></div><Btn onClick={()=>openEdit(m)} variant="ghost" size="sm">Editar</Btn><Btn onClick={()=>reenviarInvitacion(m)} variant="ghost" size="sm" disabled={!m.email}>Invitar</Btn><Btn onClick={()=>openEdit(m,"antiguedad")} variant="ghost" size="sm">Antigüedad</Btn></Card>})}</div></div>)}</div>
     </>}
-    {candidateIncorpModal&&<Modal title="Incorporar candidata como manicura" onClose={()=>setCandidateIncorpModal(null)} width={560}><div style={{display:"flex",flexDirection:"column",gap:11}}><div style={{padding:10,borderRadius:10,background:COLORS.successLight,fontSize:12}}><strong>{candidateIncorpModal.candidata.nombre}</strong><br/>Ingreso a <strong>{data.locales.find(l=>Number(l.id)===Number(candidateIncorpModal.destinoId))?.nombre}</strong></div><ModalInput label="Fecha de ingreso" type="date" value={candidateIncorpModal.fechaInicio} onChange={v=>setCandidateIncorpModal(x=>({...x,fechaInicio:v}))}/><div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10}}><ModalInput label="Usuario" value={candidateIncorpModal.usuario} onChange={v=>setCandidateIncorpModal(x=>({...x,usuario:v}))}/><ModalInput label="Email" value={candidateIncorpModal.email} onChange={v=>setCandidateIncorpModal(x=>({...x,email:v}))}/></div><ModalInput label="Contraseña inicial" value={candidateIncorpModal.password} onChange={v=>setCandidateIncorpModal(x=>({...x,password:v}))}/><ModalSelect label="Tipo de relación" value={candidateIncorpModal.tipoRelacion} onChange={v=>setCandidateIncorpModal(x=>({...x,tipoRelacion:v}))}><option value="a_resolver">A resolver</option><option value="monotributista">Monotributista</option><option value="dependencia">Relación de dependencia</option></ModalSelect><p style={{margin:0,fontSize:11,color:"var(--color-text-secondary)"}}>Al confirmar se crea el usuario, se abre el primer período de antigüedad y la candidatura queda vinculada como incorporada. Los servicios de la prueba técnica no se copian automáticamente.</p><div style={{display:"flex",gap:8}}><Btn variant="success" onClick={confirmarIncorporacionCandidata} disabled={savingCandidateIncorp} style={{flex:1,justifyContent:"center"}}>{savingCandidateIncorp?"Incorporando...":"Confirmar incorporación"}</Btn><Btn variant="secondary" onClick={()=>setCandidateIncorpModal(null)} style={{flex:1,justifyContent:"center"}}>Cancelar</Btn></div></div></Modal>}
+    {puedeGestionarReclutamiento&&candidateIncorpModal&&<Modal title="Incorporar candidata como manicura" onClose={()=>setCandidateIncorpModal(null)} width={560}><div style={{display:"flex",flexDirection:"column",gap:11}}><div style={{padding:10,borderRadius:10,background:COLORS.successLight,fontSize:12}}><strong>{candidateIncorpModal.candidata.nombre}</strong><br/>Ingreso a <strong>{data.locales.find(l=>Number(l.id)===Number(candidateIncorpModal.destinoId))?.nombre}</strong></div><ModalInput label="Fecha de ingreso" type="date" value={candidateIncorpModal.fechaInicio} onChange={v=>setCandidateIncorpModal(x=>({...x,fechaInicio:v}))}/><div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10}}><ModalInput label="Usuario" value={candidateIncorpModal.usuario} onChange={v=>setCandidateIncorpModal(x=>({...x,usuario:v}))}/><ModalInput label="Email" value={candidateIncorpModal.email} onChange={v=>setCandidateIncorpModal(x=>({...x,email:v}))}/></div><ModalInput label="Contraseña inicial" value={candidateIncorpModal.password} onChange={v=>setCandidateIncorpModal(x=>({...x,password:v}))}/><ModalSelect label="Tipo de relación" value={candidateIncorpModal.tipoRelacion} onChange={v=>setCandidateIncorpModal(x=>({...x,tipoRelacion:v}))}><option value="a_resolver">A resolver</option><option value="monotributista">Monotributista</option><option value="dependencia">Relación de dependencia</option></ModalSelect><p style={{margin:0,fontSize:11,color:"var(--color-text-secondary)"}}>Al confirmar se crea el usuario, se abre el primer período de antigüedad y la candidatura queda vinculada como incorporada. Los servicios de la prueba técnica no se copian automáticamente.</p><div style={{display:"flex",gap:8}}><Btn variant="success" onClick={confirmarIncorporacionCandidata} disabled={savingCandidateIncorp} style={{flex:1,justifyContent:"center"}}>{savingCandidateIncorp?"Incorporando...":"Confirmar incorporación"}</Btn><Btn variant="secondary" onClick={()=>setCandidateIncorpModal(null)} style={{flex:1,justifyContent:"center"}}>Cancelar</Btn></div></div></Modal>}
     {encargadaEquipoEdit&&<EncargadaEquipoEditor encargada={encargadaEquipoEdit} data={data} setData={setData} user={user} reloadData={reloadData} onClose={()=>setEncargadaEquipoEdit(null)}/>}
     {movimientoModal&&<Modal title={movimientoModal.reactivacion?"Activar y asignar manicura":"Cambiar manicura de local"} onClose={()=>setMovimientoModal(null)} width={520}><div style={{display:"flex",flexDirection:"column",gap:12}}><div style={{padding:10,borderRadius:10,background:COLORS.infoLight,fontSize:13}}><strong>{movimientoModal.nombre}</strong><br/>{movimientoModal.origenId?(data.locales.find(l=>l.id===movimientoModal.origenId)?.nombre||"Sin local"):"Inactiva"} → <strong>{data.locales.find(l=>l.id===movimientoModal.destinoId)?.nombre}</strong></div>{!movimientoModal.reactivacion&&<ModalInput label="Fecha de fin en el local de origen" type="date" value={movimientoModal.fechaFin} onChange={v=>setMovimientoModal(m=>({...m,fechaFin:v}))}/>}<ModalInput label="Fecha de inicio en el local destino" type="date" value={movimientoModal.fechaInicio} onChange={v=>setMovimientoModal(m=>({...m,fechaInicio:v}))}/><ModalInput label="Observación (opcional)" value={movimientoModal.observacion} onChange={v=>setMovimientoModal(m=>({...m,observacion:v}))}/><div style={{display:"flex",gap:8}}><Btn onClick={confirmarMovimiento} disabled={savingMovimiento} style={{flex:1,justifyContent:"center"}}>{savingMovimiento?"Guardando...":"Confirmar"}</Btn><Btn variant="secondary" onClick={()=>setMovimientoModal(null)} style={{flex:1,justifyContent:"center"}}>Cancelar</Btn></div></div></Modal>}
     {bajaModal&&<Modal title="Dar de baja manicura" onClose={()=>setBajaModal(null)} width={500}><div style={{display:"flex",flexDirection:"column",gap:12}}><p style={{margin:0,fontSize:13}}>Se desactivará a <strong>{bajaModal.nombre}</strong> y se cerrará su período activo.</p><ModalInput label="Fecha de baja" type="date" value={bajaModal.fechaFin} onChange={v=>setBajaModal(b=>({...b,fechaFin:v}))}/><ModalSelect label="Motivo" value={bajaModal.motivo} onChange={v=>setBajaModal(b=>({...b,motivo:v}))}><option value="Baja">Baja</option><option value="Renuncia">Renuncia</option><option value="Despido">Despido</option><option value="Otro">Otro</option></ModalSelect><ModalInput label="Observación (opcional)" value={bajaModal.observacion} onChange={v=>setBajaModal(b=>({...b,observacion:v}))}/><div style={{display:"flex",gap:8}}><Btn variant="danger" onClick={confirmarBaja} disabled={savingMovimiento} style={{flex:1,justifyContent:"center"}}>{savingMovimiento?"Guardando...":"Dar de baja"}</Btn><Btn variant="secondary" onClick={()=>setBajaModal(null)} style={{flex:1,justifyContent:"center"}}>Cancelar</Btn></div></div></Modal>}
@@ -14316,6 +14380,9 @@ function DashboardComercial({ data, user }) {
   const [sortDir,setSortDir]=useState("desc");
   const [drillLocalId,setDrillLocalId]=useState(null);
   const [selectedPeriodo,setSelectedPeriodo]=useState("");
+  const [qualityKpi,setQualityKpi]=useState({loading:false,error:"",reclamos:0,reclamosAnt:0,incidencia:0,incidenciaAnt:0,porLocal:[]});
+  const [qualityDetailOpen,setQualityDetailOpen]=useState(false);
+  const [refreshNonce,setRefreshNonce]=useState(0);
 
   const allowedIds=useMemo(()=>new Set(getAssignedLocalIds(data,user).map(Number)),[data,user]);
   const localesBase=useMemo(()=>(data.locales||[]).filter(l=>localActivo(l)&&allowedIds.has(Number(l.id))),[data.locales,allowedIds]);
@@ -14348,6 +14415,7 @@ function DashboardComercial({ data, user }) {
         diarios=await api.getDashboardKpiLocalDiaTodo();
       }
       setDiaRows(diarios||[]);
+      setRefreshNonce(n=>n+1);
       const periodos=Array.from(new Set((diarios||[]).map(r=>String(r.fecha||"").slice(0,7)).filter(Boolean))).sort().reverse();
       setSelectedPeriodo(prev=>prev&&periodos.includes(prev)?prev:(periodos[0]||""));
     }catch(e){setError(e?.message||"No se pudo cargar el dashboard.");}
@@ -14382,6 +14450,44 @@ function DashboardComercial({ data, user }) {
     const ticket=visitas?ventas/visitas:0, ticketAnt=visitasAnt?ventasAnt/visitasAnt:0;
     return {ventas,visitas,ventasAnt,visitasAnt,ticket,ticketAnt,proy,proyVis,varVentas:dashboardPct(ventas,ventasAnt),varVisitas:dashboardPct(visitas,visitasAnt),varTicket:dashboardPct(ticket,ticketAnt)};
   },[filtradosMes]);
+
+  const qualityScopeKey=useMemo(()=>Array.from(visibleIds).sort((a,b)=>a-b).join("|"),[visibleIds]);
+  useEffect(()=>{
+    let alive=true;
+    if(!actualDesde||!actualHasta||!anteriorDesde||!anteriorHasta||visibleIds.size===0){
+      setQualityKpi({loading:false,error:"",reclamos:0,reclamosAnt:0,incidencia:0,incidenciaAnt:0,porLocal:[]});
+      return ()=>{alive=false;};
+    }
+    setQualityKpi(q=>({...q,loading:true,error:""}));
+    api.getReclamosRango(anteriorDesde,actualHasta).then(rows=>{
+      if(!alive)return;
+      const scoped=(rows||[]).filter(r=>visibleIds.has(Number(r.local_id??r.localId)));
+      const actuales=scoped.filter(r=>String(r.fecha||"")>=actualDesde&&String(r.fecha||"")<=actualHasta);
+      const anteriores=scoped.filter(r=>String(r.fecha||"")>=anteriorDesde&&String(r.fecha||"")<=anteriorHasta);
+      const reclamos=actuales.length;
+      const reclamosAnt=anteriores.length;
+      const incidencia=totals.visitas?reclamos/totals.visitas*100:0;
+      const incidenciaAnt=totals.visitasAnt?reclamosAnt/totals.visitasAnt*100:0;
+      const reclamosLocal=new Map(),reclamosLocalAnt=new Map();
+      actuales.forEach(r=>{const id=Number(r.local_id??r.localId);if(id)reclamosLocal.set(id,(reclamosLocal.get(id)||0)+1);});
+      anteriores.forEach(r=>{const id=Number(r.local_id??r.localId);if(id)reclamosLocalAnt.set(id,(reclamosLocalAnt.get(id)||0)+1);});
+      const porLocal=filtradosMes.map(m=>{
+        const id=Number(m.local_id);
+        const visitas=Number(m.visitas||0),visitasAnt=Number(m.visitas_mes_anterior||0);
+        const reclamos=Number(reclamosLocal.get(id)||0),reclamosAnt=Number(reclamosLocalAnt.get(id)||0);
+        return {
+          localId:id,local:m.local||((data.locales||[]).find(l=>Number(l.id)===id)?.nombre)||`Local ${id}`,
+          reclamos,visitas,incidencia:visitas?reclamos/visitas*100:null,
+          reclamosAnt,visitasAnt,incidenciaAnt:visitasAnt?reclamosAnt/visitasAnt*100:null,
+        };
+      }).sort((a,b)=>(Number(b.incidencia??-1)-Number(a.incidencia??-1))||b.reclamos-a.reclamos||String(a.local).localeCompare(String(b.local),"es"));
+      setQualityKpi({loading:false,error:"",reclamos,reclamosAnt,incidencia,incidenciaAnt,porLocal});
+    }).catch(e=>{
+      if(!alive)return;
+      setQualityKpi(q=>({...q,loading:false,error:e?.message||"No se pudieron cargar los reclamos.",porLocal:[]}));
+    });
+    return ()=>{alive=false;};
+  },[actualDesde,actualHasta,anteriorDesde,anteriorHasta,qualityScopeKey,totals.visitas,totals.visitasAnt,filtradosMes,data.locales,refreshNonce]);
 
   const aggregateRange=useCallback((desde,hasta)=>{
     const map=new Map();
@@ -14457,6 +14563,7 @@ function DashboardComercial({ data, user }) {
   const branchMaxVisits=useMemo(()=>Math.max(1,...mesRowsScope.map(r=>Number(r.visitas||0))),[mesRowsScope]);
   const periodoTxt=periodo?periodoLabel(periodo):"Mes actual";
   const selectedCount=selectedLocalIds===null||!(selectedLocalIds||[]).length?0:visibleIds.size;
+  const qualityIncidenceLabel=n=>new Intl.NumberFormat("es-AR",{minimumFractionDigits:2,maximumFractionDigits:2}).format(Number(n||0));
 
   const insights=useMemo(()=>{
     const out=[];
@@ -14536,6 +14643,44 @@ function DashboardComercial({ data, user }) {
       <DashboardMetricCard icon="👣" label={`Visitas ${periodoTxt}`} value={new Intl.NumberFormat("es-AR").format(Math.round(totals.visitas))} variation={totals.varVisitas} subValue={isCurrentPeriod?`Proyección: ${new Intl.NumberFormat("es-AR").format(Math.round(totals.proyVis))}`:`Anterior: ${new Intl.NumberFormat("es-AR").format(Math.round(totals.visitasAnt))}`} detail="atenciones consolidadas" accent />
       <DashboardMetricCard icon="🎟" label="Ticket promedio" value={fmtMoney(totals.ticket)} variation={totals.varTicket} subValue={`Anterior: ${fmtMoney(totals.ticketAnt)}`} detail="venta / visitas" />
     </div>
+
+    <Card style={{ padding:"10px 14px",boxShadow:"0 6px 18px rgba(0,0,0,.025)",border:"1px solid rgba(120,120,120,.10)",background:"linear-gradient(90deg,rgba(250,247,248,.92),rgba(255,255,255,.98))" }}>
+      <div style={{ display:"flex",alignItems:"center",gap:16,justifyContent:"space-between",flexWrap:"wrap" }}>
+        <div style={{ minWidth:145 }}>
+          <div style={{ display:"flex",alignItems:"center",gap:7 }}><span style={{ fontSize:14 }}>♡</span><strong style={{ fontSize:11.5,color:"var(--color-text-primary)" }}>Calidad</strong></div>
+          <p style={{ margin:"2px 0 0",fontSize:9.5,color:"var(--color-text-secondary)" }}>Indicadores secundarios del período visible</p>
+        </div>
+        <div className="niki-dashboard-two-col" style={{ flex:"1 1 440px",display:"grid",gridTemplateColumns:"repeat(2,minmax(180px,1fr))",gap:8 }}>
+          <div style={{ padding:"7px 11px",borderLeft:"2px solid rgba(114,36,62,.18)" }}>
+            <span style={{ display:"block",fontSize:9,textTransform:"uppercase",letterSpacing:".045em",fontWeight:800,color:"var(--color-text-secondary)" }}>Reclamos</span>
+            <div style={{ display:"flex",alignItems:"baseline",gap:7,marginTop:2 }}><strong style={{ fontSize:20,lineHeight:1,color:"var(--color-text-primary)" }}>{qualityKpi.loading?"…":new Intl.NumberFormat("es-AR").format(qualityKpi.reclamos)}</strong><span style={{ fontSize:9.5,color:"var(--color-text-secondary)" }}>Anterior: {qualityKpi.loading?"…":new Intl.NumberFormat("es-AR").format(qualityKpi.reclamosAnt)}</span></div>
+          </div>
+          <div style={{ padding:"7px 11px",borderLeft:"2px solid rgba(114,36,62,.18)" }}>
+            <div style={{ display:"flex",alignItems:"center",justifyContent:"space-between",gap:8 }}>
+              <span style={{ display:"block",fontSize:9,textTransform:"uppercase",letterSpacing:".045em",fontWeight:800,color:"var(--color-text-secondary)" }}>Incidencia</span>
+              <button type="button" onClick={()=>setQualityDetailOpen(true)} disabled={qualityKpi.loading||!qualityKpi.porLocal?.length} style={{ border:"1px solid rgba(114,36,62,.16)",background:"rgba(255,255,255,.88)",color:COLORS.pinkDark,borderRadius:7,padding:"3px 7px",fontSize:9.5,fontWeight:800,cursor:qualityKpi.loading||!qualityKpi.porLocal?.length?"default":"pointer",opacity:(qualityKpi.loading||!qualityKpi.porLocal?.length)?0.55:1 }}>Detalle</button>
+            </div>
+            <div style={{ display:"flex",alignItems:"baseline",gap:6,marginTop:2,flexWrap:"wrap" }}><strong style={{ fontSize:20,lineHeight:1,color:"var(--color-text-primary)" }}>{qualityKpi.loading?"…":qualityIncidenceLabel(qualityKpi.incidencia)}</strong><span style={{ fontSize:9.5,color:"var(--color-text-secondary)" }}>reclamos cada 100 visitas</span><span style={{ fontSize:9.5,color:"var(--color-text-secondary)" }}>· anterior {qualityKpi.loading?"…":qualityIncidenceLabel(qualityKpi.incidenciaAnt)}</span></div>
+          </div>
+        </div>
+      </div>
+      {qualityKpi.error&&<p style={{ margin:"5px 0 0",fontSize:9.5,color:COLORS.danger }}>No se pudo actualizar Calidad: {qualityKpi.error}</p>}
+    </Card>
+
+    {qualityDetailOpen&&<Modal title="Incidencia de reclamos por local" onClose={()=>setQualityDetailOpen(false)} width={720}>
+      <div style={{ display:"grid",gap:10 }}>
+        <div style={{ padding:"9px 11px",borderRadius:9,background:"var(--color-background-secondary)",fontSize:10.5,color:"var(--color-text-secondary)" }}>
+          {periodoTxt} · reclamos cada 100 visitas · {comparisonText}. Se respetan los filtros actuales del Dashboard.
+        </div>
+        <div style={{ overflowX:"auto",border:"1px solid rgba(120,120,120,.12)",borderRadius:10 }}>
+          <table style={{ width:"100%",borderCollapse:"collapse",fontSize:11,minWidth:590 }}>
+            <thead><tr style={{ background:"#f8f2f4",color:COLORS.pinkDark,textTransform:"uppercase",fontSize:9,letterSpacing:".03em" }}><th style={{ textAlign:"left",padding:"9px 10px" }}>Local</th><th style={{ textAlign:"right",padding:"9px 8px" }}>Reclamos</th><th style={{ textAlign:"right",padding:"9px 8px" }}>Visitas</th><th style={{ textAlign:"right",padding:"9px 8px" }}>Incidencia / 100</th><th style={{ textAlign:"right",padding:"9px 10px" }}>Anterior</th></tr></thead>
+            <tbody>{(qualityKpi.porLocal||[]).map((r,i)=><tr key={r.localId} style={{ borderTop:"1px solid rgba(120,120,120,.09)",background:i%2?"rgba(120,120,120,.018)":"transparent" }}><td style={{ padding:"9px 10px",fontWeight:700 }}>{r.local}</td><td style={{ padding:"9px 8px",textAlign:"right" }}>{new Intl.NumberFormat("es-AR").format(r.reclamos)}</td><td style={{ padding:"9px 8px",textAlign:"right" }}>{new Intl.NumberFormat("es-AR").format(r.visitas)}</td><td style={{ padding:"9px 8px",textAlign:"right",fontWeight:800,color:r.incidencia==null?"var(--color-text-secondary)":r.incidencia>=1?COLORS.danger:r.incidencia>=.5?COLORS.amber:COLORS.success }}>{r.incidencia==null?"—":qualityIncidenceLabel(r.incidencia)}</td><td style={{ padding:"9px 10px",textAlign:"right",color:"var(--color-text-secondary)" }}>{r.incidenciaAnt==null?"—":qualityIncidenceLabel(r.incidenciaAnt)}</td></tr>)}</tbody>
+          </table>
+        </div>
+        <p style={{ margin:0,fontSize:9.5,color:"var(--color-text-secondary)" }}>Un local sin visitas en el período muestra “—” para evitar interpretar una tasa 0 cuando no existe base de comparación.</p>
+      </div>
+    </Modal>}
 
     {insights.length>0&&<Card style={{ padding:14,boxShadow:"0 8px 24px rgba(0,0,0,.03)" }}>
       <div style={{ display:"flex",justifyContent:"space-between",alignItems:"baseline",gap:10,marginBottom:10 }}><div><h3 style={{ margin:0,fontSize:14 }}>Lectura rápida</h3><p style={{ margin:"3px 0 0",fontSize:10.5,color:"var(--color-text-secondary)" }}>Señales automáticas sobre los datos visibles</p></div><Badge color="pink">{insights.length} insights</Badge></div>
@@ -15437,13 +15582,14 @@ export default function App() {
     // Comisiones de detalle, importaciones y criterios ya no se cargan completas al iniciar
     // NikiAsistencia. Son tablas que crecen continuamente y hacían pesado el estado global.
     // Cada reporte carga únicamente el período que necesita.
+    const actor = actorOverride || userRef.current;
+    const reclutamientoPromise = isAdminLikeRole(actor?.rol) ? api.getReclutamientoCandidatasDisponibles().catch(()=>[]) : Promise.resolve([]);
     const [users, locales, horarios, asistencias, periodos, feriados, reglasCobertura, configCobertura, encargadoLocales, usuarioLocales, manicuraHistorialLocales, usuarioHistorialLaboral, personaDocumentos, comisionesConfiguracion, comisionesManicuraConfig, adelantos, garantias, informesDiarios, agendaServicios, agendaManicuraServicios, agendaListasPrecios, agendaLocalListas, agendaPreciosServicios, agendaListaVigencias, agendaPreciosVigencia, agendaClientes, agendaTurnos, agendaTurnosPagos, agendaTurnoServicios, agendaBloqueos, reclutamientoCandidatas] = await Promise.all([
-      api.getUsers(), api.getLocales(), api.getHorarios(), api.getAsistencias(), api.getPeriodos(), api.getFeriados(), api.getReglasCobertura(), api.getConfigCobertura(), api.getEncargadoLocales(), api.getUsuarioLocales(), api.getManicuraHistorialLocales(), api.getUsuarioHistorialLaboral(), api.getPersonaDocumentos(), api.getComisionesConfiguracion(), api.getComisionesManicuraConfig(), api.getAdelantos(), api.getGarantias(), api.getInformesDiarios(), api.getAgendaServicios(), api.getAgendaManicuraServicios(), api.getAgendaListasPrecios(), api.getAgendaLocalListas(), api.getAgendaPreciosServicios(), api.getAgendaListaVigencias(), api.getAgendaPreciosVigencia(), api.getAgendaClientes(), api.getAgendaTurnos(), api.getAgendaTurnosPagos(), api.getAgendaTurnoServicios(), api.getAgendaBloqueos(), (api.getReclutamientoCandidatasDisponibles().catch(()=>[]))
+      api.getUsers(), api.getLocales(), api.getHorarios(), api.getAsistencias(), api.getPeriodos(), api.getFeriados(), api.getReglasCobertura(), api.getConfigCobertura(), api.getEncargadoLocales(), api.getUsuarioLocales(), api.getManicuraHistorialLocales(), api.getUsuarioHistorialLaboral(), api.getPersonaDocumentos(), api.getComisionesConfiguracion(), api.getComisionesManicuraConfig(), api.getAdelantos(), api.getGarantias(), api.getInformesDiarios(), api.getAgendaServicios(), api.getAgendaManicuraServicios(), api.getAgendaListasPrecios(), api.getAgendaLocalListas(), api.getAgendaPreciosServicios(), api.getAgendaListaVigencias(), api.getAgendaPreciosVigencia(), api.getAgendaClientes(), api.getAgendaTurnos(), api.getAgendaTurnosPagos(), api.getAgendaTurnoServicios(), api.getAgendaBloqueos(), reclutamientoPromise
     ]);
     const nextData = {
       users: await Promise.all((users || []).map(async raw => {
         const u = normalizeUser(raw);
-        const actor = actorOverride || userRef.current;
         if (u.fotoPerfilPath && actor?.id && actor?.sessionToken) {
           try {
             u.fotoPerfilUrl = await api.signPersonaArchivo(actor, u.id, u.fotoPerfilPath, 3600);
