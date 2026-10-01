@@ -1574,6 +1574,22 @@ function getActiveManicuraLocalIds(data, userId, fecha = null) {
     .map(h => Number(h.localId))
     .filter(Boolean)));
 }
+function getManicuraLocalIdsForRange(data, userId, desde, hasta = null) {
+  const d = String(desde || dateKey(new Date())).slice(0,10);
+  const h = String(hasta || d).slice(0,10);
+  const historialUsuario = (data.manicuraHistorialLocales || []).filter(x => Number(x.userId) === Number(userId));
+  const ids = Array.from(new Set(historialUsuario
+    .filter(x => x.fechaInicio && x.fechaInicio <= h && (!x.fechaFin || x.fechaFin >= d))
+    .map(x => Number(x.localId))
+    .filter(Boolean)));
+  if (ids.length || historialUsuario.length) return ids;
+  const legacy = (data.users || []).find(u => Number(u.id) === Number(userId))?.localId;
+  return legacy ? [Number(legacy)] : [];
+}
+function manicuraAsignadaEnLocal(data, userId, localId, fecha) {
+  if (!userId || !localId || !fecha) return false;
+  return getManicuraLocalIdsForRange(data, userId, fecha, fecha).includes(Number(localId));
+}
 function getManicuraLocalIdForDate(data, userId, fecha, preferredLocalId = null) {
   const ids = getActiveManicuraLocalIds(data, userId, fecha);
   if (preferredLocalId && ids.includes(Number(preferredLocalId))) return Number(preferredLocalId);
@@ -2011,8 +2027,8 @@ function CalendarioHorarios({ data, setData, reloadData, user, agendaRequest, on
       preferred ?? (Number(uid) === Number(manicuraId) ? (Number(manicuraLocalId) || null) : null)
     ),
   [data, weekStart, manicuraId, manicuraLocalId]);
-  const periodoBloqueadoParaManicura = useCallback((periodo, uid) => {
-    const localIdManicura = getLocalIdForManicura(uid, `${periodo}-01`);
+  const periodoBloqueadoParaManicura = useCallback((periodo, uid, localIdOverride = null, fechaRef = null) => {
+    const localIdManicura = Number(localIdOverride) || getLocalIdForManicura(uid, fechaRef || `${periodo}-01`);
     return (data.periodosBloqueados || []).some(p => {
       if (typeof p === "string") return p === periodo;
       const samePeriodo = p.periodo === periodo;
@@ -2021,21 +2037,33 @@ function CalendarioHorarios({ data, setData, reloadData, user, agendaRequest, on
       return samePeriodo && sameUser && sameLocal;
     });
   }, [data.periodosBloqueados, getLocalIdForManicura]);
-  const puedeEditarManicura = useCallback((uid) => {
+  const puedeEditarManicura = useCallback((uid, fechaRef = null, localIdRef = null) => {
     const uidNum = parseInt(uid);
     if (esAdmin) return true;
     if (user.rol === "manicura") return uidNum === parseInt(user.id);
     const m = data.users.find(u => u.id === uidNum);
-    return esGestorLocal && m?.rol === "manicura" && getActiveManicuraLocalIds(data,m.id,dateKey(weekStart)).some(id=>allowedLocalIds.includes(Number(id)));
-  }, [esAdmin, esGestorLocal, user.rol, user.id, data.users, data.manicuraHistorialLocales, allowedLocalIds, weekStart]);
-  const bloqueadoPorFecha = useCallback((f, uid = manicuraId) =>
-    (periodoBloqueadoParaManicura(periodoDesdeFecha(f), uid) && !esAdmin) || !puedeEditarManicura(uid),
+    if (!esGestorLocal || m?.rol !== "manicura") return false;
+    if (localIdRef) return allowedLocalIds.includes(Number(localIdRef)) && manicuraAsignadaEnLocal(data, uidNum, Number(localIdRef), fechaRef || dateKey(hoy));
+    let desdeRef, hastaRef;
+    if (vista === "dia") desdeRef = hastaRef = fechaRef || diaVista;
+    else if (vista === "semana") {
+      const d = new Date(weekStart);
+      const h = new Date(weekStart); h.setDate(h.getDate()+5);
+      desdeRef = fechaRef || dateKey(d); hastaRef = fechaRef || dateKey(h);
+    } else {
+      desdeRef = fechaRef || `${anio}-${String(mes+1).padStart(2,"0")}-01`;
+      hastaRef = fechaRef || dateKey(new Date(anio, mes+1, 0));
+    }
+    return getManicuraLocalIdsForRange(data, uidNum, desdeRef, hastaRef).some(id=>allowedLocalIds.includes(Number(id)));
+  }, [esAdmin, esGestorLocal, user.rol, user.id, data.users, data.manicuraHistorialLocales, allowedLocalIds, vista, weekStart, diaVista, anio, mes]);
+  const bloqueadoPorFecha = useCallback((f, uid = manicuraId, localIdOverride = null) =>
+    (periodoBloqueadoParaManicura(periodoDesdeFecha(f), uid, localIdOverride, f) && !esAdmin) || !puedeEditarManicura(uid, f, localIdOverride),
     [periodoBloqueadoParaManicura, periodoDesdeFecha, manicuraId, esAdmin, puedeEditarManicura]
   );
 
-  const periodoBloqueadoActualEnServidor = useCallback(async (f, uid = manicuraId) => {
+  const periodoBloqueadoActualEnServidor = useCallback(async (f, uid = manicuraId, localIdOverride = null) => {
     const periodo = periodoDesdeFecha(f);
-    const localIdManicura = getLocalIdForManicura(uid, `${periodo}-01`);
+    const localIdManicura = Number(localIdOverride) || getLocalIdForManicura(uid, f);
     const rows = await api.getPeriodosBloqueadosPara(periodo, uid);
     return (rows || []).some(p => {
       const rowLocalId = p.local_id ?? p.localId ?? null;
@@ -2043,11 +2071,11 @@ function CalendarioHorarios({ data, setData, reloadData, user, agendaRequest, on
     });
   }, [manicuraId, periodoDesdeFecha, getLocalIdForManicura]);
 
-  const validarEdicionHorarioActual = useCallback(async (uid, f) => {
-    if (!puedeEditarManicura(uid)) return false;
+  const validarEdicionHorarioActual = useCallback(async (uid, f, localIdOverride = null) => {
+    if (!puedeEditarManicura(uid, f, localIdOverride)) return false;
     if (esAdmin) return true;
 
-    const estaBloqueado = await periodoBloqueadoActualEnServidor(f, uid);
+    const estaBloqueado = await periodoBloqueadoActualEnServidor(f, uid, localIdOverride);
     if (!estaBloqueado) return true;
 
     await reloadData();
@@ -2059,16 +2087,25 @@ function CalendarioHorarios({ data, setData, reloadData, user, agendaRequest, on
     return false;
   }, [puedeEditarManicura, esAdmin, periodoBloqueadoActualEnServidor, reloadData]);
 
-  const bloqueado = (periodoBloqueadoParaManicura(periodoActivoKey, manicuraId) && !esAdmin) || !puedeEditarManicura(manicuraId);
+  const bloqueado = (periodoBloqueadoParaManicura(periodoActivoKey, manicuraId, Number(manicuraLocalId)||null) && !esAdmin) || !puedeEditarManicura(manicuraId);
   const feriados = new Set((data.feriados||[]).map(f=>f.fecha));
   const manicuras = data.users.filter(u=>u.rol==="manicura"&&u.activo&&getActiveManicuraLocalIds(data,u.id,dateKey(hoy)).some(id=>localesHorarios.some(l=>Number(l.id)===Number(id)))).sort((a,b)=>(a.nombre||"").localeCompare(b.nombre||""));
   const manicurasPorLocal = useMemo(()=>localesHorarios.map(local=>({local,manicuras:manicuras.filter(m=>getActiveManicuraLocalIds(data,m.id,dateKey(hoy)).includes(Number(local.id)))})).filter(g=>g.manicuras.length),[localesHorarios,manicuras,data.manicuraHistorialLocales]);
   const selectedManicura = data.users.find(u=>u.id===parseInt(manicuraId));
   const selectedManicuraLocalIds = useMemo(() => {
-    const sampleDate = vista === "semana" ? dateKey(weekStart) : (vista === "dia" ? diaVista : `${anio}-${String(mes+1).padStart(2,"0")}-01`);
-    const ids = getActiveManicuraLocalIds(data, manicuraId, sampleDate).filter(id=>localesHorarios.some(l=>Number(l.id)===Number(id)));
-    return ids.length ? ids : [selectedManicura?.localId].filter(Boolean).map(Number);
-  }, [data.manicuraHistorialLocales, manicuraId, selectedManicura?.localId, vista, weekStart, diaVista, anio, mes, localesHorarios]);
+    let desdeRef, hastaRef;
+    if (vista === "semana") {
+      const end = new Date(weekStart); end.setDate(end.getDate()+5);
+      desdeRef = dateKey(weekStart); hastaRef = dateKey(end);
+    } else if (vista === "dia") {
+      desdeRef = hastaRef = diaVista;
+    } else {
+      desdeRef = `${anio}-${String(mes+1).padStart(2,"0")}-01`;
+      hastaRef = dateKey(new Date(anio, mes+1, 0));
+    }
+    return getManicuraLocalIdsForRange(data, manicuraId, desdeRef, hastaRef)
+      .filter(id=>localesHorarios.some(l=>Number(l.id)===Number(id)));
+  }, [data.manicuraHistorialLocales, data.users, manicuraId, vista, weekStart, diaVista, anio, mes, localesHorarios]);
   const selectedLocalId = Number(manicuraLocalId) && selectedManicuraLocalIds.includes(Number(manicuraLocalId)) ? Number(manicuraLocalId) : (selectedManicuraLocalIds[0] || null);
   useEffect(()=>{ if(selectedLocalId && String(manicuraLocalId)!==String(selectedLocalId)) setManicuraLocalId(String(selectedLocalId)); },[selectedLocalId]);
   useEffect(()=>{ setLocalH({}); setLocalHAll({}); },[selectedLocalId,manicuraId]);
@@ -2126,8 +2163,8 @@ function CalendarioHorarios({ data, setData, reloadData, user, agendaRequest, on
     confirmResolver.current = resolve;
     setConfirmDialog(config);
   }), []);
-  const confirmarCambioHorario = useCallback(async (uid, f, accion) => {
-    const localIdRegistro = Number(uid)===Number(manicuraId) ? selectedLocalId : getManicuraLocalIdForDate(data,uid,f);
+  const confirmarCambioHorario = useCallback(async (uid, f, accion, localIdOverride = null) => {
+    const localIdRegistro = Number(localIdOverride) || (Number(uid)===Number(manicuraId) ? selectedLocalId : getManicuraLocalIdForDate(data,uid,f));
     if(!localIdRegistro){ notifyToast("Seleccioná la sucursal del horario.","warning"); return false; }
     const key = horarioKey(uid, f, localIdRegistro);
     if (!hasHorarioPersistidoFor(uid, f, localIdRegistro)) return true;
@@ -2157,7 +2194,7 @@ function CalendarioHorarios({ data, setData, reloadData, user, agendaRequest, on
   }, [data, manicuraId, selectedLocalId]);
 
   const getB = f => localH[f] ?? bloques[f];
-  const getBFor = (uid, f) => localHAll[horarioKey(uid, f)] ?? getBloqueFor(uid, f);
+  const getBFor = (uid, f, localId = null) => localHAll[horarioKey(uid, f, localId)] ?? getBloqueFor(uid, f, localId);
 
   const rangoVisual = useMemo(() => {
     let starts=[], ends=[];
@@ -2175,9 +2212,9 @@ function CalendarioHorarios({ data, setData, reloadData, user, agendaRequest, on
     } else if(vista==="dia"){
       const d=new Date(diaVista+"T12:00:00");
       const lid=parseInt(localDiaId)||selectedLocalId||localesHorarios[0]?.id;
-      const dayMs=(puedeGestionar?manicuras:manicuras.filter(m=>m.id===user.id)).filter(m=>m.localId===Number(lid));
+      const dayMs=(puedeGestionar?manicuras:manicuras.filter(m=>m.id===user.id)).filter(m=>manicuraAsignadaEnLocal(data,m.id,lid,diaVista));
       pushHorario(lid,d,null);
-      dayMs.forEach(m=>{const b=getBFor(m.id,diaVista); if(b){starts.push(b.startSlot);ends.push(b.endSlot);}});
+      dayMs.forEach(m=>{const b=getBFor(m.id,diaVista,lid); if(b){starts.push(b.startSlot);ends.push(b.endSlot);}});
     }
     if(!starts.length||!ends.length)return {startSlot:CAL_DEFAULT_START*2,endSlot:CAL_DEFAULT_END*2};
     let startSlot=Math.max(0,Math.min(...starts));
@@ -2185,7 +2222,7 @@ function CalendarioHorarios({ data, setData, reloadData, user, agendaRequest, on
     startSlot=Math.floor(startSlot/2)*2; endSlot=Math.ceil(endSlot/2)*2;
     if(endSlot-startSlot<8)endSlot=Math.min(CAL_TOTAL_SLOTS,startSlot+8);
     return {startSlot,endSlot};
-  }, [vista, selectedLocalId, weekStart, diaVista, localDiaId, localHorarios, bloques, localH, localHAll, manicuras]);
+  }, [vista, selectedLocalId, weekStart, diaVista, localDiaId, localHorarios, bloques, localH, localHAll, manicuras, data.manicuraHistorialLocales]);
   const viewStartSlot=rangoVisual.startSlot, viewEndSlot=rangoVisual.endSlot;
   const viewStartHour=Math.floor(viewStartSlot/2), viewEndHour=Math.ceil(viewEndSlot/2);
   const viewHours=Array.from({length:Math.max(1,viewEndHour-viewStartHour)},(_,i)=>viewStartHour+i);
@@ -2249,15 +2286,15 @@ function CalendarioHorarios({ data, setData, reloadData, user, agendaRequest, on
   }, []);
 
   const saveBloqueFor = useCallback(async (uid, f, b, opts = {}) => {
-    const localIdRegistro = Number(uid)===Number(manicuraId) ? selectedLocalId : getManicuraLocalIdForDate(data,uid,f);
+    const localIdRegistro = Number(opts.localId) || (Number(uid)===Number(manicuraId) ? selectedLocalId : getManicuraLocalIdForDate(data,uid,f));
     if(!localIdRegistro){ notifyToast("Seleccioná la sucursal del horario.","warning"); return false; }
     if (getAsistenciaFor(uid, f, localIdRegistro)) return false;
-    if (!(await validarEdicionHorarioActual(uid, f))) return false;
+    if (!(await validarEdicionHorarioActual(uid, f, localIdRegistro))) return false;
     if(!localIdRegistro){ notifyToast("Seleccioná la sucursal del horario.","warning"); return false; }
     const key = horarioKey(uid, f, localIdRegistro);
-    const bl = b || (parseInt(uid) === parseInt(manicuraId) ? localH[f] || bloques[f] : localHAll[key] || getBloqueFor(uid, f));
+    const bl = b || (parseInt(uid) === parseInt(manicuraId) ? localH[f] || bloques[f] : localHAll[key] || getBloqueFor(uid, f, localIdRegistro));
     if (!bl) return false;
-    const ok = await confirmarCambioHorario(uid, f, "modificarlo");
+    const ok = await confirmarCambioHorario(uid, f, "modificarlo", localIdRegistro);
     if (!ok) {
       if (opts.clearSelected !== false && parseInt(uid) === parseInt(manicuraId)) setLocalH(p => { const n={...p}; delete n[f]; return n; });
       setLocalHAll(p => { const n={...p}; delete n[key]; return n; });
@@ -2301,15 +2338,15 @@ function CalendarioHorarios({ data, setData, reloadData, user, agendaRequest, on
 
   const saveBloque = useCallback(async (f, b) => saveBloqueFor(parseInt(manicuraId), f, b), [manicuraId, saveBloqueFor]);
 
-  const onAddBFor = useCallback(async (uid, f, b) => {
-    const localIdRegistro = Number(uid)===Number(manicuraId) ? selectedLocalId : getManicuraLocalIdForDate(data,uid,f);
+  const onAddBFor = useCallback(async (uid, f, b, opts = {}) => {
+    const localIdRegistro = Number(opts.localId) || (Number(uid)===Number(manicuraId) ? selectedLocalId : getManicuraLocalIdForDate(data,uid,f));
     if(!localIdRegistro){ notifyToast("Seleccioná la sucursal del horario.","warning"); return false; }
     if (getAsistenciaFor(uid, f, localIdRegistro)) return false;
-    if (!(await validarEdicionHorarioActual(uid, f))) return false;
+    if (!(await validarEdicionHorarioActual(uid, f, localIdRegistro))) return false;
     if(!localIdRegistro){ notifyToast("Seleccioná la sucursal del horario.","warning"); return false; }
     const key = horarioKey(uid, f, localIdRegistro);
     const alreadyPersisted = hasHorarioPersistidoFor(uid, f, localIdRegistro);
-    if (alreadyPersisted && !(await confirmarCambioHorario(uid, f, "modificarlo"))) return false;
+    if (alreadyPersisted && !(await confirmarCambioHorario(uid, f, "modificarlo", localIdRegistro))) return false;
     if (parseInt(uid) === parseInt(manicuraId)) setLocalH(p => ({...p,[f]:b}));
     setLocalHAll(p => ({...p,[key]:b}));
     const s = calFromSlot(b.startSlot), e = calFromSlot(b.endSlot);
@@ -2351,12 +2388,12 @@ function CalendarioHorarios({ data, setData, reloadData, user, agendaRequest, on
 
   const onAddB = useCallback(async (f, b) => onAddBFor(parseInt(manicuraId), f, b), [manicuraId, onAddBFor]);
 
-  const onDeleteBFor = useCallback(async (uid, f) => {
-    const localIdRegistro = Number(uid)===Number(manicuraId) ? selectedLocalId : getManicuraLocalIdForDate(data,uid,f);
+  const onDeleteBFor = useCallback(async (uid, f, opts = {}) => {
+    const localIdRegistro = Number(opts.localId) || (Number(uid)===Number(manicuraId) ? selectedLocalId : getManicuraLocalIdForDate(data,uid,f));
     if(!localIdRegistro){ notifyToast("Seleccioná la sucursal del horario.","warning"); return false; }
     if (getAsistenciaFor(uid, f, localIdRegistro)) return false;
-    if (!(await validarEdicionHorarioActual(uid, f))) return false;
-    if (!(await confirmarCambioHorario(uid, f, "eliminarlo"))) return false;
+    if (!(await validarEdicionHorarioActual(uid, f, localIdRegistro))) return false;
+    if (!(await confirmarCambioHorario(uid, f, "eliminarlo", localIdRegistro))) return false;
     const anterior = (data.horarios || []).find(h => registroCoincideLocal(data,h,uid,f,localIdRegistro)) || null;
     setData(prev => ({ ...prev, horarios:(prev?.horarios || []).filter(h => !(registroCoincideLocal(prev,h,uid,f,localIdRegistro))) }));
     try {
@@ -2652,8 +2689,8 @@ function CalendarioHorarios({ data, setData, reloadData, user, agendaRequest, on
   const renderDiarioTodos = () => {
     const baseCols = puedeGestionar ? manicuras : manicuras.filter(m => m.id === user.id);
     const selectedLocalForDay = parseInt(localDiaId) || selectedLocalId || localesHorarios[0]?.id || null;
-    const cols = selectedLocalForDay ? baseCols.filter(m => m.localId === parseInt(selectedLocalForDay)) : [];
-    const totalDia = cols.reduce((a,m)=>a+calHoras(getBloqueFor(m.id, diaVista)),0);
+    const cols = selectedLocalForDay ? baseCols.filter(m => manicuraAsignadaEnLocal(data,m.id,selectedLocalForDay,diaVista)) : [];
+    const totalDia = cols.reduce((a,m)=>a+calHoras(getBFor(m.id, diaVista, selectedLocalForDay)),0);
     const minColW = isMobile ? 118 : 0;
     const innerMinWidth = isMobile ? Math.max(cols.length * minColW, 1) : "100%";
     const gridCols = isMobile
@@ -2683,31 +2720,32 @@ function CalendarioHorarios({ data, setData, reloadData, user, agendaRequest, on
             <div style={{ display:"grid",gridTemplateColumns:gridCols,height:48,borderBottom:"0.5px solid rgba(120,120,120,0.24)" }}>
               {cols.map(m=><div key={m.id} style={{ textAlign:"center",padding:"7px 6px",borderLeft:"0.5px solid rgba(120,120,120,0.24)",background:"var(--color-background-primary)",minWidth:0 }}>
                 <p style={{ margin:0,fontSize:11,fontWeight:600,color:"var(--color-text-primary)",whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis" }}>{m.nombre}</p>
-                <p style={{ margin:"2px 0 0",fontSize:10,color:"var(--color-text-secondary)",whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis" }}>{data.locales.find(l=>l.id===m.localId)?.nombre||"Sin local"}</p>
+                <p style={{ margin:"2px 0 0",fontSize:10,color:"var(--color-text-secondary)",whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis" }}>{data.locales.find(l=>Number(l.id)===Number(selectedLocalForDay))?.nombre||"Sin local"}</p>
               </div>)}
             </div>
 
             <div style={{ display:"grid",gridTemplateColumns:gridCols,height:viewGridH+18 }}>
               {cols.map(m=>{
-                const b=getBFor(m.id,diaVista), asis=getAsistenciaFor(m.id,diaVista), fer=feriados.has(diaVista);
-                const dayDate=new Date(diaVista+"T12:00:00"), localDay=horarioLocalDia(m.localId,dayDate.getDay()), closedLocal=!localDay.abierto;
-                const lockedByPeriod = bloqueadoPorFecha(diaVista, m.id);
+                const b=getBFor(m.id,diaVista,selectedLocalForDay), asis=getAsistenciaFor(m.id,diaVista,selectedLocalForDay), fer=feriados.has(diaVista);
+                const dayDate=new Date(diaVista+"T12:00:00"), localDay=horarioLocalDia(selectedLocalForDay,dayDate.getDay()), closedLocal=!localDay.abierto;
+                const lockedByPeriod = bloqueadoPorFecha(diaVista, m.id, selectedLocalForDay);
                 const lockedForEdit = lockedByPeriod || !!asis || closedLocal;
                 return <div key={m.id}
                   onClick={async e=>{
-                    if (!puedeEditarManicura(m.id)) return;
+                    if (!puedeEditarManicura(m.id, diaVista, selectedLocalForDay)) return;
                     setManicuraId(m.id);
+                    setManicuraLocalId(String(selectedLocalForDay));
                     if (b || lockedForEdit) { setModalDk(diaVista); return; }
                     const rect=e.currentTarget.getBoundingClientRect();
                     const slot=slotFromPointer(e.clientY-rect.top);
                     const nb={startSlot:slot,endSlot:Math.min(viewEndSlot,slot+8)};
                     const st=calFromSlot(nb.startSlot), en=calFromSlot(nb.endSlot);
-                    await onAddBFor(m.id, diaVista, nb);
+                    await onAddBFor(m.id, diaVista, nb, { localId:selectedLocalForDay });
                   }}
-                  style={{ position:"relative",height:viewGridH+18,borderLeft:"0.5px solid rgba(120,120,120,0.24)",cursor:puedeEditarManicura(m.id)&&!b&&!lockedForEdit?"cell":"default",background:closedLocal?"rgba(120,120,120,0.06)":fer?"rgba(186,117,23,0.05)":"transparent",minWidth:0 }}>
+                  style={{ position:"relative",height:viewGridH+18,borderLeft:"0.5px solid rgba(120,120,120,0.24)",cursor:puedeEditarManicura(m.id,diaVista,selectedLocalForDay)&&!b&&!lockedForEdit?"cell":"default",background:closedLocal?"rgba(120,120,120,0.06)":fer?"rgba(186,117,23,0.05)":"transparent",minWidth:0 }}>
                   {viewHours.map((_,hi)=><div key={hi} style={{ position:"absolute",top:hi*CAL_SLOT_H,left:0,right:0,height:CAL_SLOT_H,borderTop:"0.5px solid rgba(120,120,120,0.24)",pointerEvents:"none" }}><div style={{ position:"absolute",top:"50%",left:0,right:0,borderTop:"1px dashed rgba(120,120,120,0.16)",opacity:0.5 }}/></div>)}
                   <div style={{ position:"absolute",top:viewGridH,left:0,right:0,borderTop:"0.5px solid rgba(120,120,120,0.24)",pointerEvents:"none" }}/>
-                  {b && <BloqueCalendario fecha={diaVista} bloque={b} onChange={(f2,nb)=>{ if(asis) return; setLocalHAll(p=>({...p,[horarioKey(m.id,f2)]:nb})); }} onCommit={(f2,nb)=>saveBloqueFor(m.id,f2,nb)} onDelete={(f2)=>onDeleteBFor(m.id,f2)} bloqueado={lockedByPeriod || !!asis} onOpen={()=>{ setManicuraId(m.id); setModalDk(diaVista); }} asistencia={asis} manicuraNombre={m.nombre} onTooltip={(ev,f,bl)=>showTooltip(ev,f,bl,m.nombre,asis)} onHideTooltip={hideTooltip} viewStartSlot={viewStartSlot} viewEndSlot={viewEndSlot}/>} 
+                  {b && <BloqueCalendario fecha={diaVista} bloque={b} onChange={(f2,nb)=>{ if(asis) return; setLocalHAll(p=>({...p,[horarioKey(m.id,f2,selectedLocalForDay)]:nb})); }} onCommit={(f2,nb)=>saveBloqueFor(m.id,f2,nb,{localId:selectedLocalForDay})} onDelete={(f2)=>onDeleteBFor(m.id,f2,{localId:selectedLocalForDay})} bloqueado={lockedByPeriod || !!asis} onOpen={()=>{ setManicuraId(m.id); setManicuraLocalId(String(selectedLocalForDay)); setModalDk(diaVista); }} asistencia={asis} manicuraNombre={m.nombre} onTooltip={(ev,f,bl)=>showTooltip(ev,f,bl,m.nombre,asis)} onHideTooltip={hideTooltip} viewStartSlot={viewStartSlot} viewEndSlot={viewEndSlot}/>} 
                   {!b && closedLocal && <div style={{ position:"absolute",left:4,right:4,top:8,background:"#f1f1f1",color:"#777",borderRadius:6,padding:"4px 6px",fontSize:10,fontWeight:600,textAlign:"center" }}>Local cerrado</div>}
                   {!b && lockedByPeriod && <div style={{ position:"absolute",left:4,right:4,top:8,background:COLORS.amberLight,color:COLORS.amber,borderRadius:6,padding:"4px 6px",fontSize:10,fontWeight:600,textAlign:"center" }}>Bloqueado</div>}
                 </div>;
@@ -7532,7 +7570,7 @@ function GarantiasServicios({ data, reloadData, user }) {
   const esAdmin = isAdminLikeRole(user.rol);
   const allowedLocalIds = esAdmin ? data.locales.map(l=>l.id) : getAssignedLocalIds(data, user);
   const locales = data.locales.filter(l=>allowedLocalIds.includes(l.id));
-  const manicuras = data.users.filter(u=>u.rol==="manicura" && u.activo && allowedLocalIds.includes(u.localId));
+  const manicuras = data.users.filter(u=>u.rol==="manicura" && u.activo);
   const [periodo, setPeriodo] = useState(fmtPeriodo(hoy));
   const [localFiltro, setLocalFiltro] = useState(locales[0]?.id ? String(locales[0].id) : "todos");
   const [modal, setModal] = useState(false);
@@ -7677,14 +7715,16 @@ function GarantiasServicios({ data, reloadData, user }) {
     });
     setFiles([]); setErr(""); setModal(true);
   };
-  const manicurasLocal = manicuras.filter(m=>!form.localId || m.localId===parseInt(form.localId));
+  const fechaReferenciaOriginal = form.fechaServicioOriginal || form.fechaReparacion || dateKey(hoy);
+  const manicurasLocal = manicuras.filter(m=>!form.localId || manicuraAsignadaEnLocal(data,m.id,parseInt(form.localId),fechaReferenciaOriginal));
   const manicuraIdsConServicioOriginal = new Set((comisionesFuente||[])
     .map(c => c.userId)
     .filter(Boolean));
   const manicurasOriginalDisponibles = manicurasLocal.filter(m => manicuraIdsConServicioOriginal.has(m.id) || String(m.id) === String(form.manicuraOriginalId || ""));
   const manicurasReparacionDisponibles = manicuras.filter(m => {
-    if (!form.localId || m.localId !== parseInt(form.localId)) return false;
-    const tieneAgenda = (data.horarios || []).some(h => h.userId === m.id && h.fecha === form.fechaReparacion && h.trabaja && h.entrada && h.salida);
+    const lid = parseInt(form.localId);
+    if (!lid || !form.fechaReparacion || !manicuraAsignadaEnLocal(data,m.id,lid,form.fechaReparacion)) return false;
+    const tieneAgenda = (data.horarios || []).some(h => registroCoincideLocal(data,h,m.id,form.fechaReparacion,lid) && h.trabaja && h.entrada && h.salida);
     return tieneAgenda || String(m.id) === String(form.manicuraReparacionId || "");
   });
   const comisionesOriginales = (comisionesFuente||[]).filter(c =>
@@ -7737,7 +7777,10 @@ function GarantiasServicios({ data, reloadData, user }) {
     if (((form.fotos || []).length + files.length) > MAX_GARANTIA_FOTOS) { setErr(`Máximo ${MAX_GARANTIA_FOTOS} fotos por garantía.`); return; }
     const original = data.users.find(u=>u.id===parseInt(form.manicuraOriginalId));
     const reparacion = data.users.find(u=>u.id===parseInt(form.manicuraReparacionId));
-    if (!esAdmin && (!allowedLocalIds.includes(parseInt(form.localId)) || !allowedLocalIds.includes(original?.localId) || !allowedLocalIds.includes(reparacion?.localId))) { setErr("No tenés permiso para registrar garantías en ese local."); return; }
+    const garantiaLocalId = parseInt(form.localId);
+    if (!esAdmin && !allowedLocalIds.includes(garantiaLocalId)) { setErr("No tenés permiso para registrar garantías en ese local."); return; }
+    if (!manicuraAsignadaEnLocal(data, original?.id, garantiaLocalId, form.fechaServicioOriginal)) { setErr("La manicura original no estaba asignada a ese local en la fecha del servicio."); return; }
+    if (!manicuraAsignadaEnLocal(data, reparacion?.id, garantiaLocalId, form.fechaReparacion)) { setErr("La manicura que realiza la reparación no está asignada a ese local en la fecha indicada."); return; }
     setSaving(true);
     try {
       const payload = {
@@ -7895,7 +7938,13 @@ function AdelantosManicuras({ data, reloadData, user }) {
   const [confirmDeletePlan, setConfirmDeletePlan] = useState(null);
   const [saving, setSaving] = useState(false);
   const [err, setErr] = useState("");
-  const manicurasFormulario = data.users.filter(u => u.rol === "manicura" && u.activo && (!form.localId || u.localId === parseInt(form.localId)) && (esAdmin || allowedLocalIds.includes(u.localId)));
+  const manicurasFormulario = data.users.filter(u => {
+    if (u.rol !== "manicura" || !u.activo) return false;
+    const lid = parseInt(form.localId);
+    if (!lid) return true;
+    if (!esAdmin && !allowedLocalIds.includes(lid)) return false;
+    return manicuraAsignadaEnLocal(data, u.id, lid, form.fecha || defaultFecha);
+  });
 
   const addWeeks = (fecha, n) => {
     const d = parseDateLocal(fecha) || new Date();
@@ -7940,11 +7989,11 @@ function AdelantosManicuras({ data, reloadData, user }) {
     if (!manicurasFormulario.some(m => m.id === parseInt(form.userId))) {
       setForm(f => ({ ...f, userId: manicurasFormulario[0]?.id || "" }));
     }
-  }, [form.localId, data.users]);
+  }, [form.localId, form.fecha, data.users, data.manicuraHistorialLocales]);
 
   const openNewAdelanto = () => {
     const lid = parseInt(localId || localesPermitidos[0]?.id || 0) || "";
-    const disponibles = data.users.filter(u => u.rol === "manicura" && u.activo && (!lid || u.localId === Number(lid)) && (esAdmin || allowedLocalIds.includes(u.localId)));
+    const disponibles = data.users.filter(u => u.rol === "manicura" && u.activo && (!lid || manicuraAsignadaEnLocal(data,u.id,lid,defaultFecha)) && (esAdmin || allowedLocalIds.includes(Number(lid))));
     setErr("");
     setForm({ fecha:defaultFecha, localId:lid, userId:disponibles[0]?.id || "", importe:"", concepto:"Adelanto", observacion:"", plan:"semana", cuotasTotal:"2", primeraFechaDescuento:defaultFecha, cuotas:[{ fecha:defaultFecha, importe:"" }] });
     setNewOpen(true);
@@ -7978,7 +8027,7 @@ function AdelantosManicuras({ data, reloadData, user }) {
     const formLocalId = parseInt(form.localId);
     if (!manicura) { setErr("Seleccioná una manicura válida."); return; }
     if (!formLocalId) { setErr("Seleccioná un local válido."); return; }
-    if (manicura.localId !== formLocalId) { setErr("La manicura no corresponde al local seleccionado."); return; }
+    if (!manicuraAsignadaEnLocal(data, manicura.id, formLocalId, form.fecha)) { setErr("La manicura no está asignada al local seleccionado en la fecha del adelanto."); return; }
     if (!esAdmin && !allowedLocalIds.includes(formLocalId)) { setErr("No tenés permiso para cargar adelantos en ese local."); return; }
     const plan = buildCuotasFromForm();
     if (plan.error) { setErr(plan.error); return; }
@@ -7992,7 +8041,7 @@ function AdelantosManicuras({ data, reloadData, user }) {
           fecha_descuento: cuota.fecha,
           periodo: cuota.fecha.slice(0,7),
           user_id: manicura.id,
-          local_id: manicura.localId,
+          local_id: formLocalId,
           importe: cuota.importe,
           importe_total: plan.importeTotal,
           concepto: form.concepto || "Adelanto",
@@ -8530,13 +8579,7 @@ function ReclamoEditorModal({ data, user, initial=null, forcedLocalId=null, allo
   const [saving,setSaving]=useState(false);
   const [err,setErr]=useState("");
   const fechaReferenciaManicuraArreglo = form.fechaArreglo || form.fecha || dateKey(hoy);
-  const manicurasLocal=(data.users||[]).filter(u=>{
-    if(u.rol!=="manicura" || u.activo===false) return false;
-    const localesActivos=getActiveManicuraLocalIds(data,u.id,fechaReferenciaManicuraArreglo);
-    if(localesActivos.length) return localesActivos.includes(Number(form.localId));
-    // Compatibilidad con manicuras que todavía no tengan historial por local.
-    return Number(u.localId)===Number(form.localId);
-  });
+  const manicurasLocal=(data.users||[]).filter(u=>u.rol==="manicura"&&u.activo!==false&&manicuraAsignadaEnLocal(data,u.id,form.localId,fechaReferenciaManicuraArreglo));
 
   useEffect(()=>{
     if(!form.localId || clienteQuery.trim().length<2 || clienteSeleccionado===clienteQuery.trim()) { setClienteOpciones([]); return; }
