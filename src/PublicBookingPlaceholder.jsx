@@ -235,12 +235,54 @@ async function publicGetOptional(path, signal) {
   }
 }
 
-async function createPublicBooking(payload) {
-  const res = await fetch(`${SUPABASE_URL}/functions/v1/crear-turno-publico`, {
+const PUBLIC_SESSION_KEY = "niki_public_client_session_v1";
+
+async function authRequest(path, body) {
+  const res = await fetch(`${SUPABASE_URL}/auth/v1/${path}`, {
+    method: "POST",
+    headers: { apikey: SUPABASE_KEY, "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  const text = await res.text();
+  const data = text ? JSON.parse(text) : null;
+  if (!res.ok) throw new Error(data?.msg || data?.error_description || data?.message || "No pudimos validar el email.");
+  return data;
+}
+
+async function sendEmailOtp(email) {
+  await authRequest("otp", { email: normalizeText(email).toLowerCase(), create_user: true });
+}
+
+async function verifyEmailOtp(email, token) {
+  return authRequest("verify", { email: normalizeText(email).toLowerCase(), token: normalizeText(token), type: "email" });
+}
+
+async function refreshPublicSession(refreshToken) {
+  return authRequest("token?grant_type=refresh_token", { refresh_token: refreshToken });
+}
+
+async function fetchClientProfile(accessToken) {
+  const res = await fetch(`${SUPABASE_URL}/functions/v1/cliente-publico-v2`, {
     method: "POST",
     headers: {
       apikey: SUPABASE_KEY,
-      Authorization: `Bearer ${SUPABASE_KEY}`,
+      Authorization: `Bearer ${accessToken}`,
+      "Content-Type": "application/json",
+    },
+    body: "{}",
+  });
+  const text = await res.text();
+  const data = text ? JSON.parse(text) : null;
+  if (!res.ok || data?.ok === false) throw new Error(data?.error || "No pudimos recuperar tus datos.");
+  return data;
+}
+
+async function createPublicBooking(payload, accessToken) {
+  const res = await fetch(`${SUPABASE_URL}/functions/v1/crear-turno-publico-v2`, {
+    method: "POST",
+    headers: {
+      apikey: SUPABASE_KEY,
+      Authorization: `Bearer ${accessToken}`,
       "Content-Type": "application/json",
     },
     body: JSON.stringify(payload),
@@ -253,15 +295,15 @@ async function createPublicBooking(payload) {
   return data;
 }
 
-async function fetchClientBookings(payload) {
-  const res = await fetch(`${SUPABASE_URL}/functions/v1/consultar-turnos-cliente`, {
+async function fetchClientBookings(accessToken) {
+  const res = await fetch(`${SUPABASE_URL}/functions/v1/consultar-turnos-cliente-v2`, {
     method: "POST",
     headers: {
       apikey: SUPABASE_KEY,
-      Authorization: `Bearer ${SUPABASE_KEY}`,
+      Authorization: `Bearer ${accessToken}`,
       "Content-Type": "application/json",
     },
-    body: JSON.stringify(payload),
+    body: "{}",
   });
   const text = await res.text();
   const data = text ? JSON.parse(text) : null;
@@ -424,6 +466,14 @@ export default function PublicBookingApp() {
   const [bookingError, setBookingError] = useState("");
   const [bookingLoading, setBookingLoading] = useState(false);
   const [bookingResult, setBookingResult] = useState(null);
+  const [clientSession, setClientSession] = useState(null);
+  const [identityLoading, setIdentityLoading] = useState(true);
+  const [identityEmail, setIdentityEmail] = useState("");
+  const [identityCode, setIdentityCode] = useState("");
+  const [identityCodeSent, setIdentityCodeSent] = useState(false);
+  const [identityBusy, setIdentityBusy] = useState(false);
+  const [identityError, setIdentityError] = useState("");
+  const [clientProfile, setClientProfile] = useState(null);
   const [lookup, setLookup] = useState({ email: "", telefono: "" });
   const [lookupLoading, setLookupLoading] = useState(false);
   const [lookupError, setLookupError] = useState("");
@@ -459,6 +509,121 @@ export default function PublicBookingApp() {
     email: "",
     observacion: "",
   });
+
+  useEffect(() => {
+    let cancelled = false;
+
+    async function restoreIdentity() {
+      setIdentityLoading(true);
+      try {
+        const raw = window.localStorage.getItem(PUBLIC_SESSION_KEY);
+        if (!raw) return;
+        const stored = JSON.parse(raw);
+        if (!stored?.refresh_token) return;
+        const refreshed = await refreshPublicSession(stored.refresh_token);
+        if (cancelled || !refreshed?.access_token) return;
+        const next = {
+          access_token: refreshed.access_token,
+          refresh_token: refreshed.refresh_token || stored.refresh_token,
+          user: refreshed.user || stored.user || null,
+        };
+        window.localStorage.setItem(PUBLIC_SESSION_KEY, JSON.stringify(next));
+        setClientSession(next);
+        setIdentityEmail(next.user?.email || "");
+        const profile = await fetchClientProfile(next.access_token);
+        if (cancelled) return;
+        setClientProfile(profile);
+        if (profile?.cliente) {
+          setForm((prev) => ({
+            ...prev,
+            nombre: profile.cliente.nombre || prev.nombre,
+            telefono: profile.cliente.telefono || prev.telefono,
+            email: profile.email || prev.email,
+          }));
+        } else if (profile?.email) {
+          setForm((prev) => ({ ...prev, email: profile.email }));
+        }
+      } catch {
+        window.localStorage.removeItem(PUBLIC_SESSION_KEY);
+        if (!cancelled) {
+          setClientSession(null);
+          setClientProfile(null);
+        }
+      } finally {
+        if (!cancelled) setIdentityLoading(false);
+      }
+    }
+
+    restoreIdentity();
+    return () => { cancelled = true; };
+  }, []);
+
+  const requestIdentityCode = async () => {
+    const email = normalizeText(identityEmail).toLowerCase();
+    setIdentityError("");
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+      setIdentityError("Ingresá un email válido.");
+      return;
+    }
+    setIdentityBusy(true);
+    try {
+      await sendEmailOtp(email);
+      setIdentityCodeSent(true);
+      setIdentityCode("");
+    } catch (err) {
+      setIdentityError(err?.message || "No pudimos enviar el código.");
+    } finally {
+      setIdentityBusy(false);
+    }
+  };
+
+  const confirmIdentityCode = async () => {
+    const email = normalizeText(identityEmail).toLowerCase();
+    const code = normalizeText(identityCode);
+    setIdentityError("");
+    if (!code) {
+      setIdentityError("Ingresá el código que recibiste por email.");
+      return;
+    }
+    setIdentityBusy(true);
+    try {
+      const verified = await verifyEmailOtp(email, code);
+      if (!verified?.access_token || !verified?.refresh_token) throw new Error("No pudimos iniciar la sesión.");
+      const next = {
+        access_token: verified.access_token,
+        refresh_token: verified.refresh_token,
+        user: verified.user || { email },
+      };
+      window.localStorage.setItem(PUBLIC_SESSION_KEY, JSON.stringify(next));
+      setClientSession(next);
+      const profile = await fetchClientProfile(next.access_token);
+      setClientProfile(profile);
+      setForm((prev) => ({
+        ...prev,
+        email: profile?.email || email,
+        nombre: profile?.cliente?.nombre || prev.nombre,
+        telefono: profile?.cliente?.telefono || prev.telefono,
+      }));
+      setIdentityCodeSent(false);
+      setIdentityCode("");
+    } catch (err) {
+      setIdentityError(err?.message || "El código no es válido o venció.");
+    } finally {
+      setIdentityBusy(false);
+    }
+  };
+
+  const forgetIdentity = () => {
+    window.localStorage.removeItem(PUBLIC_SESSION_KEY);
+    setClientSession(null);
+    setClientProfile(null);
+    setIdentityEmail("");
+    setIdentityCode("");
+    setIdentityCodeSent(false);
+    setIdentityError("");
+    setLookupResult(null);
+    setForm((prev) => ({ ...prev, nombre: "", telefono: "", email: "" }));
+  };
 
   useEffect(() => {
     const controller = new AbortController();
@@ -725,7 +890,7 @@ export default function PublicBookingApp() {
     if (currentStep.id === "tipo") return !!form.tipo;
     if (currentStep.id === "servicio") return !!form.servicioId;
     if (currentStep.id === "modalidad") return !!form.slot;
-    if (currentStep.id === "datos") return normalizeText(form.nombre) && (normalizeText(form.telefono) || normalizeText(form.email));
+    if (currentStep.id === "datos") return !!clientSession?.access_token && normalizeText(form.nombre) && normalizeText(form.telefono);
     return true;
   };
 
@@ -791,16 +956,13 @@ export default function PublicBookingApp() {
     setActionError("");
     setCopyFeedback("");
     setCopiedTurnId("");
-    if (!normalizeText(lookup.email) && !normalizeText(lookup.telefono)) {
-      setLookupError("Ingresá email o teléfono para consultar tus turnos.");
+    if (!clientSession?.access_token) {
+      setLookupError("Verificá tu email para consultar tus turnos.");
       return;
     }
     setLookupLoading(true);
     try {
-      const result = await fetchClientBookings({
-        email: normalizeText(lookup.email),
-        telefono: normalizeText(lookup.telefono),
-      });
+      const result = await fetchClientBookings(clientSession.access_token);
       setLookupResult(result);
     } catch (err) {
       setLookupError(err?.message || "No pudimos consultar tus turnos.");
@@ -829,7 +991,8 @@ export default function PublicBookingApp() {
           telefono: normalizeText(form.telefono),
         },
       };
-      const result = await createPublicBooking(payload);
+      if (!clientSession?.access_token) throw new Error("Verificá tu email antes de confirmar el turno.");
+      const result = await createPublicBooking(payload, clientSession.access_token);
       setBookingResult(result);
     } catch (err) {
       setBookingResult(null);
@@ -958,43 +1121,12 @@ export default function PublicBookingApp() {
             Consultar mis turnos
           </h2>
           <p style={{ margin: 0, color: "#735260", fontSize: 14, lineHeight: 1.45 }}>
-            Ingresá el email o teléfono que usaste al reservar. Por ahora esta vista solo permite consultar.
+            Verificamos tu identidad una vez y después recordamos este dispositivo para mostrarte tus próximos turnos.
           </p>
         </div>
 
         <div style={{ display: "grid", gap: 14 }}>
-          <Field label="Email">
-            <input
-              type="email"
-              value={lookup.email}
-              onChange={(event) => setLookup((prev) => ({ ...prev, email: event.target.value }))}
-              placeholder="tu@email.com"
-              style={inputStyle}
-            />
-          </Field>
-          <Field label="WhatsApp o teléfono">
-            <input
-              value={lookup.telefono}
-              onChange={(event) => setLookup((prev) => ({ ...prev, telefono: event.target.value }))}
-              placeholder="Ej: 11 5555 5555"
-              style={inputStyle}
-            />
-          </Field>
-          {lookupError && (
-            <div style={{ background: "#fff0f3", color: COLORS.pinkDark, border: "1px solid rgba(212,83,126,0.28)", borderRadius: 8, padding: "11px 13px", fontSize: 13 }}>
-              {lookupError}
-            </div>
-          )}
-          {actionError && (
-            <div style={{ background: "#fff0f3", color: COLORS.pinkDark, border: "1px solid rgba(212,83,126,0.28)", borderRadius: 8, padding: "11px 13px", fontSize: 13 }}>
-              {actionError}
-            </div>
-          )}
-          {copyFeedback && (
-            <div style={{ background: "#f8fff7", color: "#2f6b3d", border: "1px solid rgba(72,150,88,0.24)", borderRadius: 8, padding: "11px 13px", fontSize: 13, fontWeight: 800 }}>
-              {copyFeedback}
-            </div>
-          )}
+          {renderIdentityAccess()}
           <button
             type="button"
             onClick={consultMyBookings}
@@ -1330,44 +1462,102 @@ export default function PublicBookingApp() {
     </div>
   );
 
+  const renderIdentityAccess = () => {
+    if (identityLoading) {
+      return <p style={{ margin: 0, color: "#775866", fontSize: 13 }}>Reconociendo este dispositivo...</p>;
+    }
+    if (clientSession?.access_token) {
+      return (
+        <div style={{ background: "#f8fff7", border: "1px solid rgba(72,150,88,0.24)", borderRadius: 8, padding: 13 }}>
+          <strong style={{ display: "block", color: "#2f6b3d", fontSize: 13 }}>Email verificado</strong>
+          <span style={{ display: "block", color: "#55705c", fontSize: 13, marginTop: 4 }}>{form.email || identityEmail}</span>
+          <button type="button" onClick={forgetIdentity} style={{ ...secondaryButtonStyle, marginTop: 10, padding: "9px 12px" }}>
+            Usar otro email
+          </button>
+        </div>
+      );
+    }
+    return (
+      <div style={{ display: "grid", gap: 10 }}>
+        <Field label="Email">
+          <input
+            type="email"
+            value={identityEmail}
+            onChange={(event) => setIdentityEmail(event.target.value)}
+            placeholder="tu@email.com"
+            style={inputStyle}
+          />
+        </Field>
+        {!identityCodeSent ? (
+          <button type="button" onClick={requestIdentityCode} disabled={identityBusy} style={{ ...actionButtonStyle, opacity: identityBusy ? 0.7 : 1 }}>
+            {identityBusy ? "Enviando..." : "Enviar código"}
+          </button>
+        ) : (
+          <>
+            <Field label="Código recibido por email">
+              <input
+                inputMode="numeric"
+                autoComplete="one-time-code"
+                value={identityCode}
+                onChange={(event) => setIdentityCode(event.target.value)}
+                placeholder="123456"
+                style={inputStyle}
+              />
+            </Field>
+            <button type="button" onClick={confirmIdentityCode} disabled={identityBusy} style={{ ...actionButtonStyle, opacity: identityBusy ? 0.7 : 1 }}>
+              {identityBusy ? "Verificando..." : "Verificar email"}
+            </button>
+            <button type="button" onClick={requestIdentityCode} disabled={identityBusy} style={secondaryButtonStyle}>
+              Reenviar código
+            </button>
+          </>
+        )}
+        {identityError && (
+          <div style={{ background: "#fff0f3", color: COLORS.pinkDark, border: "1px solid rgba(212,83,126,0.28)", borderRadius: 8, padding: "11px 13px", fontSize: 13 }}>
+            {identityError}
+          </div>
+        )}
+        <p style={{ margin: 0, color: "#8a6875", fontSize: 12, lineHeight: 1.45 }}>
+          Solo te pediremos este código la primera vez en este dispositivo o si la sesión deja de ser válida.
+        </p>
+      </div>
+    );
+  };
+
   const renderClientStep = () => (
     <div style={{ display: "grid", gap: 14 }}>
-      <Field label="Nombre y apellido">
-        <input
-          value={form.nombre}
-          onChange={(event) => setForm((prev) => ({ ...prev, nombre: event.target.value }))}
-          placeholder="Ej: Martina Pérez"
-          style={inputStyle}
-        />
-      </Field>
-      <Field label="WhatsApp o teléfono">
-        <input
-          value={form.telefono}
-          onChange={(event) => setForm((prev) => ({ ...prev, telefono: event.target.value }))}
-          placeholder="Ej: 11 5555 5555"
-          style={inputStyle}
-        />
-      </Field>
-      <Field label="Email">
-        <input
-          type="email"
-          value={form.email}
-          onChange={(event) => setForm((prev) => ({ ...prev, email: event.target.value }))}
-          placeholder="tu@email.com"
-          style={inputStyle}
-        />
-      </Field>
-      <Field label="Observaciones">
-        <textarea
-          value={form.observacion}
-          onChange={(event) => setForm((prev) => ({ ...prev, observacion: event.target.value }))}
-          placeholder="Contanos si necesitás algo especial"
-          style={{ ...inputStyle, minHeight: 92, resize: "vertical" }}
-        />
-      </Field>
-      <p style={{ margin: 0, color: "#8a6875", fontSize: 12, lineHeight: 1.45 }}>
-        Para seguir, completá nombre y al menos un contacto.
-      </p>
+      {renderIdentityAccess()}
+      {clientSession?.access_token && (
+        <>
+          <Field label="Nombre y apellido">
+            <input
+              value={form.nombre}
+              onChange={(event) => setForm((prev) => ({ ...prev, nombre: event.target.value }))}
+              placeholder="Ej: Martina Pérez"
+              style={inputStyle}
+            />
+          </Field>
+          <Field label="WhatsApp o teléfono">
+            <input
+              value={form.telefono}
+              onChange={(event) => setForm((prev) => ({ ...prev, telefono: event.target.value }))}
+              placeholder="Ej: 11 5555 5555"
+              style={inputStyle}
+            />
+          </Field>
+          <Field label="Observaciones">
+            <textarea
+              value={form.observacion}
+              onChange={(event) => setForm((prev) => ({ ...prev, observacion: event.target.value }))}
+              placeholder="Contanos si necesitás algo especial"
+              style={{ ...inputStyle, minHeight: 92, resize: "vertical" }}
+            />
+          </Field>
+          <p style={{ margin: 0, color: "#8a6875", fontSize: 12, lineHeight: 1.45 }}>
+            Guardamos el teléfono en formato normalizado para evitar perfiles duplicados.
+          </p>
+        </>
+      )}
     </div>
   );
 
