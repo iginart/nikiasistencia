@@ -794,7 +794,14 @@ const api = {
   getComisionesAgendaProShadowRango: (desde,hasta) => sbAll(`comisiones_agendapro_shadow?select=*&fecha_pago=gte.${encodeURIComponent(desde)}&fecha_pago=lte.${encodeURIComponent(hasta)}&order=fecha_pago.desc,id.desc`),
   getAgendaComisionesSinVincular: () => sbAll("mv_comisiones_agendapro_no_vinculadas_dia?select=local_id,nombre_local,agendapro_provider_id,profesional_agendapro,fecha_pago,precio_efectivo,cantidad&order=fecha_pago.desc"),
   getAgendaComisionesSinVincularRango: (desde,hasta) => sbAll(`mv_comisiones_agendapro_no_vinculadas_dia?select=local_id,nombre_local,agendapro_provider_id,profesional_agendapro,fecha_pago,precio_efectivo,cantidad&fecha_pago=gte.${encodeURIComponent(desde)}&fecha_pago=lte.${encodeURIComponent(hasta)}&order=fecha_pago.desc`),
+  getAgendaProfesionalesNoVinculables: () => sb("agendapro_profesionales_no_vinculables?select=*&order=local_id,profesional_agendapro").catch(()=>[]),
+  upsertAgendaProfesionalNoVinculable: (d) => sb("agendapro_profesionales_no_vinculables?on_conflict=local_id,agendapro_provider_id", { method:"POST", prefer:"resolution=merge-duplicates,return=representation", body:JSON.stringify(d) }),
+  deleteAgendaProfesionalNoVinculable: (localId,providerId) => sb(`agendapro_profesionales_no_vinculables?local_id=eq.${parseInt(localId)}&agendapro_provider_id=eq.${parseInt(providerId)}`, { method:"DELETE", prefer:"" }),
   refrescarComisionesAgendaProShadow: () => sb("rpc/refrescar_comisiones_agendapro_shadow", { method:"POST", body:"{}" }),
+  refrescarComisionesAgendaProShadowRango: (desde,hasta) => sb("rpc/refrescar_comisiones_agendapro_shadow_rango", { method:"POST", body:JSON.stringify({ p_desde:desde, p_hasta:hasta }) }),
+  refrescarComisionesAgendaProToday: () => sb("rpc/refrescar_comisiones_agendapro_today", { method:"POST", body:"{}" }),
+  refrescarVinculoAgendaProShadow: (localId,providerId,desde,hasta) => sb("rpc/refrescar_vinculo_agendapro_shadow", { method:"POST", body:JSON.stringify({ p_local_id:Number(localId), p_provider_id:Number(providerId), p_desde:desde||null, p_hasta:hasta||null }) }),
+  refrescarComisionesAgendaProPendientes: () => sb("rpc/refrescar_comisiones_agendapro_pendientes", { method:"POST", body:"{}" }),
   getDashboardKpiLocalMesActual: () => sbAll("vw_agendapro_kpi_local_mes_actual?select=*&order=ventas.desc"),
   getDashboardKpiLocalDia: (desde,hasta) => sbAll(`mv_agendapro_kpi_local_dia?select=*&fecha=gte.${encodeURIComponent(desde)}&fecha=lte.${encodeURIComponent(hasta)}&order=fecha.asc,local_id.asc`),
   getDashboardKpiLocalDiaTodo: () => sbAll("mv_agendapro_kpi_local_dia?select=*&order=fecha.asc,local_id.asc"),
@@ -1101,7 +1108,8 @@ function normalizePeriodo(p) { return { id: p.id, periodo: p.periodo, userId: p.
 function normalizeReglaCobertura(r) { return { id:r.id, localId:r.local_id, diaSemana:r.dia_semana, afluencia:r.afluencia, minimoDiario:r.minimo_diario, maximoDiario:r.maximo_diario, minimoApertura:r.minimo_apertura, minimoCierre:r.minimo_cierre, activo:r.activo }; }
 function normalizeConfigCobertura(c) { return { id:c.id, localId:c.local_id, horaApertura:(c.hora_apertura||"10:00").slice(0,5), horaCierre:(c.hora_cierre||"20:00").slice(0,5), minutosApertura:c.minutos_apertura ?? 60, minutosCierre:c.minutos_cierre ?? 60 }; }
 function normalizeEncargadoLocal(x) { return { userId:x.user_id, localId:x.local_id }; }
-function normalizeComision(c) { return { id:c.id, periodo:c.periodo, fechaPago:c.fecha_pago, localId:c.local_id, codigoExternoLocal:c.codigo_externo_local || "", nombreLocal:c.nombre_local || "", userId:c.user_id, codigoExternoManicura:c.codigo_externo_manicura || "", nombreManicura:c.nombre_manicura || "", servicio:c.servicio || "", cliente:c.cliente || "", precio:Number(c.precio || 0), precioCobradoAgendaPro:Number(c.precio_cobrado_agendapro ?? c.precio ?? 0), comision:Number(c.comision || 0), hashRegistro:c.hash_registro || "", actualizadoEn:c.actualizado_en || "" }; }
+function normalizeComision(c) { return { id:c.id, periodo:c.periodo, fechaPago:c.fecha_pago, localId:c.local_id, codigoExternoLocal:c.codigo_externo_local || "", nombreLocal:c.nombre_local || "", userId:c.user_id, codigoExternoManicura:c.codigo_externo_manicura || "", nombreManicura:c.nombre_manicura || c.profesional_agendapro || "", profesionalAgendaPro:c.profesional_agendapro || c.nombre_manicura || "", agendaproProviderId:c.agendapro_provider_id == null ? null : Number(c.agendapro_provider_id), servicio:c.servicio || "", cliente:c.cliente || "", precio:Number(c.precio || 0), precioCobradoAgendaPro:Number(c.precio_cobrado_agendapro ?? c.precio ?? 0), comision:Number(c.comision || 0), estado:c.estado || "", hashRegistro:c.hash_registro || "", actualizadoEn:c.actualizado_en || "" }; }
+function normalizeAgendaProfesionalNoVinculable(x) { return { localId:Number(x.local_id||0), providerId:Number(x.agendapro_provider_id||0), profesional:x.profesional_agendapro||"", motivo:x.motivo||"profesional_historico", fechaDesde:x.fecha_desde||"", fechaHasta:x.fecha_hasta||"", creadoPor:x.creado_por_user_id||null, creadoEn:x.creado_en||"", actualizadoEn:x.actualizado_en||"" }; }
 function agruparComisionesAgendaProSinVincular(rows = []) {
   const map = new Map();
   (rows || []).forEach(r => {
@@ -1517,6 +1525,123 @@ function getMinimumGuaranteeStatus(histories, userId, localId, weekStartKey, wee
   const eligible = activeInWeek && started && weekStart <= endDate;
   return { eligible, activeInWeek, endDateKey:dateKey(endDate), firstStartKey:dateKey(firstStart), requiredDays };
 }
+function getGlobalEmploymentEpisodeStatus(histories, userId, weekStartKey, weekEndKey) {
+  if (!userId || !weekStartKey || !weekEndKey) return { eligible:false, activeInWeek:false, endDateKey:"", firstStartKey:"", anchorLocalId:null, activeLocalIds:[], episode:null };
+  const periods=(histories||[])
+    .filter(h=>Number(h.userId ?? h.user_id)===Number(userId))
+    .map(h=>{
+      const start=parseDateLocal(h.fechaInicio || h.fecha_inicio);
+      const end=parseDateLocal(h.fechaFin || h.fecha_fin) || new Date(2099,11,31,12,0,0,0);
+      const localId=Number(h.localId ?? h.local_id ?? 0)||null;
+      return start && end>=start && localId ? { start,end,localId,raw:h } : null;
+    })
+    .filter(Boolean)
+    .sort((a,b)=>a.start-b.start || a.end-b.end || a.localId-b.localId);
+  if(!periods.length) return { eligible:false, activeInWeek:false, endDateKey:"", firstStartKey:"", anchorLocalId:null, activeLocalIds:[], episode:null };
+
+  // Un episodio laboral global se mantiene si hay superposición real entre locales.
+  // Un cambio de local sin superposición inicia una antigüedad nueva. Para el mismo
+  // local se toleran períodos contiguos (por ejemplo, una edición administrativa).
+  const episodes=[];
+  periods.forEach(p=>{
+    const last=episodes[episodes.length-1];
+    if(!last){ episodes.push({ start:new Date(p.start),end:new Date(p.end),segments:[p] }); return; }
+    const overlaps=p.start<=last.end;
+    const sameLocalAdjacent=last.segments.some(seg=>Number(seg.localId)===Number(p.localId) && p.start<=addDaysLocal(dateKey(seg.end),1));
+    if(overlaps || sameLocalAdjacent){
+      last.segments.push(p);
+      if(p.start<last.start) last.start=new Date(p.start);
+      if(p.end>last.end) last.end=new Date(p.end);
+    } else {
+      episodes.push({ start:new Date(p.start),end:new Date(p.end),segments:[p] });
+    }
+  });
+
+  const weekStart=parseDateLocal(weekStartKey), weekEnd=parseDateLocal(weekEndKey);
+  const candidates=episodes.filter(ep=>ep.start<=weekEnd && ep.end>=weekStart);
+  const episode=candidates.sort((a,b)=>b.start-a.start)[0] || null;
+  if(!episode) return { eligible:false, activeInWeek:false, endDateKey:"", firstStartKey:"", anchorLocalId:null, activeLocalIds:[], episode:null };
+  const anchor=[...episode.segments].sort((a,b)=>a.start-b.start || a.localId-b.localId)[0];
+  const activeLocalIds=Array.from(new Set(episode.segments.filter(seg=>seg.start<=weekEnd && seg.end>=weekStart).map(seg=>Number(seg.localId)).filter(Boolean)));
+  const endDate=addCalendarMonthsClamped(episode.start,2);
+  const activeInWeek=episode.start<=weekEnd && episode.end>=weekStart;
+  const eligible=activeInWeek && weekStart<=endDate;
+  return { eligible,activeInWeek,endDateKey:dateKey(endDate),firstStartKey:dateKey(episode.start),anchorLocalId:anchor?.localId||null,activeLocalIds,episode };
+}
+
+function getGlobalMinimumGuaranteeStatus(histories, userId, weekStartKey, weekEndKey) {
+  if (!userId || !weekStartKey || !weekEndKey) return { eligible:false, activeInWeek:false, endDateKey:"", firstStartKey:"", anchorLocalId:null, seniorityLocalId:null, activeLocalIds:[] };
+  const periods=(histories||[])
+    .filter(h=>Number(h.userId ?? h.user_id)===Number(userId))
+    .map(h=>{
+      const start=parseDateLocal(h.fechaInicio || h.fecha_inicio);
+      const end=parseDateLocal(h.fechaFin || h.fecha_fin) || new Date(2099,11,31,12,0,0,0);
+      const localId=Number(h.localId ?? h.local_id ?? 0)||null;
+      return start && end>=start && localId ? { start,end,localId,raw:h } : null;
+    })
+    .filter(Boolean)
+    .sort((a,b)=>a.start-b.start || a.end-b.end || a.localId-b.localId);
+  if(!periods.length) return { eligible:false, activeInWeek:false, endDateKey:"", firstStartKey:"", anchorLocalId:null, seniorityLocalId:null, activeLocalIds:[] };
+
+  const weekStart=parseDateLocal(weekStartKey), weekEnd=parseDateLocal(weekEndKey);
+  const segmentsInWeek=periods.filter(p=>p.start<=weekEnd && p.end>=weekStart);
+  if(!segmentsInWeek.length) return { eligible:false, activeInWeek:false, endDateKey:"", firstStartKey:"", anchorLocalId:null, seniorityLocalId:null, activeLocalIds:[] };
+
+  /*
+   * Mínimo garantizado: antigüedad POR LOCAL + unificación sólo cuando los
+   * locales están realmente activos EN SIMULTÁNEO.
+   *
+   * - Para cada sucursal conservamos siempre el primer ingreso histórico a ese
+   *   local. Volver a una sucursal conocida no reinicia el mínimo.
+   * - Cambiar a una sucursal nueva, dejando la anterior, sí inicia una nueva
+   *   antigüedad desde el primer ingreso a la nueva sucursal.
+   * - Si hay varios locales activos al mismo tiempo, existe un único mínimo y
+   *   se usa la antigüedad más antigua entre esos locales simultáneos.
+   *
+   * La semana puede contener un cambio de local sin simultaneidad (por ejemplo,
+   * termina uno el martes y empieza otro el miércoles). Para no confundir eso
+   * con multi-local, tomamos una "foto" del último día de la semana en el que
+   * la manicura tuvo algún local activo y sólo agrupamos los locales que se
+   * superponen en esa fecha.
+   */
+  const referenceDate=segmentsInWeek.reduce((latest,p)=>{
+    const candidate=p.end<weekEnd?p.end:weekEnd;
+    return !latest || candidate>latest ? candidate : latest;
+  },null);
+  const simultaneousSegments=referenceDate
+    ? periods.filter(p=>p.start<=referenceDate && p.end>=referenceDate)
+    : [];
+  const activeLocalIds=Array.from(new Set(simultaneousSegments.map(p=>Number(p.localId)).filter(Boolean)));
+  if(!activeLocalIds.length) return { eligible:false, activeInWeek:true, endDateKey:"", firstStartKey:"", anchorLocalId:null, seniorityLocalId:null, activeLocalIds:[] };
+
+  const firstStartByLocal=new Map();
+  periods.forEach(p=>{
+    const lid=Number(p.localId);
+    const prev=firstStartByLocal.get(lid);
+    if(!prev || p.start<prev) firstStartByLocal.set(lid,new Date(p.start));
+  });
+
+  const seniorities=activeLocalIds
+    .map(localId=>({ localId, start:firstStartByLocal.get(Number(localId)) }))
+    .filter(x=>x.start)
+    .sort((a,b)=>a.start-b.start || a.localId-b.localId);
+  const anchor=seniorities[0] || null;
+  if(!anchor) return { eligible:false, activeInWeek:true, endDateKey:"", firstStartKey:"", anchorLocalId:null, seniorityLocalId:null, activeLocalIds };
+
+  const endDate=addCalendarMonthsClamped(anchor.start,2);
+  const eligible=anchor.start<=weekEnd && weekStart<=endDate;
+  return {
+    eligible,
+    activeInWeek:true,
+    endDateKey:dateKey(endDate),
+    firstStartKey:dateKey(anchor.start),
+    anchorLocalId:anchor.localId,
+    seniorityLocalId:anchor.localId,
+    activeLocalIds,
+    referenceDateKey:dateKey(referenceDate),
+  };
+}
+
 function genToken() { return Math.random().toString(36).slice(2) + Math.random().toString(36).slice(2); }
 function isAdminRole(role) {
   return role === "admin";
@@ -5175,6 +5300,8 @@ function ABMManicuras({ data, setData, reloadData, user }) {
   const [agendaPendientesLoading, setAgendaPendientesLoading] = useState(false);
   const [agendaPendientesError, setAgendaPendientesError] = useState("");
   const [agendaLinkConfirm, setAgendaLinkConfirm] = useState(null);
+  const [agendaPendientesGestionModal, setAgendaPendientesGestionModal] = useState(false);
+  const [agendaNoVinculableConfirm, setAgendaNoVinculableConfirm] = useState(null);
   useEffect(()=>{
     if(!isAdminLikeRole(user.rol)){
       setData(prev=>prev?{...prev,reclutamientoCandidatas:[]}:prev);
@@ -5252,10 +5379,15 @@ function ABMManicuras({ data, setData, reloadData, user }) {
     });
     return Array.from(map.values()).sort((a,b)=>(a.nombreLocal||"").localeCompare(b.nombreLocal||"") || (a.profesional||"").localeCompare(b.profesional||""));
   }, [agendaComisionesSinVincular]);
+  const agendaNoVinculableKeys = useMemo(() => new Set((data.agendaProfesionalesNoVinculables || []).map(x=>`${Number(x.localId)}|${Number(x.providerId)}`)), [data.agendaProfesionalesNoVinculables]);
   const agendaPendientesVisibles = useMemo(() => {
     const permitidos = new Set((localesPermitidos || []).map(l=>Number(l.id)));
-    return agendaPendientesAgrupados.filter(p=>permitidos.has(Number(p.localId)));
-  }, [agendaPendientesAgrupados, localesPermitidos]);
+    return agendaPendientesAgrupados.filter(p=>permitidos.has(Number(p.localId)) && !(p.providerId != null && agendaNoVinculableKeys.has(`${Number(p.localId)}|${Number(p.providerId)}`)));
+  }, [agendaPendientesAgrupados, localesPermitidos, agendaNoVinculableKeys]);
+  const agendaHistoricosNoVinculables = useMemo(() => {
+    const permitidos = new Set((localesPermitidos || []).map(l=>Number(l.id)));
+    return agendaPendientesAgrupados.filter(p=>permitidos.has(Number(p.localId)) && p.providerId != null && agendaNoVinculableKeys.has(`${Number(p.localId)}|${Number(p.providerId)}`));
+  }, [agendaPendientesAgrupados, localesPermitidos, agendaNoVinculableKeys]);
   const agendaPendientesConId = useMemo(() => agendaPendientesVisibles.filter(p=>p.providerId !== null && Number.isFinite(Number(p.providerId))), [agendaPendientesVisibles]);
   const agendaPendientesSinId = useMemo(() => agendaPendientesVisibles.filter(p=>p.providerId === null || !Number.isFinite(Number(p.providerId))), [agendaPendientesVisibles]);
   const agendaCantidadVinculable = useMemo(() => agendaPendientesConId.reduce((acc,p)=>acc+Number(p.cantidad||0),0), [agendaPendientesConId]);
@@ -5344,32 +5476,111 @@ function ABMManicuras({ data, setData, reloadData, user }) {
   const openEdit = (u, tab="general") => {
     const encargadaLocalIds=(data.encargadoLocales||[]).filter(x=>Number(x.userId)===Number(u.id)).map(x=>Number(x.localId));
     setForm({...u,password:"",password2:"",encargadaLocalIds});
-    setHistorialDraft(sortHistorial((data.manicuraHistorialLocales||[]).filter(x=>x.userId===u.id).map(x=>({...x}))));
+    setHistorialDraft(sortHistorial((data.manicuraHistorialLocales||[]).filter(x=>Number(x.userId)===Number(u.id)).map(x=>({...x}))));
     setFormErr(""); setModalTab(tab); setModal("edit");
   };
   const toggleEncargadaLocalManicura = localId => setForm(f=>{ const current=(f.encargadaLocalIds||[]).map(Number); const id=Number(localId); return {...f,encargadaLocalIds:current.includes(id)?current.filter(x=>x!==id):[...current,id]}; });
   const addHistorial = () => setHistorialDraft(rows => [{ tempId:`new-${Date.now()}`, localId:form.localId||localesPermitidos[0]?.id||"", fechaInicio:hoy, fechaFin:"", motivoFin:"", observacion:"", isNew:true }, ...rows]);
   const updateHistorialDraft = (key, field, value) => setHistorialDraft(rows=>rows.map(r=>(r.id||r.tempId)===key?{...r,[field]:value}:r));
   const removeHistorialDraft = key => setHistorialDraft(rows=>rows.filter(r=>(r.id||r.tempId)!==key));
-  const aplicarVinculoAgenda = pendiente => {
+  const aplicarVinculoAgenda = async pendiente => {
     if (!pendiente?.providerId || !pendiente?.localId) return;
-    const rowsLocal = (historialDraft || []).filter(r=>Number(r.localId)===Number(pendiente.localId));
-    if (!rowsLocal.length) {
+
+    const fechaLabel = value => value ? String(value).slice(0,10).split("-").reverse().join("/") : "?";
+    const userIdActual = Number(form.id || 0);
+    const historialPersistido = (data.manicuraHistorialLocales || []).filter(h=>Number(h.userId)===userIdActual);
+
+    // La antigüedad debe estar guardada antes de vincular. Esto evita validar contra
+    // un borrador que todavía no participa de vw_comisiones_agendapro_compat.
+    const originalById = new Map(historialPersistido.map(h=>[String(h.id),h]));
+    const hayCambiosAntiguedadSinGuardar =
+      historialDraft.length !== historialPersistido.length ||
+      historialDraft.some(r=>{
+        if (!r.id) return true;
+        const o=originalById.get(String(r.id));
+        if (!o) return true;
+        return Number(r.localId||0)!==Number(o.localId||0)
+          || String(r.fechaInicio||"")!==String(o.fechaInicio||"")
+          || String(r.fechaFin||"")!==String(o.fechaFin||"")
+          || String(r.motivoFin||"")!==String(o.motivoFin||"")
+          || String(r.observacion||"")!==String(o.observacion||"")
+          || Number(r.agendaproProviderId||0)!==Number(o.agendaproProviderId||0);
+      });
+
+    if (hayCambiosAntiguedadSinGuardar) {
+      const msg="Hay cambios de antigüedad sin guardar. Guardá primero la ficha de la manicura y después volvé a vincular AgendaPro.";
       setAgendaLinkConfirm(null);
-      setFormErr(`Primero agregá un período de antigüedad para ${pendiente.nombreLocal || "ese local"}.`);
+      setFormErr(msg);
+      notifyToast(msg,"warning");
       setModalTab("antiguedad");
       return;
     }
-    const cubreTodo = r => !!r.fechaInicio && (!pendiente.fechaDesde || r.fechaInicio <= pendiente.fechaDesde) && (!r.fechaFin || !pendiente.fechaHasta || r.fechaFin >= pendiente.fechaHasta);
-    const target = rowsLocal.find(cubreTodo) || rowsLocal.find(r=>!r.fechaFin) || rowsLocal[0];
-    const targetKey = target.id || target.tempId;
-    setHistorialDraft(rows=>rows.map(r=>(r.id||r.tempId)===targetKey?{...r,agendaproProviderId:Number(pendiente.providerId)}:r));
-    setAgendaLinkConfirm(null);
-    if (!cubreTodo(target)) {
-      notifyToast(`Vínculo seleccionado con ${pendiente.profesional}. Revisá las fechas del período en ${pendiente.nombreLocal}: las comisiones pendientes van de ${pendiente.fechaDesde || "?"} a ${pendiente.fechaHasta || "?"}.`, "warning");
+
+    const rowsLocal = historialPersistido.filter(r=>Number(r.localId)===Number(pendiente.localId));
+    if (!rowsLocal.length) {
+      const msg=`No se puede vincular con ${pendiente.profesional || "AgendaPro"}: primero cargá y guardá un período de antigüedad para ${pendiente.nombreLocal || "ese local"}.`;
+      setAgendaLinkConfirm(null);
+      setFormErr(msg);
+      notifyToast(msg,"warning");
       setModalTab("antiguedad");
-    } else {
-      notifyToast(`Vínculo AgendaPro confirmado: ${pendiente.profesional} · ${pendiente.nombreLocal}.`, "success");
+      return;
+    }
+
+    const cubreTodo = r => !!r.fechaInicio
+      && (!pendiente.fechaDesde || r.fechaInicio <= pendiente.fechaDesde)
+      && (!r.fechaFin || !pendiente.fechaHasta || r.fechaFin >= pendiente.fechaHasta);
+    const targetPersistido = rowsLocal.find(cubreTodo);
+
+    if (!targetPersistido) {
+      const rangos=rowsLocal
+        .map(r=>`${fechaLabel(r.fechaInicio)} a ${r.fechaFin?fechaLabel(r.fechaFin):"actualidad"}`)
+        .join("; ");
+      const msg=`No se puede vincular con ${pendiente.profesional || "AgendaPro"}. AgendaPro registra servicios en ${pendiente.nombreLocal || "el local"} desde ${fechaLabel(pendiente.fechaDesde)} hasta ${fechaLabel(pendiente.fechaHasta)}, pero la antigüedad guardada (${rangos || "sin período"}) no cubre todo ese intervalo. Ajustá la fecha de ingreso y/o egreso, guardá la ficha y luego volvé a vincular.`;
+      setAgendaLinkConfirm(null);
+      setFormErr(msg);
+      notifyToast(msg,"warning");
+      setModalTab("antiguedad");
+      return;
+    }
+
+    const target = (historialDraft || []).find(r=>String(r.id)===String(targetPersistido.id)) || targetPersistido;
+    const targetKey = target.id || target.tempId;
+    const providerId = Number(pendiente.providerId);
+
+    setAgendaLinkConfirm(null);
+    setAgendaPendientesLoading(true);
+    setFormErr("");
+    try {
+      const rows = await api.updateManicuraHistorialLocal(target.id,{ agendapro_provider_id:providerId });
+      const raw = Array.isArray(rows) ? rows[0] : rows;
+      const persisted = raw ? normalizeManicuraHistorialLocal(raw) : null;
+
+      setHistorialDraft(prev=>prev.map(r=>(r.id||r.tempId)===targetKey?{...r,agendaproProviderId:providerId,actualizadoEn:persisted?.actualizadoEn||r.actualizadoEn}:r));
+      setData(prev=>prev?{
+        ...prev,
+        manicuraHistorialLocales:(prev.manicuraHistorialLocales||[]).map(h=>String(h.id)===String(target.id)?{...h,agendaproProviderId:providerId,actualizadoEn:persisted?.actualizadoEn||h.actualizadoEn}:h)
+      }:prev);
+
+      const desde = pendiente.fechaDesde || target.fechaInicio || hoy;
+      const hasta = pendiente.fechaHasta || pendiente.fechaDesde || hoy;
+      await api.refrescarVinculoAgendaProShadow(pendiente.localId,providerId,desde,hasta);
+
+      // El refresh de pendientes corre separado: si fuera pesado o fallara, el vínculo
+      // y las comisiones ya quedaron confirmados y no se revierten.
+      try { await api.refrescarComisionesAgendaProPendientes(); }
+      catch (e) { console.warn("Refresco de pendientes AgendaPro",e); }
+
+      setAgendaComisionesSinVincular(prev=>(prev||[]).filter(r=>!(
+        Number(r.local_id)===Number(pendiente.localId) &&
+        Number(r.agendapro_provider_id)===providerId &&
+        (!r.fecha_pago || (String(r.fecha_pago).slice(0,10)>=desde && String(r.fecha_pago).slice(0,10)<=hasta))
+      )));
+
+      notifyToast(`Vínculo AgendaPro guardado: ${pendiente.profesional} · ${pendiente.nombreLocal}.`, "success");
+    } catch (e) {
+      setFormErr("No se pudo guardar el vínculo con AgendaPro: "+(e?.message||e));
+    } finally {
+      setAgendaPendientesLoading(false);
     }
   };
 
@@ -5418,12 +5629,32 @@ function ABMManicuras({ data, setData, reloadData, user }) {
     }
     const originalesAgenda = modal==="new" ? [] : (data.manicuraHistorialLocales||[]).filter(h=>Number(h.userId)===Number(form.id));
     const idsDraftAgenda = new Set(historialDraft.filter(r=>r.id).map(r=>String(r.id)));
-    const agendaVinculoModificado =
+
+    // Cualquier cambio de fechas/local/vínculo en un período ya vinculado puede
+    // modificar qué servicios pertenecen a la manicura. Debe reprocesarse AgendaPro.
+    const agendaHistorialModificado =
       historialDraft.some(r => {
         const original = r.id ? originalesAgenda.find(h=>String(h.id)===String(r.id)) : null;
-        return Number(r.agendaproProviderId || 0) !== Number(original?.agendaproProviderId || 0);
+        if (!original) return !!r.agendaproProviderId;
+        const afectaAgenda = !!r.agendaproProviderId || !!original.agendaproProviderId;
+        if (!afectaAgenda) return false;
+        return Number(r.agendaproProviderId||0)!==Number(original.agendaproProviderId||0)
+          || Number(r.localId||0)!==Number(original.localId||0)
+          || String(r.fechaInicio||"")!==String(original.fechaInicio||"")
+          || String(r.fechaFin||"")!==String(original.fechaFin||"");
       }) ||
       originalesAgenda.some(h=>h.agendaproProviderId && !idsDraftAgenda.has(String(h.id)));
+
+    // Reprocesamos tanto el par anterior como el nuevo. Así también se limpian
+    // asociaciones que dejaron de corresponder al acortar/cambiar un período.
+    const agendaRefreshTargets = Array.from(new Map(
+      [...originalesAgenda,...historialDraft]
+        .filter(r=>r.agendaproProviderId && r.localId)
+        .map(r=>{
+          const localId=Number(r.localId), providerId=Number(r.agendaproProviderId);
+          return [`${localId}|${providerId}`,{localId,providerId}];
+        })
+    ).values());
     setSaving(true);
     try {
       let targetId=form.id;
@@ -5439,7 +5670,7 @@ function ABMManicuras({ data, setData, reloadData, user }) {
         await api.updateUser(targetId,{ nombre:form.nombre.trim(),usuario:usuarioLimpio,email:emailLimpio,email_actualizado_en:new Date().toISOString(),codigo_externo:(form.codigoExterno||"").trim()||null,telefono_codigo_area:onlyDigits(form.telefonoCodigoArea)||null,telefono_numero:onlyDigits(form.telefonoNumero)||null,telefono:[onlyDigits(form.telefonoCodigoArea),onlyDigits(form.telefonoNumero)].filter(Boolean).join("")||null,dato_bancario:String(form.datoBancario||"").trim()||null,tipo_relacion:form.tipoRelacion||"a_resolver",local_id:principal?parseInt(principal.localId):null,activo:abiertos.length>0 });
         if(form.password){await api.changePassword({mode:"admin_set",actor_id:user.id,session_token:user.sessionToken,target_user_id:targetId,new_password:form.password});}
       }
-      const originales=(data.manicuraHistorialLocales||[]).filter(x=>x.userId===targetId);
+      const originales=(data.manicuraHistorialLocales||[]).filter(x=>Number(x.userId)===Number(targetId));
       const idsDraft=new Set(historialDraft.filter(r=>r.id).map(r=>r.id));
       for(const old of originales) if(!idsDraft.has(old.id)) await api.deleteManicuraHistorialLocal(old.id);
       const existentes=historialDraft.filter(r=>r.id).sort((a,b)=>Number(!!b.fechaFin)-Number(!!a.fechaFin));
@@ -5454,20 +5685,28 @@ function ABMManicuras({ data, setData, reloadData, user }) {
       if (puedeAsignarFuncionEncargada) {
         await api.setEncargadoLocales(targetId,(form.encargadaLocalIds||[]).map(Number));
       }
-      if (agendaVinculoModificado) {
-        try {
-          await api.refrescarComisionesAgendaProShadow();
-          await cargarAgendaPendientes();
-        } catch (e) {
-          notifyToast("El vínculo AgendaPro se guardó, pero no se pudo refrescar la fuente de comisiones automáticamente: "+(e?.message||e), "warning");
+      if (agendaHistorialModificado && agendaRefreshTargets.length) {
+        for (const p of agendaRefreshTargets) {
+          try {
+            // Sin rango: reevalúa todo el historial de ese profesional/local.
+            // Esto recupera servicios cuando se adelanta la fecha de ingreso y
+            // también quita asociaciones si se acorta/cambia un período.
+            await api.refrescarVinculoAgendaProShadow(p.localId,p.providerId,null,null);
+          } catch (e) {
+            console.warn("Refresco puntual AgendaPro por cambio de antigüedad", e);
+          }
         }
+        try { await api.refrescarComisionesAgendaProPendientes(); }
+        catch (e) { console.warn("Refresco de pendientes AgendaPro",e); }
+        try { await cargarAgendaPendientes(); }
+        catch (e) { console.warn("Recarga de pendientes AgendaPro",e); }
       }
       if(modal==="new"&&targetId){try{await api.enviarInvitacionUsuario({actor_id:user.id,session_token:user.sessionToken,target_user_id:targetId});}catch(e){notifyToast("La manicura se creó, pero la invitación quedó pendiente.","warning");}}
       const abiertosGuardados=historialGuardado.filter(r=>!r.fechaFin).sort((a,b)=>(b.fechaInicio||"").localeCompare(a.fechaInicio||""));
       const principal=abiertosGuardados[0]||historialDraft.filter(r=>!r.fechaFin).sort((a,b)=>(b.fechaInicio||"").localeCompare(a.fechaInicio||""))[0];
       const updatedUser={...form,id:targetId,nombre:form.nombre.trim(),usuario:usuarioLimpio,email:emailLimpio,rol:"manicura",localId:principal?parseInt(principal.localId):null,activo:abiertosGuardados.length>0||historialDraft.some(r=>!r.fechaFin),codigoExterno:(form.codigoExterno||"").trim(),telefonoCodigoArea:onlyDigits(form.telefonoCodigoArea),telefonoNumero:onlyDigits(form.telefonoNumero),telefono:[onlyDigits(form.telefonoCodigoArea),onlyDigits(form.telefonoNumero)].filter(Boolean).join(""),datoBancario:String(form.datoBancario||"").trim(),tipoRelacion:form.tipoRelacion||"a_resolver"};
       setData(prev=>({...prev,users:[...(prev.users||[]).filter(u=>parseInt(u.id)!==parseInt(targetId)),updatedUser].sort((a,b)=>(a.nombre||"").localeCompare(b.nombre||"")),manicuraHistorialLocales:[...(prev.manicuraHistorialLocales||[]).filter(h=>parseInt(h.userId)!==parseInt(targetId)),...historialGuardado],encargadoLocales:puedeAsignarFuncionEncargada?[...(prev.encargadoLocales||[]).filter(x=>Number(x.userId)!==Number(targetId)),...(form.encargadaLocalIds||[]).map(localId=>({userId:targetId,localId:Number(localId)}))]:(prev.encargadoLocales||[])}));
-      setModal(null); notifyToast(agendaVinculoModificado?"Datos, historial y vínculo AgendaPro guardados correctamente.":"Datos e historial guardados correctamente.","success");
+      setModal(null); notifyToast(agendaHistorialModificado?"Datos, historial y sincronización AgendaPro guardados correctamente.":"Datos e historial guardados correctamente.","success");
     } catch(e) { setFormErr("Error al guardar: "+e.message); }
     setSaving(false);
   };
@@ -5579,20 +5818,40 @@ function ABMManicuras({ data, setData, reloadData, user }) {
     setSavingMovimiento(false);
   };
 
+  const marcarAgendaNoVinculable = async p => {
+    if(!p?.localId || !p?.providerId) return;
+    try {
+      const payload={ local_id:Number(p.localId), agendapro_provider_id:Number(p.providerId), profesional_agendapro:p.profesional||null, motivo:"profesional_historico", fecha_desde:p.fechaDesde||null, fecha_hasta:p.fechaHasta||null, creado_por_user_id:user.id, actualizado_en:new Date().toISOString() };
+      const rows=await api.upsertAgendaProfesionalNoVinculable(payload);
+      const saved=normalizeAgendaProfesionalNoVinculable(Array.isArray(rows)?rows[0]:rows||payload);
+      setData(prev=>prev?{...prev,agendaProfesionalesNoVinculables:[...(prev.agendaProfesionalesNoVinculables||[]).filter(x=>!(Number(x.localId)===Number(saved.localId)&&Number(x.providerId)===Number(saved.providerId))),saved]}:prev);
+      setAgendaNoVinculableConfirm(null);
+      notifyToast(`${p.profesional || `AgendaPro #${p.providerId}`} quedó marcado como histórico no vinculable. Sus comisiones siguen en los reportes.`,"success");
+    } catch(e){ notifyToast("No se pudo marcar como histórico: "+(e.message||e),"error"); }
+  };
+  const reactivarAgendaVinculable = async p => {
+    try {
+      await api.deleteAgendaProfesionalNoVinculable(p.localId,p.providerId);
+      setData(prev=>prev?{...prev,agendaProfesionalesNoVinculables:(prev.agendaProfesionalesNoVinculables||[]).filter(x=>!(Number(x.localId)===Number(p.localId)&&Number(x.providerId)===Number(p.providerId)))}:prev);
+      notifyToast(`${p.profesional || `AgendaPro #${p.providerId}`} vuelve a estar disponible para vincular.`,"success");
+    } catch(e){ notifyToast("No se pudo reactivar: "+(e.message||e),"error"); }
+  };
+
   const reenviarInvitacion = async u => { try { await api.enviarInvitacionUsuario({ actor_id:user.id, session_token:user.sessionToken, target_user_id:u.id }); notifyToast(`Invitación enviada a ${u.email}.`,"success"); } catch(e){notifyToast("No se pudo enviar la invitación: "+(e.message||e),"error");} };
   const tabStyle = active => ({ border:"none",borderRadius:8,padding:"8px 14px",fontSize:13,fontWeight:600,cursor:"pointer",background:active?COLORS.pink:COLORS.pinkLight,color:active?"#fff":COLORS.pinkDark });
 
   return <div>
     <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:12,gap:10,flexWrap:"wrap"}}><div><h2 style={{margin:0,fontSize:18,fontWeight:500}}>Equipo</h2><p style={{margin:"3px 0 0",fontSize:12,color:"var(--color-text-secondary)"}}>Manicuras por local y encargadas asignadas.</p></div><div style={{display:"flex",gap:8,flexWrap:"wrap"}}><Btn variant={vistaEquipo==="equipo"?"primary":"secondary"} size="sm" onClick={()=>setVistaEquipo("equipo")}>Equipo por local</Btn><Btn variant={vistaEquipo==="listado"?"primary":"secondary"} size="sm" onClick={()=>setVistaEquipo("listado")}>Listado</Btn><Btn onClick={openNew} size="sm">+ Nueva manicura</Btn></div></div>
-    {(agendaPendientesLoading || agendaPendientesError || agendaCantidadVinculable>0 || agendaCantidadSinId>0) && <Card style={{marginBottom:14,padding:"11px 12px",background:agendaCantidadVinculable>0?COLORS.amberLight:COLORS.infoLight,border:`1px solid ${agendaCantidadVinculable>0?COLORS.amber:COLORS.info}55`}}>
+    {(agendaPendientesLoading || agendaPendientesError || agendaCantidadVinculable>0 || agendaCantidadSinId>0 || agendaHistoricosNoVinculables.length>0) && <Card style={{marginBottom:14,padding:"11px 12px",background:agendaCantidadVinculable>0?COLORS.amberLight:COLORS.infoLight,border:`1px solid ${agendaCantidadVinculable>0?COLORS.amber:COLORS.info}55`}}>
       <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",gap:10,flexWrap:"wrap"}}>
         <div style={{flex:1,minWidth:240}}>
           <p style={{margin:0,fontSize:13,fontWeight:800,color:agendaCantidadVinculable>0?COLORS.amber:COLORS.info}}>{agendaPendientesLoading?"Revisando comisiones de AgendaPro...":agendaCantidadVinculable>0?`${agendaCantidadVinculable} comisiones sin vincular · ${agendaPendientesConId.length} profesional${agendaPendientesConId.length===1?"":"es"}`:"Sin comisiones vinculables pendientes"}</p>
           {!agendaPendientesLoading&&!agendaPendientesError&&agendaCantidadVinculable>0&&<p style={{margin:"3px 0 0",fontSize:11,color:"#666"}}>Al dar de alta o editar una manicura, confirmá el profesional de AgendaPro. Ese vínculo se guarda por local e ID numérico, no por nombre.</p>}
           {!agendaPendientesLoading&&!agendaPendientesError&&agendaCantidadSinId>0&&<p style={{margin:"3px 0 0",fontSize:11,color:COLORS.danger}}>{agendaCantidadSinId} prestación{agendaCantidadSinId===1?"":"es"} no trae{agendaCantidadSinId===1?"":"n"} profesional desde AgendaPro y no se puede{agendaCantidadSinId===1?"":"n"} vincular desde NikiOS.</p>}
+          {!agendaPendientesLoading&&!agendaPendientesError&&agendaHistoricosNoVinculables.length>0&&<p style={{margin:"3px 0 0",fontSize:11,color:COLORS.info}}>{agendaHistoricosNoVinculables.length} profesional{agendaHistoricosNoVinculables.length===1?" histórico":"es históricos"} marcado{agendaHistoricosNoVinculables.length===1?"":"s"} como no vinculable{agendaHistoricosNoVinculables.length===1?"":"s"}. Sus comisiones siguen visibles en reportes.</p>}
           {agendaPendientesError&&<p style={{margin:"3px 0 0",fontSize:11,color:COLORS.danger}}>No se pudo consultar el control AgendaPro: {agendaPendientesError}</p>}
         </div>
-        <Btn size="sm" variant="secondary" disabled={agendaPendientesLoading} onClick={()=>void cargarAgendaPendientes()}>Actualizar control</Btn>
+        <div style={{display:"flex",gap:7,flexWrap:"wrap"}}>{(agendaPendientesConId.length>0||agendaHistoricosNoVinculables.length>0)&&<Btn size="sm" variant="secondary" onClick={()=>setAgendaPendientesGestionModal(true)}>Gestionar históricos</Btn>}<Btn size="sm" variant="secondary" disabled={agendaPendientesLoading} onClick={()=>void cargarAgendaPendientes()}>Actualizar control</Btn></div>
       </div>
     </Card>}
     <Card style={{marginBottom:14,padding:"10px 12px"}}><div style={{display:"flex",gap:10,alignItems:"center",flexWrap:"wrap"}}><div style={{flex:"1 1 280px",position:"relative"}}><span style={{position:"absolute",left:11,top:8,color:"#999"}}>⌕</span><Input value={busqueda} onChange={setBusqueda} placeholder="Buscar manicura o encargada por nombre" style={{paddingLeft:32}}/></div>{busqueda&&<Btn size="sm" variant="ghost" onClick={()=>setBusqueda("")}>Limpiar</Btn>}</div></Card>
@@ -5652,6 +5911,23 @@ function ABMManicuras({ data, setData, reloadData, user }) {
       <div><div style={{display:"flex",justifyContent:"space-between",alignItems:"center",gap:12,marginBottom:12}}><div><h3 style={{margin:0,fontSize:15}}>Historial por local</h3><p style={{margin:"3px 0 0",fontSize:12,color:"var(--color-text-secondary)"}}>Puede haber más de un período activo siempre que correspondan a sucursales distintas.</p></div><Btn onClick={addHistorial} size="sm">+ Agregar período</Btn></div><div style={{overflowX:"auto",border:"1px solid rgba(120,120,120,0.16)",borderRadius:12}}><div className="niki-history-table" style={{minWidth:760}}><div className="niki-history-header" style={{display:"grid",gridTemplateColumns:"1.25fr 130px 130px 150px 1.2fr 44px",gap:8,padding:"9px 10px",background:"var(--color-background-secondary)",fontSize:11,fontWeight:700,textTransform:"uppercase"}}><span>Local</span><span>Fecha inicio</span><span>Fecha fin</span><span>Motivo</span><span>Observación</span><span></span></div>{historialDraft.length===0?<p style={{padding:16,textAlign:"center",fontSize:13,color:"var(--color-text-secondary)"}}>Sin períodos cargados.</p>:historialDraft.map(r=>{const key=r.id||r.tempId;return <div className="niki-history-row" key={key} style={{display:"grid",gridTemplateColumns:"1.25fr 130px 130px 150px 1.2fr 44px",gap:8,padding:"9px 10px",borderTop:"1px solid rgba(120,120,120,0.12)",alignItems:"center",background:!r.fechaFin?COLORS.successLight:"#fff"}}><select value={r.localId||""} onChange={e=>updateHistorialDraft(key,"localId",e.target.value)} style={{border:"1px solid #ddd",borderRadius:7,padding:"7px 8px",fontSize:12}}>{localesPermitidos.map(l=><option key={l.id} value={l.id}>{l.nombre}</option>)}</select><input type="date" value={r.fechaInicio||""} onChange={e=>updateHistorialDraft(key,"fechaInicio",e.target.value)} style={{border:"1px solid #ddd",borderRadius:7,padding:"7px 8px",fontSize:12}}/><input type="date" value={r.fechaFin||""} onChange={e=>{updateHistorialDraft(key,"fechaFin",e.target.value);if(!e.target.value)updateHistorialDraft(key,"motivoFin","");}} style={{border:"1px solid #ddd",borderRadius:7,padding:"7px 8px",fontSize:12}}/><select value={r.motivoFin||""} disabled={!r.fechaFin} onChange={e=>updateHistorialDraft(key,"motivoFin",e.target.value)} style={{border:"1px solid #ddd",borderRadius:7,padding:"7px 8px",fontSize:12,background:!r.fechaFin?"#f4f4f4":"#fff"}}><option value="">{r.fechaFin?"Seleccionar":"Período activo"}</option>{motivosFin.map(x=><option key={x}>{x}</option>)}</select><input value={r.observacion||""} onChange={e=>updateHistorialDraft(key,"observacion",e.target.value)} placeholder="Opcional" style={{border:"1px solid #ddd",borderRadius:7,padding:"7px 8px",fontSize:12}}/><button onClick={()=>removeHistorialDraft(key)} title="Eliminar período" style={{border:"none",background:COLORS.dangerLight,color:COLORS.danger,borderRadius:7,width:34,height:34,cursor:"pointer"}}>×</button></div>})}</div></div></div>:modalTab==="laboral"?<div style={{display:"flex",flexDirection:"column",gap:14}}><ModalInput label="Alias o CBU bancario" value={form.datoBancario||""} onChange={v=>setForm(f=>({...f,datoBancario:v}))}/><ModalSelect label="Tipo de relación" value={form.tipoRelacion||"a_resolver"} onChange={v=>setForm(f=>({...f,tipoRelacion:v}))}><option value="monotributista">Monotributista</option><option value="dependencia">Relación de Dependencia</option><option value="a_resolver">A resolver</option></ModalSelect></div>:<LegajoDocumentosPanel actor={user} userId={form.id} documentos={documentosPersona} onReload={reloadData} currentPhotoUrl={form.fotoPerfilUrl||""}/>}
       {formErr&&<p style={{margin:"14px 0 0",fontSize:13,color:COLORS.danger,background:COLORS.dangerLight,padding:"8px 12px",borderRadius:8}}>{formErr}</p>}<div style={{display:"flex",gap:8,marginTop:18,flexWrap:"wrap"}}><Btn onClick={save} disabled={saving} style={{flex:1,justifyContent:"center"}}>{saving?"Guardando...":"Guardar"}</Btn><Btn onClick={()=>setModal(null)} variant="secondary" style={{flex:1,justifyContent:"center"}}>Cancelar</Btn></div>
     </Modal>}
+    {agendaPendientesGestionModal&&<Modal title="Profesionales AgendaPro pendientes / históricos" onClose={()=>setAgendaPendientesGestionModal(false)} width={900}>
+      <div style={{display:"flex",flexDirection:"column",gap:14}}>
+        <div style={{padding:"9px 11px",borderRadius:9,background:COLORS.infoLight,color:COLORS.info,fontSize:11,lineHeight:1.45}}>Marcá como <strong>histórico no vinculable</strong> a una profesional que ya no trabaja en NikiOS. La venta y su comisión permanecen en los reportes, pero deja de proponerse para vinculación y no entra en la liquidación de una manicura actual.</div>
+        <div><h4 style={{margin:"0 0 7px",fontSize:12}}>Pendientes vinculables</h4>{agendaPendientesConId.length?<div style={{display:"flex",flexDirection:"column",gap:6,maxHeight:280,overflowY:"auto"}}>{agendaPendientesConId.map(p=><div key={`pend-${p.key}`} style={{display:"grid",gridTemplateColumns:"1fr 1fr 90px 150px 130px",gap:8,alignItems:"center",padding:"8px 9px",border:"1px solid rgba(120,120,120,.14)",borderRadius:9,fontSize:11}}><strong>{p.nombreLocal||"Sin local"}</strong><span>{p.profesional||`AgendaPro #${p.providerId}`}</span><span>{p.cantidad} serv.</span><span>{p.fechaDesde===p.fechaHasta?p.fechaDesde:`${p.fechaDesde} a ${p.fechaHasta}`}</span><Btn size="sm" variant="secondary" onClick={()=>setAgendaNoVinculableConfirm(p)}>No vincular</Btn></div>)}</div>:<p style={{margin:0,fontSize:11,color:"var(--color-text-secondary)"}}>No hay profesionales pendientes vinculables.</p>}</div>
+        <div><h4 style={{margin:"0 0 7px",fontSize:12}}>Históricos no vinculables</h4>{agendaHistoricosNoVinculables.length?<div style={{display:"flex",flexDirection:"column",gap:6,maxHeight:220,overflowY:"auto"}}>{agendaHistoricosNoVinculables.map(p=><div key={`hist-${p.key}`} style={{display:"grid",gridTemplateColumns:"1fr 1fr 90px 150px 120px",gap:8,alignItems:"center",padding:"8px 9px",border:"1px solid rgba(120,120,120,.14)",borderRadius:9,fontSize:11,background:"var(--color-background-secondary)"}}><strong>{p.nombreLocal||"Sin local"}</strong><span>{p.profesional||`AgendaPro #${p.providerId}`}</span><span>{p.cantidad} serv.</span><span>{p.fechaDesde===p.fechaHasta?p.fechaDesde:`${p.fechaDesde} a ${p.fechaHasta}`}</span><Btn size="sm" variant="ghost" onClick={()=>void reactivarAgendaVinculable(p)}>Reactivar</Btn></div>)}</div>:<p style={{margin:0,fontSize:11,color:"var(--color-text-secondary)"}}>Todavía no hay históricos marcados.</p>}</div>
+      </div>
+    </Modal>}
+    <ConfirmDialog
+      config={agendaNoVinculableConfirm ? {
+        title:"Marcar como histórico no vinculable",
+        message:`${agendaNoVinculableConfirm.profesional || `AgendaPro #${agendaNoVinculableConfirm.providerId}`} dejará de aparecer como opción para vincular en ${agendaNoVinculableConfirm.nombreLocal}. Sus ${agendaNoVinculableConfirm.cantidad} prestaciones y comisiones seguirán apareciendo en los reportes como histórico sin manicura NikiOS.`,
+        confirmText:"Marcar histórico",
+        variant:"primary"
+      } : null}
+      onCancel={()=>setAgendaNoVinculableConfirm(null)}
+      onConfirm={()=>void marcarAgendaNoVinculable(agendaNoVinculableConfirm)}
+    />
     <ConfirmDialog
       config={multiLocalConfirm ? {
         title:"Manicura asignada a varios locales",
@@ -6229,6 +6505,7 @@ function Reportes({ data, setData, user, onOpenAgenda, reportRestore, reloadData
   const [comisionesReady, setComisionesReady] = useState(false);
   const [ultimaActualizacionComisiones, setUltimaActualizacionComisiones] = useState(null);
   const [comisionesSinVincularModal, setComisionesSinVincularModal] = useState(false);
+  const [comisionGlobalDetalle, setComisionGlobalDetalle] = useState(null);
   const [agendaPendientesComisiones, setAgendaPendientesComisiones] = useState([]);
   const refreshComisionesSeq = useRef(0);
   const [configComisionesFiltros, setConfigComisionesFiltros] = useState({ local:"", tipoLocal:"", zona:"", manicura:"", estado:"activas", configuracion:"" });
@@ -6275,6 +6552,18 @@ function Reportes({ data, setData, user, onOpenAgenda, reportRestore, reloadData
       const semanas = getCommissionWeeksForMonth(yy, (mm || 1) - 1);
       const desde = semanas[0]?.desdeKey || `${periodoComisiones}-01`;
       const hasta = semanas[semanas.length-1]?.hastaKey || dateKey(new Date(yy, mm || 1, 0));
+
+      // Autorreparacion del mes actual: antes de leer el shadow, sincroniza hoy + ayer.
+      // Si por algun motivo falla, no bloquea el reporte: se muestran los ultimos datos disponibles.
+      if (periodoComisiones === fmtPeriodo(new Date())) {
+        try {
+          await api.refrescarComisionesAgendaProToday();
+        } catch (syncError) {
+          console.warn("No se pudo sincronizar Today antes de cargar Comisiones", syncError);
+          if (!silencioso) notifyToast("No se pudo sincronizar AgendaPro en este momento. Se muestran los últimos datos disponibles.", "warning");
+        }
+      }
+
       const [comisionesRaw, agendaPendientesRaw, importacionesRaw, criteriosRaw, configuracionRaw, manicuraConfigRaw, adelantosRaw, garantiasRaw, horariosRaw, asistenciasRaw] = await Promise.all([
         api.getComisionesAgendaProShadowRango(desde,hasta),
         api.getAgendaComisionesSinVincularRango(desde,hasta),
@@ -6567,8 +6856,26 @@ function Reportes({ data, setData, user, onOpenAgenda, reportRestore, reloadData
     };
     const localesComisionesDisponibles = localesVisibles.filter(l => !!l?.id);
     const localComisionesSeleccionado = parseInt(localComisiones || localComisionesInicial || localesComisionesDisponibles[0]?.id || "");
-    const manicurasComisionesDisponibles = manicuras.filter(m => !localComisionesSeleccionado || m.localId === localComisionesSeleccionado);
+    const rangoComisionDesde=semanaSeleccionadaComision?.desdeKey || `${periodoComisiones}-01`;
+    const rangoComisionHasta=semanaSeleccionadaComision?.hastaKey || `${periodoComisiones}-${String(new Date(periodoYearComisiones,periodoMonthComisiones+1,0).getDate()).padStart(2,"0")}`;
+    const manicurasComisionesDisponibles = manicuras.filter(m => !localComisionesSeleccionado || getManicuraLocalIdsForRange(data,m.id,rangoComisionDesde,rangoComisionHasta).includes(Number(localComisionesSeleccionado)) || (data.comisiones||[]).some(c=>Number(c.userId)===Number(m.id)&&Number(c.localId)===Number(localComisionesSeleccionado)&&String(c.fechaPago||"")>=rangoComisionDesde&&String(c.fechaPago||"")<=rangoComisionHasta));
+    const agendaNoVinculableSet = new Set((data.agendaProfesionalesNoVinculables || []).map(x=>`${Number(x.localId)}|${Number(x.providerId)}`));
+    const agendaProviderNameMap = new Map();
+    (agendaPendientesComisiones || []).forEach(r=>{
+      const lid=Number(r.local_id||0), pid=r.agendapro_provider_id==null?null:Number(r.agendapro_provider_id);
+      const nombre=String(r.profesional_agendapro||"").trim();
+      if(lid&&pid!=null&&nombre) agendaProviderNameMap.set(`${lid}|${pid}`,nombre);
+    });
+    (data.agendaProfesionalesNoVinculables || []).forEach(r=>{
+      const nombre=String(r.profesional||"").trim();
+      if(r.localId&&r.providerId!=null&&nombre&&!agendaProviderNameMap.has(`${Number(r.localId)}|${Number(r.providerId)}`)) agendaProviderNameMap.set(`${Number(r.localId)}|${Number(r.providerId)}`,nombre);
+    });
     const baseRegistrosComisiones = (data.comisiones||[])
+      .map(c=>{
+        const providerKey=c.agendaproProviderId==null?"":`${Number(c.localId)}|${Number(c.agendaproProviderId)}`;
+        const historicoNoVinculable=!c.userId && !!providerKey && agendaNoVinculableSet.has(providerKey);
+        return {...c,nombreManicura:c.nombreManicura||agendaProviderNameMap.get(providerKey)||(historicoNoVinculable?"Histórico AgendaPro":"Sin manicura"),historicoNoVinculable};
+      })
       .filter(c=>puedeVerComision(c))
       .filter(c=>!sinSemanaComisiones && fechaEnSemanaSeleccionada(c.fechaPago))
       .filter(c=>!localComisionesSeleccionado || c.localId === localComisionesSeleccionado || normalize(c.nombreLocal) === normalize(localNameById.get(localComisionesSeleccionado)))
@@ -6578,6 +6885,8 @@ function Reportes({ data, setData, user, onOpenAgenda, reportRestore, reloadData
         const lid = Number(r.local_id || 0);
         if (!puedeGestionar) return false;
         if (!esAdmin && !allowedLocalIds.includes(lid)) return false;
+        const pid=r.agendapro_provider_id==null?null:Number(r.agendapro_provider_id);
+        if(pid!=null && agendaNoVinculableSet.has(`${lid}|${pid}`)) return false;
         if (localComisionesSeleccionado && lid !== Number(localComisionesSeleccionado)) return false;
         if (!sinSemanaComisiones && semanaSeleccionadaComision && !isDateInRangeKey(r.fecha_pago, semanaSeleccionadaComision.desdeKey, semanaSeleccionadaComision.hastaKey)) return false;
         return true;
@@ -6684,9 +6993,13 @@ function Reportes({ data, setData, user, onOpenAgenda, reportRestore, reloadData
     };
     const configGeneralComisiones = (data.comisionesConfiguracion || []).find(c=>c.activo) || { id:1, porcentajeBase:40, porcentajeReducido:35, horasObjetivoDefault:36, horasObjetivoFinSemana:null, maxLlegadasTarde:0, maxFaltasNoJustificadas:0, contarFaltasJustificadas:false, toleranciaLlegadaTardeMinutos:0, minimoSemanalEstandar:0, minimoSemanalPremiumExclusiva:0, minimoSemanalEstandarFinSemana:null, minimoSemanalPremiumExclusivaFinSemana:null };
     const configManicuraMap = new Map((data.comisionesManicuraConfig || []).filter(c=>c.activo).map(c=>[`${c.userId}|${c.localId || 0}`, c]));
-    const getConfigManicura = (uid, localIdValue=null) => configManicuraMap.get(`${uid}|${localIdValue || 0}`) || configManicuraMap.get(`${uid}|0`) || null;
-    const reglaComision = (uid, localIdValue=null) => {
-      const cfg = getConfigManicura(uid, localIdValue);
+    const getConfigManicura = (uid, localIdValue=null) => configManicuraMap.get(`${uid}|0`) || configManicuraMap.get(`${uid}|${localIdValue || 0}`) || null;
+    const estadoLaboralGlobal = (uid, desdeKey=semanaSeleccionadaComision?.desdeKey, hastaKey=semanaSeleccionadaComision?.hastaKey) => getGlobalEmploymentEpisodeStatus(data.manicuraHistorialLocales || [], uid, desdeKey, hastaKey);
+    const estadoGarantiaGlobal = (uid, desdeKey=semanaSeleccionadaComision?.desdeKey, hastaKey=semanaSeleccionadaComision?.hastaKey) => getGlobalMinimumGuaranteeStatus(data.manicuraHistorialLocales || [], uid, desdeKey, hastaKey);
+    const reglaComision = (uid, localIdValue=null, desdeKey=semanaSeleccionadaComision?.desdeKey, hastaKey=semanaSeleccionadaComision?.hastaKey) => {
+      const estado=uid&&desdeKey&&hastaKey?estadoLaboralGlobal(uid,desdeKey,hastaKey):null;
+      const localRegla=estado?.anchorLocalId || localIdValue || 0;
+      const cfg = getConfigManicura(uid, localRegla);
       const manicura = (data.users || []).find(u=>Number(u.id)===Number(uid));
       const esFinSemana = manicura?.soloFinDeSemana === true;
       const horasGeneral = esFinSemana
@@ -6701,56 +7014,68 @@ function Reportes({ data, setData, user, onOpenAgenda, reportRestore, reloadData
         maxFaltasNoJustificadas: Number(cfg?.maxFaltasNoJustificadas ?? configGeneralComisiones.maxFaltasNoJustificadas ?? 0),
         contarFaltasJustificadas: cfg?.contarFaltasJustificadas ?? configGeneralComisiones.contarFaltasJustificadas ?? false,
         configuracionPropia: !!cfg,
+        anchorLocalId:localRegla||null,
       };
     };
-    // Índices de acceso para evitar recorrer horarios/asistencias completos por cada registro.
+    // Multi-local: un mismo día puede tener más de un horario. Se conservan todos
+    // y las horas se suman globalmente; antes un local podía pisar al otro.
     const horariosComisionMap = new Map();
-    (data.horarios || []).forEach(h => horariosComisionMap.set(`${Number(h.userId)}|${h.fecha}`, h));
+    (data.horarios || []).forEach(h => {
+      const k=`${Number(h.userId)}|${h.fecha}`;
+      if(!horariosComisionMap.has(k)) horariosComisionMap.set(k,[]);
+      horariosComisionMap.get(k).push(h);
+    });
     const asistenciasComisionMap = new Map();
     (data.asistencias || []).forEach(a => {
       const k = `${Number(a.userId)}|${a.fecha}`;
       if (!asistenciasComisionMap.has(k)) asistenciasComisionMap.set(k, []);
       asistenciasComisionMap.get(k).push(a);
     });
-    const horasTeoricasSemana = (uid) => semanaKeysComision.reduce((acc,f)=>{
-      const h = horariosComisionMap.get(`${Number(uid)}|${f}`);
-      if (!h || !h.trabaja || !h.entrada || !h.salida) return acc;
-      return acc + Math.max(0, minutesFromTimeComision(h.salida) - minutesFromTimeComision(h.entrada)) / 60;
+    const horasParaKeys = (uid,keys) => (keys||[]).reduce((acc,f)=>{
+      const rows=horariosComisionMap.get(`${Number(uid)}|${f}`)||[];
+      return acc+rows.reduce((sum,h)=>{
+        if(!h?.trabaja||!h.entrada||!h.salida) return sum;
+        return sum+Math.max(0,minutesFromTimeComision(h.salida)-minutesFromTimeComision(h.entrada))/60;
+      },0);
     },0);
-    const asistenciasSemanaUsuario = (uid) => semanaKeysComision.flatMap(f => asistenciasComisionMap.get(`${Number(uid)}|${f}`) || []);
-    const faltasSemana = (uid, localIdValue=null) => {
-      const regla = reglaComision(uid, localIdValue);
-      return asistenciasSemanaUsuario(uid).filter(a => a.estado === "ausente" && (regla.contarFaltasJustificadas || !a.certificado)).length;
+    const statsAsistenciaParaKeys = (uid,keys,regla) => {
+      let faltas=0,llegadasTarde=0;
+      (keys||[]).forEach(f=>{
+        const rows=asistenciasComisionMap.get(`${Number(uid)}|${f}`)||[];
+        if(rows.some(a=>a.estado==="tarde")) llegadasTarde+=1;
+        const tienePresencia=rows.some(a=>a.estado==="presente"||a.estado==="tarde");
+        if(!tienePresencia && rows.some(a=>a.estado==="ausente" && (regla.contarFaltasJustificadas || !a.certificado))) faltas+=1;
+      });
+      return {faltas,llegadasTarde};
     };
-    const llegadasTardeSemana = (uid) => asistenciasSemanaUsuario(uid).filter(a => a.estado === "tarde").length;
+    const horasTeoricasSemana = (uid) => horasParaKeys(uid,semanaKeysComision);
+    const faltasSemana = (uid) => statsAsistenciaParaKeys(uid,semanaKeysComision,reglaComision(uid)).faltas;
+    const llegadasTardeSemana = (uid) => statsAsistenciaParaKeys(uid,semanaKeysComision,reglaComision(uid)).llegadasTarde;
     const criterioKey = (uid, localIdValue=null) => `${periodoComisiones}|${semanaComisiones}|${uid}|${localIdValue || 0}`;
-    const criteriosSemanaMap = new Map((data.comisionesCriterios||[])
-      .filter(c=>c.periodo===periodoComisiones && String(c.semana)===String(semanaComisiones))
-      .map(c=>[criterioKey(c.userId, c.localId), c]));
-    const porcentajeAutomatico = (uid, localIdValue=null) => {
+    const criteriosSemanaRows=(data.comisionesCriterios||[]).filter(c=>c.periodo===periodoComisiones && String(c.semana)===String(semanaComisiones));
+    const criterioGuardadoGlobal=(uid)=>criteriosSemanaRows.find(c=>Number(c.userId)===Number(uid)&&!Number(c.localId||0)) || criteriosSemanaRows.find(c=>Number(c.userId)===Number(uid)) || null;
+    const porcentajeAutomatico = (uid) => {
       if (!uid || sinSemanaComisiones) return Number(configGeneralComisiones.porcentajeBase || 40);
-      const regla = reglaComision(uid, localIdValue);
-      const tieneHorariosCargados = semanaKeysComision.some(f => { const h = horariosComisionMap.get(`${Number(uid)}|${f}`); return !!(h?.trabaja && h?.entrada && h?.salida); });
-      // Mientras no todas las sucursales carguen horarios, si la semana no tiene ningún horario
-      // se considera cumplida la condición de horas y se aplica el porcentaje base.
+      const regla = reglaComision(uid);
+      const tieneHorariosCargados = semanaKeysComision.some(f => (horariosComisionMap.get(`${Number(uid)}|${f}`)||[]).some(h=>h?.trabaja&&h?.entrada&&h?.salida));
       if (!tieneHorariosCargados) return regla.porcentajeBase;
       const horas = horasTeoricasSemana(uid);
-      const faltas = faltasSemana(uid, localIdValue);
-      const tarde = llegadasTardeSemana(uid);
-      return (horas < regla.horasObjetivo || faltas > regla.maxFaltasNoJustificadas || tarde > regla.maxLlegadasTarde) ? regla.porcentajeReducido : regla.porcentajeBase;
+      const stats=statsAsistenciaParaKeys(uid,semanaKeysComision,regla);
+      return (horas < regla.horasObjetivo || stats.faltas > regla.maxFaltasNoJustificadas || stats.llegadasTarde > regla.maxLlegadasTarde) ? regla.porcentajeReducido : regla.porcentajeBase;
     };
-    const criterioInfo = (uid, localIdValue=null) => {
-      const guardado = criteriosSemanaMap.get(criterioKey(uid, localIdValue)) || criteriosSemanaMap.get(criterioKey(uid, 0));
-      const regla = reglaComision(uid, localIdValue);
-      const auto = porcentajeAutomatico(uid, localIdValue);
+    const criterioInfo = (uid) => {
+      const regla = reglaComision(uid);
+      const guardado=uid?criterioGuardadoGlobal(uid):null;
+      const auto = porcentajeAutomatico(uid);
+      const stats=uid?statsAsistenciaParaKeys(uid,semanaKeysComision,regla):{faltas:0,llegadasTarde:0};
       return {
         porcentaje: guardado?.porcentaje || auto,
         guardado: !!guardado,
         automatico: auto,
         horas: uid ? horasTeoricasSemana(uid) : 0,
         horasObjetivo: regla.horasObjetivo,
-        faltas: uid ? faltasSemana(uid, localIdValue) : 0,
-        llegadasTarde: uid ? llegadasTardeSemana(uid) : 0,
+        faltas: stats.faltas,
+        llegadasTarde: stats.llegadasTarde,
         regla,
         motivo: guardado?.motivo || ""
       };
@@ -6770,61 +7095,69 @@ function Reportes({ data, setData, user, onOpenAgenda, reportRestore, reloadData
         ? Number(configGeneralComisiones.minimoSemanalPremiumExclusiva || 0)
         : Number(configGeneralComisiones.minimoSemanalEstandar || 0);
     };
-    const garantiaMinimaInfo = (uid, localIdValue) => {
-      if (sinSemanaComisiones || !semanaSeleccionadaComision || !uid || !localIdValue) return { eligible:false, applies:false, minimum:0, endDateKey:"" };
-      const status = getMinimumGuaranteeStatus(data.manicuraHistorialLocales || [], uid, localIdValue, semanaSeleccionadaComision.desdeKey, semanaSeleccionadaComision.hastaKey);
-      const regla = reglaComision(uid, localIdValue);
-      const info = criterioInfo(uid, localIdValue);
+    const garantiaMinimaInfo = (uid, localIdValue=null) => {
+      if (sinSemanaComisiones || !semanaSeleccionadaComision || !uid) return { eligible:false, applies:false, minimum:0, endDateKey:"", anchorLocalId:null, activeLocalIds:[] };
+      const status = estadoGarantiaGlobal(uid, semanaSeleccionadaComision.desdeKey, semanaSeleccionadaComision.hastaKey);
+      const anchorLocalId=status.anchorLocalId || localIdValue;
+      const regla = reglaComision(uid, anchorLocalId);
+      const info = criterioInfo(uid);
       const cumpleConfiguracion = Number(info.porcentaje) === Number(regla.porcentajeBase);
-      const minimum = minimoSemanalParaLocal(uid, localIdValue);
-      return { ...status, minimum, cumpleConfiguracion, applies:status.eligible && cumpleConfiguracion && minimum > 0 };
+      const minimum = anchorLocalId ? minimoSemanalParaLocal(uid, anchorLocalId) : 0;
+      return { ...status, anchorLocalId, minimum, cumpleConfiguracion, applies:status.eligible && cumpleConfiguracion && minimum > 0 };
     };
     const comisionConPorcentaje = (comisionBase, porcentaje, porcentajeBase=40) => Number(comisionBase || 0) * (Number(porcentaje || porcentajeBase) / Math.max(1, Number(porcentajeBase || 40)));
     const comisionAl35 = (com40) => comisionConPorcentaje(com40, Number(configGeneralComisiones.porcentajeReducido || 35), Number(configGeneralComisiones.porcentajeBase || 40));
     const comisionAplicadaRegistro = (c) => {
       const valor = Number(c?.comision || 0);
-      if (!c || c.tipoRegistro === "garantia") return valor;
-      const info = criterioInfo(c.userId, c.localId);
+      if (!c || c.tipoRegistro === "garantia" || !c.userId) return valor;
+      const info = criterioInfo(c.userId);
       return comisionConPorcentaje(valor, info.porcentaje, info.regla?.porcentajeBase || configGeneralComisiones.porcentajeBase || 40);
     };
     const porcentajeAplicadoRegistro = (c) => {
-      if (!c || c.tipoRegistro === "garantia") return null;
-      return criterioInfo(c.userId, c.localId).porcentaje;
+      if (!c || c.tipoRegistro === "garantia" || !c.userId) return null;
+      return criterioInfo(c.userId).porcentaje;
+    };
+    const rangoSemanaPorPeriodo = (periodo, semana) => {
+      const [yy,mm]=String(periodo||"").split("-").map(Number);
+      if(!yy||!mm||!semana) return null;
+      return getCommissionWeeksForMonth(yy,mm-1).find(w=>String(w.numero)===String(semana))||null;
     };
     const semanaKeysPorPeriodo = (periodo, semana) => {
-      const [yy, mm] = String(periodo || "").split("-").map(Number);
-      if (!yy || !mm || !semana) return [];
-      const semanas = getSemanas(getDiasDelMes(yy, mm - 1));
-      return (semanas[parseInt(semana) - 1] || []).filter(Boolean).map(d => dateKey(d));
+      const w=rangoSemanaPorPeriodo(periodo,semana);
+      if(!w) return [];
+      const keys=[];
+      for(let d=new Date(w.desde);d<=w.hasta;d.setDate(d.getDate()+1)) keys.push(dateKey(d));
+      return keys;
     };
-    const horasTeoricasSemanaFor = (uid, periodo, semana) => semanaKeysPorPeriodo(periodo, semana).reduce((acc, f) => {
-      const h = horariosComisionMap.get(`${Number(uid)}|${f}`);
-      if (!h) return acc;
-      return acc + Math.max(0, minutesFromTimeComision(h.salida) - minutesFromTimeComision(h.entrada)) / 60;
-    }, 0);
-    const faltasSemanaFor = (uid, periodo, semana) => semanaKeysPorPeriodo(periodo, semana).filter(f => (asistenciasComisionMap.get(`${Number(uid)}|${f}`) || []).some(a => a.estado === "ausente")).length;
-    const criterioInfoFor = (uid, periodo, semana, localIdValue=null) => {
-      if (!uid || !periodo || !semana) return { porcentaje: 40, guardado: false, automatico: 40, horas: 0, faltas: 0 };
-      const guardado = (data.comisionesCriterios || []).find(c => c.periodo === periodo && String(c.semana) === String(semana) && c.userId === uid && ((c.localId || 0) === (localIdValue || 0)))
-        || (data.comisionesCriterios || []).find(c => c.periodo === periodo && String(c.semana) === String(semana) && c.userId === uid && !c.localId);
-      const horas = horasTeoricasSemanaFor(uid, periodo, semana);
-      const faltas = faltasSemanaFor(uid, periodo, semana);
-      const regla = reglaComision(uid, localIdValue);
-      const tarde = semanaKeysPorPeriodo(periodo, semana).filter(f => (asistenciasComisionMap.get(`${Number(uid)}|${f}`) || []).some(a => a.estado === "tarde")).length;
-      const automatico = (faltas > regla.maxFaltasNoJustificadas || horas < regla.horasObjetivo || tarde > regla.maxLlegadasTarde) ? regla.porcentajeReducido : regla.porcentajeBase;
-      return { porcentaje: guardado?.porcentaje || automatico, guardado: !!guardado, automatico, horas, faltas, llegadasTarde:tarde, regla };
+    const criterioInfoFor = (uid, periodo, semana) => {
+      if (!uid || !periodo || !semana) return { porcentaje:Number(configGeneralComisiones.porcentajeBase||40), guardado:false, automatico:Number(configGeneralComisiones.porcentajeBase||40), horas:0, faltas:0, llegadasTarde:0, regla:reglaComision(uid) };
+      const w=rangoSemanaPorPeriodo(periodo,semana);
+      const keys=semanaKeysPorPeriodo(periodo,semana);
+      const regla=reglaComision(uid,null,w?.desdeKey,w?.hastaKey);
+      const criterios=(data.comisionesCriterios||[]).filter(c=>c.periodo===periodo&&String(c.semana)===String(semana)&&Number(c.userId)===Number(uid));
+      const guardado=criterios.find(c=>!Number(c.localId||0))||criterios[0]||null;
+      const horas=horasParaKeys(uid,keys);
+      const stats=statsAsistenciaParaKeys(uid,keys,regla);
+      const tieneHorarios=keys.some(f=>(horariosComisionMap.get(`${Number(uid)}|${f}`)||[]).some(h=>h?.trabaja&&h?.entrada&&h?.salida));
+      const automatico=!tieneHorarios?regla.porcentajeBase:(stats.faltas>regla.maxFaltasNoJustificadas||horas<regla.horasObjetivo||stats.llegadasTarde>regla.maxLlegadasTarde)?regla.porcentajeReducido:regla.porcentajeBase;
+      return { porcentaje:guardado?.porcentaje||automatico,guardado:!!guardado,automatico,horas,faltas:stats.faltas,llegadasTarde:stats.llegadasTarde,regla };
     };
     const comisionAplicadaRegistroHistorica = (c) => {
       const valor = Number(c?.comision || 0);
-      if (!c || c.tipoRegistro === "garantia") return valor;
-      const info = criterioInfoFor(c.userId, c.periodo || String(c.fechaPago || "").slice(0,7), weekOfMonthValue(c.fechaPago), c.localId);
+      if (!c || c.tipoRegistro === "garantia" || !c.userId) return valor;
+      const info = criterioInfoFor(c.userId, c.periodo || String(c.fechaPago || "").slice(0,7), weekOfMonthValue(c.fechaPago));
       return comisionConPorcentaje(valor, info.porcentaje, info.regla?.porcentajeBase || configGeneralComisiones.porcentajeBase || 40);
     };
     const guardarCriterioComision = async (uid, localIdValue, porcentaje) => {
       if (!uid || sinSemanaComisiones) return;
       const semanaNum=parseInt(semanaComisiones);
-      const localNorm=localIdValue || null;
-      const previo=(data.comisionesCriterios||[]).find(c=>c.periodo===periodoComisiones&&Number(c.semana)===semanaNum&&Number(c.userId)===Number(uid)&&Number(c.localId||0)===Number(localNorm||0));
+      // El criterio se interpreta globalmente por manicura/semana. Para mantener
+      // compatibilidad con la tabla histórica (que puede exigir un local válido),
+      // actualizamos primero cualquier criterio ya existente; si no hay, usamos
+      // el local visible/ancla sólo como soporte de persistencia, no como alcance.
+      const previos=(data.comisionesCriterios||[]).filter(c=>c.periodo===periodoComisiones&&Number(c.semana)===semanaNum&&Number(c.userId)===Number(uid));
+      const previo=previos.find(c=>!Number(c.localId||0))||previos[0]||null;
+      const localNorm=Number(previo?.localId || localIdValue || reglaComision(uid,localIdValue)?.anchorLocalId || 0);
       const optimista={
         id:previo?.id || `tmp-${uid}-${localNorm||0}-${semanaNum}`,
         periodo:periodoComisiones, semana:semanaNum, userId:Number(uid), localId:localNorm,
@@ -6947,12 +7280,42 @@ function Reportes({ data, setData, user, onOpenAgenda, reportRestore, reloadData
       setSavingConfigComisiones(false);
     };
 
+    // Totales globales por manicura para la semana. El filtro visual puede estar en un
+    // local, pero la regla 40/35 y el mínimo garantizado se evalúan sobre todos los locales.
+    const comisionGlobalSemanaMap=new Map();
+    if(!sinSemanaComisiones&&semanaSeleccionadaComision){
+      (data.comisiones||[]).forEach(c=>{
+        if(!c.userId||!fechaEnSemanaSeleccionada(c.fechaPago)) return;
+        const uid=Number(c.userId);
+        const prev=comisionGlobalSemanaMap.get(uid)||{userId:uid,total:0,servicios:0,porLocal:new Map()};
+        const importe=comisionAplicadaRegistro(c);
+        prev.total+=importe; prev.servicios+=1;
+        const lid=Number(c.localId||0);
+        const localPrev=prev.porLocal.get(lid)||{localId:lid,local:localNameById.get(lid)||c.nombreLocal||"Sin local",comision:0,venta:0,servicios:0};
+        localPrev.comision+=importe; localPrev.venta+=Number(c.precioCobradoAgendaPro??c.precio??0); localPrev.servicios+=1;
+        prev.porLocal.set(lid,localPrev);
+        comisionGlobalSemanaMap.set(uid,prev);
+      });
+    }
+    const detalleGlobalUsuario=(uid, localIdsScope=null)=>{
+      const g=comisionGlobalSemanaMap.get(Number(uid));
+      if(!g) return {userId:Number(uid)||null,total:0,servicios:0,locales:[],otrosLocales:0};
+      const scopeSet=Array.isArray(localIdsScope)&&localIdsScope.length?new Set(localIdsScope.map(Number)):null;
+      const locales=Array.from(g.porLocal.values())
+        .filter(x=>!scopeSet||scopeSet.has(Number(x.localId)))
+        .sort((a,b)=>b.comision-a.comision);
+      const total=locales.reduce((a,x)=>a+Number(x.comision||0),0);
+      const servicios=locales.reduce((a,x)=>a+Number(x.servicios||0),0);
+      return {userId:Number(uid)||null,total,servicios,locales,porLocal:g.porLocal,otrosLocales:locales.filter(x=>Number(x.localId)!==Number(localComisionesSeleccionado)).reduce((a,x)=>a+Number(x.comision||0),0)};
+    };
+
     const manicurasPagoMap = new Map();
     registros.forEach(c => {
-      const key = c.userId || normalize(c.nombreLocal + "|" + c.nombreManicura);
+      if(!c.userId) return; // históricos/no vinculados nunca integran una liquidación personal
+      const key = c.userId;
       if (!manicurasPagoMap.has(key)) {
-        const userMatch = c.userId ? data.users.find(u=>u.id===c.userId) : data.users.find(u=>u.rol==="manicura" && normalize(u.nombre)===normalize(c.nombreManicura) && (!c.localId || u.localId===c.localId));
-        manicurasPagoMap.set(key, { userId:c.userId || userMatch?.id || null, localId:c.localId || userMatch?.localId || null, nombre:userMatch?.nombre || c.nombreManicura || "Sin manicura", local:c.nombreLocal || localNameById.get(userMatch?.localId) || "", comision:0, adelantos:0 });
+        const userMatch = data.users.find(u=>u.id===c.userId);
+        manicurasPagoMap.set(key, { userId:c.userId, localId:c.localId || userMatch?.localId || null, nombre:userMatch?.nombre || c.nombreManicura || "Sin manicura", local:c.nombreLocal || localNameById.get(userMatch?.localId) || "", comision:0, adelantos:0 });
       }
       const item = manicurasPagoMap.get(key);
       item.comision += comisionAplicadaRegistro(c);
@@ -6965,18 +7328,36 @@ function Reportes({ data, setData, user, onOpenAgenda, reportRestore, reloadData
       manicurasPagoMap.get(key).adelantos += a.importe;
     });
     if (!sinSemanaComisiones && localComisionesSeleccionado) {
-      data.users.filter(m=>m.rol==="manicura" && m.activo!==false).forEach(m=>{
-        if (manicuraComisiones !== "todas" && parseInt(manicuraComisiones)!==parseInt(m.id)) return;
-        const minimoInfo = garantiaMinimaInfo(m.id, localComisionesSeleccionado);
-        if (!minimoInfo.eligible) return;
-        const key = m.id;
-        if (!manicurasPagoMap.has(key)) manicurasPagoMap.set(key, { userId:m.id, localId:localComisionesSeleccionado, nombre:m.nombre, local:localNameById.get(localComisionesSeleccionado)||"", comision:0, adelantos:0 });
+      // Si el mínimo global corresponde al local ancla, ese local debe mostrar el
+      // complemento aun cuando esa semana no haya tenido servicios propios allí.
+      // Así la suma de reportes por local siempre reconcilia con la liquidación global.
+      (data.users||[]).filter(u=>u.rol==="manicura"&&u.activo!==false).forEach(u=>{
+        if(manicurasPagoMap.has(u.id)) return;
+        const minimoInfo=garantiaMinimaInfo(u.id,localComisionesSeleccionado);
+        const globalMinimo=detalleGlobalUsuario(u.id,minimoInfo.activeLocalIds);
+        const debeMostrar=Number(minimoInfo.anchorLocalId)===Number(localComisionesSeleccionado)&&minimoInfo.applies&&globalMinimo.total<minimoInfo.minimum;
+        if(!debeMostrar) return;
+        manicurasPagoMap.set(u.id,{ userId:u.id, localId:Number(localComisionesSeleccionado), nombre:u.nombre||"Sin manicura", local:localNameById.get(Number(localComisionesSeleccionado))||"", comision:0, adelantos:0 });
       });
       manicurasPagoMap.forEach(m=>{
-        const minimoInfo = garantiaMinimaInfo(m.userId, m.localId || localComisionesSeleccionado);
-        m.comisionReal = m.comision;
-        m.minimoAplica = minimoInfo.applies && m.comision < minimoInfo.minimum;
-        if (m.minimoAplica) m.comision = minimoInfo.minimum;
+        if(!m.userId) return;
+        const global=detalleGlobalUsuario(m.userId);
+        const minimoInfo=garantiaMinimaInfo(m.userId,m.localId||localComisionesSeleccionado);
+        const globalMinimo=detalleGlobalUsuario(m.userId,minimoInfo.activeLocalIds);
+        m.comisionReal=m.comision;
+        m.comisionGlobalReal=globalMinimo.total;
+        m.comisionOtrosLocales=Math.max(0,global.total-m.comision);
+        m.minimoAplica=minimoInfo.applies&&globalMinimo.total<minimoInfo.minimum;
+        m.comisionGlobalDefinitiva=m.minimoAplica?minimoInfo.minimum:globalMinimo.total;
+        m.complementoMinimoGlobal=m.minimoAplica?Math.max(0,m.comisionGlobalDefinitiva-m.comisionGlobalReal):0;
+        // El complemento global se imputa UNA sola vez al local ancla (el de mayor
+        // antigüedad del episodio laboral simultáneo). De esta forma los reportes
+        // por local siguen mostrando sólo lo generado allí, pero la suma de locales
+        // reconcilia exactamente contra el mínimo global.
+        m.complementoMinimoLocal=Number(minimoInfo.anchorLocalId)===Number(localComisionesSeleccionado||m.localId||0)?m.complementoMinimoGlobal:0;
+        m.comisionDefinitivaLocal=Number(m.comision||0)+Number(m.complementoMinimoLocal||0);
+        m.minimoInfo=minimoInfo;
+        m.globalDetalle=global;
       });
     }
     const fechasPagoComisiones = Array.from(manicurasPagoMap.values()).map(m => {
@@ -6987,7 +7368,8 @@ function Reportes({ data, setData, user, onOpenAgenda, reportRestore, reloadData
         ? (asistenciaSabado ? asistenciaSabado.estado !== "ausente" : horarioSabado)
         : horarioSabado;
       const fechaPago = sabadoPagoBase ? addDaysLocal(dateKey(sabadoPagoBase), trabajaSabado ? 2 : 3) : null;
-      return { ...m, trabajaSabado, asistenciaSabado:asistenciaSabado?.estado || "", fechaPago: fechaPago ? dateKey(fechaPago) : "", neto:m.comision - m.adelantos };
+      const comisionLocalPagar=Number(m.comisionDefinitivaLocal ?? m.comision ?? 0);
+      return { ...m, trabajaSabado, asistenciaSabado:asistenciaSabado?.estado || "", fechaPago: fechaPago ? dateKey(fechaPago) : "", neto:comisionLocalPagar - m.adelantos };
     }).sort((a,b)=>(a.fechaPago||"").localeCompare(b.fechaPago||"") || String(a.nombre).localeCompare(String(b.nombre)));
     const anioComisionesSeleccionado = periodoYearComisiones;
     const mesComisionesSeleccionado = periodoMonthComisiones + 1;
@@ -7035,7 +7417,7 @@ function Reportes({ data, setData, user, onOpenAgenda, reportRestore, reloadData
       return map;
     }, resumenMapComisionesSeed);
     for (const r of resumenMapComisiones.values()) {
-      const info = criterioInfo(r.userId, r.localId);
+      const info = criterioInfo(r.userId);
       r.porcentajeAplicado = info.porcentaje;
       r.porcentajeAutomatico = info.automatico;
       r.criterioGuardado = info.guardado;
@@ -7044,21 +7426,50 @@ function Reportes({ data, setData, user, onOpenAgenda, reportRestore, reloadData
       r.llegadasTarde = info.llegadasTarde;
       r.horasObjetivo = info.horasObjetivo;
       r.reglaComision = info.regla;
-      const baseFinal = comisionConPorcentaje(r.comisionBase, r.porcentajeAplicado, info.regla?.porcentajeBase || configGeneralComisiones.porcentajeBase || 40);
-      const minimoInfo = garantiaMinimaInfo(r.userId, r.localId);
-      r.comisionReal = baseFinal;
+      const baseFinal = r.userId ? comisionConPorcentaje(r.comisionBase, r.porcentajeAplicado, info.regla?.porcentajeBase || configGeneralComisiones.porcentajeBase || 40) : Number(r.comisionBase||0);
+      const global= r.userId ? detalleGlobalUsuario(r.userId) : {total:baseFinal,servicios:r.servicios,locales:[],otrosLocales:0};
+      const minimoInfo = r.userId ? garantiaMinimaInfo(r.userId, r.localId) : {eligible:false,applies:false,minimum:0,endDateKey:"",anchorLocalId:null,activeLocalIds:[]};
+      const globalMinimo = r.userId ? detalleGlobalUsuario(r.userId,minimoInfo.activeLocalIds) : global;
+      r.comisionReal = baseFinal; // sólo el local consultado
+      r.comisionGlobalReal=globalMinimo.total;
+      r.comisionOtrosLocales=Math.max(0,global.total-baseFinal);
+      r.globalDetalle=global;
       r.minimoGarantizado = minimoInfo.minimum;
       r.minimoFin = minimoInfo.endDateKey;
+      r.minimoInicio = minimoInfo.firstStartKey;
+      r.minimoAnchorLocalId=minimoInfo.anchorLocalId;
+      r.minimoAnchorLocal=localNameById.get(Number(minimoInfo.anchorLocalId))||"";
       r.minimoElegible = minimoInfo.eligible;
-      r.minimoAplica = minimoInfo.applies && baseFinal < minimoInfo.minimum;
-      r.comisionDefinitiva = r.minimoAplica ? minimoInfo.minimum : baseFinal;
+      r.minimoAplica = minimoInfo.applies && globalMinimo.total < minimoInfo.minimum;
+      r.comisionGlobalDefinitiva=r.minimoAplica?minimoInfo.minimum:globalMinimo.total;
+      r.complementoMinimoGlobal=r.minimoAplica?Math.max(0,r.comisionGlobalDefinitiva-r.comisionGlobalReal):0;
+      r.complementoMinimoLocal=Number(minimoInfo.anchorLocalId)===Number(localComisionesSeleccionado||r.localId||0)?r.complementoMinimoGlobal:0;
+      r.comisionDefinitiva=baseFinal+r.complementoMinimoLocal;
       r.neto = r.comisionDefinitiva + r.garantias - r.adelantos;
     }
-    adelantos.forEach(a=>{ const m=data.users.find(u=>u.id===a.userId); const l=data.locales.find(x=>x.id===a.localId); const key=a.userId || `adelanto-${a.id}`; const prev=resumenMapComisiones.get(key)||{ userId:a.userId, localId:a.localId, nombre:m?.codigoExterno||m?.nombre||"Sin manicura", local:l?.nombre||"", precio:0, comisionBase:0, comision35:0, comisionDefinitiva:0, porcentajeAplicado:40, porcentajeAutomatico:40, criterioGuardado:false, horasTeoricas:0, faltas:0, garantias:0, adelantos:0, neto:0, servicios:0, garantiasQty:0 }; prev.adelantos+=a.importe; const info=criterioInfo(prev.userId, prev.localId); prev.porcentajeAplicado=info.porcentaje; prev.porcentajeAutomatico=info.automatico; prev.criterioGuardado=info.guardado; prev.horasTeoricas=info.horas; prev.faltas=info.faltas; prev.llegadasTarde=info.llegadasTarde; prev.horasObjetivo=info.horasObjetivo; prev.reglaComision=info.regla; prev.comisionReal=comisionConPorcentaje(prev.comisionBase,prev.porcentajeAplicado,info.regla?.porcentajeBase||configGeneralComisiones.porcentajeBase||40); const minimoInfo=garantiaMinimaInfo(prev.userId,prev.localId); prev.minimoGarantizado=minimoInfo.minimum; prev.minimoFin=minimoInfo.endDateKey; prev.minimoElegible=minimoInfo.eligible; prev.minimoAplica=minimoInfo.applies&&prev.comisionReal<minimoInfo.minimum; prev.comisionDefinitiva=prev.minimoAplica?minimoInfo.minimum:prev.comisionReal; prev.neto=prev.comisionDefinitiva+prev.garantias-prev.adelantos; resumenMapComisiones.set(key,prev); });
+    adelantos.forEach(a=>{
+      const m=data.users.find(u=>u.id===a.userId), l=data.locales.find(x=>x.id===a.localId), key=a.userId || `adelanto-${a.id}`;
+      const prev=resumenMapComisiones.get(key)||{ userId:a.userId,localId:a.localId,nombre:m?.codigoExterno||m?.nombre||"Sin manicura",local:l?.nombre||"",precio:0,comisionBase:0,comision35:0,comisionDefinitiva:0,porcentajeAplicado:40,porcentajeAutomatico:40,criterioGuardado:false,horasTeoricas:0,faltas:0,garantias:0,adelantos:0,neto:0,servicios:0,garantiasQty:0 };
+      prev.adelantos+=a.importe;
+      const info=criterioInfo(prev.userId);
+      prev.porcentajeAplicado=info.porcentaje; prev.porcentajeAutomatico=info.automatico; prev.criterioGuardado=info.guardado; prev.horasTeoricas=info.horas; prev.faltas=info.faltas; prev.llegadasTarde=info.llegadasTarde; prev.horasObjetivo=info.horasObjetivo; prev.reglaComision=info.regla;
+      prev.comisionReal=prev.userId?comisionConPorcentaje(prev.comisionBase,prev.porcentajeAplicado,info.regla?.porcentajeBase||configGeneralComisiones.porcentajeBase||40):Number(prev.comisionBase||0);
+      const global=prev.userId?detalleGlobalUsuario(prev.userId):{total:prev.comisionReal,locales:[],otrosLocales:0};
+      const minimoInfo=prev.userId?garantiaMinimaInfo(prev.userId,prev.localId):{eligible:false,applies:false,minimum:0,endDateKey:"",activeLocalIds:[]};
+      const globalMinimo=prev.userId?detalleGlobalUsuario(prev.userId,minimoInfo.activeLocalIds):global;
+      prev.comisionGlobalReal=globalMinimo.total; prev.comisionOtrosLocales=Math.max(0,global.total-prev.comisionReal); prev.globalDetalle=global;
+      prev.minimoGarantizado=minimoInfo.minimum; prev.minimoFin=minimoInfo.endDateKey; prev.minimoInicio=minimoInfo.firstStartKey; prev.minimoAnchorLocalId=minimoInfo.anchorLocalId; prev.minimoAnchorLocal=localNameById.get(Number(minimoInfo.anchorLocalId))||""; prev.minimoElegible=minimoInfo.eligible; prev.minimoAplica=minimoInfo.applies&&globalMinimo.total<minimoInfo.minimum; prev.comisionGlobalDefinitiva=prev.minimoAplica?minimoInfo.minimum:globalMinimo.total;
+      prev.complementoMinimoGlobal=prev.minimoAplica?Math.max(0,prev.comisionGlobalDefinitiva-prev.comisionGlobalReal):0;
+      prev.complementoMinimoLocal=Number(minimoInfo.anchorLocalId)===Number(localComisionesSeleccionado||prev.localId||0)?prev.complementoMinimoGlobal:0;
+      prev.comisionDefinitiva=prev.comisionReal+prev.complementoMinimoLocal;
+      prev.neto=prev.comisionDefinitiva+prev.garantias-prev.adelantos;
+      resumenMapComisiones.set(key,prev);
+    });
     const resumenPorManicura = Array.from(resumenMapComisiones.values()).sort((a,b)=>b.neto-a.neto);
     const totalComisionDefinitiva = resumenPorManicura.reduce((a,r)=>a+Number(r.comisionDefinitiva||0)+Number(r.garantias||0),0);
     const netoPagarDefinitivo = resumenPorManicura.reduce((a,r)=>a+Number(r.neto||0),0);
     const totalComision35 = resumenPorManicura.reduce((a,r)=>a+Number(r.comision35||0),0);
+    const totalComplementoMinimoLocal = resumenPorManicura.reduce((a,r)=>a+Number(r.complementoMinimoLocal||0),0);
 
     const agrupables = [
       { id:"semana", label:"Semana" },
@@ -7224,7 +7635,7 @@ function Reportes({ data, setData, user, onOpenAgenda, reportRestore, reloadData
       const indent = extra.indent || 0;
       const muted = !!extra.muted;
       return <div key={extra.key || c.id} style={{ display:"grid",gridTemplateColumns:gridColumns,gap:8,padding:"8px 12px",fontSize:12,alignItems:"center",borderBottom:"1px solid rgba(120,120,120,0.08)",background:muted?"rgba(120,120,120,0.025)":"transparent" }}>
-        {colsComisiones.map((col,idx)=>{ const money=["precio","comision"].includes(col.key); const strong=col.key==="comision"||col.key==="manicura"; const content=renderCell(c,col.key); const baseStyle={ textAlign:money?"right":"left",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap",paddingLeft:idx===0?indent:0,color:money?"var(--color-text-secondary)":"var(--color-text-primary)" }; if (c.tipoRegistro==="garantia" && col.key==="servicio") { const garantia = (data.garantias||[]).find(g=>g.id===c.garantiaId); const esDescuento = Number(c.comision||0)<0; return <span key={col.key} style={{...baseStyle,display:"flex",alignItems:"center",gap:6,minWidth:0}}><Badge color={esDescuento?"danger":"success"}>{esDescuento?"Desc. garantía":"Rep. garantía"}</Badge><span style={{ minWidth:0,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap" }}>{content}</span><button onClick={e=>{e.stopPropagation();setGarantiaDetalleComisiones(garantia || c);}} style={{ border:"none",background:COLORS.pinkLight,color:COLORS.pinkDark,borderRadius:6,padding:"2px 6px",fontSize:10,fontWeight:700,cursor:"pointer",flexShrink:0 }}>Ver</button></span>; } return strong?<strong key={col.key} style={{...baseStyle,color:col.key==="comision"?COLORS.pink:"var(--color-text-primary)"}}>{content}</strong>:<span key={col.key} style={baseStyle}>{content}</span>;})}
+        {colsComisiones.map((col,idx)=>{ const money=["precio","comision"].includes(col.key); const strong=col.key==="comision"||col.key==="manicura"; const content=renderCell(c,col.key); const baseStyle={ textAlign:money?"right":"left",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap",paddingLeft:idx===0?indent:0,color:money?"var(--color-text-secondary)":"var(--color-text-primary)" }; if (c.tipoRegistro==="garantia" && col.key==="servicio") { const garantia = (data.garantias||[]).find(g=>g.id===c.garantiaId); const esDescuento = Number(c.comision||0)<0; return <span key={col.key} style={{...baseStyle,display:"flex",alignItems:"center",gap:6,minWidth:0}}><Badge color={esDescuento?"danger":"success"}>{esDescuento?"Desc. garantía":"Rep. garantía"}</Badge><span style={{ minWidth:0,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap" }}>{content}</span><button onClick={e=>{e.stopPropagation();setGarantiaDetalleComisiones(garantia || c);}} style={{ border:"none",background:COLORS.pinkLight,color:COLORS.pinkDark,borderRadius:6,padding:"2px 6px",fontSize:10,fontWeight:700,cursor:"pointer",flexShrink:0 }}>Ver</button></span>; } if(col.key==="manicura"){ const global=c.userId?detalleGlobalUsuario(c.userId):null; const multi=global&&global.locales?.length>1; return <span key={col.key} style={{...baseStyle,display:"flex",alignItems:"center",gap:5,minWidth:0}}><strong style={{minWidth:0,overflow:"hidden",textOverflow:"ellipsis"}}>{content||"Sin manicura"}</strong>{c.historicoNoVinculable&&<Badge color="gray">Histórico</Badge>}{multi&&<button title="Ver comisión global" onClick={e=>{e.stopPropagation();setComisionGlobalDetalle({userId:c.userId,nombre:c.nombreManicura,localId:c.localId,local:c.nombreLocal,globalDetalle:global,minimoInfo:garantiaMinimaInfo(c.userId,c.localId)});}} style={{border:"none",background:COLORS.infoLight,color:COLORS.info,borderRadius:999,padding:"2px 6px",fontSize:9,fontWeight:800,cursor:"pointer",flexShrink:0}}>+{global.locales.length-1} local</button>}</span>; } return strong?<strong key={col.key} style={{...baseStyle,color:col.key==="comision"?COLORS.pink:"var(--color-text-primary)"}}>{content}</strong>:<span key={col.key} style={baseStyle}>{content}</span>;})}
       </div>;
     };
 
@@ -7321,6 +7732,9 @@ function Reportes({ data, setData, user, onOpenAgenda, reportRestore, reloadData
     };
 
     return <>
+      {comisionGlobalDetalle&&<div style={{position:"fixed",right:18,top:82,zIndex:99990,width:"min(430px,calc(100vw - 36px))",maxHeight:"72vh",overflowY:"auto",background:"#fff",border:"1px solid rgba(120,120,120,.18)",borderRadius:14,boxShadow:"0 18px 46px rgba(0,0,0,.22)",padding:14}}>
+        {(()=>{const d=comisionGlobalDetalle, g=d.globalDetalle||detalleGlobalUsuario(d.userId), min=d.minimoInfo||garantiaMinimaInfo(d.userId,d.localId), totalDef=min?.applies&&g.total<min.minimum?min.minimum:g.total;return <><div style={{display:"flex",justifyContent:"space-between",gap:10,alignItems:"flex-start",marginBottom:10}}><div><p style={{margin:0,fontSize:10,fontWeight:800,color:"var(--color-text-secondary)",textTransform:"uppercase"}}>Comisión global · semana {semanaComisiones}</p><h3 style={{margin:"2px 0 0",fontSize:15}}>{d.nombre||userNameById.get(Number(d.userId))||"Manicura"}</h3></div><button onClick={()=>setComisionGlobalDetalle(null)} style={{border:"none",background:COLORS.grayLight,borderRadius:"50%",width:28,height:28,cursor:"pointer",fontSize:16}}>×</button></div><div style={{display:"grid",gridTemplateColumns:"1fr auto",gap:7,fontSize:12}}>{(g.locales||[]).map(x=><React.Fragment key={x.localId}><span>{x.local} <small style={{color:"var(--color-text-secondary)"}}>· {x.servicios} serv.</small></span><strong>{fmtMoney(x.comision)}</strong></React.Fragment>)}</div><div style={{marginTop:10,paddingTop:10,borderTop:"1px solid rgba(120,120,120,.14)",display:"grid",gridTemplateColumns:"1fr auto",gap:6,fontSize:12}}><strong>Comisión generada global</strong><strong style={{color:COLORS.pink}}>{fmtMoney(g.total)}</strong>{min?.eligible&&<><span style={{color:"var(--color-text-secondary)"}}>Mínimo global hasta {min.endDateKey?min.endDateKey.split("-").reverse().join("/"):"—"}{min.anchorLocalId?` · ${localNameById.get(Number(min.anchorLocalId))||""}`:""}</span><strong>{fmtMoney(min.minimum||0)}</strong></>}{min?.applies&&g.total<min.minimum&&<><span style={{color:COLORS.info,fontWeight:700}}>Complemento mínimo</span><strong style={{color:COLORS.info}}>{fmtMoney(min.minimum-g.total)}</strong></>}<strong style={{marginTop:3}}>Total global a considerar</strong><strong style={{marginTop:3,color:COLORS.success}}>{fmtMoney(totalDef)}</strong></div></>;})()}
+      </div>}
       {comisionesSinVincularModal&&<Modal title="Comisiones AgendaPro sin vincular" onClose={()=>setComisionesSinVincularModal(false)} width={900}>
         <div style={{display:"flex",flexDirection:"column",gap:10}}>
           <div style={{padding:"10px 12px",background:COLORS.amberLight,borderRadius:10,color:COLORS.amber,fontSize:12,lineHeight:1.45}}><strong>Estas prestaciones no están incluidas en la liquidación.</strong> Falta confirmar qué manicura de NikiOS corresponde a cada profesional de AgendaPro. El vínculo se resuelve desde Equipo → Manicuras.</div>
@@ -7396,7 +7810,7 @@ function Reportes({ data, setData, user, onOpenAgenda, reportRestore, reloadData
         <Btn size="sm" variant="ghost" onClick={()=>refrescarDatosComisiones()} disabled={refreshingComisiones}>{refreshingComisiones?"Actualizando...":"↻ Actualizar ahora"}</Btn>
       </div>
       {puedeGestionar&&agendaPendientesCantidad>0&&<div style={{display:"flex",alignItems:"center",justifyContent:"space-between",gap:10,flexWrap:"wrap",marginBottom:10,padding:"11px 12px",background:COLORS.amberLight,border:`1px solid ${COLORS.amber}55`,borderRadius:10}}>
-        <div><strong style={{fontSize:12,color:COLORS.amber}}>⚠ {agendaPendientesCantidad} prestación{agendaPendientesCantidad===1?"":"es"} de AgendaPro sin manicura vinculada</strong><p style={{margin:"3px 0 0",fontSize:10,color:COLORS.amber}}>No están incluidas en los totales del reporte · {agendaPendientesAgrupados.length} profesional{agendaPendientesAgrupados.length===1?"":"es"}/situación{agendaPendientesAgrupados.length===1?"":"es"} · base {fmtMoney(agendaPendientesTotal)}.</p></div>
+        <div><strong style={{fontSize:12,color:COLORS.amber}}>⚠ {agendaPendientesCantidad} prestación{agendaPendientesCantidad===1?"":"es"} de AgendaPro sin manicura vinculada</strong><p style={{margin:"3px 0 0",fontSize:10,color:COLORS.amber}}>Se muestran en el reporte como comisión sin manicura, pero no ingresan en la liquidación personal · {agendaPendientesAgrupados.length} profesional{agendaPendientesAgrupados.length===1?"":"es"}/situación{agendaPendientesAgrupados.length===1?"":"es"} · base {fmtMoney(agendaPendientesTotal)}.</p></div>
         <Btn size="sm" variant="secondary" onClick={()=>setComisionesSinVincularModal(true)}>Ver Manicura / Local</Btn>
       </div>}
       {!comisionesReady&&refreshingComisiones?<Card style={{padding:18,marginBottom:12}}><div style={{display:"flex",alignItems:"center",gap:10}}><span style={{fontSize:18}}>↻</span><div><strong style={{fontSize:13}}>Actualizando reporte de comisiones</strong><p style={{margin:"3px 0 0",fontSize:11,color:"var(--color-text-secondary)"}}>Se consulta únicamente el período seleccionado, sin recargar el resto de NikiAsistencia.</p></div></div></Card>:<>
@@ -7423,7 +7837,7 @@ function Reportes({ data, setData, user, onOpenAgenda, reportRestore, reloadData
       </div>
       <div style={{ display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(160px,1fr))",gap:10,marginBottom:14 }}>
         <Card><p style={{ margin:"0 0 4px",fontSize:11,color:"var(--color-text-secondary)",textTransform:"uppercase",letterSpacing:"0.04em" }}>Venta total</p><p style={{ margin:0,fontSize:22,fontWeight:600 }}>{fmtMoney(totalVentaReal)}</p><p style={{ margin:"2px 0 0",fontSize:11,color:"var(--color-text-secondary)" }}>Cobrado real en AgendaPro · base comisión: {fmtMoney(totalPrecio)}</p></Card>
-        <Card><p style={{ margin:"0 0 4px",fontSize:11,color:"var(--color-text-secondary)",textTransform:"uppercase",letterSpacing:"0.04em" }}>Comisión definitiva</p><p style={{ margin:0,fontSize:22,fontWeight:600,color:COLORS.pink }}>{fmtMoney(totalComisionDefinitiva)}</p><p style={{ margin:"2px 0 0",fontSize:11,color:"var(--color-text-secondary)" }}>{Number(configGeneralComisiones.porcentajeBase||40)}%: {fmtMoney(totalComision)} · reducido: {fmtMoney(totalComision35)}</p></Card>
+        <Card><p style={{ margin:"0 0 4px",fontSize:11,color:"var(--color-text-secondary)",textTransform:"uppercase",letterSpacing:"0.04em" }}>Comisión definitiva</p><p style={{ margin:0,fontSize:22,fontWeight:600,color:COLORS.pink }}>{fmtMoney(totalComisionDefinitiva)}</p><p style={{ margin:"2px 0 0",fontSize:11,color:"var(--color-text-secondary)" }}>{Number(configGeneralComisiones.porcentajeBase||40)}%: {fmtMoney(totalComision)} · reducido: {fmtMoney(totalComision35)}{totalComplementoMinimoLocal>0?` · mínimo +${fmtMoney(totalComplementoMinimoLocal)}`:""}</p></Card>
         <Card><p style={{ margin:"0 0 4px",fontSize:11,color:"var(--color-text-secondary)",textTransform:"uppercase",letterSpacing:"0.04em" }}>Adelantos</p><p style={{ margin:0,fontSize:22,fontWeight:600,color:COLORS.amber }}>-{fmtMoney(totalAdelantos)}</p></Card>
         <Card><p style={{ margin:"0 0 4px",fontSize:11,color:"var(--color-text-secondary)",textTransform:"uppercase",letterSpacing:"0.04em" }}>Neto a pagar</p><p style={{ margin:0,fontSize:22,fontWeight:600,color:netoPagarDefinitivo>=0?COLORS.success:COLORS.danger }}>{fmtMoney(netoPagarDefinitivo)}</p></Card>
         <Card><p style={{ margin:"0 0 4px",fontSize:11,color:"var(--color-text-secondary)",textTransform:"uppercase",letterSpacing:"0.04em" }}>Ajustes garantías</p><p style={{ margin:0,fontSize:18,fontWeight:600,color:COLORS.success }}>+{fmtMoney(totalGarantiasAsignadas)}</p><p style={{ margin:"2px 0 0",fontSize:12,fontWeight:600,color:COLORS.danger }}>-{fmtMoney(totalGarantiasDescontadas)}</p></Card>
@@ -7443,7 +7857,7 @@ function Reportes({ data, setData, user, onOpenAgenda, reportRestore, reloadData
   </div>
   {!sinSemanaComisiones&&fechasPagoComisiones.length>0&&<div style={{ marginTop:12,display:"flex",flexDirection:"column",gap:6 }}>
     {fechasPagoComisiones.map((pago,i)=><div key={`${pago.userId||pago.nombre}-${i}`} style={{ display:"grid",gridTemplateColumns:"1fr 120px 120px 115px",gap:8,alignItems:"center",background:"rgba(255,255,255,0.68)",borderRadius:8,padding:"7px 9px" }}>
-      <div><p style={{ margin:0,fontSize:13,fontWeight:600 }}>{pago.nombre}</p><p style={{ margin:0,fontSize:11,color:"var(--color-text-secondary)" }}>{pago.local||"Sin local"} · {pago.trabajaSabado?"Trabaja sábado":"No trabaja sábado"}{pagoEstimado?" · estimado por agenda":""}</p></div>
+      <div><p style={{ margin:0,fontSize:13,fontWeight:600 }}>{pago.nombre}</p><p style={{ margin:0,fontSize:11,color:"var(--color-text-secondary)" }}>{pago.local||"Sin local"} · {pago.trabajaSabado?"Trabaja sábado":"No trabaja sábado"}{pagoEstimado?" · estimado por agenda":""}{Number(pago.complementoMinimoLocal||0)>0?` · mínimo +${fmtMoney(pago.complementoMinimoLocal)}`:""}</p></div>
       <Badge color={pagoEstimado?"amber":pago.trabajaSabado?"success":"amber"}>{pagoEstimado?`Estimado ${pago.trabajaSabado?"lunes":"martes"}`:pago.trabajaSabado?"Lunes":"Martes"}</Badge>
       <strong style={{ fontSize:14,textAlign:"right" }}>{pago.fechaPago ? pago.fechaPago.split("-").reverse().join("/") : "—"}</strong>
       <strong style={{ fontSize:14,textAlign:"right",color:(pago.neto||0)>=0?COLORS.success:COLORS.danger }}>{fmtMoney(pago.neto)}</strong>
@@ -7486,7 +7900,7 @@ function Reportes({ data, setData, user, onOpenAgenda, reportRestore, reloadData
         <div style={{ display:"flex",alignItems:"center",justifyContent:"space-between",gap:8,marginBottom:10,flexWrap:"wrap" }}>
           <div>
             <h3 style={{ margin:0,fontSize:15,fontWeight:500 }}>Resumen por manicura</h3>
-            <p style={{ margin:"3px 0 0",fontSize:11,color:"var(--color-text-secondary)" }}>La comisión importada equivale al porcentaje base. Se muestra también el cálculo reducido y la comisión definitiva según selección o regla automática.</p>
+            <p style={{ margin:"3px 0 0",fontSize:11,color:"var(--color-text-secondary)" }}>La grilla muestra lo generado en el local consultado. Horas, porcentaje 40/35 y mínimo garantizado se evalúan globalmente entre todos los locales simultáneos de la manicura. Si corresponde un complemento de mínimo, se imputa una sola vez al local ancla (el de mayor antigüedad).</p>
           </div>
           {sinSemanaComisiones?<Badge color="info">Seleccioná una semana para definir porcentaje</Badge>:<Badge color="success">Semana {semanaComisiones}</Badge>}
         </div>
@@ -7498,18 +7912,18 @@ function Reportes({ data, setData, user, onOpenAgenda, reportRestore, reloadData
               <span style={{ fontSize:10,fontWeight:700,color:"var(--color-text-secondary)",textTransform:"uppercase",letterSpacing:"0.04em",textAlign:"right" }}>% base</span>
               <span style={{ fontSize:10,fontWeight:700,color:"var(--color-text-secondary)",textTransform:"uppercase",letterSpacing:"0.04em",textAlign:"right" }}>% reducido</span>
               {puedeGestionar&&<span style={{ fontSize:10,fontWeight:700,color:"var(--color-text-secondary)",textTransform:"uppercase",letterSpacing:"0.04em",textAlign:"center" }}>Aplicar</span>}
-              <span style={{ fontSize:10,fontWeight:700,color:"var(--color-text-secondary)",textTransform:"uppercase",letterSpacing:"0.04em",textAlign:"right" }}>Definitiva</span>
+              <span style={{ fontSize:10,fontWeight:700,color:"var(--color-text-secondary)",textTransform:"uppercase",letterSpacing:"0.04em",textAlign:"right" }}>Definitiva local</span>
               <span style={{ fontSize:10,fontWeight:700,color:"var(--color-text-secondary)",textTransform:"uppercase",letterSpacing:"0.04em",textAlign:"right" }}>Garantías</span>
               <span style={{ fontSize:10,fontWeight:700,color:"var(--color-text-secondary)",textTransform:"uppercase",letterSpacing:"0.04em",textAlign:"right" }}>Adelantos</span>
               <span style={{ fontSize:10,fontWeight:700,color:"var(--color-text-secondary)",textTransform:"uppercase",letterSpacing:"0.04em",textAlign:"right" }}>Neto</span>
             </div>
             <div style={{ display:"flex",flexDirection:"column",gap:6 }}>{resumenPorManicura.slice(0,12).map((r,i)=><div key={i} style={{ display:"grid",gridTemplateColumns:puedeGestionar?"1fr 90px 95px 95px 115px 110px 105px 105px 110px":"1fr 90px 95px 95px 105px 105px 105px 110px",gap:8,alignItems:"center",padding:"7px 8px",borderRadius:8,background:r.minimoAplica?COLORS.infoLight:"var(--color-background-secondary)",border:r.minimoAplica?`1px solid ${COLORS.info}33`:"1px solid transparent" }}>
-              <div><p style={{ margin:0,fontSize:13,fontWeight:500 }}>{r.nombre}{r.minimoAplica&&<span style={{ marginLeft:7,fontSize:10,fontWeight:800,color:COLORS.info,background:"#fff",borderRadius:999,padding:"2px 7px" }}>Mínimo garantizado</span>}</p><p style={{ margin:0,fontSize:11,color:"var(--color-text-secondary)" }}>{r.local} · {r.servicios} servicios{!sinSemanaComisiones?` · ${Number(r.horasTeoricas||0).toFixed(1)}h de ${Number(r.horasObjetivo||0).toFixed(1)}h · ${r.faltas||0} falta${(r.faltas||0)!==1?"s":""} · ${r.llegadasTarde||0} tarde${(r.llegadasTarde||0)!==1?"s":""}`:""}{r.garantiasQty?` · ${r.garantiasQty} garantía${r.garantiasQty!==1?"s":""}`:""}</p>{r.minimoElegible&&r.minimoFin&&<p style={{ margin:"3px 0 0",fontSize:10,color:r.minimoAplica?COLORS.info:"var(--color-text-secondary)" }}>Garantía hasta {r.minimoFin.split("-").reverse().join("/")}{r.minimoAplica?` · Comisión real ${fmtMoney(r.comisionReal)} · complemento ${fmtMoney(Math.max(0,r.comisionDefinitiva-r.comisionReal))}`:""}</p>}</div>
+              <div><p style={{ margin:0,fontSize:13,fontWeight:500,display:"flex",alignItems:"center",gap:6,flexWrap:"wrap" }}>{r.nombre}{r.minimoAplica&&<span style={{ fontSize:10,fontWeight:800,color:COLORS.info,background:"#fff",borderRadius:999,padding:"2px 7px" }}>Mínimo global</span>}{r.globalDetalle?.locales?.length>1&&<button onClick={()=>setComisionGlobalDetalle(r)} style={{border:`1px solid ${COLORS.info}44`,background:COLORS.infoLight,color:COLORS.info,borderRadius:999,padding:"2px 7px",fontSize:9,fontWeight:800,cursor:"pointer"}}>+{r.globalDetalle.locales.length-1} local · total {fmtMoney(r.comisionGlobalDefinitiva||r.comisionGlobalReal)}</button>}</p><p style={{ margin:0,fontSize:11,color:"var(--color-text-secondary)" }}>{r.local} · {r.servicios} servicios{!sinSemanaComisiones?` · ${Number(r.horasTeoricas||0).toFixed(1)}h globales de ${Number(r.horasObjetivo||0).toFixed(1)}h · ${r.faltas||0} falta${(r.faltas||0)!==1?"s":""} · ${r.llegadasTarde||0} tarde${(r.llegadasTarde||0)!==1?"s":""}`:""}{r.garantiasQty?` · ${r.garantiasQty} garantía${r.garantiasQty!==1?"s":""}`:""}</p>{r.minimoElegible&&r.minimoFin&&<p style={{ margin:"3px 0 0",fontSize:10,color:r.minimoAplica?COLORS.info:"var(--color-text-secondary)" }}>Antigüedad para mínimo {r.minimoInicio?`desde ${r.minimoInicio.split("-").reverse().join("/")}`:""}{r.minimoAnchorLocal?` · base ${r.minimoAnchorLocal}`:""} · garantía hasta ${r.minimoFin.split("-").reverse().join("/")}{r.minimoAplica?` · comisión global ${fmtMoney(r.comisionGlobalReal)} · complemento global ${fmtMoney(Math.max(0,r.comisionGlobalDefinitiva-r.comisionGlobalReal))}`:""}</p>}</div>
               <span style={{ fontSize:13,textAlign:"right",color:"var(--color-text-secondary)" }}>{fmtMoney(r.precio)}</span>
               <strong style={{ fontSize:14,textAlign:"right",color:COLORS.pink }}>{fmtMoney(r.comisionBase)}</strong>
               <strong style={{ fontSize:14,textAlign:"right",color:COLORS.amber }}>{fmtMoney(r.comision35)}</strong>
               {puedeGestionar&&<div style={{ textAlign:"center" }}>{!sinSemanaComisiones&&r.userId?<select value={r.porcentajeAplicado} onChange={e=>guardarCriterioComision(r.userId,r.localId,e.target.value)} style={{ border:`1px solid ${r.criterioGuardado?COLORS.pink:"var(--color-border-secondary)"}`,borderRadius:8,padding:"5px 7px",fontSize:12,background:"#fff",color:"var(--color-text-primary)",fontFamily:"inherit" }} title={r.criterioGuardado?"Selección manual":"Sugerido automáticamente"}><option value={r.reglaComision?.porcentajeBase || configGeneralComisiones.porcentajeBase || 40}>{r.reglaComision?.porcentajeBase || configGeneralComisiones.porcentajeBase || 40}%</option><option value={r.reglaComision?.porcentajeReducido || configGeneralComisiones.porcentajeReducido || 35}>{r.reglaComision?.porcentajeReducido || configGeneralComisiones.porcentajeReducido || 35}%</option></select>:<span style={{ fontSize:11,color:"var(--color-text-secondary)" }}>—</span>}</div>}
-              <strong style={{ fontSize:14,textAlign:"right",color:Number(r.porcentajeAplicado)===Number(r.reglaComision?.porcentajeReducido || configGeneralComisiones.porcentajeReducido || 35)?COLORS.amber:COLORS.success }}>{fmtMoney(r.comisionDefinitiva)}</strong>
+              <strong title={Number(r.complementoMinimoLocal||0)>0?`Incluye ${fmtMoney(r.complementoMinimoLocal)} de complemento por mínimo garantizado global`:""} style={{ fontSize:14,textAlign:"right",color:Number(r.porcentajeAplicado)===Number(r.reglaComision?.porcentajeReducido || configGeneralComisiones.porcentajeReducido || 35)?COLORS.amber:COLORS.success }}>{fmtMoney(r.comisionDefinitiva)}{Number(r.complementoMinimoLocal||0)>0&&<small style={{display:"block",fontSize:9,color:COLORS.info,fontWeight:700}}>+ mínimo {fmtMoney(r.complementoMinimoLocal)}</small>}</strong>
               <strong style={{ fontSize:14,textAlign:"right",color:r.garantias>0?COLORS.success:r.garantias<0?COLORS.danger:"var(--color-text-secondary)" }}>{r.garantias>0?"+":r.garantias<0?"-":""}{fmtMoney(Math.abs(r.garantias))}</strong>
               <AdelantoPlanTooltip planes={planesPorUserComisiones.get(r.userId) || []}><strong style={{ fontSize:14,textAlign:"right",color:COLORS.amber,cursor:(planesPorUserComisiones.get(r.userId)||[]).length?"help":"default" }}>-{fmtMoney(r.adelantos)}</strong></AdelantoPlanTooltip>
               <strong style={{ fontSize:14,textAlign:"right",color:r.neto>=0?COLORS.success:COLORS.danger }}>{fmtMoney(r.neto)}</strong>
@@ -12414,6 +12828,17 @@ function ReportePagoComisiones({ data, setData, user }) {
       const semanasPeriodo = getCommissionWeeksForMonth(Number(anio), Number(mes) - 1);
       const desde = semanasPeriodo[0]?.desdeKey || `${periodo}-01`;
       const hasta = semanasPeriodo[semanasPeriodo.length-1]?.hastaKey || dateKey(new Date(Number(anio), Number(mes), 0));
+
+      // Misma autorreparacion para la pantalla de pago de comisiones.
+      if (periodo === fmtPeriodo(new Date())) {
+        try {
+          await api.refrescarComisionesAgendaProToday();
+        } catch (syncError) {
+          console.warn("No se pudo sincronizar Today antes de cargar Pago de comisiones", syncError);
+          if (!silencioso) notifyToast("No se pudo sincronizar AgendaPro en este momento. Se muestran los últimos datos disponibles.", "warning");
+        }
+      }
+
       const [comisionesRaw, agendaPendientesRaw, criteriosRaw, configRaw, configManicuraRaw, horariosRaw, asistenciasRaw] = await Promise.all([
         api.getComisionesAgendaProShadowRango(desde,hasta),
         api.getAgendaComisionesSinVincularRango(desde,hasta),
@@ -12463,9 +12888,12 @@ function ReportePagoComisiones({ data, setData, user }) {
   const localBaseSet = new Set(localBaseIds);
   const filtroLocalIds = localesAplicados.length ? localesAplicados.map(Number).filter(id => localBaseSet.has(id)) : localBaseIds;
   const filtroLocalSet = new Set(filtroLocalIds.map(Number));
+  const agendaNoVinculablePagoSet = new Set((data.agendaProfesionalesNoVinculables || []).map(x=>`${Number(x.localId)}|${Number(x.providerId)}`));
   const agendaPendientesPagoVisibles = (agendaPendientesPago || []).filter(r => {
     const lid = Number(r.local_id || 0);
     if (!filtroLocalSet.has(lid)) return false;
+    const pid=r.agendapro_provider_id==null?null:Number(r.agendapro_provider_id);
+    if(pid!=null && agendaNoVinculablePagoSet.has(`${lid}|${pid}`)) return false;
     if (semanaSeleccionada && !isDateInRangeKey(r.fecha_pago, semanaSeleccionada.desdeKey, semanaSeleccionada.hastaKey)) return false;
     return true;
   });
@@ -12474,10 +12902,29 @@ function ReportePagoComisiones({ data, setData, user }) {
   const agendaPendientesPagoTotal = agendaPendientesPagoVisibles.reduce((acc,r)=>acc+Number(r.precio_efectivo||0),0);
 
   const configGeneralPagoComisiones = (data.comisionesConfiguracion || []).find(c => c.activo) || { id:1, porcentajeBase:40, porcentajeReducido:35, horasObjetivoDefault:36, horasObjetivoFinSemana:null, maxLlegadasTarde:0, maxFaltasNoJustificadas:0, contarFaltasJustificadas:false, toleranciaLlegadaTardeMinutos:0, minimoSemanalEstandar:0, minimoSemanalPremiumExclusiva:0, minimoSemanalEstandarFinSemana:null, minimoSemanalPremiumExclusivaFinSemana:null };
+  const minutosPagoComision = (hhmm) => {
+    const [h,m] = String(hhmm || "").slice(0,5).split(":").map(Number);
+    return (Number.isFinite(h) ? h : 0) * 60 + (Number.isFinite(m) ? m : 0);
+  };
+  const rangoSemanaPagoComision = (periodoValue, semanaValue) => {
+    const [yy,mm]=String(periodoValue||"").split("-").map(Number);
+    if(!yy||!mm||!semanaValue) return null;
+    return getCommissionWeeksForMonth(yy,mm-1).find(w=>String(w.numero)===String(semanaValue))||null;
+  };
+  const semanaKeysPagoComision = (periodoValue, semanaValue) => {
+    const week=rangoSemanaPagoComision(periodoValue,semanaValue);
+    if(!week) return [];
+    const keys=[];
+    for(let d=new Date(week.desde);d<=week.hasta;d.setDate(d.getDate()+1)) keys.push(dateKey(d));
+    return keys;
+  };
   const configManicuraPagoMap = useMemo(() => new Map((data.comisionesManicuraConfig || []).filter(c => c.activo).map(c => [`${c.userId}|${c.localId || 0}`, c])), [data.comisionesManicuraConfig]);
-  const getConfigManicuraPago = useCallback((uid, localIdValue=null) => configManicuraPagoMap.get(`${uid}|${localIdValue || 0}`) || configManicuraPagoMap.get(`${uid}|0`) || null, [configManicuraPagoMap]);
-  const reglaPagoComision = useCallback((uid, localIdValue=null) => {
-    const cfg = getConfigManicuraPago(uid, localIdValue);
+  const getConfigManicuraPago = useCallback((uid, localIdValue=null) => configManicuraPagoMap.get(`${uid}|0`) || configManicuraPagoMap.get(`${uid}|${localIdValue || 0}`) || null, [configManicuraPagoMap]);
+  const reglaPagoComision = useCallback((uid, localIdValue=null, periodoValue=periodo, semanaValue=semanaSeleccionada?.numero) => {
+    const w=rangoSemanaPagoComision(periodoValue,semanaValue);
+    const status=w?getGlobalEmploymentEpisodeStatus(data.manicuraHistorialLocales || [],uid,w.desdeKey,w.hastaKey):null;
+    const localRegla=status?.anchorLocalId||localIdValue||0;
+    const cfg = getConfigManicuraPago(uid, localRegla);
     const manicura = userById.get(Number(uid));
     const esFinSemana = manicura?.soloFinDeSemana === true;
     const horasGeneral = esFinSemana
@@ -12491,24 +12938,12 @@ function ReportePagoComisiones({ data, setData, user }) {
       maxLlegadasTarde: Number(cfg?.maxLlegadasTarde ?? configGeneralPagoComisiones.maxLlegadasTarde ?? 0),
       maxFaltasNoJustificadas: Number(cfg?.maxFaltasNoJustificadas ?? configGeneralPagoComisiones.maxFaltasNoJustificadas ?? 0),
       contarFaltasJustificadas: cfg?.contarFaltasJustificadas ?? configGeneralPagoComisiones.contarFaltasJustificadas ?? false,
+      anchorLocalId:localRegla||null,
     };
-  }, [configGeneralPagoComisiones, getConfigManicuraPago, userById]);
-  const minutosPagoComision = (hhmm) => {
-    const [h,m] = String(hhmm || "").slice(0,5).split(":").map(Number);
-    return (Number.isFinite(h) ? h : 0) * 60 + (Number.isFinite(m) ? m : 0);
-  };
-  const semanaKeysPagoComision = (periodoValue, semanaValue) => {
-    const [yy, mm] = String(periodoValue || "").split("-").map(Number);
-    if (!yy || !mm || !semanaValue) return [];
-    const week = getCommissionWeeksForMonth(yy, mm - 1).find(w => String(w.numero) === String(semanaValue));
-    if (!week) return [];
-    const keys = [];
-    for (let d = new Date(week.desde); d <= week.hasta; d.setDate(d.getDate() + 1)) keys.push(dateKey(d));
-    return keys;
-  };
+  }, [configGeneralPagoComisiones, getConfigManicuraPago, userById, data.manicuraHistorialLocales, periodo, semanaSeleccionada?.numero]);
   const horariosPagoMap = useMemo(() => {
     const map = new Map();
-    (data.horarios || []).forEach(h => map.set(`${Number(h.userId)}|${h.fecha}`, h));
+    (data.horarios || []).forEach(h => { const k=`${Number(h.userId)}|${h.fecha}`; if(!map.has(k))map.set(k,[]); map.get(k).push(h); });
     return map;
   }, [data.horarios]);
   const asistenciasPagoMap = useMemo(() => {
@@ -12522,31 +12957,31 @@ function ReportePagoComisiones({ data, setData, user }) {
   }, [data.asistencias]);
   const criteriosPagoMap = useMemo(() => {
     const map = new Map();
-    (data.comisionesCriterios || []).forEach(c => map.set(`${c.periodo}|${c.semana}|${Number(c.userId)}|${Number(c.localId || 0)}`, c));
+    (data.comisionesCriterios || []).forEach(c => {
+      const base=`${c.periodo}|${c.semana}|${Number(c.userId)}`;
+      if(!map.has(base)) map.set(base,[]);
+      map.get(base).push(c);
+    });
     return map;
   }, [data.comisionesCriterios]);
-  const horasTeoricasPagoSemana = useCallback((uid, periodoValue, semanaValue) => semanaKeysPagoComision(periodoValue, semanaValue).reduce((acc, f) => {
-    const h = horariosPagoMap.get(`${Number(uid)}|${f}`);
-    if (!h || !h.trabaja || !h.entrada || !h.salida) return acc;
-    return acc + Math.max(0, minutosPagoComision(h.salida) - minutosPagoComision(h.entrada)) / 60;
-  }, 0), [horariosPagoMap]);
-  const asistenciasPagoSemana = useCallback((uid, periodoValue, semanaValue) => semanaKeysPagoComision(periodoValue, semanaValue).flatMap(f => asistenciasPagoMap.get(`${Number(uid)}|${f}`) || []), [asistenciasPagoMap]);
   const criterioPagoComision = useCallback((uid, periodoValue, semanaValue, localIdValue=null) => {
-    if (!uid || !periodoValue || !semanaValue) return { porcentaje: Number(configGeneralPagoComisiones.porcentajeBase || 40), regla: reglaPagoComision(uid, localIdValue) };
-    const regla = reglaPagoComision(uid, localIdValue);
-    const guardado = criteriosPagoMap.get(`${periodoValue}|${semanaValue}|${Number(uid)}|${Number(localIdValue || 0)}`)
-      || criteriosPagoMap.get(`${periodoValue}|${semanaValue}|${Number(uid)}|0`);
-    const weekKeys = semanaKeysPagoComision(periodoValue, semanaValue);
-    const tieneHorariosCargados = weekKeys.some(f => { const h = horariosPagoMap.get(`${Number(uid)}|${f}`); return !!(h?.trabaja && h?.entrada && h?.salida); });
-    const horas = horasTeoricasPagoSemana(uid, periodoValue, semanaValue);
-    const asistencias = asistenciasPagoSemana(uid, periodoValue, semanaValue);
-    const faltas = asistencias.filter(a => a.estado === "ausente" && (regla.contarFaltasJustificadas || !a.certificado)).length;
-    const llegadasTarde = asistencias.filter(a => a.estado === "tarde").length;
-    const automatico = !tieneHorariosCargados
-      ? regla.porcentajeBase
-      : (faltas > regla.maxFaltasNoJustificadas || horas < regla.horasObjetivo || llegadasTarde > regla.maxLlegadasTarde) ? regla.porcentajeReducido : regla.porcentajeBase;
-    return { porcentaje: Number(guardado?.porcentaje || automatico), regla, guardado: !!guardado, automatico, horas, faltas, llegadasTarde };
-  }, [asistenciasPagoSemana, configGeneralPagoComisiones, criteriosPagoMap, horasTeoricasPagoSemana, reglaPagoComision, horariosPagoMap]);
+    const regla = reglaPagoComision(uid, localIdValue, periodoValue, semanaValue);
+    if (!uid || !periodoValue || !semanaValue) return { porcentaje:Number(configGeneralPagoComisiones.porcentajeBase||40),regla,guardado:false,automatico:Number(configGeneralPagoComisiones.porcentajeBase||40),horas:0,faltas:0,llegadasTarde:0 };
+    const criterios=criteriosPagoMap.get(`${periodoValue}|${semanaValue}|${Number(uid)}`)||[];
+    const guardado=criterios.find(c=>!Number(c.localId||0))||criterios[0]||null;
+    const weekKeys=semanaKeysPagoComision(periodoValue,semanaValue);
+    let horas=0,faltas=0,llegadasTarde=0,tieneHorarios=false;
+    weekKeys.forEach(f=>{
+      const hs=horariosPagoMap.get(`${Number(uid)}|${f}`)||[];
+      hs.forEach(h=>{ if(h?.trabaja&&h.entrada&&h.salida){tieneHorarios=true;horas+=Math.max(0,minutosPagoComision(h.salida)-minutosPagoComision(h.entrada))/60;} });
+      const ars=asistenciasPagoMap.get(`${Number(uid)}|${f}`)||[];
+      if(ars.some(a=>a.estado==="tarde")) llegadasTarde+=1;
+      const tienePresencia=ars.some(a=>a.estado==="presente"||a.estado==="tarde");
+      if(!tienePresencia&&ars.some(a=>a.estado==="ausente"&&(regla.contarFaltasJustificadas||!a.certificado))) faltas+=1;
+    });
+    const automatico=!tieneHorarios?regla.porcentajeBase:(faltas>regla.maxFaltasNoJustificadas||horas<regla.horasObjetivo||llegadasTarde>regla.maxLlegadasTarde)?regla.porcentajeReducido:regla.porcentajeBase;
+    return { porcentaje:Number(guardado?.porcentaje||automatico),regla,guardado:!!guardado,automatico,horas,faltas,llegadasTarde };
+  }, [asistenciasPagoMap, configGeneralPagoComisiones, criteriosPagoMap, horariosPagoMap, reglaPagoComision]);
   const comisionConPorcentajePago = (comisionBase, porcentaje, porcentajeBase=40) => Number(comisionBase || 0) * (Number(porcentaje || porcentajeBase) / Math.max(1, Number(porcentajeBase || 40)));
   const comisionAplicadaPago = useCallback((c) => {
     const valor = Number(c?.comision || 0);
@@ -12559,7 +12994,7 @@ function ReportePagoComisiones({ data, setData, user }) {
     // evaluarse con una regla semanal distinta solo por su fecha calendario.
     const periodoCriterio = semanaSeleccionada ? periodo : periodoRegistro;
     const semanaCriterio = semanaSeleccionada ? Number(semanaSeleccionada.numero) : semanaRegistro;
-    const info = criterioPagoComision(c.userId, periodoCriterio, semanaCriterio, c.localId);
+    const info = criterioPagoComision(c.userId, periodoCriterio, semanaCriterio);
     return comisionConPorcentajePago(valor, info.porcentaje, info.regla?.porcentajeBase || configGeneralPagoComisiones.porcentajeBase || 40);
   }, [criterioPagoComision, configGeneralPagoComisiones]);
 
@@ -12588,6 +13023,7 @@ function ReportePagoComisiones({ data, setData, user }) {
   const rowsBase = useMemo(() => {
     const rows = [];
     (data.comisiones || []).forEach(c => {
+      if(!c.userId) return; // históricos y pendientes se informan, pero no se liquidan a una manicura actual
       const lid = Number(c.localId || 0);
       if (!localBaseSet.has(lid)) return;
       if (!fechaPasaPeriodo(c.fechaPago || c.periodo)) return;
@@ -12655,46 +13091,62 @@ function ReportePagoComisiones({ data, setData, user }) {
       });
     });
 
-    // El mínimo garantizado es semanal. Se agrega como un ajuste positivo para que
-    // totales, gráficos y listado de pago usen exactamente el mismo criterio que el cálculo.
+    // El mínimo garantizado se calcula por la antigüedad histórica de cada LOCAL.
+    // Si existen varios locales realmente activos en simultáneo, se unifican y se
+    // usa la antigüedad más antigua de ese conjunto. Un cambio de local sin
+    // superposición inicia la antigüedad propia del nuevo local; volver a un local
+    // conocido conserva su primer ingreso histórico a esa sucursal.
     const semanasEvaluar = semanaSeleccionada ? [semanaSeleccionada] : semanas;
     const manicurasActivas = (data.users || []).filter(u=>u.rol==="manicura" && u.activo!==false);
 
-    // Índice previo por manicura/local/semana. Antes se hacía rows.filter(...) dentro
-    // del triple bucle semana x local x manicura, lo que volvía muy costoso abrir
-    // el reporte de pago cuando había muchos registros de comisiones.
-    const comisionSemanaMap = new Map();
-    rows.forEach(r => {
-      if (r.tipo !== "comision") return;
-      const semanaRow = semanasEvaluar.find(w => isDateInRangeKey(r.fecha, w.desdeKey, w.hastaKey));
-      if (!semanaRow) return;
-      const key = `${Number(r.userId||0)}|${Number(r.localId||0)}|${semanaRow.numero}`;
-      comisionSemanaMap.set(key, (comisionSemanaMap.get(key) || 0) + Number(r.importe || 0));
+    // Comisión real global por manicura/semana, tomada directamente de data.comisiones
+    // para no depender del filtro de locales usado para armar la grilla de pago.
+    const comisionGlobalSemanaMap = new Map();
+    (data.comisiones || []).forEach(c => {
+      const uid=Number(c.userId||0);
+      if(!uid) return; // históricos/no vinculables no participan de liquidación personal
+      const fecha=String(c.fechaPago||"").slice(0,10);
+      const semanaRow=semanasEvaluar.find(w=>isDateInRangeKey(fecha,w.desdeKey,w.hastaKey));
+      if(!semanaRow) return;
+      const lid=Number(c.localId||0);
+      const key=`${uid}|${semanaRow.numero}|${lid}`;
+      comisionGlobalSemanaMap.set(key,(comisionGlobalSemanaMap.get(key)||0)+Number(comisionAplicadaPago(c)||0));
     });
 
     semanasEvaluar.forEach(w => {
-      localBaseIds.forEach(lid => {
-        manicurasActivas.forEach(m => {
-          const status = getMinimumGuaranteeStatus(data.manicuraHistorialLocales || [], m.id, lid, w.desdeKey, w.hastaKey);
-          if (!status.eligible) return;
-          const minimum = minimoPagoParaLocal(m.id, lid);
-          if (!(minimum > 0)) return;
-          const criterio = criterioPagoComision(m.id, periodo, w.numero, lid);
-          if (Number(criterio.porcentaje) !== Number(criterio.regla?.porcentajeBase || configGeneralPagoComisiones.porcentajeBase || 40)) return;
-          const comisionSemana = comisionSemanaMap.get(`${Number(m.id)}|${Number(lid)}|${w.numero}`) || 0;
-          if (comisionSemana >= minimum) return;
-          rows.push({
-            id:`minimo-${m.id}-${lid}-${w.desdeKey}`,
-            tipo:"minimo",
-            fecha:w.hastaKey,
-            localId:Number(lid),
-            localNombre:localNombre(lid),
-            tipoLocal:localTipo(lid),
-            userId:Number(m.id),
-            manicuraNombre:m.nombre || "Sin manicura",
-            concepto:"Ajuste mínimo garantizado",
-            importe:minimum-comisionSemana,
-          });
+      manicurasActivas.forEach(m => {
+        const status=getGlobalMinimumGuaranteeStatus(data.manicuraHistorialLocales || [],m.id,w.desdeKey,w.hastaKey);
+        if(!status.eligible || !status.anchorLocalId) return;
+
+        const anchorLocalId=Number(status.anchorLocalId);
+        const minimum=minimoPagoParaLocal(m.id,anchorLocalId);
+        if(!(minimum>0)) return;
+
+        const criterio=criterioPagoComision(m.id,periodo,w.numero,anchorLocalId);
+        const porcentajeBase=Number(criterio.regla?.porcentajeBase || configGeneralPagoComisiones.porcentajeBase || 40);
+        if(Number(criterio.porcentaje)!==porcentajeBase) return;
+
+        const comisionSemana=(status.activeLocalIds||[]).reduce((acc,lid)=>acc+(comisionGlobalSemanaMap.get(`${Number(m.id)}|${w.numero}|${Number(lid)}`)||0),0);
+        if(comisionSemana>=minimum) return;
+
+        // El complemento se atribuye contablemente al local ancla (el de mayor
+        // antigüedad del episodio), pero se calcula una sola vez y de forma global.
+        rows.push({
+          id:`minimo-global-${m.id}-${w.desdeKey}`,
+          tipo:"minimo",
+          fecha:w.hastaKey,
+          localId:anchorLocalId,
+          localNombre:localNombre(anchorLocalId),
+          tipoLocal:localTipo(anchorLocalId),
+          userId:Number(m.id),
+          manicuraNombre:m.nombre || "Sin manicura",
+          concepto:`Ajuste mínimo garantizado global · base ${localNombre(anchorLocalId)}`,
+          importe:minimum-comisionSemana,
+          minimoGlobal:true,
+          antiguedadDesde:status.firstStartKey,
+          antiguedadHasta:status.endDateKey,
+          localesActivos:status.activeLocalIds,
+          comisionGlobal:comisionSemana,
         });
       });
     });
@@ -14289,8 +14741,8 @@ function DashboardLocalDrilldown({ row, diaRows, onClose }) {
   const anteriorDesde=String(row.anterior_desde||"").slice(0,10);
   const anteriorHasta=String(row.anterior_hasta||"").slice(0,10);
   const localDia=(diaRows||[]).filter(x=>Number(x.local_id)===localId);
-  const current=localDia.filter(x=>x.fecha>=actualDesde&&x.fecha<=actualHasta).sort((a,b)=>String(a.fecha).localeCompare(String(b.fecha)));
-  const previous=localDia.filter(x=>x.fecha>=anteriorDesde&&x.fecha<=anteriorHasta).sort((a,b)=>String(a.fecha).localeCompare(String(b.fecha)));
+  const current=localDia.filter(x=>{const f=String(x.fecha||"").slice(0,10);return f>=actualDesde&&f<=actualHasta;}).sort((a,b)=>String(a.fecha).slice(0,10).localeCompare(String(b.fecha).slice(0,10)));
+  const previous=localDia.filter(x=>{const f=String(x.fecha||"").slice(0,10);return f>=anteriorDesde&&f<=anteriorHasta;}).sort((a,b)=>String(a.fecha).slice(0,10).localeCompare(String(b.fecha).slice(0,10)));
   const daily=dashboardCalendarDailyCompare(current,previous,actualHasta);
   const ventas=Number(row.ventas||0), ventasAnt=Number(row.ventas_mes_anterior||0), visitas=Number(row.visitas||0), visitasAnt=Number(row.visitas_mes_anterior||0);
   const ticket=Number(row.ticket_promedio||0), ticketAnt=Number(row.ticket_mes_anterior||0);
@@ -14342,7 +14794,7 @@ function dashboardBuildMonthRows(diaRows, periodo, locales = []) {
   const actualDesde=`${periodo}-01`;
   const monthEnd=`${periodo}-${String(diasMes).padStart(2,"0")}`;
   const todayKey=dateKey(today);
-  const fechasPeriodo=(diaRows||[]).map(r=>String(r.fecha||"").slice(0,10)).filter(f=>f.startsWith(`${periodo}-`)&&(!isCurrent||f<todayKey)).sort();
+  const fechasPeriodo=(diaRows||[]).map(r=>String(r.fecha||"").slice(0,10)).filter(f=>f.startsWith(`${periodo}-`)&&(!isCurrent||f<=todayKey)).sort();
   const actualHasta=isCurrent?(fechasPeriodo[fechasPeriodo.length-1]||actualDesde):monthEnd;
   const diasTranscurridos=isCurrent?Number(String(actualHasta).slice(8,10)||0):diasMes;
   const anteriorPeriodo=dashboardPreviousPeriodo(periodo);
@@ -14356,7 +14808,7 @@ function dashboardBuildMonthRows(diaRows, periodo, locales = []) {
     const f=String(r.fecha||"").slice(0,10);
     if((f>=actualDesde&&f<=actualHasta)||(f>=anteriorDesde&&f<=anteriorHasta)) ids.add(Number(r.local_id));
   });
-  const sumRange=(localId,desde,hasta,key)=>(diaRows||[]).filter(r=>Number(r.local_id)===Number(localId)&&String(r.fecha)>=desde&&String(r.fecha)<=hasta).reduce((a,r)=>a+Number(r[key]||0),0);
+  const sumRange=(localId,desde,hasta,key)=>(diaRows||[]).filter(r=>{ const f=String(r.fecha||"").slice(0,10); return Number(r.local_id)===Number(localId)&&f>=desde&&f<=hasta; }).reduce((a,r)=>a+Number(r[key]||0),0);
   return Array.from(ids).map(localId=>{
     const ventas=sumRange(localId,actualDesde,actualHasta,"ventas");
     const visitas=sumRange(localId,actualDesde,actualHasta,"visitas");
@@ -14501,8 +14953,11 @@ function DashboardComercial({ data, user }) {
 
   const aggregateRange=useCallback((desde,hasta)=>{
     const map=new Map();
-    filtradosDia.filter(r=>!desde||!hasta||(r.fecha>=desde&&r.fecha<=hasta)).forEach(r=>{
-      const k=r.fecha; const p=map.get(k)||{fecha:k,ventas:0,visitas:0}; p.ventas+=Number(r.ventas||0); p.visitas+=Number(r.visitas||0); map.set(k,p);
+    filtradosDia.forEach(r=>{
+      const k=String(r.fecha||"").slice(0,10);
+      if(!k || (desde&&hasta&&(k<desde||k>hasta))) return;
+      const p=map.get(k)||{fecha:k,ventas:0,visitas:0};
+      p.ventas+=Number(r.ventas||0); p.visitas+=Number(r.visitas||0); map.set(k,p);
     });
     return Array.from(map.values()).sort((a,b)=>a.fecha.localeCompare(b.fecha));
   },[filtradosDia]);
@@ -14514,8 +14969,10 @@ function DashboardComercial({ data, user }) {
 
   const weekly=useMemo(()=>{
     const map=new Map();
-    filtradosDia.filter(r=>r.fecha>=anteriorDesde&&r.fecha<=actualHasta).forEach(r=>{
-      const d=parseDateLocal(r.fecha); if(!d)return; const mon=getMon(d); const key=dateKey(mon); const p=map.get(key)||{key,ventas:0,visitas:0}; p.ventas+=Number(r.ventas||0); p.visitas+=Number(r.visitas||0); map.set(key,p);
+    filtradosDia.forEach(r=>{
+      const fecha=String(r.fecha||"").slice(0,10);
+      if(!fecha || fecha<anteriorDesde || fecha>actualHasta) return;
+      const d=parseDateLocal(fecha); if(!d)return; const mon=getMon(d); const key=dateKey(mon); const p=map.get(key)||{key,ventas:0,visitas:0}; p.ventas+=Number(r.ventas||0); p.visitas+=Number(r.visitas||0); map.set(key,p);
     });
     const cutoffDate=parseDateLocal(cutoff);
     return Array.from(map.values()).sort((a,b)=>a.key.localeCompare(b.key)).slice(-8).map(r=>{
@@ -14716,7 +15173,7 @@ function DashboardComercial({ data, user }) {
         <th style={{ width:34,padding:"10px 5px",textAlign:"center" }}>✓</th><th onClick={()=>toggleSort("local")} style={{ textAlign:"left",padding:"10px",cursor:"pointer" }}>Sucursal{sortMark("local")}</th><th onClick={()=>toggleSort("ventas")} style={{ textAlign:"right",padding:"10px",cursor:"pointer" }}>Ventas{sortMark("ventas")}</th><th onClick={()=>toggleSort("variacion_ventas_pct")} style={{ textAlign:"right",padding:"10px",cursor:"pointer" }}>Var. ventas{sortMark("variacion_ventas_pct")}</th><th onClick={()=>toggleSort("visitas")} style={{ textAlign:"right",padding:"10px",cursor:"pointer" }}>Visitas{sortMark("visitas")}</th><th onClick={()=>toggleSort("variacion_visitas_pct")} style={{ textAlign:"right",padding:"10px",cursor:"pointer" }}>Var. visitas{sortMark("variacion_visitas_pct")}</th><th onClick={()=>toggleSort("ticket_promedio")} style={{ textAlign:"right",padding:"10px",cursor:"pointer" }}>Ticket{sortMark("ticket_promedio")}</th><th onClick={()=>toggleSort("variacion_ticket_pct")} style={{ textAlign:"right",padding:"10px",cursor:"pointer" }}>Var. ticket{sortMark("variacion_ticket_pct")}</th><th onClick={()=>toggleSort(isCurrentPeriod?"proyeccion_ventas":"ventas_mes_anterior")} style={{ textAlign:"right",padding:"10px",cursor:"pointer" }}>{isCurrentPeriod?"Proyección":"Mes anterior"}{sortMark(isCurrentPeriod?"proyeccion_ventas":"ventas_mes_anterior")}</th><th style={{ width:72,padding:"10px",textAlign:"center" }}>Detalle</th>
       </tr></thead><tbody>{branchRows.map((r,i)=>{const vv=Number(r.variacion_ventas_pct),qv=Number(r.variacion_visitas_pct),tv=Number(r.variacion_ticket_pct);const pct=(n)=><span style={{ fontWeight:800,color:Number.isFinite(n)?(n>=0?COLORS.success:COLORS.danger):"var(--color-text-secondary)" }}>{Number.isFinite(n)?dashboardPctLabel(n):"—"}</span>;const salesPct=Math.max(2,Math.min(100,Number(r.ventas||0)/branchMaxSales*100));const visitsPct=Math.max(2,Math.min(100,Number(r.visitas||0)/branchMaxVisits*100));const allLocals=selectedLocalIds===null||!(selectedLocalIds||[]).length;const selected=!allLocals&&visibleIds.has(Number(r.local_id));return <tr key={r.local_id} style={{ borderTop:"1px solid rgba(120,120,120,.09)",background:selected?"rgba(225,198,204,.30)":(i%2?"rgba(120,120,120,.018)":"transparent") }}><td onClick={()=>toggleLocalFromTable(r.local_id)} title={selected?"Quitar de la selección":"Seleccionar sucursal"} style={{ padding:"10px 5px",textAlign:"center",cursor:"pointer" }}><input type="checkbox" checked={selected} readOnly style={{ accentColor:COLORS.pinkDark,pointerEvents:"none" }}/></td><td style={{ padding:"10px",fontWeight:800 }}><button type="button" onClick={()=>setDrillLocalId(Number(r.local_id))} style={{ border:"none",background:"transparent",padding:0,color:selected&&selectedLocalIds!==null?COLORS.pinkDark:"var(--color-text-primary)",fontWeight:800,cursor:"pointer",textDecoration:"underline",textDecorationColor:"rgba(114,36,62,.28)",textUnderlineOffset:3 }}>{r.local}</button></td><td style={{ padding:"10px",textAlign:"right",minWidth:145 }}><div>{fmtMoney(r.ventas)}</div><div style={{ height:4,marginTop:4,borderRadius:999,background:"rgba(114,36,62,.08)",overflow:"hidden" }}><div style={{ width:`${salesPct}%`,height:"100%",background:COLORS.pinkDark,borderRadius:999 }}/></div></td><td style={{ padding:"10px",textAlign:"right" }}>{pct(vv)}</td><td style={{ padding:"10px",textAlign:"right",minWidth:105 }}><div>{new Intl.NumberFormat("es-AR").format(Number(r.visitas||0))}</div><div style={{ height:4,marginTop:4,borderRadius:999,background:"rgba(114,36,62,.08)",overflow:"hidden" }}><div style={{ width:`${visitsPct}%`,height:"100%",background:"#c98fa0",borderRadius:999 }}/></div></td><td style={{ padding:"10px",textAlign:"right" }}>{pct(qv)}</td><td style={{ padding:"10px",textAlign:"right" }}>{fmtMoney(r.ticket_promedio)}</td><td style={{ padding:"10px",textAlign:"right" }}>{pct(tv)}</td><td style={{ padding:"10px",textAlign:"right",fontWeight:800 }}>{fmtMoney(isCurrentPeriod?r.proyeccion_ventas:r.ventas_mes_anterior)}</td><td style={{ padding:"8px",textAlign:"center" }}><button type="button" onClick={()=>setDrillLocalId(Number(r.local_id))} style={{ border:"1px solid rgba(114,36,62,.18)",background:COLORS.pinkLight,color:COLORS.pinkDark,borderRadius:8,padding:"5px 8px",fontSize:10.5,fontWeight:800,cursor:"pointer" }}>Ver</button></td></tr>})}</tbody></table></div>
     </Card>
-    <p style={{ margin:"-4px 2px 0",fontSize:10.5,color:"var(--color-text-secondary)" }}>Venta = total pagado en AgendaPro. Visita = atención consolidada por local, día y cliente. Las comparaciones diarias se alinean por día calendario: un día sin actividad vale 0 y no desplaza la serie. En el mes actual, el día en curso no se incluye en comparativos ni proyecciones. Los meses anteriores se muestran cerrados. Las líneas de tendencia usan media móvil de 3 puntos.</p>
+    <p style={{ margin:"-4px 2px 0",fontSize:10.5,color:"var(--color-text-secondary)" }}>Venta = total pagado en AgendaPro. Visita = atención consolidada por local, día y cliente. Las comparaciones diarias se alinean por día calendario: un día sin actividad vale 0 y no desplaza la serie. En el mes actual, el día en curso se incluye cuando ya existen datos consolidados. Los meses anteriores se muestran cerrados. Las líneas de tendencia usan media móvil de 3 puntos.</p>
     {drillRow&&<DashboardLocalDrilldown row={drillRow} diaRows={diaRows} onClose={()=>setDrillLocalId(null)}/>} 
   </div>;
 }
@@ -15616,8 +16073,8 @@ export default function App() {
     // Cada reporte carga únicamente el período que necesita.
     const actor = actorOverride || userRef.current;
     const reclutamientoPromise = isAdminLikeRole(actor?.rol) ? api.getReclutamientoCandidatasDisponibles().catch(()=>[]) : Promise.resolve([]);
-    const [users, locales, horarios, asistencias, periodos, feriados, reglasCobertura, configCobertura, encargadoLocales, usuarioLocales, manicuraHistorialLocales, usuarioHistorialLaboral, personaDocumentos, comisionesConfiguracion, comisionesManicuraConfig, adelantos, garantias, informesDiarios, agendaServicios, agendaManicuraServicios, agendaListasPrecios, agendaLocalListas, agendaPreciosServicios, agendaListaVigencias, agendaPreciosVigencia, agendaClientes, agendaTurnos, agendaTurnosPagos, agendaTurnoServicios, agendaBloqueos, reclutamientoCandidatas] = await Promise.all([
-      api.getUsers(), api.getLocales(), api.getHorarios(), api.getAsistencias(), api.getPeriodos(), api.getFeriados(), api.getReglasCobertura(), api.getConfigCobertura(), api.getEncargadoLocales(), api.getUsuarioLocales(), api.getManicuraHistorialLocales(), api.getUsuarioHistorialLaboral(), api.getPersonaDocumentos(), api.getComisionesConfiguracion(), api.getComisionesManicuraConfig(), api.getAdelantos(), api.getGarantias(), api.getInformesDiarios(), api.getAgendaServicios(), api.getAgendaManicuraServicios(), api.getAgendaListasPrecios(), api.getAgendaLocalListas(), api.getAgendaPreciosServicios(), api.getAgendaListaVigencias(), api.getAgendaPreciosVigencia(), api.getAgendaClientes(), api.getAgendaTurnos(), api.getAgendaTurnosPagos(), api.getAgendaTurnoServicios(), api.getAgendaBloqueos(), reclutamientoPromise
+    const [users, locales, horarios, asistencias, periodos, feriados, reglasCobertura, configCobertura, encargadoLocales, usuarioLocales, manicuraHistorialLocales, usuarioHistorialLaboral, personaDocumentos, comisionesConfiguracion, comisionesManicuraConfig, agendaProfesionalesNoVinculables, adelantos, garantias, informesDiarios, agendaServicios, agendaManicuraServicios, agendaListasPrecios, agendaLocalListas, agendaPreciosServicios, agendaListaVigencias, agendaPreciosVigencia, agendaClientes, agendaTurnos, agendaTurnosPagos, agendaTurnoServicios, agendaBloqueos, reclutamientoCandidatas] = await Promise.all([
+      api.getUsers(), api.getLocales(), api.getHorarios(), api.getAsistencias(), api.getPeriodos(), api.getFeriados(), api.getReglasCobertura(), api.getConfigCobertura(), api.getEncargadoLocales(), api.getUsuarioLocales(), api.getManicuraHistorialLocales(), api.getUsuarioHistorialLaboral(), api.getPersonaDocumentos(), api.getComisionesConfiguracion(), api.getComisionesManicuraConfig(), api.getAgendaProfesionalesNoVinculables(), api.getAdelantos(), api.getGarantias(), api.getInformesDiarios(), api.getAgendaServicios(), api.getAgendaManicuraServicios(), api.getAgendaListasPrecios(), api.getAgendaLocalListas(), api.getAgendaPreciosServicios(), api.getAgendaListaVigencias(), api.getAgendaPreciosVigencia(), api.getAgendaClientes(), api.getAgendaTurnos(), api.getAgendaTurnosPagos(), api.getAgendaTurnoServicios(), api.getAgendaBloqueos(), reclutamientoPromise
     ]);
     const nextData = {
       users: await Promise.all((users || []).map(async raw => {
@@ -15650,6 +16107,7 @@ export default function App() {
       comisionesCriterios: [],
       comisionesConfiguracion: (comisionesConfiguracion||[]).map(normalizeComisionesConfiguracion),
       comisionesManicuraConfig: (comisionesManicuraConfig||[]).map(normalizeComisionesManicuraConfig),
+      agendaProfesionalesNoVinculables: (agendaProfesionalesNoVinculables||[]).map(normalizeAgendaProfesionalNoVinculable),
       adelantos: (adelantos||[]).map(normalizeAdelanto),
       garantias: (garantias||[]).map(normalizeGarantia),
       informesDiarios: (informesDiarios||[]).map(normalizeInformeDiario),
@@ -15801,30 +16259,45 @@ export default function App() {
       setHomeKpis(prev => ({ ...prev, loading:true, error:"" }));
       try {
         const now = new Date();
-        const cutoff = new Date(now.getFullYear(), now.getMonth(), now.getDate() - 1);
-        const currentStart = new Date(cutoff.getFullYear(), cutoff.getMonth(), 1);
+        const iso = d => `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}`;
+        const todayKey = iso(now);
+        const currentPeriodo = `${now.getFullYear()}-${String(now.getMonth()+1).padStart(2,"0")}`;
+        const currentStart = new Date(now.getFullYear(), now.getMonth(), 1);
+        const previousStartBase = new Date(now.getFullYear(), now.getMonth() - 1, 1);
+
+        // Igual que el Dashboard comercial: si hoy ya tiene datos consolidados,
+        // el corte incluye hoy; si no, usa el ultimo dia disponible del mes.
+        const rows = await api.getDashboardKpiLocalDia(iso(previousStartBase), todayKey);
+        const fechasPeriodo = (rows || [])
+          .map(r => String(r.fecha || "").slice(0,10))
+          .filter(f => f.startsWith(`${currentPeriodo}-`) && f <= todayKey)
+          .sort();
+        const cutoffKey = fechasPeriodo[fechasPeriodo.length - 1] || iso(currentStart);
+        const cutoff = parseDateLocal(cutoffKey) || currentStart;
+
         const previousStart = new Date(cutoff.getFullYear(), cutoff.getMonth() - 1, 1);
         const previousMonthLast = new Date(cutoff.getFullYear(), cutoff.getMonth(), 0).getDate();
         const comparableDay = Math.min(cutoff.getDate(), previousMonthLast);
         const previousEnd = new Date(previousStart.getFullYear(), previousStart.getMonth(), comparableDay);
-        const iso = d => `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}`;
 
-        const rows = await api.getDashboardKpiLocalDia(iso(previousStart), iso(cutoff));
+        // Mismo alcance que el Dashboard: locales asignados y activos.
         const allowedIds = new Set((getAssignedLocalIds(data, effectiveUser) || []).map(Number));
-        const scoped = (rows || []).filter(r => effectiveRole === "admin" || allowedIds.has(Number(r.local_id)));
+        const activeIds = new Set((data.locales || []).filter(localActivo).map(l => Number(l.id)));
+        const scoped = (rows || []).filter(r => allowedIds.has(Number(r.local_id)) && activeIds.has(Number(r.local_id)));
+
         const sumRange = (from,to) => {
           let ventas=0, visitas=0;
           for (const r of scoped) {
-            const f=String(r.fecha||"");
+            const f=String(r.fecha||"").slice(0,10);
             if (f < from || f > to) continue;
             ventas += Number(r.ventas || 0);
             visitas += Number(r.visitas || 0);
           }
           return { ventas, visitas, ticket: visitas ? ventas/visitas : 0 };
         };
-        const cur=sumRange(iso(currentStart),iso(cutoff));
+        const cur=sumRange(iso(currentStart),cutoffKey);
         const prev=sumRange(iso(previousStart),iso(previousEnd));
-        if (!cancelled) setHomeKpis({ loading:false,error:"",ventas:cur.ventas,ventasAnt:prev.ventas,visitas:cur.visitas,visitasAnt:prev.visitas,ticket:cur.ticket,ticketAnt:prev.ticket,fechaHasta:iso(cutoff) });
+        if (!cancelled) setHomeKpis({ loading:false,error:"",ventas:cur.ventas,ventasAnt:prev.ventas,visitas:cur.visitas,visitasAnt:prev.visitas,ticket:cur.ticket,ticketAnt:prev.ticket,fechaHasta:cutoffKey });
       } catch (e) {
         if (!cancelled) setHomeKpis(prev => ({ ...prev, loading:false, error:e?.message || "No se pudo cargar el resumen." }));
       }
