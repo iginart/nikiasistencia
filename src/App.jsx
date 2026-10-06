@@ -567,6 +567,13 @@ async function nikiProtectedFetch(url, options = {}) {
     } catch {}
   }
   if (!sessionExpired) return res;
+
+  // Si no hay una sesión Niki activa, no corresponde intentar renovarla.
+  // Esto es necesario para flujos públicos como recuperación de contraseña,
+  // donde un 401 debe devolverse tal cual para mostrar el error real del token.
+  const actor = currentNikiActor();
+  if (!actor?.id || !actor?.sessionToken) return res;
+
   await refreshNikiSession();
   res = await fetch(url, optionsWithCurrentNikiSession(options));
   return res;
@@ -615,14 +622,27 @@ const api = {
     return data;
   },
   changePassword: async (payload) => {
-    const res = await nikiProtectedFetch(`${SUPABASE_URL}/functions/v1/cambiar-password-niki`, {
+    // El blanqueo por email es un flujo público basado en token y no requiere
+    // una sesión Niki previa. Los cambios "self"/administrativos sí mantienen
+    // la renovación automática de sesión.
+    const request = payload?.mode === "reset" ? fetch : nikiProtectedFetch;
+    const res = await request(`${SUPABASE_URL}/functions/v1/cambiar-password-niki`, {
       method: "POST",
       headers: { apikey: SUPABASE_KEY, Authorization: `Bearer ${SUPABASE_KEY}`, "Content-Type": "application/json" },
       body: JSON.stringify(payload),
     });
     const txt = await res.text();
-    const data = txt ? JSON.parse(txt) : null;
-    if (!res.ok || data?.ok === false) throw new Error(data?.error || txt || "No se pudo cambiar la contraseña");
+    let data = null;
+    try { data = txt ? JSON.parse(txt) : null; }
+    catch { data = null; }
+
+    if (!res.ok || data?.ok === false) {
+      const serverError = data?.error || txt || "";
+      if (payload?.mode === "reset" && res.status === 401 && !serverError) {
+        throw new Error("El enlace de recuperación no es válido o venció. Solicitá uno nuevo.");
+      }
+      throw new Error(serverError || "No se pudo cambiar la contraseña");
+    }
     return data;
   },
   solicitarResetPassword: async (identificador) => {
@@ -7322,8 +7342,6 @@ function Reportes({ data, setData, user, onOpenAgenda, reportRestore, reloadData
       // Así la suma de reportes por local siempre reconcilia con la liquidación global.
       (data.users||[])
         .filter(u=>u.rol==="manicura"&&u.activo!==false)
-        // Seguridad de visibilidad: una manicura sólo puede generar su propia fila
-        // sintética de mínimo garantizado. Los gestores conservan el alcance habitual.
         .filter(u=>puedeGestionar || Number(u.id)===Number(user.id))
         .filter(u=>manicuraComisiones==="todas" || Number(u.id)===Number(manicuraComisiones))
         .forEach(u=>{
@@ -7356,8 +7374,6 @@ function Reportes({ data, setData, user, onOpenAgenda, reportRestore, reloadData
       });
     }
     const fechasPagoComisiones = Array.from(manicurasPagoMap.values())
-      // Segunda barrera defensiva: el recuadro "Fecha de pago" nunca debe exponer
-      // una liquidación personal fuera del alcance del usuario actual.
       .filter(m=>puedeGestionar || Number(m.userId)===Number(user.id))
       .filter(m=>manicuraComisiones==="todas" || Number(m.userId)===Number(manicuraComisiones))
       .map(m => {
