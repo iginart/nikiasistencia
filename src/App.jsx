@@ -7320,7 +7320,13 @@ function Reportes({ data, setData, user, onOpenAgenda, reportRestore, reloadData
       // Si el mínimo global corresponde al local ancla, ese local debe mostrar el
       // complemento aun cuando esa semana no haya tenido servicios propios allí.
       // Así la suma de reportes por local siempre reconcilia con la liquidación global.
-      (data.users||[]).filter(u=>u.rol==="manicura"&&u.activo!==false).forEach(u=>{
+      (data.users||[])
+        .filter(u=>u.rol==="manicura"&&u.activo!==false)
+        // Seguridad de visibilidad: una manicura sólo puede generar su propia fila
+        // sintética de mínimo garantizado. Los gestores conservan el alcance habitual.
+        .filter(u=>puedeGestionar || Number(u.id)===Number(user.id))
+        .filter(u=>manicuraComisiones==="todas" || Number(u.id)===Number(manicuraComisiones))
+        .forEach(u=>{
         if(manicurasPagoMap.has(u.id)) return;
         const minimoInfo=garantiaMinimaInfo(u.id,localComisionesSeleccionado);
         const globalMinimo=detalleGlobalUsuario(u.id,minimoInfo.activeLocalIds);
@@ -7349,7 +7355,12 @@ function Reportes({ data, setData, user, onOpenAgenda, reportRestore, reloadData
         m.globalDetalle=global;
       });
     }
-    const fechasPagoComisiones = Array.from(manicurasPagoMap.values()).map(m => {
+    const fechasPagoComisiones = Array.from(manicurasPagoMap.values())
+      // Segunda barrera defensiva: el recuadro "Fecha de pago" nunca debe exponer
+      // una liquidación personal fuera del alcance del usuario actual.
+      .filter(m=>puedeGestionar || Number(m.userId)===Number(user.id))
+      .filter(m=>manicuraComisiones==="todas" || Number(m.userId)===Number(manicuraComisiones))
+      .map(m => {
       const sabadoKey = sabadoPagoBase ? dateKey(sabadoPagoBase) : "";
       const horarioSabado = !!(sabadoKey && m.userId && data.horarios.some(h => h.userId===m.userId && h.fecha===sabadoKey && h.trabaja && h.entrada && h.salida));
       const asistenciaSabado = sabadoKey && m.userId ? data.asistencias.find(a => a.userId===m.userId && a.fecha===sabadoKey) : null;
@@ -8939,6 +8950,87 @@ function SueldoEncargadaModal({ target, user, onClose }) {
   </Modal>;
 }
 
+
+function formatPeriodoLiquidacion(periodo) {
+  const parts=String(periodo||"").split("-");
+  const y=Number(parts[0]||0),m=Number(parts[1]||0);
+  if(!y||!m) return String(periodo||"");
+  const label=new Date(y,m-1,1).toLocaleDateString("es-AR",{month:"long",year:"numeric"});
+  return label?label.charAt(0).toUpperCase()+label.slice(1):String(periodo||"");
+}
+
+function escapeHtmlLiquidacion(value) {
+  return String(value??"").replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;").replace(/'/g,"&#039;");
+}
+
+function LiquidacionEncargadaModal({ row, periodo, data, localId, onClose }) {
+  if(!row)return null;
+  const periodoLabel=formatPeriodoLiquidacion(periodo);
+  const fechaEmision=new Date().toLocaleDateString("es-AR");
+  const receiptCode="ENC-"+String(periodo||"").replace("-","")+"-"+String(row.user_id||"").padStart(4,"0");
+  const relaciones=(data.encargadoLocales||[]).filter(x=>Number(x.userId)===Number(row.user_id));
+  const ids=Array.from(new Set(relaciones.map(x=>Number(x.localId)).filter(Boolean))).filter(id=>!localId||Number(localId)===id);
+  const names=ids.map(id=>(data.locales||[]).find(l=>Number(l.id)===id)?.nombre).filter(Boolean);
+  const localesLabel=names.length?names.join(" · "):(localId?((data.locales||[]).find(l=>Number(l.id)===Number(localId))?.nombre||"Sucursal seleccionada"):"Locales asignados");
+  const vigencia=row.config_vigencia_desde?String(row.config_vigencia_desde).split("-").reverse().join("/"):"Sin vigencia informada";
+  const conceptos=[
+    {label:"Sueldo base",detalle:"Configuración vigente desde "+vigencia,importe:Number(row.sueldo_base||0)},
+    {label:"Horas extra",detalle:Number(row.horas_extra||0).toFixed(1)+" h × "+fmtMoney(row.valor_hora_extra||0),importe:Number(row.monto_horas_extra||0)},
+    {label:"Feriados trabajados",detalle:String(Number(row.feriados_trabajados||0))+" día(s) adicional(es)",importe:Number(row.monto_feriados||0)},
+    {label:"Aguinaldo estimado",detalle:Number(row.aguinaldo||0)>0?String(Number(row.meses_trabajados_semestre||0))+"/6 meses · mejor base "+fmtMoney(row.mejor_sueldo_base_semestre||0):"No corresponde en este período",importe:Number(row.aguinaldo||0)}
+  ].filter(x=>x.label==="Sueldo base"||Math.abs(x.importe)>0.004);
+  const totalHaberes=conceptos.reduce((a,x)=>a+x.importe,0);
+  const totalDescuentos=0;
+  const neto=Number(row.total_estimado||totalHaberes);
+  const novedades=(row.detalle||[]).filter(d=>d.ausencia||d.cambio_turno||d.feriado||Number(d.horas_extra||0)>0||(d.trabajado&&!d.agendado));
+
+  const printReceipt=()=>{
+    const w=window.open("","_blank","width=940,height=1150");
+    if(!w){notifyToast("El navegador bloqueó la ventana de impresión. Habilitá ventanas emergentes para generar el PDF.","warning");return;}
+    const conceptosHtml=conceptos.map(c=>"<tr><td><strong>"+escapeHtmlLiquidacion(c.label)+"</strong><div class='muted'>"+escapeHtmlLiquidacion(c.detalle)+"</div></td><td class='money'>"+escapeHtmlLiquidacion(fmtMoney(c.importe))+"</td></tr>").join("");
+    const novedadesHtml=novedades.length?novedades.map(d=>{
+      const detail=[d.ausencia?"Ausencia":"",d.cambio_turno?"Cambio de turno":"",d.feriado?"Feriado":"",Number(d.horas_extra||0)>0?Number(d.horas_extra||0).toFixed(1)+" h extra":"",d.trabajado&&!d.agendado?"Cobertura / reemplazo":""].filter(Boolean).join(" · ");
+      return "<tr><td>"+escapeHtmlLiquidacion(String(d.fecha||"").split("-").reverse().join("/"))+"</td><td>"+escapeHtmlLiquidacion(detail)+"</td></tr>";
+    }).join(""):"<tr><td colspan='2' class='muted'>Sin novedades relevantes registradas en el período.</td></tr>";
+    const logoUrl=new URL("icons/niki-os-192.png",window.location.href).href;
+    const html="<!doctype html><html><head><meta charset='utf-8'><title>"+escapeHtmlLiquidacion(receiptCode)+"</title>"+
+      "<link href='https://fonts.googleapis.com/css2?family=Montserrat:wght@400;500;600;700;800&display=swap' rel='stylesheet'>"+
+      "<style>@page{size:A4;margin:14mm}*{box-sizing:border-box}body{font-family:Montserrat,Arial,sans-serif;color:#2b2427;margin:0;background:#fff;font-size:12px}.sheet{max-width:184mm;margin:0 auto}.header{display:flex;justify-content:space-between;gap:20px;align-items:flex-start;padding-bottom:18px;border-bottom:2px solid #72243e}.brand{display:flex;gap:12px;align-items:center}.logo{width:52px;height:52px;border-radius:14px;object-fit:cover}.eyebrow{font-size:10px;letter-spacing:.12em;text-transform:uppercase;color:#8c6572;font-weight:800}.title{font-size:24px;margin:2px 0 4px;color:#72243e}.muted{color:#786b70;font-size:10px;line-height:1.45}.code{text-align:right}.badge{display:inline-block;padding:5px 9px;border-radius:999px;background:#f7e9ee;color:#72243e;font-size:9px;font-weight:800;letter-spacing:.06em}.grid{display:grid;grid-template-columns:1.4fr 1fr 1fr;gap:10px;margin:16px 0}.box{border:1px solid #eadde2;border-radius:12px;padding:11px 12px}.label{font-size:9px;text-transform:uppercase;letter-spacing:.08em;color:#8c7a80;font-weight:700;margin-bottom:5px}.value{font-size:12px;font-weight:700}.summary{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin:14px 0 18px}.summary .box:last-child{background:#72243e;color:white;border-color:#72243e}.summary .box:last-child .label{color:#f5dce4}.amount{font-size:20px;font-weight:800}h2{font-size:13px;margin:18px 0 8px;color:#4c313a}table{width:100%;border-collapse:collapse}th{text-align:left;font-size:9px;text-transform:uppercase;letter-spacing:.06em;color:#8c7a80;padding:7px 8px;border-bottom:1px solid #eadde2}td{padding:9px 8px;border-bottom:1px solid #f0e7ea;vertical-align:top}.money{text-align:right;font-weight:800;white-space:nowrap}.metrics{display:grid;grid-template-columns:repeat(5,1fr);gap:8px;margin:10px 0}.metric{background:#faf6f7;border-radius:9px;padding:9px;text-align:center}.metric strong{display:block;font-size:15px;color:#72243e}.metric span{font-size:8px;text-transform:uppercase;color:#8c7a80}.note{margin-top:18px;background:#faf6f7;border-left:3px solid #c9899f;padding:10px 12px;font-size:10px;line-height:1.5;color:#66585d}.footer{margin-top:24px;padding-top:10px;border-top:1px solid #eadde2;display:flex;justify-content:space-between;gap:16px;font-size:9px;color:#8c7a80}@media print{body{-webkit-print-color-adjust:exact;print-color-adjust:exact}.sheet{max-width:none}}</style></head><body><div class='sheet'>"+
+      "<div class='header'><div class='brand'><img class='logo' src='"+escapeHtmlLiquidacion(logoUrl)+"'><div><div class='eyebrow'>Niki Beauty Bar</div><h1 class='title'>Detalle de liquidación</h1><div class='muted'>"+escapeHtmlLiquidacion(periodoLabel)+" · Encargadas</div></div></div><div class='code'><span class='badge'>PRELIQUIDACIÓN</span><div style='margin-top:8px;font-weight:700'>"+escapeHtmlLiquidacion(receiptCode)+"</div><div class='muted'>Emitido "+escapeHtmlLiquidacion(fechaEmision)+"</div></div></div>"+
+      "<div class='grid'><div class='box'><div class='label'>Encargada</div><div class='value'>"+escapeHtmlLiquidacion(row.nombre)+"</div></div><div class='box'><div class='label'>Período</div><div class='value'>"+escapeHtmlLiquidacion(periodoLabel)+"</div></div><div class='box'><div class='label'>Sucursal / alcance</div><div class='value'>"+escapeHtmlLiquidacion(localesLabel)+"</div></div></div>"+
+      "<div class='summary'><div class='box'><div class='label'>Haberes estimados</div><div class='amount'>"+escapeHtmlLiquidacion(fmtMoney(totalHaberes))+"</div></div><div class='box'><div class='label'>Descuentos automáticos</div><div class='amount'>"+escapeHtmlLiquidacion(fmtMoney(totalDescuentos))+"</div></div><div class='box'><div class='label'>Neto estimado</div><div class='amount'>"+escapeHtmlLiquidacion(fmtMoney(neto))+"</div></div></div>"+
+      "<h2>Composición del cálculo</h2><table><thead><tr><th>Concepto</th><th style='text-align:right'>Importe</th></tr></thead><tbody>"+conceptosHtml+"</tbody></table>"+
+      "<h2>Resumen de asistencia</h2><div class='metrics'><div class='metric'><strong>"+escapeHtmlLiquidacion(row.dias_trabajados)+"</strong><span>Días trabajados</span></div><div class='metric'><strong>"+escapeHtmlLiquidacion(row.dias_agendados)+"</strong><span>Días agendados</span></div><div class='metric'><strong>"+escapeHtmlLiquidacion(row.ausencias)+"</strong><span>Ausencias</span></div><div class='metric'><strong>"+escapeHtmlLiquidacion(Number(row.horas_extra||0).toFixed(1))+"</strong><span>Horas extra</span></div><div class='metric'><strong>"+escapeHtmlLiquidacion(row.feriados_trabajados)+"</strong><span>Feriados</span></div></div>"+
+      "<h2>Novedades del período</h2><table><thead><tr><th style='width:100px'>Fecha</th><th>Novedad</th></tr></thead><tbody>"+novedadesHtml+"</tbody></table>"+
+      "<div class='note'><strong>Importante:</strong> este documento refleja la lógica actual de preliquidación de NikiOS: sueldo base + horas extra + feriados trabajados + aguinaldo cuando corresponde. Las ausencias se informan para control, pero hoy no generan un descuento automático en el cálculo.</div>"+
+      "<div class='footer'><span>NikiOS · Documento informativo de preliquidación</span><span>"+escapeHtmlLiquidacion(receiptCode)+"</span></div></div></body></html>";
+    w.document.open();w.document.write(html);w.document.close();w.focus();setTimeout(()=>w.print(),450);
+  };
+
+  return <Modal title={"Liquidación · "+row.nombre} onClose={onClose} width={920}>
+    <div style={{display:"flex",justifyContent:"flex-end",gap:8,marginBottom:12,flexWrap:"wrap"}}><Btn variant="secondary" onClick={printReceipt}>Imprimir / guardar PDF</Btn><Btn variant="ghost" onClick={onClose}>Cerrar</Btn></div>
+    <div style={{background:"#fff",border:"1px solid #eadde2",borderRadius:16,padding:"22px 24px",boxShadow:"0 10px 28px rgba(76,49,58,.07)"}}>
+      <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",gap:16,paddingBottom:16,borderBottom:"2px solid "+COLORS.pinkDark,flexWrap:"wrap"}}>
+        <div style={{display:"flex",alignItems:"center",gap:12}}><img src={FAVICON_SRC} alt="Niki Beauty Bar" style={{width:50,height:50,borderRadius:14,objectFit:"cover"}}/><div><p style={{margin:0,fontSize:10,letterSpacing:".11em",fontWeight:800,color:"#8c6572"}}>NIKI BEAUTY BAR</p><h3 style={{margin:"2px 0 3px",fontSize:23,color:COLORS.pinkDark}}>Detalle de liquidación</h3><p style={{margin:0,fontSize:11,color:"var(--color-text-secondary)"}}>{periodoLabel} · Encargadas</p></div></div>
+        <div style={{textAlign:"right"}}><Badge color="pink">PRELIQUIDACIÓN</Badge><p style={{margin:"8px 0 2px",fontSize:11,fontWeight:800}}>{receiptCode}</p><p style={{margin:0,fontSize:10,color:"var(--color-text-secondary)"}}>Emitido {fechaEmision}</p></div>
+      </div>
+      <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(170px,1fr))",gap:9,margin:"15px 0"}}>{[["Encargada",row.nombre],["Período",periodoLabel],["Sucursal / alcance",localesLabel]].map(([label,value])=><div key={label} style={{border:"1px solid #eadde2",borderRadius:11,padding:"10px 11px"}}><p style={{margin:"0 0 4px",fontSize:9,fontWeight:700,color:"#8c7a80",textTransform:"uppercase",letterSpacing:".07em"}}>{label}</p><strong style={{fontSize:12}}>{value}</strong></div>)}</div>
+      <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(170px,1fr))",gap:9,marginBottom:17}}>
+        <div style={{border:"1px solid #eadde2",borderRadius:11,padding:"11px 12px"}}><p style={{margin:"0 0 4px",fontSize:9,textTransform:"uppercase",color:"#8c7a80"}}>Haberes estimados</p><strong style={{fontSize:20}}>{fmtMoney(totalHaberes)}</strong></div>
+        <div style={{border:"1px solid #eadde2",borderRadius:11,padding:"11px 12px"}}><p style={{margin:"0 0 4px",fontSize:9,textTransform:"uppercase",color:"#8c7a80"}}>Descuentos automáticos</p><strong style={{fontSize:20}}>{fmtMoney(totalDescuentos)}</strong></div>
+        <div style={{border:"1px solid "+COLORS.pinkDark,borderRadius:11,padding:"11px 12px",background:COLORS.pinkDark,color:"#fff"}}><p style={{margin:"0 0 4px",fontSize:9,textTransform:"uppercase",opacity:.78}}>Neto estimado</p><strong style={{fontSize:20}}>{fmtMoney(neto)}</strong></div>
+      </div>
+      <h4 style={{margin:"0 0 7px",fontSize:13}}>Composición del cálculo</h4>
+      <div style={{border:"1px solid #f0e7ea",borderRadius:11,overflow:"hidden",marginBottom:16}}>{conceptos.map((c,i)=><div key={c.label} style={{display:"grid",gridTemplateColumns:"1fr auto",gap:12,padding:"9px 11px",borderTop:i?"1px solid #f0e7ea":"none",alignItems:"center"}}><div><strong style={{fontSize:11}}>{c.label}</strong><p style={{margin:"2px 0 0",fontSize:9,color:"var(--color-text-secondary)"}}>{c.detalle}</p></div><strong style={{fontSize:12}}>{fmtMoney(c.importe)}</strong></div>)}</div>
+      <h4 style={{margin:"0 0 7px",fontSize:13}}>Resumen de asistencia</h4>
+      <div style={{display:"grid",gridTemplateColumns:"repeat(5,minmax(90px,1fr))",gap:7,overflowX:"auto",marginBottom:16}}>{[["Días trabajados",row.dias_trabajados],["Días agendados",row.dias_agendados],["Ausencias",row.ausencias],["Horas extra",Number(row.horas_extra||0).toFixed(1)],["Feriados",row.feriados_trabajados]].map(([label,value])=><div key={label} style={{background:"#faf6f7",borderRadius:9,padding:"9px 7px",textAlign:"center",minWidth:90}}><strong style={{display:"block",fontSize:15,color:COLORS.pinkDark}}>{value}</strong><span style={{fontSize:8,color:"#8c7a80",textTransform:"uppercase"}}>{label}</span></div>)}</div>
+      <h4 style={{margin:"0 0 7px",fontSize:13}}>Novedades del período</h4>
+      <div style={{border:"1px solid #f0e7ea",borderRadius:11,overflow:"hidden"}}>{!novedades.length?<p style={{margin:0,padding:11,fontSize:10,color:"var(--color-text-secondary)"}}>Sin novedades relevantes registradas en el período.</p>:novedades.map((d,i)=>{const detail=[d.ausencia?"Ausencia":"",d.cambio_turno?"Cambio de turno":"",d.feriado?"Feriado":"",Number(d.horas_extra||0)>0?Number(d.horas_extra||0).toFixed(1)+" h extra":"",d.trabajado&&!d.agendado?"Cobertura / reemplazo":""].filter(Boolean).join(" · ");return <div key={d.fecha} style={{display:"grid",gridTemplateColumns:"95px 1fr",gap:8,padding:"8px 10px",borderTop:i?"1px solid #f0e7ea":"none",fontSize:10}}><strong>{String(d.fecha||"").split("-").reverse().join("/")}</strong><span>{detail}</span></div>})}</div>
+      <div style={{marginTop:16,background:"#faf6f7",borderLeft:"3px solid #c9899f",borderRadius:"0 8px 8px 0",padding:"9px 11px",fontSize:10,lineHeight:1.5,color:"#66585d"}}><strong>Importante:</strong> este documento usa la lógica actual de preliquidación: sueldo base + horas extra + feriados trabajados + aguinaldo cuando corresponde. Las ausencias se informan para control, pero hoy no generan un descuento automático.</div>
+    </div>
+  </Modal>;
+}
+
 function PreliquidacionEncargadas({ data, user }) {
   const hoy=new Date();
   const [periodo,setPeriodo]=useState(`${hoy.getFullYear()}-${String(hoy.getMonth()+1).padStart(2,"0")}`);
@@ -8948,6 +9040,7 @@ function PreliquidacionEncargadas({ data, user }) {
   const [rows,setRows]=useState([]),[loading,setLoading]=useState(false),[err,setErr]=useState("");
   const [expanded,setExpanded]=useState(new Set());
   const [salaryTarget,setSalaryTarget]=useState(null);
+  const [receiptTarget,setReceiptTarget]=useState(null);
   const canEditSalary=["admin","casa_matriz","franquiciado"].includes(user.rol);
   useEffect(()=>{ if(localId && !allowedLocalIds.includes(Number(localId))) setLocalId(""); },[localId,allowedLocalIds]);
   const load=useCallback(async()=>{
@@ -8967,8 +9060,9 @@ function PreliquidacionEncargadas({ data, user }) {
     <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(150px,1fr))",gap:10,marginBottom:12}}>
       {[['Base',totals.base],['Horas extra',totals.extras],['Feriados',totals.feriados],['Aguinaldo',totals.aguinaldo],['Total estimado',totals.total]].map(([l,v],i)=><Card key={l} style={{padding:"12px 14px"}}><p style={{margin:0,fontSize:10,textTransform:"uppercase",letterSpacing:'.04em',color:"var(--color-text-secondary)"}}>{l}</p><p style={{margin:"4px 0 0",fontSize:i===4?21:18,fontWeight:700,color:i===4?COLORS.pinkDark:"var(--color-text-primary)"}}>{fmtMoney(v)}</p></Card>)}
     </div>
-    {!loading&&!rows.length?<Card><p style={{margin:0,fontSize:13,color:"var(--color-text-secondary)"}}>No hay encargadas o datos disponibles para este período.</p></Card>:<div style={{display:"flex",flexDirection:"column",gap:10}}>{rows.map(r=>{const open=expanded.has(r.user_id);return <Card key={r.user_id} style={{padding:0,overflow:"hidden"}}><div style={{padding:"12px 14px",display:"grid",gridTemplateColumns:"minmax(170px,1.4fr) repeat(5,minmax(80px,.7fr)) auto",gap:10,alignItems:"center"}}><div style={{display:"flex",alignItems:"center",gap:9,minWidth:0}}><Avatar nombre={r.nombre} userId={r.user_id} size={34}/><div style={{minWidth:0}}><strong style={{fontSize:13,display:"block",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{r.nombre}</strong><span style={{fontSize:10,color:r.sueldo_base>0?"var(--color-text-secondary)":COLORS.danger}}>{r.sueldo_base>0?`${fmtMoney(r.sueldo_base)} · ${r.horas_diarias_habituales} h/día`:"Falta configuración salarial"}</span></div></div><div><small style={{display:"block",color:"var(--color-text-secondary)"}}>Días</small><strong>{r.dias_trabajados}/{r.dias_agendados}</strong></div><div><small style={{display:"block",color:"var(--color-text-secondary)"}}>Ausencias</small><strong>{r.ausencias}</strong></div><div><small style={{display:"block",color:"var(--color-text-secondary)"}}>Extras</small><strong>{Number(r.horas_extra||0).toFixed(1)} h</strong></div><div><small style={{display:"block",color:"var(--color-text-secondary)"}}>Feriados</small><strong>{r.feriados_trabajados}</strong></div><div><small style={{display:"block",color:"var(--color-text-secondary)"}}>Total</small><strong style={{color:COLORS.pinkDark}}>{fmtMoney(r.total_estimado)}</strong></div><div style={{display:"flex",gap:6}}>{(canEditSalary||user.rol==="encargada")&&<Btn size="sm" variant="ghost" onClick={()=>setSalaryTarget({id:r.user_id,nombre:r.nombre})}>Sueldo</Btn>}<Btn size="sm" variant="secondary" onClick={()=>toggle(r.user_id)}>{open?"Cerrar":"Detalle"}</Btn></div></div>{open&&<div style={{borderTop:"1px solid rgba(120,120,120,.14)",padding:"10px 14px",background:"var(--color-background-secondary)"}}><div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(150px,1fr))",gap:8,marginBottom:10}}><div><small>Valor hora extra</small><strong style={{display:"block"}}>{fmtMoney(r.valor_hora_extra)}</strong></div><div><small>Monto horas extra</small><strong style={{display:"block"}}>{fmtMoney(r.monto_horas_extra)}</strong></div><div><small>Monto feriados</small><strong style={{display:"block"}}>{fmtMoney(r.monto_feriados)}</strong></div><div><small>Aguinaldo estimado</small><strong style={{display:"block"}}>{fmtMoney(r.aguinaldo)}</strong>{Number(r.aguinaldo||0)>0&&<span style={{fontSize:10,color:"var(--color-text-secondary)"}}>{r.meses_trabajados_semestre}/6 meses · mejor base {fmtMoney(r.mejor_sueldo_base_semestre)}</span>}</div></div><div style={{overflowX:"auto"}}><div style={{minWidth:700}}><div style={{display:"grid",gridTemplateColumns:"90px 90px 90px 90px 90px 1fr",gap:8,fontSize:10,fontWeight:700,color:"var(--color-text-secondary)",padding:"0 6px 5px"}}><span>Fecha</span><span>Agendado</span><span>Trabajó</span><span>Ausencia</span><span>Extra</span><span>Novedad</span></div>{(r.detalle||[]).map(d=><div key={d.fecha} style={{display:"grid",gridTemplateColumns:"90px 90px 90px 90px 90px 1fr",gap:8,padding:"6px",borderTop:"1px solid rgba(120,120,120,.10)",fontSize:11}}><span>{String(d.fecha).split("-").reverse().join("/")}{d.feriado?" · F":""}</span><span>{d.agendado?"Sí":"—"}</span><span>{d.trabajado?"Sí":"—"}</span><span>{d.ausencia?"Sí":"—"}</span><span>{Number(d.horas_extra||0).toFixed(1)} h</span><span>{d.cambio_turno?"Cambio de turno":d.ausencia?"Ausencia":d.trabajado&&!d.agendado?"Cobertura / reemplazo":""}</span></div>)}</div></div></div>}</Card>})}</div>}
+    {!loading&&!rows.length?<Card><p style={{margin:0,fontSize:13,color:"var(--color-text-secondary)"}}>No hay encargadas o datos disponibles para este período.</p></Card>:<div style={{display:"flex",flexDirection:"column",gap:10}}>{rows.map(r=>{const open=expanded.has(r.user_id);return <Card key={r.user_id} style={{padding:0,overflow:"hidden"}}><div style={{padding:"12px 14px",display:"grid",gridTemplateColumns:"minmax(170px,1.4fr) repeat(5,minmax(80px,.7fr)) auto",gap:10,alignItems:"center"}}><div style={{display:"flex",alignItems:"center",gap:9,minWidth:0}}><Avatar nombre={r.nombre} userId={r.user_id} size={34}/><div style={{minWidth:0}}><strong style={{fontSize:13,display:"block",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{r.nombre}</strong><span style={{fontSize:10,color:r.sueldo_base>0?"var(--color-text-secondary)":COLORS.danger}}>{r.sueldo_base>0?`${fmtMoney(r.sueldo_base)} · ${r.horas_diarias_habituales} h/día`:"Falta configuración salarial"}</span></div></div><div><small style={{display:"block",color:"var(--color-text-secondary)"}}>Días</small><strong>{r.dias_trabajados}/{r.dias_agendados}</strong></div><div><small style={{display:"block",color:"var(--color-text-secondary)"}}>Ausencias</small><strong>{r.ausencias}</strong></div><div><small style={{display:"block",color:"var(--color-text-secondary)"}}>Extras</small><strong>{Number(r.horas_extra||0).toFixed(1)} h</strong></div><div><small style={{display:"block",color:"var(--color-text-secondary)"}}>Feriados</small><strong>{r.feriados_trabajados}</strong></div><div><small style={{display:"block",color:"var(--color-text-secondary)"}}>Total</small><strong style={{color:COLORS.pinkDark}}>{fmtMoney(r.total_estimado)}</strong></div><div style={{display:"flex",gap:6,flexWrap:"wrap"}}>{(canEditSalary||user.rol==="encargada")&&<Btn size="sm" variant="ghost" onClick={()=>setSalaryTarget({id:r.user_id,nombre:r.nombre})}>Sueldo</Btn>}<Btn size="sm" variant="ghost" onClick={()=>setReceiptTarget(r)}>Recibo</Btn><Btn size="sm" variant="secondary" onClick={()=>toggle(r.user_id)}>{open?"Cerrar":"Detalle"}</Btn></div></div>{open&&<div style={{borderTop:"1px solid rgba(120,120,120,.14)",padding:"10px 14px",background:"var(--color-background-secondary)"}}><div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(150px,1fr))",gap:8,marginBottom:10}}><div><small>Valor hora extra</small><strong style={{display:"block"}}>{fmtMoney(r.valor_hora_extra)}</strong></div><div><small>Monto horas extra</small><strong style={{display:"block"}}>{fmtMoney(r.monto_horas_extra)}</strong></div><div><small>Monto feriados</small><strong style={{display:"block"}}>{fmtMoney(r.monto_feriados)}</strong></div><div><small>Aguinaldo estimado</small><strong style={{display:"block"}}>{fmtMoney(r.aguinaldo)}</strong>{Number(r.aguinaldo||0)>0&&<span style={{fontSize:10,color:"var(--color-text-secondary)"}}>{r.meses_trabajados_semestre}/6 meses · mejor base {fmtMoney(r.mejor_sueldo_base_semestre)}</span>}</div></div><div style={{overflowX:"auto"}}><div style={{minWidth:700}}><div style={{display:"grid",gridTemplateColumns:"90px 90px 90px 90px 90px 1fr",gap:8,fontSize:10,fontWeight:700,color:"var(--color-text-secondary)",padding:"0 6px 5px"}}><span>Fecha</span><span>Agendado</span><span>Trabajó</span><span>Ausencia</span><span>Extra</span><span>Novedad</span></div>{(r.detalle||[]).map(d=><div key={d.fecha} style={{display:"grid",gridTemplateColumns:"90px 90px 90px 90px 90px 1fr",gap:8,padding:"6px",borderTop:"1px solid rgba(120,120,120,.10)",fontSize:11}}><span>{String(d.fecha).split("-").reverse().join("/")}{d.feriado?" · F":""}</span><span>{d.agendado?"Sí":"—"}</span><span>{d.trabajado?"Sí":"—"}</span><span>{d.ausencia?"Sí":"—"}</span><span>{Number(d.horas_extra||0).toFixed(1)} h</span><span>{d.cambio_turno?"Cambio de turno":d.ausencia?"Ausencia":d.trabajado&&!d.agendado?"Cobertura / reemplazo":""}</span></div>)}</div></div></div>}</Card>})}</div>}
     {salaryTarget&&<SueldoEncargadaModal target={salaryTarget} user={user} onClose={()=>{setSalaryTarget(null);load();}}/>}
+    {receiptTarget&&<LiquidacionEncargadaModal row={receiptTarget} periodo={periodo} data={data} localId={localId} onClose={()=>setReceiptTarget(null)}/>}
   </div>;
 }
 
