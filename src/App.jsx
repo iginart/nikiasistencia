@@ -608,6 +608,21 @@ const encargadasSueldosEdge = async (action, payload = {}) => {
   return data;
 };
 
+
+const encargadasVacacionesEdge = async (action, payload = {}) => {
+  const actor = window.__nikiCurrentUser || null;
+  if (!actor?.id || !actor?.sessionToken) throw new Error("Sesion invalida para Vacaciones.");
+  const res = await nikiProtectedFetch(`${SUPABASE_URL}/functions/v1/encargadas-vacaciones-niki`, {
+    method:"POST",
+    headers:{ apikey:SUPABASE_KEY, Authorization:`Bearer ${SUPABASE_KEY}`, "Content-Type":"application/json" },
+    body:JSON.stringify({ action, actor_id:actor.id, session_token:actor.sessionToken, ...payload }),
+  });
+  const txt = await res.text();
+  const data = txt ? JSON.parse(txt) : {};
+  if (!res.ok || data?.ok === false) throw new Error(data?.error || txt || "Error al gestionar vacaciones.");
+  return data;
+};
+
 const api = {
   getUsers: () => sb("users?select=id,nombre,usuario,email,rol,local_id,activo,codigo_externo,telefono,telefono_codigo_area,telefono_numero,dato_bancario,forma_pago_comision,solo_fin_de_semana,tipo_relacion,foto_perfil_path&order=id"),
   login: async (usuario, password) => {
@@ -803,11 +818,21 @@ const api = {
   upsertEncargadaPlanificacion: (rows) => sb("encargada_planificacion?on_conflict=local_id,user_id,fecha", { method:"POST", prefer:"resolution=merge-duplicates,return=representation", body:JSON.stringify(rows) }),
   deleteEncargadaPlanificacionDia: (localId,fecha) => sb(`encargada_planificacion?local_id=eq.${parseInt(localId)}&fecha=eq.${fecha}`, { method:"DELETE", prefer:"" }),
   deleteEncargadaPlanificacionRango: (localId,desde,hasta) => sb(`encargada_planificacion?local_id=eq.${parseInt(localId)}&fecha=gte.${desde}&fecha=lte.${hasta}`, { method:"DELETE", prefer:"" }),
+  getEncargadaPlanConfirmaciones: (localId,desde,hasta) => sb(`encargada_planificacion_confirmaciones?select=*&local_id=eq.${parseInt(localId)}&fecha=gte.${desde}&fecha=lte.${hasta}&order=fecha`),
+  getEncargadaPlanConfirmacionDia: (localId,fecha) => sb(`encargada_planificacion_confirmaciones?select=*&local_id=eq.${parseInt(localId)}&fecha=eq.${fecha}&limit=1`),
+  upsertEncargadaPlanConfirmaciones: (rows) => sb("encargada_planificacion_confirmaciones?on_conflict=local_id,fecha", { method:"POST", prefer:"resolution=merge-duplicates,return=representation", body:JSON.stringify(rows) }),
+  deleteEncargadaPlanConfirmacionDia: (localId,fecha) => sb(`encargada_planificacion_confirmaciones?local_id=eq.${parseInt(localId)}&fecha=eq.${fecha}`, { method:"DELETE", prefer:"" }),
+  deleteEncargadaPlanConfirmacionesRango: (localId,desde,hasta) => sb(`encargada_planificacion_confirmaciones?local_id=eq.${parseInt(localId)}&fecha=gte.${desde}&fecha=lte.${hasta}`, { method:"DELETE", prefer:"" }),
   getEncargadaSemanaTipoLocal: (localId) => sb(`encargada_semana_tipo?select=*&local_id=eq.${parseInt(localId)}&order=dia_semana,user_id,tipo_semana`),
   getEncargadaJornadaReal: (localId,fecha) => sb(`encargada_jornada_real?select=*&local_id=eq.${parseInt(localId)}&fecha=eq.${fecha}&order=user_id`),
   upsertEncargadaJornadaReal: (rows) => sb("encargada_jornada_real?on_conflict=local_id,user_id,fecha", { method:"POST", prefer:"resolution=merge-duplicates,return=representation", body:JSON.stringify(rows) }),
   deleteEncargadaJornadaRealDia: (localId,fecha) => sb(`encargada_jornada_real?local_id=eq.${parseInt(localId)}&fecha=eq.${fecha}`, { method:"DELETE", prefer:"" }),
+  deleteEncargadaJornadaRealDiaManual: (localId,fecha) => sb(`encargada_jornada_real?local_id=eq.${parseInt(localId)}&fecha=eq.${fecha}&origen=eq.manual`, { method:"DELETE", prefer:"" }),
   deleteEncargadaJornadaReal: (localId,fecha,userId) => sb(`encargada_jornada_real?local_id=eq.${parseInt(localId)}&fecha=eq.${fecha}&user_id=eq.${parseInt(userId)}`, { method:"DELETE", prefer:"" }),
+  getEncargadaCoberturas: (localId,fecha) => sb(`encargada_coberturas_segmentos?select=*&local_id=eq.${parseInt(localId)}&fecha=eq.${fecha}&estado=neq.cancelada&order=hora_desde,id`),
+  createEncargadaCobertura: (d) => sb("encargada_coberturas_segmentos", { method:"POST", prefer:"return=representation", body:JSON.stringify(d) }),
+  updateEncargadaCobertura: (id,d) => sb(`encargada_coberturas_segmentos?id=eq.${parseInt(id)}`, { method:"PATCH", body:JSON.stringify(d) }),
+  deleteEncargadaCoberturasManual: (localId,fecha,reemplazadoId) => sb(`encargada_coberturas_segmentos?local_id=eq.${parseInt(localId)}&fecha=eq.${fecha}&reemplazado_user_id=eq.${parseInt(reemplazadoId)}&origen=eq.manual`, { method:"DELETE", prefer:"" }),
   getComisiones: () => sbAll("comisiones_detalle?select=*&order=fecha_pago.desc,id.desc"),
   getComisionesPeriodo: (periodo) => sbAll(`comisiones_detalle?select=*&periodo=eq.${encodeURIComponent(periodo)}&order=fecha_pago.desc,id.desc`),
   getComisionesRango: (desde,hasta) => sbAll(`comisiones_detalle?select=*&fecha_pago=gte.${encodeURIComponent(desde)}&fecha_pago=lte.${encodeURIComponent(hasta)}&order=fecha_pago.desc,id.desc`),
@@ -872,6 +897,8 @@ const api = {
   createInformeReclamo: (d) => sb("informe_diario_reclamos", { method:"POST", body:JSON.stringify(d) }),
   updateInformeReclamo: (id,d) => sb(`informe_diario_reclamos?id=eq.${parseInt(id)}`, { method:"PATCH", body:JSON.stringify(d) }),
   deleteInformeReclamo: (id) => sb(`informe_diario_reclamos?id=eq.${parseInt(id)}`, { method:"DELETE", prefer:"" }),
+  getReclamoSeguimientos: (reclamoId) => sbAll(`reclamo_seguimientos?select=*&reclamo_id=eq.${parseInt(reclamoId)}&order=fecha.desc,creado_en.desc,id.desc`),
+  addReclamoSeguimiento: (d) => sb("rpc/agregar_reclamo_seguimiento", { method:"POST", body:JSON.stringify(d) }),
   getReclamosRango: (desde,hasta) => sbAll(`informe_diario_reclamos?select=*&fecha=gte.${encodeURIComponent(desde)}&fecha=lte.${encodeURIComponent(hasta)}&order=fecha.desc,id.desc`),
   getReclamosPendientes: () => sbAll("informe_diario_reclamos?select=*&estado=eq.pendiente&order=fecha.asc,id.asc"),
   getReclamosDiaLocal: (localId,fecha) => sbAll(`informe_diario_reclamos?select=*&local_id=eq.${parseInt(localId)}&fecha=eq.${encodeURIComponent(fecha)}&order=creado_en.asc,id.asc`),
@@ -1018,7 +1045,7 @@ const api = {
     const txt = await res.text();
     const data = txt ? JSON.parse(txt) : null;
     if (!res.ok || data?.ok === false) throw new Error(data?.error || txt || "No se pudo enviar el email");
-    return data;
+return data;
   },
   setEncargadoLocales: async (userId, localIds) => { await sb(`encargado_locales?user_id=eq.${userId}`, { method:"DELETE", prefer:"" }); if (!localIds?.length) return []; return sb("encargado_locales", { method:"POST", body:JSON.stringify(localIds.map(local_id=>({ user_id:userId, local_id:parseInt(local_id) }))) }); },
 
@@ -1284,6 +1311,8 @@ function NikiSplash({ text = "", fullScreen = true, compact = false }) {
 const DIAS_SEMANA = ["Lun","Mar","Mié","Jue","Vie","Sáb"];
 const MESES = ["Enero","Febrero","Marzo","Abril","Mayo","Junio","Julio","Agosto","Septiembre","Octubre","Noviembre","Diciembre"];
 const MOTIVOS_AUSENCIA = ["Enfermedad","Personal","Trámite","Licencia","Otro"];
+const MOTIVOS_AUSENCIA_ENCARGADA = ["Enfermedad","Reunión de personal","Motivo personal","Cambio de turno / horario","Cobertura en otro local","Licencia","Otro"];
+const MOTIVOS_MODIFICACION_ENCARGADA = ["Cambio de turno / horario","Reunión de personal","Cobertura en otro local","Motivo personal","Otro"];
 
 function periodoLabel(periodo) {
   const [y, m] = String(periodo || "").split("-").map(Number);
@@ -2018,7 +2047,7 @@ function BloqueCalendario({ fecha, bloque, onChange, onCommit, onDelete, bloquea
       let nb;
 
       if (mode === "move") {
-        const dur = oe - os;
+const dur = oe - os;
         const ns = Math.max(viewStartSlot, Math.min(viewEndSlot - dur, os + d));
         nb = { startSlot: ns, endSlot: ns + dur };
       } else if (mode === "top") {
@@ -3018,7 +3047,7 @@ function CalendarioHorarios({ data, setData, reloadData, user, agendaRequest, on
         {!lockedDia && <div style={{ display:"flex",flexDirection:"column",gap:12 }}>
           {[["Entrada",start,setStart],["Salida",end,setEnd]].map(([lbl,val,setVal])=><div key={lbl}><label style={{ fontSize:12,color:"#888",display:"block",marginBottom:4 }}>{lbl}</label><select value={val} onChange={e=>setVal(e.target.value)} style={{ width:"100%",border:"1.5px solid #e0e0e0",borderRadius:8,padding:"8px 10px",fontSize:14,background:"#fafafa" }}>{opciones.map(t=><option key={t} value={t}>{t}</option>)}</select></div>)}
           <div style={{ display:"flex",gap:8,marginTop:4 }}>
-            <button onClick={guardar} style={{ flex:1,background:COLORS.pink,color:"#fff",border:"none",borderRadius:8,padding:"8px",fontSize:14,fontWeight:500,cursor:"pointer" }}>Guardar</button>
+<button onClick={guardar} style={{ flex:1,background:COLORS.pink,color:"#fff",border:"none",borderRadius:8,padding:"8px",fontSize:14,fontWeight:500,cursor:"pointer" }}>Guardar</button>
             {b && <button onClick={async()=>{ await onDeleteB(f); setModalDk(null); }} style={{ background:COLORS.dangerLight,color:COLORS.danger,border:"none",borderRadius:8,padding:"8px 12px",fontSize:14,cursor:"pointer",fontWeight:500 }}>Eliminar</button>}
             <button onClick={()=>setModalDk(null)} style={{ background:"#f5f5f5",border:"none",borderRadius:8,padding:"8px 12px",fontSize:14,cursor:"pointer" }}>Cancelar</button>
           </div>
@@ -4018,7 +4047,7 @@ const HELP_TOPICS = [
           "Casa Matriz puede consultar el roadmap, pero no editarlo.",
           "Encargadas y manicuras no ven esta sección.",
         ],
-      },
+},
       {
         heading: "Qué información tiene cada tarea",
         bullets: [
@@ -5018,7 +5047,7 @@ function Login({ onLogin, reloadData }) {
     try {
       const usersActuales = (await api.getUsers()).map(normalizeUser);
       if (emailEnUso(usersActuales, emailLimpio, securityUser.id)) {
-        setMsg("Ese email ya está asignado a otro usuario. Usá otro correo o pedí a administración que corrija el usuario existente.");
+setMsg("Ese email ya está asignado a otro usuario. Usá otro correo o pedí a administración que corrija el usuario existente.");
         setLoading(false);
         return;
       }
@@ -6018,7 +6047,7 @@ function ABMLocales({ data, setData, reloadData, user }) {
   const openEdit = l => {
     if (!esAdmin && !allowedLocalIds.has(l.id)) {
       notifyToast("No tenés permiso para editar este local.", "warning");
-      return;
+return;
     }
     setForm({
       ...defaultLocalForm(),
@@ -6404,22 +6433,17 @@ function AsistenciaDiaria({ data, setData, reloadData, user }) {
 
   const encUserName = useCallback((id)=>data.users.find(u=>Number(u.id)===Number(id))?.nombre||"Encargada",[data.users]);
   const loadEncLocal = useCallback(async (localId) => {
-    const lid=Number(localId); if(!lid||!fecha)return {rows:[],source:"sin_plan",weekType:"a"};
-    const [confirmed, realRows, cfgRows, templateRows]=await Promise.all([
-      api.getEncargadaPlanificacion(lid,fecha,fecha),api.getEncargadaJornadaReal(lid,fecha),api.getEncargadaPlanificacionConfig(lid),api.getEncargadaSemanaTipoLocal(lid)
+    const lid=Number(localId); if(!lid||!fecha)return {rows:[],source:"sin_confirmar",weekType:"",coverages:[]};
+    const [confirmed, realRows, confirmRows, coverageRows]=await Promise.all([
+      api.getEncargadaPlanificacion(lid,fecha,fecha),api.getEncargadaJornadaReal(lid,fecha),api.getEncargadaPlanConfirmacionDia(lid,fecha),api.getEncargadaCoberturas(lid,fecha)
     ]);
-    const cfg=Array.isArray(cfgRows)?cfgRows[0]:cfgRows;
-    const d=parseDateLocal(fecha), jsDay=d?.getDay()??0, diaSemana=jsDay===0?7:jsDay;
-    let weekType="a";
-    if(d){const monday=getMon(d);const ref=cfg?.fecha_referencia_a?getMon(parseDateLocal(cfg.fecha_referencia_a)):monday;const weeks=Math.round((monday-ref)/(7*86400000));weekType=Math.abs(weeks)%2===0?"a":"b";}
-    let source="sin_plan",plan=[];
-    if((confirmed||[]).length){source="confirmado";plan=(confirmed||[]).map(r=>({userId:Number(r.user_id),horaPlanDesde:String(r.hora_desde||"").slice(0,5),horaPlanHasta:String(r.hora_hasta||"").slice(0,5)}));}
-    else {const dayRows=(templateRows||[]).filter(r=>Number(r.dia_semana)===Number(diaSemana));const users=[...new Set(dayRows.map(r=>Number(r.user_id)))];plan=users.map(uid=>{const r=dayRows.find(x=>Number(x.user_id)===uid&&x.tipo_semana===weekType)||dayRows.find(x=>Number(x.user_id)===uid&&x.tipo_semana==="todas");return r?{userId:uid,horaPlanDesde:String(r.hora_desde||"").slice(0,5),horaPlanHasta:String(r.hora_hasta||"").slice(0,5)}:null;}).filter(Boolean);source=plan.length?"semana_tipo":"sin_plan";}
+    const isConfirmed=(confirmRows||[]).length>0;
+    const source=isConfirmed?"confirmado":"sin_confirmar";
+    const plan=isConfirmed?(confirmed||[]).map(r=>({userId:Number(r.user_id),horaPlanDesde:String(r.hora_desde||"").slice(0,5),horaPlanHasta:String(r.hora_hasta||"").slice(0,5)})):[];
     const realByUser=new Map((realRows||[]).map(r=>[Number(r.user_id),r]));
-    const assigned=(data.encargadoLocales||[]).filter(x=>Number(x.localId)===lid).map(x=>Number(x.userId));
-    const allIds=new Set([...plan.map(p=>p.userId),...(realRows||[]).map(r=>Number(r.user_id)),...assigned.filter(uid=>plan.some(p=>p.userId===uid)||realByUser.has(uid))]);
-    const rows=[...allIds].map(uid=>{const p=plan.find(x=>x.userId===uid)||{},r=realByUser.get(uid);return {id:r?.id||null,userId:uid,horaPlanDesde:String(r?.hora_plan_desde||p.horaPlanDesde||"").slice(0,5),horaPlanHasta:String(r?.hora_plan_hasta||p.horaPlanHasta||"").slice(0,5),horaRealDesde:String(r?.hora_real_desde||p.horaPlanDesde||"").slice(0,5),horaRealHasta:String(r?.hora_real_hasta||p.horaPlanHasta||"").slice(0,5),estado:r?.estado||"pendiente",reemplazaUserId:r?.reemplaza_user_id||null,comentario:r?.comentario||"",motivoAusencia:r?.motivo_ausencia||"",certificado:r?.certificado===true,tipoDoc:r?.tipo_doc||"",certificadoPath:r?.certificado_path||"",certificadoNombre:r?.certificado_nombre||"",certificadoMime:r?.certificado_mime||"",certificadoTamano:Number(r?.certificado_tamano||0),saved:!!r,dirty:false};}).sort((a,b)=>(a.horaPlanDesde||"99:99").localeCompare(b.horaPlanDesde||"99:99")||encUserName(a.userId).localeCompare(encUserName(b.userId)));
-    return {rows,source,weekType};
+    const allIds=new Set([...plan.map(p=>p.userId),...(realRows||[]).map(r=>Number(r.user_id))]);
+    const rows=[...allIds].map(uid=>{const p=plan.find(x=>x.userId===uid)||{},r=realByUser.get(uid);return {id:r?.id||null,userId:uid,horaPlanDesde:String(r?.hora_plan_desde||p.horaPlanDesde||"").slice(0,5),horaPlanHasta:String(r?.hora_plan_hasta||p.horaPlanHasta||"").slice(0,5),horaRealDesde:String(r?.hora_real_desde||p.horaPlanDesde||"").slice(0,5),horaRealHasta:String(r?.hora_real_hasta||p.horaPlanHasta||"").slice(0,5),estado:r?.estado||"pendiente",reemplazaUserId:r?.reemplaza_user_id||null,comentario:r?.comentario||"",motivoAusencia:r?.motivo_ausencia||"",certificado:r?.certificado===true,tipoDoc:r?.tipo_doc||"",certificadoPath:r?.certificado_path||"",certificadoNombre:r?.certificado_nombre||"",certificadoMime:r?.certificado_mime||"",certificadoTamano:Number(r?.certificado_tamano||0),origen:r?.origen||"manual",solicitudVacacionesId:r?.solicitud_vacaciones_id||null,saved:!!r,dirty:false};}).sort((a,b)=>(a.horaPlanDesde||"99:99").localeCompare(b.horaPlanDesde||"99:99")||encUserName(a.userId).localeCompare(encUserName(b.userId)));
+    return {rows,source,weekType:"",coverages:coverageRows||[]};
   },[fecha,data.encargadoLocales,encUserName]);
 
   const loadEncargadas = useCallback(async()=>{setEncLoading(true);try{const entries=await Promise.all(localIdsToShow.map(async lid=>[lid,await loadEncLocal(lid)]));setEncByLocal(Object.fromEntries(entries));}catch(e){notifyToast("No se pudieron cargar los horarios de encargadas: "+(e.message||e),"error");}finally{setEncLoading(false);}},[localIdsToShow.join("|"),loadEncLocal]);
@@ -6434,8 +6458,8 @@ function AsistenciaDiaria({ data, setData, reloadData, user }) {
     if(currentUserId) current.delete(Number(currentUserId));
     return (data.users||[]).filter(u=>u.activo!==false&&isEncargadaOperativa(data,u.id)&&!current.has(Number(u.id))).sort((a,b)=>(a.nombre||"").localeCompare(b.nombre||""));
   },[encByLocal,data.users,data.encargadoLocales]);
-  const persistEncRow=async(localId,row,patch={})=>{const next={...row,...patch};if(!next.userId){notifyToast("Seleccioná la encargada que realizó la cobertura.","warning");return null;}if(next.estado==="reemplazo"&&!next.reemplazaUserId){notifyToast("Indicá a qué encargada reemplaza.","warning");return null;}const payload={fecha,local_id:Number(localId),user_id:Number(next.userId),hora_plan_desde:next.horaPlanDesde||null,hora_plan_hasta:next.horaPlanHasta||null,hora_real_desde:["ausencia","vacaciones"].includes(next.estado)?null:(next.horaRealDesde||null),hora_real_hasta:["ausencia","vacaciones"].includes(next.estado)?null:(next.horaRealHasta||null),estado:next.estado==="pendiente"?"normal":next.estado,reemplaza_user_id:next.reemplazaUserId?Number(next.reemplazaUserId):null,comentario:String(next.comentario||"").trim()||null,motivo_ausencia:next.motivoAusencia||null,certificado:!!next.certificado,tipo_doc:next.tipoDoc||null,certificado_path:next.certificadoPath||null,certificado_nombre:next.certificadoNombre||null,certificado_mime:next.certificadoMime||null,certificado_tamano:next.certificadoTamano||null,actualizado_por_user_id:user.id,actualizado_en:new Date().toISOString()};await api.upsertEncargadaJornadaReal([payload]);setEncByLocal(prev=>({...prev,[localId]:{...(prev[localId]||{}),rows:(prev[localId]?.rows||[]).map(r=>r===row||Number(r.userId)===Number(next.userId)?{...next,saved:true,dirty:false}:r)}}));return next;};
-  const markAllEnc=async(localId)=>{const info=encByLocal[localId];if(!info?.rows?.length)return;for(const row of info.rows.filter(r=>r.userId&&r.horaPlanDesde&&r.horaPlanHasta)){await persistEncRow(localId,row,{estado:"normal",horaRealDesde:row.horaPlanDesde||row.horaRealDesde,horaRealHasta:row.horaPlanHasta||row.horaRealHasta,reemplazaUserId:null});}notifyToast("Asistencia de encargadas confirmada según planificación.","success");};
+  const persistEncRow=async(localId,row,patch={})=>{const next={...row,...patch};if(!next.userId){notifyToast("Seleccioná la encargada que realizó la cobertura.","warning");return null;}if(next.estado==="reemplazo"&&!next.reemplazaUserId){notifyToast("Indicá a qué encargada reemplaza.","warning");return null;}const payload={fecha,local_id:Number(localId),user_id:Number(next.userId),hora_plan_desde:next.horaPlanDesde||null,hora_plan_hasta:next.horaPlanHasta||null,hora_real_desde:["ausencia","vacaciones"].includes(next.estado)?null:(next.horaRealDesde||null),hora_real_hasta:["ausencia","vacaciones"].includes(next.estado)?null:(next.horaRealHasta||null),estado:next.estado==="pendiente"?"normal":next.estado,origen:next.origen||"manual",solicitud_vacaciones_id:next.solicitudVacacionesId||null,reemplaza_user_id:next.reemplazaUserId?Number(next.reemplazaUserId):null,comentario:String(next.comentario||"").trim()||null,motivo_ausencia:next.motivoAusencia||null,certificado:!!next.certificado,tipo_doc:next.tipoDoc||null,certificado_path:next.certificadoPath||null,certificado_nombre:next.certificadoNombre||null,certificado_mime:next.certificadoMime||null,certificado_tamano:next.certificadoTamano||null,actualizado_por_user_id:user.id,actualizado_en:new Date().toISOString()};await api.upsertEncargadaJornadaReal([payload]);setEncByLocal(prev=>({...prev,[localId]:{...(prev[localId]||{}),rows:(prev[localId]?.rows||[]).map(r=>r===row||Number(r.userId)===Number(next.userId)?{...next,saved:true,dirty:false}:r)}}));return next;};
+  const markAllEnc=async(localId)=>{const info=encByLocal[localId];if(info?.source!=="confirmado")return notifyToast("Primero confirmá la planificación mensual de encargadas.","warning");if(!info?.rows?.length)return;for(const row of info.rows.filter(r=>r.userId&&r.horaPlanDesde&&r.horaPlanHasta)){await persistEncRow(localId,row,{estado:"normal",horaRealDesde:row.horaPlanDesde||row.horaRealDesde,horaRealHasta:row.horaPlanHasta||row.horaRealHasta,reemplazaUserId:null});}notifyToast("Asistencia de encargadas confirmada según planificación.","success");};
   const addEncReplacement=(localId)=>{const available=encargadasCoberturaDisponibles(localId);if(!available.length)return notifyToast("No hay otra encargada operativa disponible para agregar.","warning");setEncByLocal(prev=>({...prev,[localId]:{...(prev[localId]||{source:"sin_plan",weekType:"a"}),rows:[...(prev[localId]?.rows||[]),{id:null,userId:"",horaPlanDesde:"",horaPlanHasta:"",horaRealDesde:"",horaRealHasta:"",estado:"reemplazo",reemplazaUserId:null,comentario:"",saved:false,dirty:true}]}}));};
   const removeEncReplacement=async(localId,row)=>{try{if(row.saved&&row.userId){if(row.certificadoPath)try{await api.deleteAsistenciaDocumento(user,row.userId,localId,fecha,row.certificadoPath);}catch{}await api.deleteEncargadaJornadaReal(localId,fecha,row.userId);}setEncByLocal(prev=>({...prev,[localId]:{...(prev[localId]||{}),rows:(prev[localId]?.rows||[]).filter(r=>r!==row)}}));notifyToast("Cobertura eliminada.","success");}catch(e){notifyToast("No se pudo quitar la cobertura: "+(e.message||e),"error");}};
   const viewEncDoc=async(localId,row)=>{if(!row.certificadoPath)return;try{const r=await api.signAsistenciaDocumento(user,row.userId,localId,fecha,row.certificadoPath,600);if(r?.url)window.open(r.url,"_blank","noopener,noreferrer");}catch(e){notifyToast(e?.message||"No se pudo abrir el documento.","error");}};
@@ -6452,10 +6476,10 @@ function AsistenciaDiaria({ data, setData, reloadData, user }) {
   return <div>
     <div style={{ display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:16,flexWrap:"wrap",gap:8 }}><div><h2 style={{ margin:0,fontSize:18,fontWeight:500 }}>Asistencia diaria</h2><p style={{ margin:"3px 0 0",fontSize:12,color:"var(--color-text-secondary)" }}>Encargadas y manicuras agrupadas por local. Ambos registros quedan sincronizados con el Informe Diario.</p></div><div style={{ display:"flex",gap:8,alignItems:"center",flexWrap:"wrap" }}><select value={filtroLocal} onChange={e=>setFiltroLocal(e.target.value)} style={{ border:"0.5px solid rgba(120,120,120,0.24)",borderRadius:8,padding:"7px 12px",fontSize:14,background:"var(--color-background-primary)",color:"var(--color-text-primary)",minWidth:180 }}><option value="todos">Todos los locales</option>{localesVisibles.map(l=><option key={l.id} value={l.id}>{l.nombre}</option>)}</select><input type="date" value={fecha} onChange={e=>setFecha(e.target.value)} style={{ border:"0.5px solid rgba(120,120,120,0.24)",borderRadius:8,padding:"7px 12px",fontSize:14,background:"var(--color-background-primary)",color:"var(--color-text-primary)" }}/></div></div>
     {gruposPorLocal.length===0?<Card><p style={{margin:0,color:"var(--color-text-secondary)"}}>No hay horarios cargados para esta fecha.</p></Card>:<div style={{display:"flex",flexDirection:"column",gap:16}}>{gruposPorLocal.map(({local,manicuras})=>{const res=resumenLocal(manicuras),encInfo=encByLocal[local.id]||{rows:[],source:"sin_plan",weekType:"a"};return <Card key={local.id} style={{padding:0,overflow:"hidden"}}><div style={{padding:"12px 14px",borderBottom:"1px solid rgba(120,120,120,.14)",display:"flex",justifyContent:"space-between",alignItems:"center",gap:10,flexWrap:"wrap"}}><div><strong>🏠 {local.nombre}</strong><p style={{margin:"2px 0 0",fontSize:11,color:"var(--color-text-secondary)"}}>{local.direccion||""}</p></div><div style={{display:"flex",gap:6,flexWrap:"wrap"}}><Badge color="info">{manicuras.length} con horario</Badge><Badge color="success">✓ {res.presentes}</Badge><Badge color="amber">⏰ {res.tardes}</Badge><Badge color="danger">✗ {res.ausentes}</Badge><Badge color="gray">Pend. {res.pendientes}</Badge></div></div>
-      <div style={{padding:"12px 14px",background:"rgba(24,95,165,.025)",borderBottom:"1px solid rgba(120,120,120,.12)"}}><div style={{display:"flex",justifyContent:"space-between",alignItems:"center",gap:8,marginBottom:8,flexWrap:"wrap"}}><div><strong style={{fontSize:13,color:COLORS.info}}>Horarios encargadas</strong><span style={{fontSize:10,color:"var(--color-text-secondary)",marginLeft:8}}>{encInfo.source==="confirmado"?"Planificación confirmada":encInfo.source==="semana_tipo"?`Semana ${String(encInfo.weekType).toUpperCase()} como referencia`:"Sin planificación"}</span><div style={{fontSize:9,color:"var(--color-text-secondary)",marginTop:2}}>“Teórica” significa que todavía no existe jornada real. Confirmá cada fila o usá “Todo según planificación”.</div></div><div style={{display:"flex",gap:6}}><Btn size="sm" variant="success" onClick={()=>markAllEnc(local.id)} disabled={encLoading||!encInfo.rows.length}>✓ Todo según planificación</Btn><Btn size="sm" variant="secondary" onClick={()=>addEncReplacement(local.id)}>+ Reemplazo / cobertura</Btn></div></div>{encLoading&&!encInfo.rows.length?<p style={{fontSize:12,color:"var(--color-text-secondary)"}}>Cargando...</p>:encInfo.rows.length===0?<p style={{fontSize:12,color:"var(--color-text-secondary)",margin:0}}>No hay encargadas planificadas para este día.</p>:<div style={{display:"flex",flexDirection:"column",gap:7}}>{encInfo.rows.map((r,idx)=>{const vis=estadoVisual(r.saved?(r.estado||"normal"):"pendiente"),abs=["ausencia","vacaciones"].includes(r.estado),extraRow=!r.horaPlanDesde&&!r.horaPlanHasta;const replOptions=encargadasAsignadasLocal(local.id).filter(u=>Number(u.id)!==Number(r.userId));const coverOptions=encargadasCoberturaDisponibles(local.id,r.userId);const statusText=r.dirty?"Cambios sin confirmar":r.saved?"✓ Confirmada":"○ Teórica";const statusColor=r.dirty?"amber":r.saved?"success":"gray";const updateRow=(patch)=>setEncByLocal(p=>({...p,[local.id]:{...p[local.id],rows:p[local.id].rows.map((x,i)=>i===idx?{...x,...patch,dirty:true}:x)}}));return <div key={`${local.id}-${r.userId||"nuevo"}-${idx}`} style={{padding:"8px 9px",border:`1px solid ${vis.border}`,borderRadius:10,background:vis.bg}}>
+      <div style={{padding:"12px 14px",background:"rgba(24,95,165,.025)",borderBottom:"1px solid rgba(120,120,120,.12)"}}><div style={{display:"flex",justifyContent:"space-between",alignItems:"center",gap:8,marginBottom:8,flexWrap:"wrap"}}><div><strong style={{fontSize:13,color:COLORS.info}}>Horarios encargadas</strong><span style={{fontSize:10,color:"var(--color-text-secondary)",marginLeft:8}}>{encInfo.source==="confirmado"?"Planificación confirmada":"Planificación NO confirmada"}</span><div style={{fontSize:9,color:"var(--color-text-secondary)",marginTop:2}}>“Teórica” significa que todavía no existe jornada real. Confirmá cada fila o usá “Todo según planificación”.</div></div><div style={{display:"flex",gap:6}}><Btn size="sm" variant="success" onClick={()=>markAllEnc(local.id)} disabled={encLoading||encInfo.source!=="confirmado"||!encInfo.rows.length}>✓ Todo según planificación</Btn><Btn size="sm" variant="secondary" disabled={encInfo.source!=="confirmado"} onClick={()=>addEncReplacement(local.id)}>+ Reemplazo / cobertura</Btn></div></div>{encInfo.source!=="confirmado"&&<div style={{marginBottom:9,padding:"9px 10px",borderRadius:9,background:COLORS.dangerLight,color:COLORS.danger,fontSize:11,fontWeight:700}}>⚠ No hay planificación de encargadas confirmada para este día. Confirmá el calendario mensual para poder avanzar.</div>}{(encInfo.coverages||[]).length>0&&<div style={{marginBottom:9,display:"grid",gap:5}}>{encInfo.coverages.map(c=><div key={c.id} style={{padding:"7px 9px",borderRadius:8,background:COLORS.infoLight,fontSize:10,color:COLORS.info}}><strong>Cobertura:</strong> {encUserName(c.reemplazo_user_id)} reemplaza a {encUserName(c.reemplazado_user_id)} · {String(c.hora_desde).slice(0,5)}–{String(c.hora_hasta).slice(0,5)} {c.origen==="vacaciones"?"· Vacaciones":""}</div>)}</div>}{encLoading&&!encInfo.rows.length?<p style={{fontSize:12,color:"var(--color-text-secondary)"}}>Cargando...</p>:encInfo.rows.length===0?<p style={{fontSize:12,color:"var(--color-text-secondary)",margin:0}}>No hay encargadas planificadas para este día.</p>:<div style={{display:"flex",flexDirection:"column",gap:7}}>{encInfo.rows.map((r,idx)=>{const vis=estadoVisual(r.saved?(r.estado||"normal"):"pendiente"),abs=["ausencia","vacaciones"].includes(r.estado),extraRow=!r.horaPlanDesde&&!r.horaPlanHasta;const replOptions=encargadasAsignadasLocal(local.id).filter(u=>Number(u.id)!==Number(r.userId));const coverOptions=encargadasCoberturaDisponibles(local.id,r.userId);const statusText=r.dirty?"Cambios sin confirmar":r.saved?"✓ Confirmada":"○ Teórica";const statusColor=r.dirty?"amber":r.saved?"success":"gray";const updateRow=(patch)=>setEncByLocal(p=>({...p,[local.id]:{...p[local.id],rows:p[local.id].rows.map((x,i)=>i===idx?{...x,...patch,dirty:true}:x)}}));return <div key={`${local.id}-${r.userId||"nuevo"}-${idx}`} style={{padding:"8px 9px",border:`1px solid ${vis.border}`,borderRadius:10,background:vis.bg}}>
           <div style={{display:"grid",gridTemplateColumns:"minmax(150px,1.4fr) 130px 115px 115px minmax(170px,1fr) auto",gap:8,alignItems:"end"}} className="niki-mobile-one-column">
             <div style={{display:"flex",gap:8,alignItems:"center"}}><Avatar nombre={r.userId?encUserName(r.userId):"?"} userId={r.userId||null} size={30}/><div style={{minWidth:0}}>{extraRow?<><label style={{fontSize:9,fontWeight:700}}>Encargada que cubre</label><select value={r.userId||""} onChange={e=>updateRow({userId:e.target.value?Number(e.target.value):""})} style={{width:"100%",padding:"6px 7px",border:"1px solid #ddd",borderRadius:7,fontSize:11}}><option value="">Seleccionar...</option>{coverOptions.map(u=><option key={u.id} value={u.id}>{u.nombre}</option>)}</select></>:<><strong style={{fontSize:12}}>{encUserName(r.userId)}</strong><div style={{fontSize:10,color:"var(--color-text-secondary)"}}>Plan: {r.horaPlanDesde&&r.horaPlanHasta?`${r.horaPlanDesde}–${r.horaPlanHasta}`:"Sin plan"}</div></>}{r.certificadoPath&&<button type="button" onClick={()=>viewEncDoc(local.id,r)} style={{border:"none",background:"transparent",padding:0,color:COLORS.info,fontSize:10,fontWeight:700,cursor:"pointer"}}>📎 Ver documentación</button>}<div style={{marginTop:3}}><Badge color={statusColor}>{statusText}</Badge></div></div></div>
-            <div><label style={{fontSize:9,fontWeight:700}}>Estado</label><select value={r.estado==="pendiente"?"normal":r.estado} onChange={e=>{const v=e.target.value;if(v==="ausencia"){setEncAus({localId:local.id,row:r,motivo:r.motivoAusencia||MOTIVOS_AUSENCIA[0],certificado:r.certificado||false,tipoDoc:r.tipoDoc||"",certificadoPath:r.certificadoPath||"",certificadoNombre:r.certificadoNombre||"",certificadoMime:r.certificadoMime||"",certificadoTamano:r.certificadoTamano||0,file:null});return;}updateRow({estado:v,...((v!=="reemplazo")?{reemplazaUserId:null}:{})});}} style={{width:"100%",padding:"6px 7px",border:"1px solid #ddd",borderRadius:7,fontSize:11}}><option value="normal">Normal</option><option value="cambio_turno">Cambio turno</option><option value="reemplazo">Reemplazo</option><option value="ausencia">Ausencia</option><option value="vacaciones">Vacaciones</option><option value="otro">Otro</option></select></div>
+            <div><label style={{fontSize:9,fontWeight:700}}>Estado</label><select disabled={r.origen==="vacaciones"} value={r.estado==="pendiente"?"normal":r.estado} onChange={e=>{const v=e.target.value;if(v==="ausencia"){setEncAus({localId:local.id,row:r,motivo:r.motivoAusencia||MOTIVOS_AUSENCIA_ENCARGADA[0],reemplazoUserId:null,horaReemplazoDesde:r.horaPlanDesde||"",horaReemplazoHasta:r.horaPlanHasta||"",certificado:r.certificado||false,tipoDoc:r.tipoDoc||"",certificadoPath:r.certificadoPath||"",certificadoNombre:r.certificadoNombre||"",certificadoMime:r.certificadoMime||"",certificadoTamano:r.certificadoTamano||0,file:null});return;}updateRow({estado:v,...((v!=="reemplazo")?{reemplazaUserId:null}:{})});}} style={{width:"100%",padding:"6px 7px",border:"1px solid #ddd",borderRadius:7,fontSize:11}}><option value="normal">Normal</option><option value="cambio_turno">Cambio turno</option><option value="reemplazo">Reemplazo</option><option value="ausencia">Ausencia</option><option value="otro">Otro</option></select></div>
             <div><label style={{fontSize:9,fontWeight:700}}>Entrada real</label><input type="time" disabled={abs} value={r.horaRealDesde||""} onChange={e=>updateRow({horaRealDesde:e.target.value})} style={{width:"100%",padding:"5px",border:"1px solid #ddd",borderRadius:7}}/></div>
             <div><label style={{fontSize:9,fontWeight:700}}>Salida real</label><input type="time" disabled={abs} value={r.horaRealHasta||""} onChange={e=>updateRow({horaRealHasta:e.target.value})} style={{width:"100%",padding:"5px",border:"1px solid #ddd",borderRadius:7}}/></div>
             <div><label style={{fontSize:9,fontWeight:700}}>Comentario / motivo</label><input value={r.comentario||r.motivoAusencia||""} onChange={e=>updateRow({comentario:e.target.value})} style={{width:"100%",padding:"6px",border:"1px solid #ddd",borderRadius:7,fontSize:11}}/></div>
@@ -6467,7 +6491,7 @@ function AsistenciaDiaria({ data, setData, reloadData, user }) {
       <div style={{padding:"12px 14px"}}><div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:9}}><strong style={{fontSize:13}}>Manicuras</strong><span style={{fontSize:10,color:"var(--color-text-secondary)"}}>Se mantiene el registro actual</span></div><div style={{display:"flex",flexDirection:"column",gap:9}}>{manicuras.map(renderManicura)}</div></div></Card>})}</div>}
     {modal==="tarde"&&<Modal title="Registrar llegada tarde" onClose={()=>setModal(null)}><div style={{display:"flex",flexDirection:"column",gap:12}}><ModalInput label="Entrada real" type="time" value={formTarde.entrada||""} onChange={v=>setFormTarde(f=>({...f,entrada:v}))}/><ModalInput label="Salida real" type="time" value={formTarde.salida||""} onChange={v=>setFormTarde(f=>({...f,salida:v}))}/><Btn onClick={async()=>{await setA(formTarde.uid,formTarde.localId,{estado:"tarde",entradaReal:formTarde.entrada,salidaReal:formTarde.salida});setModal(null);}}>Guardar</Btn></div></Modal>}
     {modal==="ausencia"&&<Modal title="Registrar ausencia" onClose={()=>setModal(null)}><div style={{display:"flex",flexDirection:"column",gap:14}}><ModalSelect label="Motivo" value={formAus.motivo} onChange={v=>setFormAus(f=>({...f,motivo:v}))}>{MOTIVOS_AUSENCIA.map(m=><option key={m} value={m}>{m}</option>)}</ModalSelect><label style={{display:"flex",alignItems:"center",gap:8,fontSize:14}}><input type="checkbox" checked={!!formAus.certificado} onChange={e=>setFormAus(f=>({...f,certificado:e.target.checked}))}/>Presenta documentación</label>{formAus.certificado&&<><ModalSelect label="Tipo" value={formAus.tipoDoc} onChange={v=>setFormAus(f=>({...f,tipoDoc:v}))}><option value="">Seleccionar...</option><option value="Certificado médico">Certificado médico</option><option value="Licencia">Licencia</option><option value="Justificación">Justificación</option><option value="Otro">Otro</option></ModalSelect><input type="file" accept="image/jpeg,image/png,image/webp,application/pdf" onChange={e=>setFormAus(f=>({...f,file:e.target.files?.[0]||null}))}/><p style={{margin:0,fontSize:11,color:"#777"}}>PDF hasta 2 MB. Imágenes hasta 1 MB.</p></>}<Btn disabled={docBusy} onClick={async()=>{try{setDocBusy(true);let meta={certificadoPath:formAus.certificadoPath||"",certificadoNombre:formAus.certificadoNombre||"",certificadoMime:formAus.certificadoMime||"",certificadoTamano:formAus.certificadoTamano||0};if(formAus.certificado&&formAus.file){if(meta.certificadoPath)try{await api.deleteAsistenciaDocumento(user,formAus.uid,formAus.localId,fecha,meta.certificadoPath);}catch{}const up=await api.uploadAsistenciaDocumento(user,formAus.uid,formAus.localId,fecha,formAus.file);meta={certificadoPath:up.path||"",certificadoNombre:up.name||formAus.file.name,certificadoMime:up.type||formAus.file.type,certificadoTamano:Number(up.size||formAus.file.size)};}await setA(formAus.uid,formAus.localId,{estado:"ausente",motivo:formAus.motivo,certificado:!!formAus.certificado,tipoDoc:formAus.tipoDoc,...meta});setModal(null);}catch(e){notifyToast(e?.message||"No se pudo guardar la ausencia.","error");}finally{setDocBusy(false);}}}>{docBusy?"Guardando...":"Guardar"}</Btn></div></Modal>}
-    {encAus&&<Modal title="Ausencia de encargada" onClose={()=>setEncAus(null)}><div style={{display:"flex",flexDirection:"column",gap:13}}><div style={{padding:9,borderRadius:9,background:COLORS.dangerLight,fontSize:12}}><strong>{encUserName(encAus.row.userId)}</strong> · {data.locales.find(l=>Number(l.id)===Number(encAus.localId))?.nombre}</div><ModalSelect label="Motivo" value={encAus.motivo} onChange={v=>setEncAus(x=>({...x,motivo:v}))}>{MOTIVOS_AUSENCIA.map(m=><option key={m} value={m}>{m}</option>)}</ModalSelect><label style={{display:"flex",alignItems:"center",gap:8,fontSize:14}}><input type="checkbox" checked={!!encAus.certificado} onChange={e=>setEncAus(x=>({...x,certificado:e.target.checked}))}/>Presenta documentación</label>{encAus.certificado&&<><ModalSelect label="Tipo" value={encAus.tipoDoc} onChange={v=>setEncAus(x=>({...x,tipoDoc:v}))}><option value="">Seleccionar...</option><option value="Certificado médico">Certificado médico</option><option value="Licencia">Licencia</option><option value="Justificación">Justificación</option><option value="Otro">Otro</option></ModalSelect><input type="file" accept="image/jpeg,image/png,image/webp,application/pdf" onChange={e=>setEncAus(x=>({...x,file:e.target.files?.[0]||null}))}/><p style={{margin:0,fontSize:11,color:"#777"}}>PDF hasta 2 MB. Imágenes hasta 1 MB.</p>{encAus.certificadoNombre&&<span style={{fontSize:11,color:COLORS.info}}>Actual: {encAus.certificadoNombre}</span>}</>}<div style={{display:"flex",gap:8}}><Btn disabled={docBusy} style={{flex:1,justifyContent:"center"}} onClick={async()=>{try{setDocBusy(true);let meta={certificadoPath:encAus.certificadoPath||"",certificadoNombre:encAus.certificadoNombre||"",certificadoMime:encAus.certificadoMime||"",certificadoTamano:encAus.certificadoTamano||0};if(encAus.certificado&&encAus.file){if(meta.certificadoPath)try{await api.deleteAsistenciaDocumento(user,encAus.row.userId,encAus.localId,fecha,meta.certificadoPath);}catch{}const up=await api.uploadAsistenciaDocumento(user,encAus.row.userId,encAus.localId,fecha,encAus.file);meta={certificadoPath:up.path||"",certificadoNombre:up.name||encAus.file.name,certificadoMime:up.type||encAus.file.type,certificadoTamano:Number(up.size||encAus.file.size)};}if(!encAus.certificado&&meta.certificadoPath){try{await api.deleteAsistenciaDocumento(user,encAus.row.userId,encAus.localId,fecha,meta.certificadoPath);}catch{}meta={certificadoPath:"",certificadoNombre:"",certificadoMime:"",certificadoTamano:0};}await persistEncRow(encAus.localId,encAus.row,{estado:"ausencia",motivoAusencia:encAus.motivo,comentario:encAus.motivo,certificado:!!encAus.certificado,tipoDoc:encAus.tipoDoc,...meta});setEncAus(null);}catch(e){notifyToast(e?.message||"No se pudo guardar la ausencia.","error");}finally{setDocBusy(false);}}}>{docBusy?"Guardando...":"Guardar ausencia"}</Btn><Btn variant="secondary" onClick={()=>setEncAus(null)} style={{flex:1,justifyContent:"center"}}>Cancelar</Btn></div></div></Modal>}
+    {encAus&&<Modal title="Ausencia de encargada" onClose={()=>setEncAus(null)}><div style={{display:"flex",flexDirection:"column",gap:13}}><div style={{padding:9,borderRadius:9,background:COLORS.dangerLight,fontSize:12}}><strong>{encUserName(encAus.row.userId)}</strong> · {data.locales.find(l=>Number(l.id)===Number(encAus.localId))?.nombre}</div><ModalSelect label="Motivo" value={encAus.motivo} onChange={v=>setEncAus(x=>({...x,motivo:v}))}>{MOTIVOS_AUSENCIA_ENCARGADA.map(m=><option key={m} value={m}>{m}</option>)}</ModalSelect><ModalSelect label="Quién la reemplaza" value={encAus.reemplazoUserId||""} onChange={v=>setEncAus(x=>({...x,reemplazoUserId:v?Number(v):null}))}><option value="">Seleccionar...</option>{encargadasCoberturaDisponibles(encAus.localId,encAus.row.userId).map(u=><option key={u.id} value={u.id}>{u.nombre}</option>)}</ModalSelect><div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:9}}><ModalInput label="Cobertura desde" type="time" value={encAus.horaReemplazoDesde||""} onChange={v=>setEncAus(x=>({...x,horaReemplazoDesde:v}))}/><ModalInput label="Cobertura hasta" type="time" value={encAus.horaReemplazoHasta||""} onChange={v=>setEncAus(x=>({...x,horaReemplazoHasta:v}))}/></div><label style={{display:"flex",alignItems:"center",gap:8,fontSize:14}}><input type="checkbox" checked={!!encAus.certificado} onChange={e=>setEncAus(x=>({...x,certificado:e.target.checked}))}/>Presenta documentación</label>{encAus.certificado&&<><ModalSelect label="Tipo" value={encAus.tipoDoc} onChange={v=>setEncAus(x=>({...x,tipoDoc:v}))}><option value="">Seleccionar...</option><option value="Certificado médico">Certificado médico</option><option value="Licencia">Licencia</option><option value="Justificación">Justificación</option><option value="Otro">Otro</option></ModalSelect><input type="file" accept="image/jpeg,image/png,image/webp,application/pdf" onChange={e=>setEncAus(x=>({...x,file:e.target.files?.[0]||null}))}/><p style={{margin:0,fontSize:11,color:"#777"}}>PDF hasta 2 MB. Imágenes hasta 1 MB.</p>{encAus.certificadoNombre&&<span style={{fontSize:11,color:COLORS.info}}>Actual: {encAus.certificadoNombre}</span>}</>}<div style={{display:"flex",gap:8}}><Btn disabled={docBusy} style={{flex:1,justifyContent:"center"}} onClick={async()=>{try{setDocBusy(true);if(!encAus.reemplazoUserId)throw new Error("Indicá quién reemplaza a la encargada ausente.");if(!encAus.horaReemplazoDesde||!encAus.horaReemplazoHasta||encTimeToMinutes(encAus.horaReemplazoHasta)<=encTimeToMinutes(encAus.horaReemplazoDesde))throw new Error("Indicá un horario de cobertura válido.");let meta={certificadoPath:encAus.certificadoPath||"",certificadoNombre:encAus.certificadoNombre||"",certificadoMime:encAus.certificadoMime||"",certificadoTamano:encAus.certificadoTamano||0};if(encAus.certificado&&encAus.file){if(meta.certificadoPath)try{await api.deleteAsistenciaDocumento(user,encAus.row.userId,encAus.localId,fecha,meta.certificadoPath);}catch{}const up=await api.uploadAsistenciaDocumento(user,encAus.row.userId,encAus.localId,fecha,encAus.file);meta={certificadoPath:up.path||"",certificadoNombre:up.name||encAus.file.name,certificadoMime:up.type||encAus.file.type,certificadoTamano:Number(up.size||encAus.file.size)};}if(!encAus.certificado&&meta.certificadoPath){try{await api.deleteAsistenciaDocumento(user,encAus.row.userId,encAus.localId,fecha,meta.certificadoPath);}catch{}meta={certificadoPath:"",certificadoNombre:"",certificadoMime:"",certificadoTamano:0};}await persistEncRow(encAus.localId,encAus.row,{estado:"ausencia",motivoAusencia:encAus.motivo,comentario:encAus.motivo,certificado:!!encAus.certificado,tipoDoc:encAus.tipoDoc,...meta});await api.deleteEncargadaCoberturasManual(encAus.localId,fecha,encAus.row.userId);await api.createEncargadaCobertura({origen:"manual",local_id:Number(encAus.localId),fecha,reemplazado_user_id:Number(encAus.row.userId),reemplazo_user_id:Number(encAus.reemplazoUserId),hora_desde:encAus.horaReemplazoDesde,hora_hasta:encAus.horaReemplazoHasta,estado:"planificada",motivo:encAus.motivo,creado_por_user_id:user.id,actualizado_por_user_id:user.id,actualizado_en:new Date().toISOString()});setEncAus(null);await loadEncargadas();}catch(e){notifyToast(e?.message||"No se pudo guardar la ausencia.","error");}finally{setDocBusy(false);}}}>{docBusy?"Guardando...":"Guardar ausencia y cobertura"}</Btn><Btn variant="secondary" onClick={()=>setEncAus(null)} style={{flex:1,justifyContent:"center"}}>Cancelar</Btn></div></div></Modal>}
   </div>;
 }
 
@@ -7018,7 +7042,7 @@ function Reportes({ data, setData, user, onOpenAgenda, reportRestore, reloadData
         horasObjetivo: Number(cfg?.horasObjetivoSemanales || horasGeneral),
         esFinSemana,
         porcentajeBase: Number(cfg?.porcentajeBase || configGeneralComisiones.porcentajeBase || 40),
-        porcentajeReducido: Number(cfg?.porcentajeReducido || configGeneralComisiones.porcentajeReducido || 35),
+porcentajeReducido: Number(cfg?.porcentajeReducido || configGeneralComisiones.porcentajeReducido || 35),
         maxLlegadasTarde: Number(cfg?.maxLlegadasTarde ?? configGeneralComisiones.maxLlegadasTarde ?? 0),
         maxFaltasNoJustificadas: Number(cfg?.maxFaltasNoJustificadas ?? configGeneralComisiones.maxFaltasNoJustificadas ?? 0),
         contarFaltasJustificadas: cfg?.contarFaltasJustificadas ?? configGeneralComisiones.contarFaltasJustificadas ?? false,
@@ -8025,7 +8049,6 @@ function Reportes({ data, setData, user, onOpenAgenda, reportRestore, reloadData
     </div>
   );
 }
-
 function ConfiguracionCobertura({ data, reloadData, user }) {
   const esAdmin = isAdminLikeRole(user.rol);
   const allowedLocalIds = getAssignedLocalIds(data, user);
@@ -9025,7 +9048,7 @@ function LiquidacionEncargadaModal({ row, periodo, data, localId, onClose }) {
 
   return <Modal title={"Liquidación · "+row.nombre} onClose={onClose} width={920}>
     <div style={{display:"flex",justifyContent:"flex-end",gap:8,marginBottom:12,flexWrap:"wrap"}}><Btn variant="secondary" onClick={printReceipt}>Imprimir / guardar PDF</Btn><Btn variant="ghost" onClick={onClose}>Cerrar</Btn></div>
-    <div style={{background:"#fff",border:"1px solid #eadde2",borderRadius:16,padding:"22px 24px",boxShadow:"0 10px 28px rgba(76,49,58,.07)"}}>
+<div style={{background:"#fff",border:"1px solid #eadde2",borderRadius:16,padding:"22px 24px",boxShadow:"0 10px 28px rgba(76,49,58,.07)"}}>
       <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",gap:16,paddingBottom:16,borderBottom:"2px solid "+COLORS.pinkDark,flexWrap:"wrap"}}>
         <div style={{display:"flex",alignItems:"center",gap:12}}><img src={FAVICON_SRC} alt="Niki Beauty Bar" style={{width:50,height:50,borderRadius:14,objectFit:"cover"}}/><div><p style={{margin:0,fontSize:10,letterSpacing:".11em",fontWeight:800,color:"#8c6572"}}>NIKI BEAUTY BAR</p><h3 style={{margin:"2px 0 3px",fontSize:23,color:COLORS.pinkDark}}>Detalle de liquidación</h3><p style={{margin:0,fontSize:11,color:"var(--color-text-secondary)"}}>{periodoLabel} · Encargadas</p></div></div>
         <div style={{textAlign:"right"}}><Badge color="pink">PRELIQUIDACIÓN</Badge><p style={{margin:"8px 0 2px",fontSize:11,fontWeight:800}}>{receiptCode}</p><p style={{margin:0,fontSize:10,color:"var(--color-text-secondary)"}}>Emitido {fechaEmision}</p></div>
@@ -9069,20 +9092,95 @@ function PreliquidacionEncargadas({ data, user }) {
   },[periodo,localId,user.id,user.rol]);
   useEffect(()=>{load();},[load]);
   const toggle=id=>setExpanded(prev=>{const n=new Set(prev);n.has(id)?n.delete(id):n.add(id);return n;});
-  const totals=useMemo(()=>rows.reduce((a,r)=>({base:a.base+Number(r.sueldo_base||0),extras:a.extras+Number(r.monto_horas_extra||0),feriados:a.feriados+Number(r.monto_feriados||0),aguinaldo:a.aguinaldo+Number(r.aguinaldo||0),total:a.total+Number(r.total_estimado||0)}),{base:0,extras:0,feriados:0,aguinaldo:0,total:0}),[rows]);
+  const totals=useMemo(()=>rows.reduce((a,r)=>({base:a.base+Number(r.sueldo_base||0),extras:a.extras+Number(r.monto_horas_extra||0),feriados:a.feriados+Number(r.monto_feriados||0),aguinaldo:a.aguinaldo+Number(r.aguinaldo||0),vacaciones:a.vacaciones+Number(r.plus_vacacional||0),total:a.total+Number(r.total_estimado||0)}),{base:0,extras:0,feriados:0,aguinaldo:0,vacaciones:0,total:0}),[rows]);
   return <div>
     <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",gap:12,marginBottom:14,flexWrap:"wrap"}}><div><h2 style={{margin:0,fontSize:19}}>Preliquidación de encargadas</h2><p style={{margin:"4px 0 0",fontSize:12,color:"var(--color-text-secondary)"}}>Base mensual para control de sueldos. Los importes todavía no cierran una liquidación definitiva. Usá el botón <strong>Sueldo</strong> de cada encargada para configurar sueldo base y horas diarias habituales.</p></div><div style={{display:"flex",gap:8,flexWrap:"wrap"}}><input type="month" value={periodo} onChange={e=>setPeriodo(e.target.value)} style={{border:"1px solid rgba(120,120,120,.24)",borderRadius:8,padding:"7px 10px"}}/>{user.rol!=="encargada"&&<Select value={localId} onChange={setLocalId} style={{minWidth:190}}><option value="">Todos mis locales</option>{locales.map(l=><option key={l.id} value={l.id}>{l.nombre}</option>)}</Select>}<Btn variant="secondary" onClick={load} disabled={loading}>{loading?"Actualizando...":"Actualizar"}</Btn></div></div>
     {err&&<p style={{color:COLORS.danger,background:COLORS.dangerLight,padding:10,borderRadius:9,fontSize:12}}>{err}</p>}
     <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(150px,1fr))",gap:10,marginBottom:12}}>
-      {[['Base',totals.base],['Horas extra',totals.extras],['Feriados',totals.feriados],['Aguinaldo',totals.aguinaldo],['Total estimado',totals.total]].map(([l,v],i)=><Card key={l} style={{padding:"12px 14px"}}><p style={{margin:0,fontSize:10,textTransform:"uppercase",letterSpacing:'.04em',color:"var(--color-text-secondary)"}}>{l}</p><p style={{margin:"4px 0 0",fontSize:i===4?21:18,fontWeight:700,color:i===4?COLORS.pinkDark:"var(--color-text-primary)"}}>{fmtMoney(v)}</p></Card>)}
+      {[['Base',totals.base],['Horas extra',totals.extras],['Feriados',totals.feriados],['Aguinaldo',totals.aguinaldo],['Plus vacacional',totals.vacaciones],['Total estimado',totals.total]].map(([l,v],i)=><Card key={l} style={{padding:"12px 14px"}}><p style={{margin:0,fontSize:10,textTransform:"uppercase",letterSpacing:'.04em',color:"var(--color-text-secondary)"}}>{l}</p><p style={{margin:"4px 0 0",fontSize:i===4?21:18,fontWeight:700,color:i===4?COLORS.pinkDark:"var(--color-text-primary)"}}>{fmtMoney(v)}</p></Card>)}
     </div>
-    {!loading&&!rows.length?<Card><p style={{margin:0,fontSize:13,color:"var(--color-text-secondary)"}}>No hay encargadas o datos disponibles para este período.</p></Card>:<div style={{display:"flex",flexDirection:"column",gap:10}}>{rows.map(r=>{const open=expanded.has(r.user_id);return <Card key={r.user_id} style={{padding:0,overflow:"hidden"}}><div style={{padding:"12px 14px",display:"grid",gridTemplateColumns:"minmax(170px,1.4fr) repeat(5,minmax(80px,.7fr)) auto",gap:10,alignItems:"center"}}><div style={{display:"flex",alignItems:"center",gap:9,minWidth:0}}><Avatar nombre={r.nombre} userId={r.user_id} size={34}/><div style={{minWidth:0}}><strong style={{fontSize:13,display:"block",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{r.nombre}</strong><span style={{fontSize:10,color:r.sueldo_base>0?"var(--color-text-secondary)":COLORS.danger}}>{r.sueldo_base>0?`${fmtMoney(r.sueldo_base)} · ${r.horas_diarias_habituales} h/día`:"Falta configuración salarial"}</span></div></div><div><small style={{display:"block",color:"var(--color-text-secondary)"}}>Días</small><strong>{r.dias_trabajados}/{r.dias_agendados}</strong></div><div><small style={{display:"block",color:"var(--color-text-secondary)"}}>Ausencias</small><strong>{r.ausencias}</strong></div><div><small style={{display:"block",color:"var(--color-text-secondary)"}}>Extras</small><strong>{Number(r.horas_extra||0).toFixed(1)} h</strong></div><div><small style={{display:"block",color:"var(--color-text-secondary)"}}>Feriados</small><strong>{r.feriados_trabajados}</strong></div><div><small style={{display:"block",color:"var(--color-text-secondary)"}}>Total</small><strong style={{color:COLORS.pinkDark}}>{fmtMoney(r.total_estimado)}</strong></div><div style={{display:"flex",gap:6,flexWrap:"wrap"}}>{(canEditSalary||user.rol==="encargada")&&<Btn size="sm" variant="ghost" onClick={()=>setSalaryTarget({id:r.user_id,nombre:r.nombre})}>Sueldo</Btn>}<Btn size="sm" variant="ghost" onClick={()=>setReceiptTarget(r)}>Recibo</Btn><Btn size="sm" variant="secondary" onClick={()=>toggle(r.user_id)}>{open?"Cerrar":"Detalle"}</Btn></div></div>{open&&<div style={{borderTop:"1px solid rgba(120,120,120,.14)",padding:"10px 14px",background:"var(--color-background-secondary)"}}><div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(150px,1fr))",gap:8,marginBottom:10}}><div><small>Valor hora extra</small><strong style={{display:"block"}}>{fmtMoney(r.valor_hora_extra)}</strong></div><div><small>Monto horas extra</small><strong style={{display:"block"}}>{fmtMoney(r.monto_horas_extra)}</strong></div><div><small>Monto feriados</small><strong style={{display:"block"}}>{fmtMoney(r.monto_feriados)}</strong></div><div><small>Aguinaldo estimado</small><strong style={{display:"block"}}>{fmtMoney(r.aguinaldo)}</strong>{Number(r.aguinaldo||0)>0&&<span style={{fontSize:10,color:"var(--color-text-secondary)"}}>{r.meses_trabajados_semestre}/6 meses · mejor base {fmtMoney(r.mejor_sueldo_base_semestre)}</span>}</div></div><div style={{overflowX:"auto"}}><div style={{minWidth:700}}><div style={{display:"grid",gridTemplateColumns:"90px 90px 90px 90px 90px 1fr",gap:8,fontSize:10,fontWeight:700,color:"var(--color-text-secondary)",padding:"0 6px 5px"}}><span>Fecha</span><span>Agendado</span><span>Trabajó</span><span>Ausencia</span><span>Extra</span><span>Novedad</span></div>{(r.detalle||[]).map(d=><div key={d.fecha} style={{display:"grid",gridTemplateColumns:"90px 90px 90px 90px 90px 1fr",gap:8,padding:"6px",borderTop:"1px solid rgba(120,120,120,.10)",fontSize:11}}><span>{String(d.fecha).split("-").reverse().join("/")}{d.feriado?" · F":""}</span><span>{d.agendado?"Sí":"—"}</span><span>{d.trabajado?"Sí":"—"}</span><span>{d.ausencia?"Sí":"—"}</span><span>{Number(d.horas_extra||0).toFixed(1)} h</span><span>{d.cambio_turno?"Cambio de turno":d.ausencia?"Ausencia":d.trabajado&&!d.agendado?"Cobertura / reemplazo":""}</span></div>)}</div></div></div>}</Card>})}</div>}
+    {!loading&&!rows.length?<Card><p style={{margin:0,fontSize:13,color:"var(--color-text-secondary)"}}>No hay encargadas o datos disponibles para este período.</p></Card>:<div style={{display:"flex",flexDirection:"column",gap:10}}>{rows.map(r=>{const open=expanded.has(r.user_id);return <Card key={r.user_id} style={{padding:0,overflow:"hidden"}}><div style={{padding:"12px 14px",display:"grid",gridTemplateColumns:"minmax(170px,1.4fr) repeat(5,minmax(80px,.7fr)) auto",gap:10,alignItems:"center"}}><div style={{display:"flex",alignItems:"center",gap:9,minWidth:0}}><Avatar nombre={r.nombre} userId={r.user_id} size={34}/><div style={{minWidth:0}}><strong style={{fontSize:13,display:"block",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{r.nombre}</strong><span style={{fontSize:10,color:r.sueldo_base>0?"var(--color-text-secondary)":COLORS.danger}}>{r.sueldo_base>0?`${fmtMoney(r.sueldo_base)} · ${r.horas_diarias_habituales} h/día`:"Falta configuración salarial"}</span></div></div><div><small style={{display:"block",color:"var(--color-text-secondary)"}}>Días</small><strong>{r.dias_trabajados}/{r.dias_agendados}</strong></div><div><small style={{display:"block",color:"var(--color-text-secondary)"}}>Ausencias</small><strong>{r.ausencias}</strong></div><div><small style={{display:"block",color:"var(--color-text-secondary)"}}>Extras</small><strong>{Number(r.horas_extra||0).toFixed(1)} h</strong></div><div><small style={{display:"block",color:"var(--color-text-secondary)"}}>Feriados</small><strong>{r.feriados_trabajados}</strong></div><div><small style={{display:"block",color:"var(--color-text-secondary)"}}>Total</small><strong style={{color:COLORS.pinkDark}}>{fmtMoney(r.total_estimado)}</strong></div><div style={{display:"flex",gap:6,flexWrap:"wrap"}}>{(canEditSalary||user.rol==="encargada")&&<Btn size="sm" variant="ghost" onClick={()=>setSalaryTarget({id:r.user_id,nombre:r.nombre})}>Sueldo</Btn>}<Btn size="sm" variant="ghost" onClick={()=>setReceiptTarget(r)}>Recibo</Btn><Btn size="sm" variant="secondary" onClick={()=>toggle(r.user_id)}>{open?"Cerrar":"Detalle"}</Btn></div></div>{open&&<div style={{borderTop:"1px solid rgba(120,120,120,.14)",padding:"10px 14px",background:"var(--color-background-secondary)"}}><div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(150px,1fr))",gap:8,marginBottom:10}}><div><small>Valor hora extra</small><strong style={{display:"block"}}>{fmtMoney(r.valor_hora_extra)}</strong></div><div><small>Monto horas extra</small><strong style={{display:"block"}}>{fmtMoney(r.monto_horas_extra)}</strong></div><div><small>Monto feriados</small><strong style={{display:"block"}}>{fmtMoney(r.monto_feriados)}</strong></div><div><small>Aguinaldo estimado</small><strong style={{display:"block"}}>{fmtMoney(r.aguinaldo)}</strong>{Number(r.aguinaldo||0)>0&&<span style={{fontSize:10,color:"var(--color-text-secondary)"}}>{r.meses_trabajados_semestre}/6 meses · mejor base {fmtMoney(r.mejor_sueldo_base_semestre)}</span>}</div><div><small>Plus vacacional estimado</small><strong style={{display:"block"}}>{fmtMoney(r.plus_vacacional)}</strong>{Number(r.dias_vacaciones_liquidadas||0)>0&&<span style={{fontSize:10,color:"var(--color-text-secondary)"}}>{r.dias_vacaciones_liquidadas} días · base {fmtMoney(r.base_vacaciones)}</span>}</div></div><div style={{overflowX:"auto"}}><div style={{minWidth:700}}><div style={{display:"grid",gridTemplateColumns:"90px 90px 90px 90px 90px 1fr",gap:8,fontSize:10,fontWeight:700,color:"var(--color-text-secondary)",padding:"0 6px 5px"}}><span>Fecha</span><span>Agendado</span><span>Trabajó</span><span>Ausencia</span><span>Extra</span><span>Novedad</span></div>{(r.detalle||[]).map(d=><div key={d.fecha} style={{display:"grid",gridTemplateColumns:"90px 90px 90px 90px 90px 1fr",gap:8,padding:"6px",borderTop:"1px solid rgba(120,120,120,.10)",fontSize:11}}><span>{String(d.fecha).split("-").reverse().join("/")}{d.feriado?" · F":""}</span><span>{d.agendado?"Sí":"—"}</span><span>{d.trabajado?"Sí":"—"}</span><span>{d.ausencia?"Sí":"—"}</span><span>{Number(d.horas_extra||0).toFixed(1)} h</span><span>{d.cambio_turno?"Cambio de turno":d.ausencia?"Ausencia":d.trabajado&&!d.agendado?"Cobertura / reemplazo":""}</span></div>)}</div></div></div>}</Card>})}</div>}
     {salaryTarget&&<SueldoEncargadaModal target={salaryTarget} user={user} onClose={()=>{setSalaryTarget(null);load();}}/>}
     {receiptTarget&&<LiquidacionEncargadaModal row={receiptTarget} periodo={periodo} data={data} localId={localId} onClose={()=>setReceiptTarget(null)}/>}
   </div>;
 }
 
-// ── INFORME DIARIO ─────────────────────────────────────────────────
+
+function VacacionesEncargadas({ data, user }) {
+  const isApprover=["admin","casa_matriz"].includes(user.rol);
+  const [rows,setRows]=useState([]),[users,setUsers]=useState([]),[loading,setLoading]=useState(true),[err,setErr]=useState("");
+  const [requestModal,setRequestModal]=useState(false),[form,setForm]=useState({fechaInicio:"",fechaFin:"",anio:new Date().getFullYear(),observacion:""});
+  const [approval,setApproval]=useState(null),[approvalDetail,setApprovalDetail]=useState(null),[segments,setSegments]=useState([]),[periodo,setPeriodo]=useState(""),[saving,setSaving]=useState(false);
+  const [bulkReplacement,setBulkReplacement]=useState("");
+  const name=id=>users.find(u=>Number(u.id)===Number(id))?.nombre||(data.users||[]).find(u=>Number(u.id)===Number(id))?.nombre||"Encargada";
+  const fmtDate=v=>String(v||"").split("-").reverse().join("/");
+  const vacationDays=(a,b)=>{
+    const pa=String(a||"").split("-").map(Number),pb=String(b||"").split("-").map(Number);
+    if(pa.length!==3||pb.length!==3||pa.some(x=>!Number.isFinite(x))||pb.some(x=>!Number.isFinite(x)))return 0;
+    const diff=Date.UTC(pb[0],pb[1]-1,pb[2])-Date.UTC(pa[0],pa[1]-1,pa[2]);
+    return diff>=0?Math.floor(diff/86400000)+1:0;
+  };
+  const requestDays=vacationDays(form.fechaInicio,form.fechaFin);
+  const approvalDays=approval?(approvalDetail?.days?.length||vacationDays(approval.fecha_inicio,approval.fecha_fin)):0;
+  const load=useCallback(async()=>{setLoading(true);setErr("");try{const r=await encargadasVacacionesEdge("list");setRows(r.rows||[]);setUsers(r.users||[]);}catch(e){setErr(e.message||String(e));}finally{setLoading(false);}},[]);
+  useEffect(()=>{load();},[load]);
+  const closeApproval=()=>{setApproval(null);setApprovalDetail(null);setSegments([]);setBulkReplacement("");};
+  const openApproval=async r=>{setSaving(true);try{const d=await encargadasVacacionesEdge("detail",{id:r.id});setApproval(r);setApprovalDetail(d);setPeriodo(r.fecha_inicio.slice(0,7));setBulkReplacement("");setSegments((d.plan||[]).map(p=>({local_id:Number(p.local_id),fecha:p.fecha,hora_desde:String(p.hora_desde).slice(0,5),hora_hasta:String(p.hora_hasta).slice(0,5),reemplazo_user_id:""})));}catch(e){notifyToast(e.message||"No se pudo abrir la solicitud.","error");}finally{setSaving(false);}};
+  const submitRequest=async()=>{try{setSaving(true);if(!form.fechaInicio||!form.fechaFin)throw new Error("Indicá fecha de inicio y fin.");await encargadasVacacionesEdge("create",{fecha_inicio:form.fechaInicio,fecha_fin:form.fechaFin,anio_vacaciones:Number(form.anio),observacion:form.observacion});setRequestModal(false);setForm({fechaInicio:"",fechaFin:"",anio:new Date().getFullYear(),observacion:""});await load();notifyToast("Solicitud de vacaciones enviada.","success");}catch(e){notifyToast(e.message||"No se pudo enviar la solicitud.","error");}finally{setSaving(false);}};
+  const approve=async()=>{try{setSaving(true);if((approvalDetail?.missing_confirmations||[]).length)throw new Error("Hay días de la solicitud cuya planificación todavía no está confirmada.");if(segments.some(s=>!s.reemplazo_user_id))throw new Error("Definí un reemplazo para todos los turnos.");await encargadasVacacionesEdge("approve",{id:approval.id,periodo_liquidacion:periodo,segments:segments.map(s=>({...s,reemplazo_user_id:Number(s.reemplazo_user_id)}))});closeApproval();await load();notifyToast("Vacaciones aprobadas y coberturas generadas.","success");}catch(e){notifyToast(e.message||"No se pudo aprobar.","error");}finally{setSaving(false);}};
+  const reject=async r=>{try{setSaving(true);await encargadasVacacionesEdge("reject",{id:r.id});await load();notifyToast("Solicitud rechazada.","success");}catch(e){notifyToast(e.message||"No se pudo rechazar.","error");}finally{setSaving(false);}};
+  const cancel=async r=>{try{setSaving(true);await encargadasVacacionesEdge("cancel",{id:r.id});await load();notifyToast("Solicitud cancelada.","success");}catch(e){notifyToast(e.message||"No se pudo cancelar.","error");}finally{setSaving(false);}};
+  const badgeColor=s=>s==="aprobada"?"success":s==="rechazada"||s==="cancelada"?"danger":"amber";
+  const applyBulkReplacement=v=>{
+    setBulkReplacement(v);
+    if(v)setSegments(prev=>prev.map(x=>({...x,reemplazo_user_id:v})));
+  };
+  return <div>
+    <div style={{display:"flex",justifyContent:"space-between",gap:12,alignItems:"flex-start",flexWrap:"wrap",marginBottom:14}}>
+      <div><h2 style={{margin:0,fontSize:19}}>Vacaciones de encargadas</h2><p style={{margin:"4px 0 0",fontSize:12,color:"var(--color-text-secondary)"}}>Las vacaciones aprobadas impactan automáticamente en horarios, coberturas e Informe Diario.</p></div>
+      <Btn onClick={()=>setRequestModal(true)}>+ Solicitar vacaciones</Btn>
+    </div>
+    {err&&<div style={{padding:10,borderRadius:9,background:COLORS.dangerLight,color:COLORS.danger,marginBottom:10}}>{err}</div>}
+    {isApprover&&<Card style={{padding:12,marginBottom:12}}>
+      <strong style={{fontSize:13}}>Pendientes de aprobación</strong>
+      <div style={{display:"grid",gap:7,marginTop:8}}>{rows.filter(r=>r.estado==="solicitada").map(r=>{const dias=vacationDays(r.fecha_inicio,r.fecha_fin);return <div key={r.id} style={{display:"grid",gridTemplateColumns:"1fr auto auto",gap:8,alignItems:"center",padding:"8px 9px",border:"1px solid rgba(120,120,120,.14)",borderRadius:9}}><div><strong style={{fontSize:12}}>{name(r.user_id)}</strong><div style={{fontSize:10,color:"var(--color-text-secondary)"}}>{fmtDate(r.fecha_inicio)} → {fmtDate(r.fecha_fin)} · <strong>{dias} día{dias===1?"":"s"} corrido{dias===1?"":"s"}</strong></div></div><Btn size="sm" onClick={()=>openApproval(r)}>Revisar</Btn><Btn size="sm" variant="danger" onClick={()=>reject(r)}>Rechazar</Btn></div>})}{!rows.some(r=>r.estado==="solicitada")&&<span style={{fontSize:11,color:"var(--color-text-secondary)"}}>No hay solicitudes pendientes.</span>}</div>
+    </Card>}
+    <Card style={{padding:0,overflow:"hidden"}}>
+      <div style={{padding:"11px 13px",borderBottom:"1px solid rgba(120,120,120,.12)"}}><strong>Historial</strong></div>
+      {loading?<p style={{padding:13}}>Cargando...</p>:<div>{rows.map(r=>{const dias=vacationDays(r.fecha_inicio,r.fecha_fin);return <div key={r.id} style={{display:"grid",gridTemplateColumns:"minmax(150px,1fr) minmax(220px,1fr) 110px auto",gap:9,alignItems:"center",padding:"10px 13px",borderTop:"1px solid rgba(120,120,120,.08)"}} className="niki-mobile-one-column"><strong style={{fontSize:12}}>{name(r.user_id)}</strong><span style={{fontSize:11}}>{fmtDate(r.fecha_inicio)} → {fmtDate(r.fecha_fin)} · {dias} día{dias===1?"":"s"}</span><Badge color={badgeColor(r.estado)}>{r.estado}</Badge><div>{(r.estado==="solicitada"&&(!isApprover||Number(r.user_id)===Number(user.id)))&&<Btn size="sm" variant="ghost" onClick={()=>cancel(r)}>Cancelar</Btn>}</div></div>})}</div>}
+    </Card>
+    {requestModal&&<Modal title="Solicitar vacaciones" onClose={()=>setRequestModal(false)} width={520}>
+      <div style={{display:"grid",gap:12}}>
+        <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10}}><ModalInput label="Desde" type="date" value={form.fechaInicio} onChange={v=>setForm(f=>({...f,fechaInicio:v}))}/><ModalInput label="Hasta" type="date" value={form.fechaFin} onChange={v=>setForm(f=>({...f,fechaFin:v}))}/></div>
+        {requestDays>0&&<div style={{display:"flex",alignItems:"center",justifyContent:"space-between",gap:8,padding:"8px 10px",borderRadius:9,background:COLORS.infoLight,color:COLORS.info,fontSize:11}}><span>Duración solicitada</span><strong>{requestDays} día{requestDays===1?"":"s"} corrido{requestDays===1?"":"s"}</strong></div>}
+        <ModalInput label="Año de vacaciones" type="number" value={form.anio} onChange={v=>setForm(f=>({...f,anio:v}))}/>
+        <div><label style={{fontSize:12,fontWeight:700}}>Observación</label><textarea value={form.observacion} onChange={e=>setForm(f=>({...f,observacion:e.target.value}))} style={{width:"100%",boxSizing:"border-box",minHeight:76,marginTop:5,border:"1px solid #ddd",borderRadius:8,padding:8}}/></div>
+        <div style={{display:"flex",justifyContent:"flex-end",gap:8}}><Btn variant="secondary" onClick={()=>setRequestModal(false)}>Cancelar</Btn><Btn onClick={submitRequest} disabled={saving}>{saving?"Enviando...":"Enviar solicitud"}</Btn></div>
+      </div>
+    </Modal>}
+    {approval&&approvalDetail&&<Modal title={`Aprobar vacaciones · ${name(approval.user_id)}`} onClose={closeApproval} width={780}>
+      <div style={{display:"grid",gap:9}}>
+        {(approvalDetail.missing_confirmations||[]).length>0&&<div style={{padding:8,borderRadius:9,background:COLORS.dangerLight,color:COLORS.danger,fontSize:10.5,fontWeight:700}}>Hay planificación sin confirmar dentro del período. Confirmala antes de aprobar las vacaciones.</div>}
+        <div style={{display:"grid",gridTemplateColumns:"1fr 175px",gap:10,alignItems:"end"}} className="niki-mobile-one-column">
+          <div><div style={{display:"flex",gap:8,alignItems:"center",flexWrap:"wrap"}}><strong>{fmtDate(approval.fecha_inicio)} → {fmtDate(approval.fecha_fin)}</strong><span style={{padding:"3px 8px",borderRadius:999,background:COLORS.infoLight,color:COLORS.info,fontSize:10,fontWeight:800}}>{approvalDays} día{approvalDays===1?"":"s"} corrido{approvalDays===1?"":"s"}</span></div><p style={{margin:"5px 0 0",fontSize:9.5,lineHeight:1.35,color:"var(--color-text-secondary)"}}>Definí quién cubre cada turno. Si una encargada ya trabaja en ese local, la cobertura se suma sin modificar su plan base.</p></div>
+          <ModalInput label="Mes de liquidación" type="month" value={periodo} onChange={setPeriodo}/>
+        </div>
+        {segments.length>0&&<div style={{display:"grid",gridTemplateColumns:"1fr 150px",gap:8,alignItems:"end",padding:"8px 9px",border:"1px solid rgba(114,36,62,.12)",borderRadius:9,background:"var(--color-background-secondary)"}} className="niki-mobile-one-column">
+          <div><label style={{fontSize:10,fontWeight:800,display:"block",marginBottom:4}}>Reemplazo masivo</label><Select value={bulkReplacement} onChange={applyBulkReplacement} style={{fontSize:11,padding:"5px 7px"}}><option value="">Seleccionar y aplicar a todos...</option>{(approvalDetail.candidates||[]).map(c=><option key={c.id} value={c.id}>{c.nombre}</option>)}</Select></div>
+          <div style={{fontSize:9.5,lineHeight:1.35,color:"var(--color-text-secondary)"}}>Al seleccionar se asigna a todos los turnos. Después podés cambiar excepciones abajo.</div>
+        </div>}
+        <div style={{maxHeight:300,overflowY:"auto",border:segments.length?"1px solid rgba(120,120,120,.14)":"none",borderRadius:9}}>
+          {segments.length>0&&<div style={{display:"grid",gridTemplateColumns:"82px minmax(110px,1fr) 88px minmax(155px,190px)",gap:6,padding:"6px 7px",position:"sticky",top:0,zIndex:2,background:"var(--color-background-primary)",borderBottom:"1px solid rgba(120,120,120,.12)",fontSize:9,fontWeight:800,color:"var(--color-text-secondary)"}} className="niki-mobile-one-column"><span>Fecha</span><span>Local</span><span>Horario</span><span>Reemplazo</span></div>}
+          {segments.map((s,i)=>{const local=data.locales.find(l=>Number(l.id)===Number(s.local_id));return <div key={`${s.local_id}-${s.fecha}-${i}`} style={{display:"grid",gridTemplateColumns:"82px minmax(110px,1fr) 88px minmax(155px,190px)",gap:6,alignItems:"center",padding:"5px 7px",borderTop:i?"1px solid rgba(120,120,120,.08)":"none",minHeight:34}} className="niki-mobile-one-column"><span style={{fontSize:10,fontWeight:700}}>{fmtDate(s.fecha)}</span><span style={{fontSize:10}}>{local?.nombre||"Local"}</span><span style={{fontSize:10,whiteSpace:"nowrap"}}>{s.hora_desde}–{s.hora_hasta}</span><Select value={s.reemplazo_user_id||""} onChange={v=>setSegments(prev=>prev.map((x,j)=>j===i?{...x,reemplazo_user_id:v}:x))} style={{fontSize:10.5,padding:"4px 6px"}}><option value="">Seleccionar...</option>{(approvalDetail.candidates||[]).map(c=><option key={c.id} value={c.id}>{c.nombre}</option>)}</Select></div>})}
+          {!segments.length&&<div style={{padding:9,background:COLORS.infoLight,borderRadius:8,fontSize:11}}>No hay turnos confirmados para cubrir en este período.</div>}
+        </div>
+        <div style={{display:"flex",justifyContent:"flex-end",gap:8,paddingTop:2}}><Btn variant="secondary" onClick={closeApproval}>Cancelar</Btn><Btn onClick={approve} disabled={saving||(approvalDetail.missing_confirmations||[]).length>0}>{saving?"Aprobando...":"✓ Aprobar y generar coberturas"}</Btn></div>
+      </div>
+    </Modal>}
+  </div>;
+}
+
+// ── INFORME DIARIO ──────────────────────────────────────────────────
 
 const RECLAMO_MOTIVOS = [
   "Servicio mal realizado",
@@ -9097,8 +9195,15 @@ const RECLAMO_ESTADOS = [
   { value:"pendiente", label:"Pendiente" },
   { value:"resuelto", label:"Resuelto" },
   { value:"resuelto_garantia", label:"Resuelto en garantía" },
+  { value:"cerrado", label:"Cerrado / finalizado" },
 ];
 function normalizeReclamo(r) {
+  const motivosRaw = Array.isArray(r.motivos) ? r.motivos : [];
+  const motivos = Array.from(new Set([
+    ...motivosRaw.map(x=>String(x||"").trim()).filter(Boolean),
+    ...(!motivosRaw.length && (r.motivo_tipo ?? r.motivoTipo) ? [String(r.motivo_tipo ?? r.motivoTipo).trim()] : []),
+  ]));
+  const cerradoEn = r.cerrado_en || r.cerradoEn || "";
   return {
     id:r.id ?? null,
     informeId:r.informe_diario_id ?? r.informeId ?? null,
@@ -9112,14 +9217,20 @@ function normalizeReclamo(r) {
     manicuraOriginalId:r.manicura_original_id ?? r.manicuraOriginalId ?? null,
     nombreManicuraOriginal:r.nombre_manicura_original || r.nombreManicuraOriginal || "",
     servicio:r.servicio || "",
-    motivoTipo:r.motivo_tipo || r.motivoTipo || "",
+    motivos,
+    motivoTipo:motivos[0] || r.motivo_tipo || r.motivoTipo || "",
     detalle:r.detalle || r.acciones || r.motivo || "",
     fotos:Array.isArray(r.fotos) ? r.fotos : [],
     fechaArreglo:r.fecha_arreglo || r.fechaArreglo || "",
     manicuraArregloId:r.manicura_arreglo_id ?? r.manicuraArregloId ?? null,
     nombreManicuraArreglo:r.nombre_manicura_arreglo || r.nombreManicuraArreglo || "",
     atendido:r.atendido === true || r.resuelto === true,
-    estado:r.estado || (r.resuelto ? "resuelto" : "pendiente"),
+    estado:cerradoEn ? "cerrado" : (r.estado || (r.resuelto ? "resuelto" : "pendiente")),
+    estadoDb:r.estado || (r.resuelto ? "resuelto" : "pendiente"),
+    proximoSeguimientoFecha:r.proximo_seguimiento_fecha || r.proximoSeguimientoFecha || "",
+    proximoSeguimientoAccion:r.proximo_seguimiento_accion || r.proximoSeguimientoAccion || "",
+    cerradoEn,
+    cerradoPor:r.cerrado_por_user_id ?? r.cerradoPor ?? null,
     origen:r.origen || ((r.informe_diario_id ?? r.informeId) ? "informe_diario" : "reclamos"),
     creadoPor:r.creado_por_user_id ?? r.creadoPor ?? null,
     creadoEn:r.creado_en || r.creadoEn || "",
@@ -9127,7 +9238,7 @@ function normalizeReclamo(r) {
   };
 }
 
-function ReclamoEditorModal({ data, user, initial=null, forcedLocalId=null, allowedLocalIdsOverride=null, defaultFecha=null, informeId=null, onClose, onSaved }) {
+function ReclamoEditorModal({ data, user, initial=null, forcedLocalId=null, allowedLocalIdsOverride=null, defaultFecha=null, informeId=null, onClose, onSaved, onChanged }) {
   const hoy = new Date();
   const esAdmin = isAdminLikeRole(user.rol);
   const baseAllowedLocalIds = (esAdmin ? data.locales.map(l=>l.id) : getAssignedLocalIds(data,user)).map(Number);
@@ -9137,6 +9248,7 @@ function ReclamoEditorModal({ data, user, initial=null, forcedLocalId=null, allo
   const allowedLocalIds = requestedLocalIds ? baseAllowedLocalIds.filter(id=>requestedLocalIds.has(id)) : baseAllowedLocalIds;
   const locales = data.locales.filter(l=>allowedLocalIds.includes(Number(l.id)));
   const seed = initial ? normalizeReclamo(initial) : null;
+  const [recordId,setRecordId] = useState(seed?.id || null);
   const initialLocal = forcedLocalId || seed?.localId || locales[0]?.id || "";
   const [form,setForm] = useState({
     id:seed?.id || null,
@@ -9148,13 +9260,17 @@ function ReclamoEditorModal({ data, user, initial=null, forcedLocalId=null, allo
     fechaServicioOriginal:seed?.fechaServicioOriginal || "",
     manicuraOriginalId:seed?.manicuraOriginalId || "",
     servicio:seed?.servicio || "",
-    motivoTipo:seed?.motivoTipo || "",
+    motivos:seed?.motivos?.length ? seed.motivos : (seed?.motivoTipo ? [seed.motivoTipo] : []),
     detalle:seed?.detalle || "",
     fotos:seed?.fotos || [],
     fechaArreglo:seed?.fechaArreglo || "",
     manicuraArregloId:seed?.manicuraArregloId || "",
     atendido:seed?.atendido === true,
     estado:seed?.estado || "pendiente",
+    proximoSeguimientoFecha:seed?.proximoSeguimientoFecha || "",
+    proximoSeguimientoAccion:seed?.proximoSeguimientoAccion || "",
+    cerradoEn:seed?.cerradoEn || "",
+    cerradoPor:seed?.cerradoPor || null,
   });
   const [clienteQuery,setClienteQuery]=useState(seed?.cliente || "");
   const [clienteSeleccionado,setClienteSeleccionado]=useState(seed?.cliente || "");
@@ -9165,6 +9281,12 @@ function ReclamoEditorModal({ data, user, initial=null, forcedLocalId=null, allo
   const [files,setFiles]=useState([]);
   const [saving,setSaving]=useState(false);
   const [err,setErr]=useState("");
+  const [detalleEditando,setDetalleEditando]=useState(!seed?.id);
+  const [seguimientos,setSeguimientos]=useState([]);
+  const [seguimientosLoading,setSeguimientosLoading]=useState(false);
+  const [seguimientoSaving,setSeguimientoSaving]=useState(false);
+  const [seguimientoModalOpen,setSeguimientoModalOpen]=useState(false);
+  const [seguimientoDraft,setSeguimientoDraft]=useState({fecha:dateKey(new Date()),comentario:"",proximaFecha:"",proximaAccion:"",cerrar:false});
   const fechaReferenciaManicuraArreglo = form.fechaArreglo || form.fecha || dateKey(hoy);
   const manicurasLocal=(data.users||[]).filter(u=>u.rol==="manicura"&&u.activo!==false&&manicuraAsignadaEnLocal(data,u.id,form.localId,fechaReferenciaManicuraArreglo));
 
@@ -9197,12 +9319,59 @@ function ReclamoEditorModal({ data, user, initial=null, forcedLocalId=null, allo
     setForm(f=>({...f,comisionOriginalId:c.id,fechaServicioOriginal:c.fechaPago||"",manicuraOriginalId:c.userId||"",servicio:c.servicio||"",cliente:c.cliente||f.cliente}));
   };
   const removeExistingFoto=(idx)=>setForm(f=>({...f,fotos:(f.fotos||[]).filter((_,i)=>i!==idx)}));
+  const fmtReclamoFecha=v=>v?String(v).slice(0,10).split("-").reverse().join("/"):"—";
+  const reclamoUserName=id=>(data.users||[]).find(u=>Number(u.id)===Number(id))?.nombre||"Usuario";
+  const loadSeguimientos=useCallback(async()=>{
+    if(!recordId){setSeguimientos([]);return;}
+    setSeguimientosLoading(true);
+    try{setSeguimientos(await api.getReclamoSeguimientos(recordId)||[]);}
+    catch(e){notifyToast("No se pudo cargar el seguimiento: "+(e.message||e),"error");setSeguimientos([]);}
+    finally{setSeguimientosLoading(false);}
+  },[recordId]);
+  useEffect(()=>{void loadSeguimientos();},[loadSeguimientos]);
+  const saveSeguimiento=async()=>{
+    if(!recordId)return notifyToast("Guardá primero el reclamo para iniciar el seguimiento.","warning");
+    const comentario=String(seguimientoDraft.comentario||"").trim();
+    if(!comentario)return notifyToast("Escribí la novedad o comentario del seguimiento.","warning");
+    if(seguimientoDraft.proximaFecha&&!seguimientoDraft.cerrar&&!String(seguimientoDraft.proximaAccion||"").trim())return notifyToast("Indicá qué acción hay que realizar en la próxima fecha.","warning");
+    setSeguimientoSaving(true);
+    try{
+      await api.addReclamoSeguimiento({
+        p_reclamo_id:Number(recordId),p_fecha:seguimientoDraft.fecha||dateKey(new Date()),p_comentario:comentario,
+        p_proxima_accion_fecha:seguimientoDraft.cerrar?null:(seguimientoDraft.proximaFecha||null),p_proxima_accion:seguimientoDraft.cerrar?null:(String(seguimientoDraft.proximaAccion||"").trim()||null),
+        p_tipo:seguimientoDraft.cerrar?"cierre":"seguimiento",p_user_id:Number(user.id),
+      });
+      setForm(f=>seguimientoDraft.cerrar
+        ? {...f,estado:"cerrado",atendido:true,proximoSeguimientoFecha:"",proximoSeguimientoAccion:"",cerradoEn:new Date().toISOString(),cerradoPor:user.id}
+        : {...f,proximoSeguimientoFecha:seguimientoDraft.proximaFecha||"",proximoSeguimientoAccion:String(seguimientoDraft.proximaAccion||"").trim()});
+      setSeguimientoDraft({fecha:dateKey(new Date()),comentario:"",proximaFecha:"",proximaAccion:"",cerrar:false});
+      setSeguimientoModalOpen(false);
+      await loadSeguimientos();
+      await onChanged?.();
+      notifyToast(seguimientoDraft.cerrar?"Reclamo cerrado y seguimiento guardado.":"Seguimiento guardado.","success");
+    }catch(e){notifyToast(e?.message||"No se pudo guardar el seguimiento.","error");}
+    finally{setSeguimientoSaving(false);}
+  };
+  const reabrirReclamo=async()=>{
+    if(!recordId||!confirm("¿Reabrir este reclamo para continuar el seguimiento?"))return;
+    setSeguimientoSaving(true);
+    try{
+      await api.addReclamoSeguimiento({p_reclamo_id:Number(recordId),p_fecha:dateKey(new Date()),p_comentario:"Reclamo reabierto para continuar el seguimiento.",p_proxima_accion_fecha:null,p_proxima_accion:null,p_tipo:"reapertura",p_user_id:Number(user.id)});
+      setForm(f=>({...f,estado:"pendiente",atendido:false,cerradoEn:"",cerradoPor:null,proximoSeguimientoFecha:"",proximoSeguimientoAccion:""}));
+      await loadSeguimientos();
+      await onChanged?.();
+      notifyToast("Reclamo reabierto.","success");
+    }catch(e){notifyToast(e?.message||"No se pudo reabrir el reclamo.","error");}
+    finally{setSeguimientoSaving(false);}
+  };
+  const proximoPendiente=form.proximoSeguimientoFecha&&form.estado!=="cerrado";
+  const proximoVencido=proximoPendiente&&form.proximoSeguimientoFecha<dateKey(new Date());
   const save=async()=>{
     setErr("");
     if(!form.localId) return setErr("Seleccioná el local.");
     if(!clienteSeleccionado || !form.cliente) return setErr("Seleccioná una clienta desde el buscador.");
     if(!form.comisionOriginalId || !form.fechaServicioOriginal || !form.manicuraOriginalId || !form.servicio) return setErr("Seleccioná uno de los últimos servicios de la clienta.");
-    if(!form.motivoTipo) return setErr("Seleccioná el motivo del reclamo.");
+    if(!(form.motivos||[]).length) return setErr("Seleccioná al menos un motivo del reclamo.");
     if(!String(form.detalle||"").trim()) return setErr("Detallá el reclamo.");
     if(((form.fotos||[]).length+files.length)>MAX_GARANTIA_FOTOS) return setErr(`Máximo ${MAX_GARANTIA_FOTOS} fotos por reclamo.`);
     if(!allowedLocalIds.includes(Number(form.localId))) return setErr("No tenés permiso para registrar reclamos en ese local.");
@@ -9216,29 +9385,37 @@ function ReclamoEditorModal({ data, user, initial=null, forcedLocalId=null, allo
         cliente:form.cliente, cliente_id:form.clienteId||null,
         comision_original_id:Number(form.comisionOriginalId), fecha_servicio_original:form.fechaServicioOriginal,
         manicura_original_id:Number(form.manicuraOriginalId), nombre_manicura_original:mOriginal?.nombre||seed?.nombreManicuraOriginal||"",
-        servicio:form.servicio, motivo_tipo:form.motivoTipo, detalle:String(form.detalle||"").trim(),
+        servicio:form.servicio, motivos:form.motivos||[], motivo_tipo:(form.motivos||[])[0]||null, detalle:String(form.detalle||"").trim(),
         motivo:String(form.detalle||"").trim(), fotos:form.fotos||[], fecha_arreglo:form.fechaArreglo||null,
         manicura_arreglo_id:form.manicuraArregloId?Number(form.manicuraArregloId):null, nombre_manicura_arreglo:mArreglo?.nombre||null,
-        atendido:form.atendido===true, estado:form.estado||"pendiente", resuelto:(form.estado||"pendiente")!=="pendiente",
+        atendido:form.atendido===true || form.estado==="cerrado", estado:form.estado==="cerrado"?"resuelto":(form.estado||"pendiente"), resuelto:form.estado==="cerrado" || (form.estado||"pendiente")!=="pendiente",
+        cerrado_en:form.estado==="cerrado"?(form.cerradoEn||new Date().toISOString()):null, cerrado_por_user_id:form.estado==="cerrado"?(form.cerradoPor||user.id):null,
+        proximo_seguimiento_fecha:form.estado==="cerrado"?null:(form.proximoSeguimientoFecha||null), proximo_seguimiento_accion:form.estado==="cerrado"?null:(form.proximoSeguimientoAccion||null),
         origen:informeId||seed?.informeId?"informe_diario":"reclamos", actualizado_en:new Date().toISOString(),
       };
       let saved;
-      if(seed?.id) saved=await api.updateInformeReclamo(seed.id,payload);
+      if(recordId) saved=await api.updateInformeReclamo(recordId,payload);
       else saved=await api.createInformeReclamo({...payload,creado_por_user_id:user.id});
       const row=normalizeReclamo(Array.isArray(saved)?saved[0]:saved);
-      const savedId=seed?.id||row.id;
+      const savedId=recordId||row.id;
       let fotos=[...(form.fotos||[])];
       if(savedId&&files.length){
         for(const file of files) fotos.push(await api.uploadReclamoFoto(savedId,file));
         const updated=await api.updateInformeReclamo(savedId,{fotos,actualizado_en:new Date().toISOString()});
         saved=updated;
       }
-      onSaved?.(normalizeReclamo(Array.isArray(saved)?saved[0]:saved));
+      const finalRow=normalizeReclamo(Array.isArray(saved)?saved[0]:saved);
+      setRecordId(savedId);
+      setForm(f=>({...f,id:savedId,fotos:finalRow.fotos||f.fotos,proximoSeguimientoFecha:finalRow.proximoSeguimientoFecha||f.proximoSeguimientoFecha,proximoSeguimientoAccion:finalRow.proximoSeguimientoAccion||f.proximoSeguimientoAccion,cerradoEn:finalRow.cerradoEn||f.cerradoEn,cerradoPor:finalRow.cerradoPor||f.cerradoPor}));
+      setFiles([]);
+      setDetalleEditando(false);
+      await onSaved?.(finalRow);
+      notifyToast(recordId?"Reclamo actualizado.":"Reclamo creado. Ya podés continuar el seguimiento sin salir de esta pantalla.","success");
     }catch(e){setErr("No se pudo guardar el reclamo: "+(e.message||e));setSaving(false);return;}
-    setSaving(false); onClose?.();
+    setSaving(false);
   };
 
-  return <Modal title={seed?.id?"Editar reclamo":"Nuevo reclamo"} onClose={onClose} width={720}>
+  return <Modal title={recordId?`Reclamo · ${form.cliente||"Clienta"}`:"Nuevo reclamo"} onClose={onClose} width={940}>
     <div style={{display:"grid",gap:12}}>
       <div style={{display:"grid",gridTemplateColumns:"220px 1fr",gap:12,alignItems:"end"}} className="niki-mobile-one-column">
         <div><label style={{fontSize:12,fontWeight:700,display:"block",marginBottom:5}}>Local</label><Select value={String(form.localId||"")} disabled={!!forcedLocalId} onChange={v=>{setForm(f=>({...f,localId:v,cliente:"",comisionOriginalId:"",fechaServicioOriginal:"",manicuraOriginalId:"",servicio:""}));setClienteQuery("");setClienteSeleccionado("");setServiciosCliente([]);}}><option value="">Seleccionar...</option>{locales.map(l=><option key={l.id} value={l.id}>{l.nombre}</option>)}</Select></div>
@@ -9246,14 +9423,151 @@ function ReclamoEditorModal({ data, user, initial=null, forcedLocalId=null, allo
       </div>
       {clienteSeleccionado&&<div style={{border:"1px solid rgba(120,120,120,.16)",borderRadius:10,padding:10}}><div style={{display:"flex",justifyContent:"space-between",gap:8,marginBottom:7}}><div><strong style={{fontSize:12,color:COLORS.pinkDark}}>Últimos servicios de {clienteSeleccionado}</strong><p style={{margin:"2px 0 0",fontSize:10,color:"var(--color-text-secondary)"}}>Seleccioná el servicio relacionado con el reclamo.</p></div>{loadingServicios&&<span style={{fontSize:10}}>Cargando...</span>}</div>{!loadingServicios&&serviciosCliente.length===0?<p style={{margin:0,fontSize:11,color:"var(--color-text-secondary)"}}>No encontramos servicios recientes en este local.</p>:<div style={{display:"grid",gap:6}}>{serviciosCliente.map(c=>{const selected=String(form.comisionOriginalId)===String(c.id);return <button key={c.id} type="button" onClick={()=>elegirServicio(c)} style={{display:"grid",gridTemplateColumns:"88px minmax(0,1fr) 150px",gap:8,textAlign:"left",border:selected?`1.5px solid ${COLORS.pink}`:"1px solid rgba(120,120,120,.16)",background:selected?COLORS.pinkLight:"#fff",borderRadius:9,padding:"8px 10px",cursor:"pointer"}}><span style={{fontSize:11,fontWeight:700}}>{String(c.fechaPago||"").split("-").reverse().join("/")}</span><strong style={{fontSize:12}}>{c.servicio||"Servicio"}</strong><span style={{fontSize:10,color:"var(--color-text-secondary)"}}>{(data.users||[]).find(u=>u.id===c.userId)?.nombre||c.nombreManicura||"—"}</span></button>;})}</div>}</div>}
       {!!form.comisionOriginalId&&<div style={{display:"grid",gridTemplateColumns:"120px 1fr 1fr",gap:10,background:"var(--color-background-secondary)",padding:10,borderRadius:10}} className="niki-mobile-one-column"><ModalInput label="Fecha servicio" value={String(form.fechaServicioOriginal||"").split("-").reverse().join("/")} onChange={()=>{}} disabled/><ModalInput label="Servicio" value={form.servicio} onChange={()=>{}} disabled/><ModalInput label="Manicura" value={(data.users||[]).find(u=>Number(u.id)===Number(form.manicuraOriginalId))?.nombre||seed?.nombreManicuraOriginal||""} onChange={()=>{}} disabled/></div>}
-      <div style={{display:"grid",gridTemplateColumns:"1fr 180px",gap:12}} className="niki-mobile-one-column"><div><label style={{fontSize:12,fontWeight:700,display:"block",marginBottom:5}}>Motivo</label><Select value={form.motivoTipo} onChange={v=>setForm(f=>({...f,motivoTipo:v}))}><option value="">Seleccionar...</option>{RECLAMO_MOTIVOS.map(x=><option key={x} value={x}>{x}</option>)}</Select></div><ModalInput label="Fecha del reclamo" type="date" value={form.fecha} onChange={v=>setForm(f=>({...f,fecha:v}))}/></div>
-      <div><label style={{fontSize:12,fontWeight:700,display:"block",marginBottom:5}}>Detalle del reclamo</label><textarea rows={4} value={form.detalle} onChange={e=>setForm(f=>({...f,detalle:e.target.value}))} placeholder="Detalle de lo ocurrido, conversación con la clienta, resolución propuesta..." style={{width:"100%",boxSizing:"border-box",border:"1.5px solid #e0e0e0",borderRadius:8,padding:"9px 12px",fontSize:14,fontFamily:"inherit",resize:"vertical",background:"#fafafa",color:"#1a1a1a",outline:"none"}}/></div>
+      <div style={{display:"grid",gridTemplateColumns:"1fr 180px",gap:12,alignItems:"start"}} className="niki-mobile-one-column"><div><label style={{fontSize:12,fontWeight:700,display:"block",marginBottom:6}}>Motivos <span style={{fontWeight:500,color:"var(--color-text-secondary)"}}>(podés elegir más de uno)</span></label><div style={{display:"flex",gap:6,flexWrap:"wrap"}}>{RECLAMO_MOTIVOS.map(x=>{const on=(form.motivos||[]).includes(x);return <button key={x} type="button" onClick={()=>setForm(f=>({...f,motivos:on?(f.motivos||[]).filter(m=>m!==x):[...(f.motivos||[]),x]}))} style={{border:`1px solid ${on?COLORS.pinkDark:"#ddd"}`,background:on?COLORS.pinkLight:"#fff",color:on?COLORS.pinkDark:"#555",borderRadius:999,padding:"6px 9px",fontSize:10.5,fontWeight:on?700:500,cursor:"pointer"}}>{on?"✓ ":""}{x}</button>;})}</div></div><ModalInput label="Fecha del reclamo" type="date" value={form.fecha} onChange={v=>setForm(f=>({...f,fecha:v}))}/></div>
+      <div>
+        <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",gap:8,marginBottom:5,flexWrap:"wrap"}}>
+          <div>
+            <label style={{fontSize:12,fontWeight:700,display:"block"}}>Detalle del reclamo</label>
+            <span style={{fontSize:9.5,color:"var(--color-text-secondary)"}}>{detalleEditando?"Edición habilitada. Los cambios se guardan con el reclamo.":"Vista de lectura completa del detalle original."}</span>
+          </div>
+          {recordId&&<Btn size="sm" variant={detalleEditando?"secondary":"ghost"} onClick={()=>setDetalleEditando(v=>!v)}>{detalleEditando?"✓ Terminar edición":"✎ Editar detalle"}</Btn>}
+        </div>
+        {detalleEditando?
+          <textarea value={form.detalle} onChange={e=>setForm(f=>({...f,detalle:e.target.value}))} placeholder="Detalle de lo ocurrido, conversación con la clienta, resolución propuesta..." style={{width:"100%",boxSizing:"border-box",border:"1.5px solid #d9cdd1",borderRadius:9,padding:"9px 11px",fontSize:12,fontFamily:"inherit",lineHeight:1.45,minHeight:130,resize:"vertical",background:"#fff",color:"#1a1a1a",outline:"none"}}/>:
+          <div style={{width:"100%",boxSizing:"border-box",border:"1px solid rgba(120,120,120,.18)",borderRadius:9,padding:"10px 11px",fontSize:11.5,lineHeight:1.45,fontFamily:"inherit",background:"#fafafa",color:"#2f272a",whiteSpace:"pre-wrap",overflowWrap:"anywhere"}}>{form.detalle||<span style={{color:"var(--color-text-secondary)",fontStyle:"italic"}}>Sin detalle cargado.</span>}</div>
+        }
+      </div>
       <div style={{background:COLORS.infoLight,borderRadius:8,padding:"8px 10px",fontSize:11,color:COLORS.info}}>Fotos: máximo {MAX_GARANTIA_FOTOS}, comprimidas automáticamente a aproximadamente 200 KB cada una.</div>
       {(form.fotos||[]).length>0&&<div style={{display:"flex",gap:8,flexWrap:"wrap"}}>{form.fotos.map((f,i)=><div key={f.path||f.url||i} style={{position:"relative"}}><a href={f.url||`${SUPABASE_URL}/storage/v1/object/public/garantias/${f.path}`} target="_blank" rel="noreferrer"><img src={f.url||`${SUPABASE_URL}/storage/v1/object/public/garantias/${f.path}`} alt="Reclamo" style={{width:86,height:70,objectFit:"cover",borderRadius:8,border:"1px solid #ddd"}}/></a><button type="button" onClick={()=>removeExistingFoto(i)} style={{position:"absolute",right:-5,top:-5,border:"none",background:COLORS.danger,color:"#fff",borderRadius:"50%",width:19,height:19,cursor:"pointer"}}>×</button></div>)}</div>}
       <input type="file" accept="image/*" multiple disabled={(form.fotos||[]).length>=MAX_GARANTIA_FOTOS} onChange={e=>{const arr=Array.from(e.target.files||[]);const disponibles=Math.max(0,MAX_GARANTIA_FOTOS-(form.fotos||[]).length);setFiles(arr.slice(0,disponibles));if(arr.length>disponibles)setErr(`Máximo ${MAX_GARANTIA_FOTOS} fotos por reclamo.`);}}/>
-      <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr 1fr",gap:10}} className="niki-mobile-one-column"><ModalInput label="Fecha de arreglo" type="date" value={form.fechaArreglo} onChange={v=>setForm(f=>({...f,fechaArreglo:v}))}/><div><label style={{fontSize:12,fontWeight:700,display:"block",marginBottom:5}}>Manicura que arregla</label><Select value={String(form.manicuraArregloId||"")} onChange={v=>setForm(f=>({...f,manicuraArregloId:v}))}><option value="">Sin definir</option>{manicurasLocal.map(m=><option key={m.id} value={m.id}>{m.nombre}</option>)}</Select></div><div><label style={{fontSize:12,fontWeight:700,display:"block",marginBottom:5}}>Reclamo atendido</label><Select value={form.atendido?"si":"no"} onChange={v=>setForm(f=>({...f,atendido:v==="si"}))}><option value="no">No</option><option value="si">Sí</option></Select></div><div><label style={{fontSize:12,fontWeight:700,display:"block",marginBottom:5}}>Estado</label><Select value={form.estado} onChange={v=>setForm(f=>({...f,estado:v,atendido:v!=="pendiente"?true:f.atendido}))}>{RECLAMO_ESTADOS.map(x=><option key={x.value} value={x.value}>{x.label}</option>)}</Select></div></div>
+      <Card style={{padding:12,background:"#fffafc",border:`1px solid ${COLORS.pink}33`}}>
+        <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",gap:8,marginBottom:10,flexWrap:"wrap"}}><div><strong style={{fontSize:13,color:COLORS.pinkDark}}>Resolución / arreglo</strong><p style={{margin:"2px 0 0",fontSize:10,color:"var(--color-text-secondary)"}}>Datos operativos de cómo se atendió el reclamo.</p></div>{form.estado==="cerrado"&&<Badge color="gray">Cerrado / finalizado</Badge>}</div>
+        <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr 1fr",gap:10}} className="niki-mobile-one-column"><ModalInput label="Fecha de arreglo" type="date" value={form.fechaArreglo} onChange={v=>setForm(f=>({...f,fechaArreglo:v}))}/><div><label style={{fontSize:12,fontWeight:700,display:"block",marginBottom:5}}>Manicura que arregla</label><Select value={String(form.manicuraArregloId||"")} onChange={v=>setForm(f=>({...f,manicuraArregloId:v}))}><option value="">Sin definir</option>{manicurasLocal.map(m=><option key={m.id} value={m.id}>{m.nombre}</option>)}</Select></div><div><label style={{fontSize:12,fontWeight:700,display:"block",marginBottom:5}}>Reclamo atendido</label><Select value={form.atendido?"si":"no"} disabled={form.estado==="cerrado"} onChange={v=>setForm(f=>({...f,atendido:v==="si"}))}><option value="no">No</option><option value="si">Sí</option></Select></div><div><label style={{fontSize:12,fontWeight:700,display:"block",marginBottom:5}}>Estado operativo</label><Select value={form.estado==="cerrado"?"resuelto":form.estado} disabled={form.estado==="cerrado"} onChange={v=>setForm(f=>({...f,estado:v,atendido:v!=="pendiente"?true:f.atendido}))}>{RECLAMO_ESTADOS.filter(x=>x.value!=="cerrado").map(x=><option key={x.value} value={x.value}>{x.label}</option>)}</Select></div></div>
+      </Card>
+
+      <Card style={{padding:0,overflow:"hidden",border:`1px solid ${COLORS.info}33`}}>
+        <div style={{padding:"10px 12px",background:COLORS.infoLight,display:"flex",justifyContent:"space-between",alignItems:"center",gap:10,flexWrap:"wrap"}}>
+          <div>
+            <strong style={{fontSize:13,color:COLORS.info}}>Seguimiento</strong>
+            <p style={{margin:"2px 0 0",fontSize:10,color:"var(--color-text-secondary)"}}>Historial de contactos, novedades, próximas acciones y cierre del reclamo.</p>
+          </div>
+          {recordId&&<div style={{display:"flex",alignItems:"center",gap:7,flexWrap:"wrap"}}>
+            {form.estado!=="cerrado"&&<Btn size="sm" onClick={()=>{setSeguimientoDraft({fecha:dateKey(new Date()),comentario:"",proximaFecha:"",proximaAccion:"",cerrar:false});setSeguimientoModalOpen(true);}}>+ Agregar novedad</Btn>}
+            {form.estado==="cerrado"&&<Btn size="sm" variant="secondary" onClick={reabrirReclamo} disabled={seguimientoSaving}>Reabrir reclamo</Btn>}
+          </div>}
+        </div>
+        {!recordId?
+          <div style={{padding:12,fontSize:11,color:"var(--color-text-secondary)"}}>Guardá los datos principales para habilitar el seguimiento. Después podés continuar dentro de este mismo expediente.</div>:
+          <div style={{padding:12,display:"grid",gap:10}}>
+            <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",gap:10,flexWrap:"wrap",padding:"8px 10px",borderRadius:9,background:proximoPendiente?(proximoVencido?COLORS.dangerLight:"#f2f7fd"):"var(--color-background-secondary)",border:`1px solid ${proximoPendiente?(proximoVencido?COLORS.danger:COLORS.info):"rgba(120,120,120,.12)"}22`}}>
+              <div>
+                <span style={{display:"block",fontSize:9,textTransform:"uppercase",fontWeight:800,color:"var(--color-text-secondary)"}}>Próxima acción</span>
+                {proximoPendiente?<div style={{marginTop:3,fontSize:11.5,fontWeight:800,color:proximoVencido?COLORS.danger:COLORS.info}}>{proximoVencido?"⚠ Vencida · ":"📅 "}{fmtReclamoFecha(form.proximoSeguimientoFecha)}{form.proximoSeguimientoAccion?` · ${form.proximoSeguimientoAccion}`:""}</div>:<div style={{marginTop:3,fontSize:10.5,color:"var(--color-text-secondary)"}}>{form.estado==="cerrado"?"Reclamo finalizado.":"Sin próxima acción programada."}</div>}
+              </div>
+              <span style={{fontSize:9,color:"var(--color-text-secondary)"}}>{seguimientos.length} novedad{seguimientos.length===1?"":"es"}</span>
+            </div>
+
+            <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",gap:8}}>
+              <div>
+                <strong style={{fontSize:12}}>Novedades</strong>
+                <p style={{margin:"2px 0 0",fontSize:9.5,color:"var(--color-text-secondary)"}}>Cada intervención queda registrada con fecha y responsable.</p>
+              </div>
+            </div>
+
+            {seguimientosLoading?<p style={{margin:0,fontSize:10,color:"var(--color-text-secondary)"}}>Cargando historial...</p>:!seguimientos.length?<div style={{padding:"12px 13px",border:"1px dashed rgba(120,120,120,.22)",borderRadius:10,fontSize:10.5,color:"var(--color-text-secondary)",background:"#fff"}}>Todavía no hay novedades registradas.</div>:<div style={{display:"grid",gap:8,maxHeight:270,overflowY:"auto",paddingRight:2}}>{seguimientos.map(r=>{const isClose=r.tipo==="cierre",isReopen=r.tipo==="reapertura";const accent=isClose?COLORS.success:isReopen?COLORS.info:COLORS.pinkDark;return <div key={r.id} style={{border:`1px solid ${accent}33`,borderLeft:`4px solid ${accent}`,borderRadius:10,padding:"9px 10px",background:isClose?"#f8fbf5":isReopen?COLORS.infoLight:"#fff",boxShadow:"0 2px 7px rgba(0,0,0,.035)"}}>
+              <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",gap:8,marginBottom:5,flexWrap:"wrap"}}>
+                <div style={{display:"flex",alignItems:"center",gap:6,flexWrap:"wrap"}}><strong style={{fontSize:10.5}}>{fmtReclamoFecha(r.fecha)}</strong>{isClose&&<Badge color="success">Cierre</Badge>}{isReopen&&<Badge color="info">Reapertura</Badge>}</div>
+                <span style={{fontSize:8.8,color:"var(--color-text-secondary)"}}>{reclamoUserName(r.creado_por_user_id)}</span>
+              </div>
+              <p style={{whiteSpace:"pre-wrap",margin:0,fontSize:11.5,lineHeight:1.45,color:"#2f272a"}}>{r.comentario}</p>
+              {r.proxima_accion_fecha&&<div style={{marginTop:7,padding:"6px 8px",borderRadius:8,background:"#f2f7fd",border:"1px solid rgba(49,118,190,.12)",fontSize:9.8,color:COLORS.info}}><strong>Próximo seguimiento · {fmtReclamoFecha(r.proxima_accion_fecha)}</strong>{r.proxima_accion&&<span> · {r.proxima_accion}</span>}</div>}
+            </div>;})}</div>}
+          </div>
+        }
+      </Card>
+
+      {seguimientoModalOpen&&<Modal title="Agregar novedad" onClose={()=>!seguimientoSaving&&setSeguimientoModalOpen(false)} width={620}>
+        <div style={{display:"grid",gap:12}}>
+          <div style={{padding:"9px 11px",borderRadius:9,background:COLORS.infoLight,color:COLORS.info,fontSize:10.5,lineHeight:1.45}}>Registrá lo que pasó en este contacto o gestión. Si corresponde, dejá programado el próximo seguimiento y la acción a realizar.</div>
+          <div style={{display:"grid",gridTemplateColumns:"145px minmax(0,1fr)",gap:10,alignItems:"start"}} className="niki-mobile-one-column">
+            <ModalInput label="Fecha" type="date" value={seguimientoDraft.fecha} onChange={v=>setSeguimientoDraft(d=>({...d,fecha:v}))}/>
+            <div><label style={{fontSize:11,fontWeight:700,display:"block",marginBottom:4}}>Novedad / comentario</label><textarea autoFocus rows={4} value={seguimientoDraft.comentario} onChange={e=>setSeguimientoDraft(d=>({...d,comentario:e.target.value}))} placeholder="Ej.: Nos contactamos con la clienta; nos comentó que..." style={{width:"100%",boxSizing:"border-box",border:"1.5px solid #e0e0e0",borderRadius:8,padding:"8px 10px",fontSize:12,fontFamily:"inherit",lineHeight:1.45,resize:"vertical"}}/></div>
+          </div>
+          <div style={{display:"grid",gridTemplateColumns:"180px minmax(0,1fr)",gap:10,alignItems:"end"}} className="niki-mobile-one-column">
+            <ModalInput label="Próximo seguimiento" type="date" value={seguimientoDraft.proximaFecha} disabled={seguimientoDraft.cerrar} onChange={v=>setSeguimientoDraft(d=>({...d,proximaFecha:v}))}/>
+            <ModalInput label="Próxima acción" value={seguimientoDraft.proximaAccion} disabled={seguimientoDraft.cerrar} onChange={v=>setSeguimientoDraft(d=>({...d,proximaAccion:v}))} placeholder="Ej.: Volver a llamar para confirmar solución"/>
+          </div>
+          <label style={{display:"flex",alignItems:"flex-start",gap:7,padding:"9px 10px",borderRadius:9,background:seguimientoDraft.cerrar?COLORS.successLight:"var(--color-background-secondary)",fontSize:11,fontWeight:700,cursor:"pointer",lineHeight:1.35}}><input type="checkbox" checked={seguimientoDraft.cerrar} onChange={e=>setSeguimientoDraft(d=>({...d,cerrar:e.target.checked,proximaFecha:e.target.checked?"":d.proximaFecha,proximaAccion:e.target.checked?"":d.proximaAccion}))} style={{marginTop:2}}/><span>Esta novedad resuelve el caso: cerrar y finalizar el reclamo</span></label>
+          <div style={{display:"flex",justifyContent:"flex-end",gap:8}}><Btn variant="secondary" onClick={()=>setSeguimientoModalOpen(false)} disabled={seguimientoSaving}>Cancelar</Btn><Btn onClick={saveSeguimiento} disabled={seguimientoSaving}>{seguimientoSaving?"Guardando...":seguimientoDraft.cerrar?"Guardar y cerrar":"Agregar novedad"}</Btn></div>
+        </div>
+      </Modal>}
+
       {err&&<div style={{background:"#fff1f2",border:"1px solid #fecdd3",color:COLORS.danger,borderRadius:8,padding:"8px 10px",fontSize:12}}>{err}</div>}
-      <div style={{display:"flex",justifyContent:"flex-end",gap:8}}><Btn variant="secondary" onClick={onClose}>Cancelar</Btn><Btn onClick={save} disabled={saving}>{saving?"Guardando...":"Guardar reclamo"}</Btn></div>
+      <div style={{display:"flex",justifyContent:"space-between",gap:8,alignItems:"center",flexWrap:"wrap"}}><span style={{fontSize:10,color:"var(--color-text-secondary)"}}>{recordId?"Los datos y el seguimiento pertenecen al mismo expediente.":"Primero guardá el reclamo; después podés continuar el seguimiento acá mismo."}</span><div style={{display:"flex",gap:8}}><Btn variant="secondary" onClick={onClose}>{recordId?"Cerrar":"Cancelar"}</Btn><Btn onClick={save} disabled={saving}>{saving?"Guardando...":recordId?"Guardar cambios":"Guardar reclamo"}</Btn></div></div>
+    </div>
+  </Modal>;
+}
+
+
+function ReclamoDetalleModal({ data, user, reclamo, onClose, onChanged }) {
+  const [current,setCurrent]=useState(()=>normalizeReclamo(reclamo));
+  const [rows,setRows]=useState([]);
+  const [loading,setLoading]=useState(true);
+  const [saving,setSaving]=useState(false);
+  const [draft,setDraft]=useState({fecha:dateKey(new Date()),comentario:"",proximaFecha:"",proximaAccion:"",cerrar:false});
+  const userName=id=>(data.users||[]).find(u=>Number(u.id)===Number(id))?.nombre||"Usuario";
+  const estadoLabel=v=>RECLAMO_ESTADOS.find(x=>x.value===v)?.label||v;
+  const badgeColor=v=>v==="pendiente"?"amber":v==="resuelto_garantia"?"info":v==="cerrado"?"gray":"success";
+  const fmtFecha=v=>v?String(v).slice(0,10).split("-").reverse().join("/"):"—";
+  const load=useCallback(async()=>{
+    if(!current?.id)return;
+    setLoading(true);
+    try{setRows(await api.getReclamoSeguimientos(current.id)||[]);}
+    catch(e){notifyToast("No se pudo cargar el seguimiento: "+(e.message||e),"error");setRows([]);}
+    finally{setLoading(false);}
+  },[current?.id]);
+  useEffect(()=>{void load();},[load]);
+  const saveSeguimiento=async()=>{
+    const comentario=String(draft.comentario||"").trim();
+    if(!comentario)return notifyToast("Escribí la novedad o comentario del seguimiento.","warning");
+    if(draft.proximaFecha&&!draft.cerrar&&!String(draft.proximaAccion||"").trim())return notifyToast("Indicá qué acción hay que realizar en la próxima fecha.","warning");
+    setSaving(true);
+    try{
+      await api.addReclamoSeguimiento({
+        p_reclamo_id:Number(current.id),p_fecha:draft.fecha||dateKey(new Date()),p_comentario:comentario,
+        p_proxima_accion_fecha:draft.cerrar?null:(draft.proximaFecha||null),p_proxima_accion:draft.cerrar?null:(String(draft.proximaAccion||"").trim()||null),
+        p_tipo:draft.cerrar?"cierre":"seguimiento",p_user_id:Number(user.id),
+      });
+      const next=draft.cerrar?{...current,estado:"cerrado",estadoDb:"resuelto",cerradoEn:new Date().toISOString(),cerradoPor:user.id,proximoSeguimientoFecha:"",proximoSeguimientoAccion:"",atendido:true}:{...current,proximoSeguimientoFecha:draft.proximaFecha||"",proximoSeguimientoAccion:String(draft.proximaAccion||"").trim()};
+      setCurrent(next);setDraft({fecha:dateKey(new Date()),comentario:"",proximaFecha:"",proximaAccion:"",cerrar:false});
+      await load();await onChanged?.();
+      notifyToast(draft.cerrar?"Reclamo cerrado y seguimiento guardado.":"Seguimiento guardado.","success");
+    }catch(e){notifyToast(e?.message||"No se pudo guardar el seguimiento.","error");}
+    finally{setSaving(false);}
+  };
+  const reabrir=async()=>{
+    if(!confirm("¿Reabrir este reclamo para continuar el seguimiento?"))return;
+    setSaving(true);
+    try{
+      await api.addReclamoSeguimiento({p_reclamo_id:Number(current.id),p_fecha:dateKey(new Date()),p_comentario:"Reclamo reabierto para continuar el seguimiento.",p_proxima_accion_fecha:null,p_proxima_accion:null,p_tipo:"reapertura",p_user_id:Number(user.id)});
+      setCurrent(c=>({...c,estado:"pendiente",estadoDb:"pendiente",cerradoEn:"",cerradoPor:null,proximoSeguimientoFecha:"",proximoSeguimientoAccion:""}));
+      await load();await onChanged?.();notifyToast("Reclamo reabierto.","success");
+    }catch(e){notifyToast(e?.message||"No se pudo reabrir el reclamo.","error");}
+    finally{setSaving(false);}
+  };
+  const loc=data.locales.find(l=>Number(l.id)===Number(current.localId));
+  const nextDue=current.proximoSeguimientoFecha&&current.estado!=="cerrado";
+  const overdue=nextDue&&current.proximoSeguimientoFecha<dateKey(new Date());
+  return <Modal title={`Reclamo · ${current.cliente||"Clienta"}`} onClose={onClose} width={820}>
+    <div style={{display:"grid",gap:12,fontSize:12}}>
+      <div style={{display:"grid",gridTemplateColumns:"1.15fr .85fr",gap:10}} className="niki-mobile-one-column">
+        <Card style={{padding:12}}><div style={{display:"flex",justifyContent:"space-between",gap:8,alignItems:"flex-start"}}><div><strong style={{fontSize:14}}>{current.cliente}</strong><p style={{margin:"4px 0 0"}}>{current.servicio||"Servicio"} · {fmtFecha(current.fechaServicioOriginal)}</p><small>{loc?.nombre||""}{current.nombreManicuraOriginal?` · ${current.nombreManicuraOriginal}`:""}</small></div><Badge color={badgeColor(current.estado)}>{estadoLabel(current.estado)}</Badge></div><div style={{display:"flex",gap:5,flexWrap:"wrap",marginTop:10}}>{(current.motivos||[]).map(m=><span key={m} style={{background:COLORS.pinkLight,color:COLORS.pinkDark,borderRadius:999,padding:"4px 7px",fontSize:9.5,fontWeight:700}}>{m}</span>)}</div></Card>
+        <Card style={{padding:12,background:nextDue?(overdue?COLORS.dangerLight:COLORS.infoLight):"var(--color-background-secondary)"}}><p style={{margin:0,fontSize:9,textTransform:"uppercase",fontWeight:800,color:"var(--color-text-secondary)"}}>Próxima acción</p>{nextDue?<><strong style={{display:"block",marginTop:5,color:overdue?COLORS.danger:COLORS.info}}>{overdue?"⚠ Vencida · ":"📅 "}{fmtFecha(current.proximoSeguimientoFecha)}</strong><p style={{margin:"5px 0 0",lineHeight:1.4}}>{current.proximoSeguimientoAccion||"Seguimiento programado"}</p></>:<p style={{margin:"6px 0 0",color:"var(--color-text-secondary)"}}>{current.estado==="cerrado"?"Reclamo finalizado.":"Sin próxima acción programada."}</p>}</Card>
+      </div>
+      <Card style={{padding:12}}><strong>Detalle original</strong><p style={{whiteSpace:"pre-wrap",margin:"6px 0 0",lineHeight:1.5}}>{current.detalle||"—"}</p>{current.fotos?.length>0&&<div style={{display:"flex",gap:7,flexWrap:"wrap",marginTop:9}}>{current.fotos.map((f,i)=><a key={f.path||f.url||i} href={f.url||`${SUPABASE_URL}/storage/v1/object/public/garantias/${f.path}`} target="_blank" rel="noreferrer"><img src={f.url||`${SUPABASE_URL}/storage/v1/object/public/garantias/${f.path}`} alt="Reclamo" style={{width:92,height:70,objectFit:"cover",borderRadius:8}}/></a>)}</div>}</Card>
+      <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",gap:8,marginTop:2}}><div><strong style={{fontSize:13}}>Historial de seguimiento</strong><p style={{margin:"2px 0 0",fontSize:10,color:"var(--color-text-secondary)"}}>Cada contacto o novedad queda registrado con fecha y responsable.</p></div>{current.estado==="cerrado"&&<Btn size="sm" variant="secondary" onClick={reabrir} disabled={saving}>Reabrir reclamo</Btn>}</div>
+      {current.estado!=="cerrado"&&<Card style={{padding:12,border:`1px solid ${COLORS.pink}55`}}><div style={{display:"grid",gridTemplateColumns:"150px 1fr",gap:10,alignItems:"start"}} className="niki-mobile-one-column"><ModalInput label="Fecha" type="date" value={draft.fecha} onChange={v=>setDraft(d=>({...d,fecha:v}))}/><div><label style={{fontSize:11,fontWeight:700,display:"block",marginBottom:4}}>Novedad / comentario</label><textarea rows={3} value={draft.comentario} onChange={e=>setDraft(d=>({...d,comentario:e.target.value}))} placeholder="Ej.: Nos contactamos con la clienta. Indicó que..." style={{width:"100%",boxSizing:"border-box",border:"1.5px solid #e0e0e0",borderRadius:8,padding:"8px 10px",fontSize:12,fontFamily:"inherit",resize:"vertical"}}/></div></div><div style={{display:"grid",gridTemplateColumns:"180px 1fr",gap:10,marginTop:9,alignItems:"end"}} className="niki-mobile-one-column"><ModalInput label="Próximo seguimiento" type="date" value={draft.proximaFecha} disabled={draft.cerrar} onChange={v=>setDraft(d=>({...d,proximaFecha:v}))}/><ModalInput label="Próxima acción" value={draft.proximaAccion} disabled={draft.cerrar} onChange={v=>setDraft(d=>({...d,proximaAccion:v}))} placeholder="Ej.: Volver a llamar para confirmar solución"/></div><div style={{display:"flex",justifyContent:"space-between",alignItems:"center",gap:8,marginTop:10,flexWrap:"wrap"}}><label style={{display:"inline-flex",alignItems:"center",gap:6,fontSize:11,fontWeight:700,cursor:"pointer"}}><input type="checkbox" checked={draft.cerrar} onChange={e=>setDraft(d=>({...d,cerrar:e.target.checked,proximaFecha:e.target.checked?"":d.proximaFecha,proximaAccion:e.target.checked?"":d.proximaAccion}))}/> Cerrar y finalizar el reclamo con esta novedad</label><Btn size="sm" onClick={saveSeguimiento} disabled={saving}>{saving?"Guardando...":draft.cerrar?"Guardar y cerrar":"Agregar seguimiento"}</Btn></div></Card>}
+      <div style={{border:"1px solid rgba(120,120,120,.15)",borderRadius:12,overflow:"hidden"}}>{loading?<p style={{padding:12,margin:0,color:"var(--color-text-secondary)"}}>Cargando historial...</p>:!rows.length?<p style={{padding:12,margin:0,color:"var(--color-text-secondary)"}}>Todavía no hay novedades de seguimiento.</p>:rows.map((r,i)=>{const isClose=r.tipo==="cierre",isReopen=r.tipo==="reapertura";return <div key={r.id} style={{display:"grid",gridTemplateColumns:"105px 1fr",gap:10,padding:"10px 12px",borderTop:i?"1px solid rgba(120,120,120,.12)":"none",background:isClose?"#f5f8f2":isReopen?COLORS.infoLight:"#fff"}}><div><strong style={{fontSize:10}}>{fmtFecha(r.fecha)}</strong><small style={{display:"block",marginTop:3,color:"var(--color-text-secondary)"}}>{userName(r.creado_por_user_id)}</small></div><div><div style={{display:"flex",gap:6,alignItems:"center",marginBottom:3}}>{isClose&&<Badge color="success">Cierre</Badge>}{isReopen&&<Badge color="info">Reapertura</Badge>}</div><p style={{whiteSpace:"pre-wrap",margin:0,lineHeight:1.45}}>{r.comentario}</p>{r.proxima_accion_fecha&&<div style={{marginTop:6,padding:"6px 8px",borderRadius:8,background:"var(--color-background-secondary)",fontSize:10}}><strong>Próxima acción · {fmtFecha(r.proxima_accion_fecha)}</strong>{r.proxima_accion&&<span> · {r.proxima_accion}</span>}</div>}</div></div>;})}</div>
     </div>
   </Modal>;
 }
@@ -9618,7 +9932,7 @@ function InformesMensajeriaPage({ data, user }) {
         <div style={{display:"flex",justifyContent:"space-between",gap:10,flexWrap:"wrap",alignItems:"center"}}><div>{editor.id&&<Btn variant="danger" onClick={eliminarInforme} disabled={saving||deleting}>{deleting?"Eliminando...":"Eliminar informe"}</Btn>}</div><div style={{display:"flex",justifyContent:"flex-end",gap:8,flexWrap:"wrap"}}><Btn variant="secondary" onClick={()=>setEditor(null)} disabled={saving||deleting}>Cerrar</Btn><Btn variant="secondary" onClick={()=>guardar(false)} disabled={saving||deleting}>{saving?"Guardando...":"Guardar borrador"}</Btn><Btn onClick={()=>guardar(true)} disabled={saving||deleting}>{saving?"Guardando...":"Finalizar informe"}</Btn></div></div>
       </div>
     </Modal>}
-    {reclamoModal&&editor&&<ReclamoEditorModal data={data} user={user} initial={null} forcedLocalId={localIdsEditor.length===1?localIdsEditor[0]:null} allowedLocalIdsOverride={localIdsEditor} defaultFecha={editor.fecha} informeId={null} onClose={()=>setReclamoModal(null)} onSaved={async()=>{setReclamoModal(null);await loadReclamos(localIdsEditor,editor.fecha);}}/>}
+    {reclamoModal&&editor&&<ReclamoEditorModal data={data} user={user} initial={null} forcedLocalId={localIdsEditor.length===1?localIdsEditor[0]:null} allowedLocalIdsOverride={localIdsEditor} defaultFecha={editor.fecha} informeId={null} onClose={()=>setReclamoModal(null)} onSaved={async()=>{await loadReclamos(localIdsEditor,editor.fecha);}} onChanged={async()=>{await loadReclamos(localIdsEditor,editor.fecha);}}/>}
   </div>;
 }
 
@@ -9847,7 +10161,7 @@ function ReclamosPage({ data, user }) {
   const firstMonth=dateKey(new Date(hoy.getFullYear(),hoy.getMonth(),1));
   const [desde,setDesde]=useState(firstMonth),[hasta,setHasta]=useState(dateKey(hoy));
   const [localFiltro,setLocalFiltro]=useState("todos"),[motivoFiltro,setMotivoFiltro]=useState("todos"),[estadoFiltro,setEstadoFiltro]=useState("todos"),[agrupar,setAgrupar]=useState("local");
-  const [rows,setRows]=useState([]),[loading,setLoading]=useState(false),[modal,setModal]=useState(null),[detalle,setDetalle]=useState(null);
+  const [rows,setRows]=useState([]),[loading,setLoading]=useState(false),[modal,setModal]=useState(null);
   const [kpi,setKpi]=useState({actual:0,anterior:0,variacion:null,incidencia:[]});
   const load=useCallback(async()=>{setLoading(true);try{const all=(await api.getReclamosRango(desde,hasta)||[]).map(normalizeReclamo);setRows(all.filter(r=>allowedLocalIds.includes(Number(r.localId))));}catch(e){notifyToast("No se pudieron cargar los reclamos: "+(e.message||e),"error");}finally{setLoading(false);}},[desde,hasta,allowedLocalIds.join("|")]);
   const refreshKpi=useCallback(async()=>{
@@ -9889,9 +10203,10 @@ function ReclamosPage({ data, user }) {
   },[allowedLocalIds.join("|"),data.locales]);
   useEffect(()=>{load();},[load]);
   useEffect(()=>{refreshKpi();},[refreshKpi]);
-  const filtrados=rows.filter(r=>(localFiltro==="todos"||Number(r.localId)===Number(localFiltro))&&(motivoFiltro==="todos"||r.motivoTipo===motivoFiltro)&&(estadoFiltro==="todos"||r.estado===estadoFiltro));
+  const filtrados=rows.filter(r=>(localFiltro==="todos"||Number(r.localId)===Number(localFiltro))&&(motivoFiltro==="todos"||(r.motivos||[]).includes(motivoFiltro))&&(estadoFiltro==="todos"||r.estado===estadoFiltro));
   const estadoLabel=v=>RECLAMO_ESTADOS.find(x=>x.value===v)?.label||v;
-  const groupKey=r=>agrupar==="local"?(data.locales.find(l=>l.id===r.localId)?.nombre||"Sin local"):agrupar==="tipo"?(r.motivoTipo||"Sin tipo"):agrupar==="estado"?estadoLabel(r.estado):"Todos";
+  const estadoColor=v=>v==="pendiente"?"amber":v==="resuelto_garantia"?"info":v==="cerrado"?"gray":"success";
+  const groupKey=r=>agrupar==="local"?(data.locales.find(l=>l.id===r.localId)?.nombre||"Sin local"):agrupar==="tipo"?((r.motivos||[]).length>1?"Varios motivos":((r.motivos||[])[0]||"Sin tipo")):agrupar==="estado"?estadoLabel(r.estado):"Todos";
   const groups=Array.from(filtrados.reduce((m,r)=>{const k=groupKey(r);if(!m.has(k))m.set(k,[]);m.get(k).push(r);return m;},new Map()).entries());
   const del=async r=>{if(!confirm("¿Eliminar este reclamo?"))return;await api.deleteInformeReclamo(r.id);await Promise.all([load(),refreshKpi()]);};
   const pctText=Number.isFinite(kpi.variacion)?`${kpi.variacion>=0?"+":""}${kpi.variacion.toFixed(1)}%`:"—";
@@ -9923,9 +10238,8 @@ function ReclamosPage({ data, user }) {
       })():<div><p style={{margin:"0 0 4px",fontSize:9,textTransform:"uppercase",color:"var(--color-text-secondary)",fontWeight:800}}>Incidencia del mes</p><span style={{fontSize:11,color:"var(--color-text-secondary)"}}>Sin reclamos en el mes actual.</span></div>}</Card>
     </div>
     <Card style={{padding:12,marginBottom:12}}><div style={{display:"flex",gap:8,flexWrap:"wrap",alignItems:"end"}}><ModalInput label="Desde" type="date" value={desde} onChange={setDesde}/><ModalInput label="Hasta" type="date" value={hasta} onChange={setHasta}/><div><label style={{fontSize:10,fontWeight:700,display:"block",marginBottom:4}}>Local</label><Select value={localFiltro} onChange={setLocalFiltro}><option value="todos">Todos</option>{locales.map(l=><option key={l.id} value={l.id}>{l.nombre}</option>)}</Select></div><div><label style={{fontSize:10,fontWeight:700,display:"block",marginBottom:4}}>Tipo</label><Select value={motivoFiltro} onChange={setMotivoFiltro}><option value="todos">Todos</option>{RECLAMO_MOTIVOS.map(x=><option key={x}>{x}</option>)}</Select></div><div><label style={{fontSize:10,fontWeight:700,display:"block",marginBottom:4}}>Estado</label><Select value={estadoFiltro} onChange={setEstadoFiltro}><option value="todos">Todos</option>{RECLAMO_ESTADOS.map(x=><option key={x.value} value={x.value}>{x.label}</option>)}</Select></div><div><label style={{fontSize:10,fontWeight:700,display:"block",marginBottom:4}}>Agrupar por</label><Select value={agrupar} onChange={setAgrupar}><option value="ninguno">Sin agrupar</option><option value="local">Local</option><option value="tipo">Tipo</option><option value="estado">Estado</option></Select></div><Btn variant="ghost" size="sm" onClick={()=>Promise.all([load(),refreshKpi()])}>↻ Actualizar</Btn></div></Card>
-    {loading?<Card style={{padding:18}}>Cargando reclamos...</Card>:filtrados.length===0?<Card style={{padding:18,textAlign:"center",color:"var(--color-text-secondary)"}}>No hay reclamos para los filtros seleccionados.</Card>:<div style={{display:"grid",gap:10}}>{groups.map(([g,items])=><Card key={g} style={{padding:0,overflow:"hidden"}}><div style={{padding:"9px 12px",background:"var(--color-background-secondary)",display:"flex",justifyContent:"space-between"}}><strong style={{fontSize:12}}>{g}</strong><Badge color="gray">{items.length}</Badge></div><div style={{overflowX:"auto"}}><table style={{width:"100%",borderCollapse:"collapse",fontSize:11,minWidth:1050}}><thead><tr style={{textAlign:"left",color:"var(--color-text-secondary)",fontSize:9,textTransform:"uppercase"}}>{["Fecha","Local","Cliente","Servicio","Manicura","Tipo","Estado","Atendido","Arreglo","Fotos",""].map(h=><th key={h} style={{padding:"8px 9px"}}>{h}</th>)}</tr></thead><tbody>{items.map(r=>{const loc=data.locales.find(l=>l.id===r.localId);return <tr key={r.id} style={{borderTop:"1px solid rgba(120,120,120,.09)"}}><td style={{padding:9}}>{String(r.fecha||"").split("-").reverse().join("/")}</td><td style={{padding:9}}>{loc?.nombre||"—"}</td><td style={{padding:9,fontWeight:700}}>{r.cliente}</td><td style={{padding:9}}>{r.servicio||"—"}</td><td style={{padding:9}}>{r.nombreManicuraOriginal||(data.users||[]).find(u=>u.id===r.manicuraOriginalId)?.nombre||"—"}</td><td style={{padding:9}}>{r.motivoTipo||"—"}</td><td style={{padding:9}}><Badge color={r.estado==="pendiente"?"amber":r.estado==="resuelto_garantia"?"info":"success"}>{estadoLabel(r.estado)}</Badge></td><td style={{padding:9}}>{r.atendido?"Sí":"No"}</td><td style={{padding:9}}>{r.fechaArreglo?String(r.fechaArreglo).split("-").reverse().join("/"):"—"}</td><td style={{padding:9}}>{r.fotos?.length?`📷 ${r.fotos.length}`:"—"}</td><td style={{padding:7,whiteSpace:"nowrap"}}><Btn size="sm" variant="ghost" onClick={()=>setDetalle(r)}>Ver</Btn><Btn size="sm" variant="ghost" onClick={()=>setModal(r)}>Editar</Btn><Btn size="sm" variant="ghost" style={{color:COLORS.danger}} onClick={()=>del(r)}>Eliminar</Btn></td></tr>;})}</tbody></table></div></Card>)}</div>}
-    {modal&&<ReclamoEditorModal data={data} user={user} initial={modal.id?modal:null} onClose={()=>setModal(null)} onSaved={()=>Promise.all([load(),refreshKpi()])}/>} 
-    {detalle&&<Modal title="Detalle del reclamo" onClose={()=>setDetalle(null)} width={680}><div style={{display:"grid",gap:10,fontSize:12}}><div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10}}><Card><strong>{detalle.cliente}</strong><p style={{margin:"4px 0 0"}}>{detalle.servicio} · {String(detalle.fechaServicioOriginal||"").split("-").reverse().join("/")}</p><small>{detalle.nombreManicuraOriginal||(data.users||[]).find(u=>u.id===detalle.manicuraOriginalId)?.nombre||""}</small></Card><Card><Badge color={detalle.estado==="pendiente"?"amber":detalle.estado==="resuelto_garantia"?"info":"success"}>{estadoLabel(detalle.estado)}</Badge><p style={{margin:"6px 0 0"}}>{detalle.motivoTipo}</p><small>Atendido: {detalle.atendido?"Sí":"No"}</small></Card></div><Card><strong>Detalle</strong><p style={{whiteSpace:"pre-wrap",margin:"6px 0 0"}}>{detalle.detalle||"—"}</p></Card>{detalle.fechaArreglo&&<Card><strong>Arreglo</strong><p style={{margin:"5px 0 0"}}>{String(detalle.fechaArreglo).split("-").reverse().join("/")} · {detalle.nombreManicuraArreglo||(data.users||[]).find(u=>u.id===detalle.manicuraArregloId)?.nombre||"Sin manicura"}</p></Card>}{detalle.fotos?.length>0&&<Card><strong>Fotos</strong><div style={{display:"flex",gap:8,flexWrap:"wrap",marginTop:8}}>{detalle.fotos.map((f,i)=><a key={f.path||f.url||i} href={f.url||`${SUPABASE_URL}/storage/v1/object/public/garantias/${f.path}`} target="_blank" rel="noreferrer"><img src={f.url||`${SUPABASE_URL}/storage/v1/object/public/garantias/${f.path}`} alt="Reclamo" style={{width:130,height:100,objectFit:"cover",borderRadius:8}}/></a>)}</div></Card>}</div></Modal>}
+    {loading?<Card style={{padding:18}}>Cargando reclamos...</Card>:filtrados.length===0?<Card style={{padding:18,textAlign:"center",color:"var(--color-text-secondary)"}}>No hay reclamos para los filtros seleccionados.</Card>:<div style={{display:"grid",gap:10}}>{groups.map(([g,items])=><Card key={g} style={{padding:0,overflow:"hidden"}}><div style={{padding:"9px 12px",background:"var(--color-background-secondary)",display:"flex",justifyContent:"space-between"}}><strong style={{fontSize:12}}>{g}</strong><Badge color="gray">{items.length}</Badge></div><div style={{overflowX:"auto"}}><table style={{width:"100%",borderCollapse:"collapse",fontSize:11,minWidth:1180}}><thead><tr style={{textAlign:"left",color:"var(--color-text-secondary)",fontSize:9,textTransform:"uppercase"}}>{["Fecha","Local","Cliente","Servicio","Manicura","Motivos","Estado","Próximo seguimiento","Fotos",""].map(h=><th key={h} style={{padding:"8px 9px"}}>{h}</th>)}</tr></thead><tbody>{items.map(r=>{const loc=data.locales.find(l=>l.id===r.localId);const vencido=r.proximoSeguimientoFecha&&r.estado!=="cerrado"&&r.proximoSeguimientoFecha<dateKey(new Date());return <tr key={r.id} style={{borderTop:"1px solid rgba(120,120,120,.09)"}}><td style={{padding:9}}>{String(r.fecha||"").split("-").reverse().join("/")}</td><td style={{padding:9}}>{loc?.nombre||"—"}</td><td style={{padding:9,fontWeight:700}}>{r.cliente}</td><td style={{padding:9}}>{r.servicio||"—"}</td><td style={{padding:9}}>{r.nombreManicuraOriginal||(data.users||[]).find(u=>u.id===r.manicuraOriginalId)?.nombre||"—"}</td><td style={{padding:9,maxWidth:250}}><div style={{display:"flex",gap:4,flexWrap:"wrap"}}>{(r.motivos||[]).length?(r.motivos||[]).map(m=><span key={m} style={{fontSize:8.5,padding:"3px 5px",borderRadius:999,background:COLORS.pinkLight,color:COLORS.pinkDark,fontWeight:700}}>{m}</span>):"—"}</div></td><td style={{padding:9}}><Badge color={estadoColor(r.estado)}>{estadoLabel(r.estado)}</Badge></td><td style={{padding:9}}>{r.estado==="cerrado"?<span style={{color:"var(--color-text-secondary)"}}>Finalizado</span>:r.proximoSeguimientoFecha?<div><strong style={{fontSize:10,color:vencido?COLORS.danger:COLORS.info}}>{vencido?"⚠ ":""}{String(r.proximoSeguimientoFecha).split("-").reverse().join("/")}</strong>{r.proximoSeguimientoAccion&&<small style={{display:"block",marginTop:2,maxWidth:220,color:"var(--color-text-secondary)"}}>{r.proximoSeguimientoAccion}</small>}</div>:"—"}</td><td style={{padding:9}}>{r.fotos?.length?`📷 ${r.fotos.length}`:"—"}</td><td style={{padding:7,whiteSpace:"nowrap"}}><Btn size="sm" variant="ghost" onClick={()=>setModal(r)}>Abrir</Btn><Btn size="sm" variant="ghost" style={{color:COLORS.danger}} onClick={()=>del(r)}>Eliminar</Btn></td></tr>;})}</tbody></table></div></Card>)}</div>}
+    {modal&&<ReclamoEditorModal data={data} user={user} initial={modal.id?modal:null} onClose={()=>setModal(null)} onSaved={()=>Promise.all([load(),refreshKpi()])} onChanged={()=>Promise.all([load(),refreshKpi()])}/>}
   </div>;
 }
 
@@ -9948,7 +10262,10 @@ function InformeDiario({ data, reloadData, user }) {
   const [encPlanFuente, setEncPlanFuente] = useState("sin_plan");
   const [encPlanSemana, setEncPlanSemana] = useState("");
   const [encCobertura, setEncCobertura] = useState([]);
+  const [encCoberturasSegmentos, setEncCoberturasSegmentos] = useState([]);
   const [encCoberturaLoadedKey, setEncCoberturaLoadedKey] = useState("");
+  const [encNovedad, setEncNovedad] = useState(null);
+  const [encNovedadSaving, setEncNovedadSaving] = useState(false);
   const [reclamosRows, setReclamosRows] = useState([]);
   const [reclamosLoading, setReclamosLoading] = useState(false);
   const [reclamoModal, setReclamoModal] = useState(null);
@@ -10025,7 +10342,7 @@ function InformeDiario({ data, reloadData, user }) {
       })[0] || null;
   }, [data.informesDiarios, turnoOrden]);
   const getSaldoAnterior = useCallback((f, lid, turno = "manana", excludeId = null) => {
-    const prev = getPreviousInforme(f, lid, turno, excludeId);
+const prev = getPreviousInforme(f, lid, turno, excludeId);
     return prev ? calcTotalCaja(prev) : 0;
   }, [getPreviousInforme, calcTotalCaja]);
   const getSaldoEfectivoAnterior = useCallback((f, lid, turno = "manana", excludeId = null) => {
@@ -10114,33 +10431,42 @@ function InformeDiario({ data, reloadData, user }) {
     ].filter(Boolean).join(" | ")).join("\n");
   }, [getGarantiasDelDia, userLabel]);
 
+  const encMinutes = useCallback((t) => {
+    if (!t) return null;
+    const [h,m] = String(t).slice(0,5).split(":").map(Number);
+    return Number.isFinite(h) && Number.isFinite(m) ? h*60+m : null;
+  }, []);
+
   const getAsistenciaInforme = useCallback((inf) => {
-    if (!inf?.fecha || !inf?.localId) return { total:0, ok:true, tarde:[], ausente:[], sinRegistro:[] };
-    const localNum = parseInt(inf.localId);
-    const manicurasLocal = (data.users || []).filter(u => u.rol === "manicura" && u.activo !== false && u.localId === localNum);
-    const horariosDia = (data.horarios || []).filter(h => h.fecha === inf.fecha && h.trabaja && h.entrada && h.salida);
-    const idsConHorario = new Set(horariosDia.map(h => parseInt(h.userId)));
-    const manicurasConHorario = manicurasLocal.filter(m => idsConHorario.has(parseInt(m.id))).sort((a,b)=>(a.codigoExterno || a.nombre || "").localeCompare(b.codigoExterno || b.nombre || ""));
-    const asistenciasDia = (data.asistencias || []).filter(a => a.fecha === inf.fecha);
-    const byUser = new Map(asistenciasDia.map(a => [parseInt(a.userId), a]));
-    const tarde = [];
-    const ausente = [];
-    const sinRegistro = [];
-    manicurasConHorario.forEach(m => {
-      const a = byUser.get(parseInt(m.id));
-      const item = { manicura:m, asistencia:a };
-      if (!a) sinRegistro.push(item);
-      else if (a.estado === "tarde") tarde.push(item);
-      else if (a.estado === "ausente") ausente.push(item);
+    if (!inf?.fecha || !inf?.localId) return { total:0, ok:true, presente:[], tarde:[], ausente:[], sinRegistro:[], pendientesVencidas:[] };
+    const localNum=parseInt(inf.localId), now=new Date(), today=dateKey(now), nowMin=now.getHours()*60+now.getMinutes();
+    const horariosDia=(data.horarios||[]).filter(h=>h.fecha===inf.fecha&&h.trabaja&&h.entrada&&h.salida&&Number(h.localId??getManicuraLocalIdForDate(data,h.userId,inf.fecha))===localNum);
+    const usersById=new Map((data.users||[]).map(u=>[Number(u.id),u]));
+    const manicurasConHorario=horariosDia.map(h=>({manicura:usersById.get(Number(h.userId)),horario:h})).filter(x=>x.manicura&&x.manicura.activo!==false).sort((a,b)=>(a.manicura.codigoExterno||a.manicura.nombre||"").localeCompare(b.manicura.codigoExterno||b.manicura.nombre||""));
+    const asistenciasDia=(data.asistencias||[]).filter(a=>a.fecha===inf.fecha&&Number(a.localId??a.local_id??localNum)===localNum);
+    const byUser=new Map(asistenciasDia.map(a=>[parseInt(a.userId),a]));
+    const presente=[],tarde=[],ausente=[],sinRegistro=[],pendientesVencidas=[];
+    manicurasConHorario.forEach(({manicura,horario})=>{
+      const a=byUser.get(Number(manicura.id)),item={manicura,asistencia:a,horario};
+      if(!a){
+        sinRegistro.push(item);
+        const start=encMinutes(horario.entrada);
+        const due=inf.fecha<today||(inf.fecha===today&&start!=null&&start<=nowMin);
+        if(due)pendientesVencidas.push(item);
+      }else if(a.estado==="presente") presente.push(item);
+      else if(a.estado==="tarde") tarde.push(item);
+      else if(a.estado==="ausente") ausente.push(item);
+      else sinRegistro.push(item);
     });
-    return { total:manicurasConHorario.length, ok:tarde.length === 0 && ausente.length === 0, tarde, ausente, sinRegistro };
-  }, [data.users, data.horarios, data.asistencias]);
+    return { total:manicurasConHorario.length, ok:tarde.length===0&&ausente.length===0&&sinRegistro.length===0, presente, tarde, ausente, sinRegistro, pendientesVencidas };
+  }, [data.users, data.horarios, data.asistencias, data.manicuraHistorialLocales, encMinutes]);
 
   const buildAsistenciaText = useCallback((inf) => {
     const info = getAsistenciaInforme(inf);
     if (!info.total) return "No hay manicuras con horario cargado para este local y fecha.";
-    if (info.ok) return `Todas las manicuras con horario llegaron a tiempo (${info.total}).`;
+    if (info.ok) return `Todas las manicuras programadas registraron asistencia en horario (${info.total}).`;
     const lines = [];
+    if (info.presente.length) lines.push(`Presentes: ${info.presente.length}.`);
     if (info.tarde.length) {
       lines.push("Llegaron tarde:");
       info.tarde.forEach(({ manicura, asistencia }) => {
@@ -10164,15 +10490,12 @@ function InformeDiario({ data, reloadData, user }) {
         lines.push(`- ${detalle}`);
       });
     }
+    if (info.sinRegistro.length) lines.push(`Pendientes de registrar: ${info.sinRegistro.length}.`);
     return lines.join("\n");
   }, [getAsistenciaInforme, userLabel]);
 
-  const encMinutes = useCallback((t) => {
-    if (!t) return null;
-    const [h,m] = String(t).slice(0,5).split(":").map(Number);
-    return Number.isFinite(h) && Number.isFinite(m) ? h*60+m : null;
-  }, []);
   const encHoursDiff = useCallback((row) => {
+    if (["ausencia","vacaciones"].includes(String(row?.estado||""))) return 0;
     const pd=encMinutes(row.horaPlanDesde), ph=encMinutes(row.horaPlanHasta), rd=encMinutes(row.horaRealDesde), rh=encMinutes(row.horaRealHasta);
     const plan=(pd!=null&&ph!=null&&ph>pd)?ph-pd:0;
     const real=(rd!=null&&rh!=null&&rh>rd)?rh-rd:0;
@@ -10185,60 +10508,18 @@ function InformeDiario({ data, reloadData, user }) {
     const key=`${localNum}|${f}`;
     setEncCoberturaLoading(true);
     try {
-      const [confirmed, realRows, cfgRows, templateRows] = await Promise.all([
-        api.getEncargadaPlanificacion(localNum,f,f),
-        api.getEncargadaJornadaReal(localNum,f),
-        api.getEncargadaPlanificacionConfig(localNum),
-        api.getEncargadaSemanaTipoLocal(localNum),
+      const [confirmed, realRows, confirmRows, coverageRows] = await Promise.all([
+        api.getEncargadaPlanificacion(localNum,f,f),api.getEncargadaJornadaReal(localNum,f),api.getEncargadaPlanConfirmacionDia(localNum,f),api.getEncargadaCoberturas(localNum,f),
       ]);
-      const cfg=Array.isArray(cfgRows)?cfgRows[0]:cfgRows;
-      const date=parseDateLocal(f);
-      const jsDay=date?.getDay() ?? 0;
-      const diaSemana=jsDay===0?7:jsDay;
-      let weekType="a";
-      if(date){
-        const monday=getMon(date);
-        const ref=cfg?.fecha_referencia_a ? getMon(parseDateLocal(cfg.fecha_referencia_a)) : monday;
-        const weeks=Math.round((monday-ref)/(7*86400000));
-        weekType=Math.abs(weeks)%2===0?"a":"b";
-      }
-      setEncPlanSemana(weekType);
-      let plan=[];
-      if((confirmed||[]).length){
-        setEncPlanFuente("confirmado");
-        plan=(confirmed||[]).map(r=>({userId:Number(r.user_id),horaPlanDesde:String(r.hora_desde||"").slice(0,5),horaPlanHasta:String(r.hora_hasta||"").slice(0,5),planObservacion:r.observacion||""}));
-      } else {
-        const dayRows=(templateRows||[]).filter(r=>Number(r.dia_semana)===Number(diaSemana));
-        const users=new Set(dayRows.map(r=>Number(r.user_id)));
-        plan=[...users].map(uid=>{
-          const specific=dayRows.find(r=>Number(r.user_id)===uid && r.tipo_semana===weekType);
-          const common=dayRows.find(r=>Number(r.user_id)===uid && r.tipo_semana==="todas");
-          const r=specific||common;
-          return r?{userId:uid,horaPlanDesde:String(r.hora_desde||"").slice(0,5),horaPlanHasta:String(r.hora_hasta||"").slice(0,5),planObservacion:r.observacion||""}:null;
-        }).filter(Boolean);
-        setEncPlanFuente(plan.length?"semana_tipo":"sin_plan");
-      }
+      const planConfirmed=(confirmRows||[]).length>0;
+      setEncPlanFuente(planConfirmed?"confirmado":"sin_confirmar");
+      setEncPlanSemana("");
+      const plan=planConfirmed?(confirmed||[]).map(r=>({userId:Number(r.user_id),horaPlanDesde:String(r.hora_desde||"").slice(0,5),horaPlanHasta:String(r.hora_hasta||"").slice(0,5),planObservacion:r.observacion||""})):[];
       const realByUser=new Map((realRows||[]).map(r=>[Number(r.user_id),r]));
       const allIds=new Set([...plan.map(p=>p.userId),...(realRows||[]).map(r=>Number(r.user_id))]);
-      const merged=[...allIds].map(uid=>{
-        const p=plan.find(x=>x.userId===uid)||{};
-        const r=realByUser.get(uid);
-        return {
-          id:r?.id||null,userId:uid,
-          horaPlanDesde:String(r?.hora_plan_desde||p.horaPlanDesde||"").slice(0,5),
-          horaPlanHasta:String(r?.hora_plan_hasta||p.horaPlanHasta||"").slice(0,5),
-          horaRealDesde:String(r?.hora_real_desde||p.horaPlanDesde||"").slice(0,5),
-          horaRealHasta:String(r?.hora_real_hasta||p.horaPlanHasta||"").slice(0,5),
-          estado:r?.estado||"normal",reemplazaUserId:r?.reemplaza_user_id||null,
-          comentario:r?.comentario||"",motivoAusencia:r?.motivo_ausencia||"",certificado:r?.certificado===true,tipoDoc:r?.tipo_doc||"",certificadoPath:r?.certificado_path||"",certificadoNombre:r?.certificado_nombre||"",certificadoMime:r?.certificado_mime||"",certificadoTamano:Number(r?.certificado_tamano||0),planObservacion:p.planObservacion||"",saved:!!r,dirty:false,
-        };
-      }).sort((a,b)=>(a.horaPlanDesde||a.horaRealDesde||"99:99").localeCompare(b.horaPlanDesde||b.horaRealDesde||"99:99") || encUserName(a.userId).localeCompare(encUserName(b.userId)));
-      setEncCobertura(merged);
-      setEncCoberturaLoadedKey(key);
-    } catch(e) {
-      notifyToast("No se pudo cargar la cobertura de encargadas: "+(e.message||e),"error");
-      setEncCobertura([]);setEncPlanFuente("sin_plan");
-    }
+      const merged=[...allIds].map(uid=>{const p=plan.find(x=>x.userId===uid)||{};const r=realByUser.get(uid);const estado=r?.estado||"normal";const sinTrabajo=["ausencia","vacaciones"].includes(estado);return {id:r?.id||null,userId:uid,horaPlanDesde:String(r?.hora_plan_desde||p.horaPlanDesde||"").slice(0,5),horaPlanHasta:String(r?.hora_plan_hasta||p.horaPlanHasta||"").slice(0,5),horaRealDesde:sinTrabajo?"":String(r?(r.hora_real_desde||""):(p.horaPlanDesde||"")).slice(0,5),horaRealHasta:sinTrabajo?"":String(r?(r.hora_real_hasta||""):(p.horaPlanHasta||"")).slice(0,5),estado,reemplazaUserId:r?.reemplaza_user_id||null,comentario:r?.comentario||"",motivoAusencia:r?.motivo_ausencia||"",origen:r?.origen||"manual",solicitudVacacionesId:r?.solicitud_vacaciones_id||null,planObservacion:p.planObservacion||"",saved:!!r,dirty:false};}).sort((a,b)=>(a.horaPlanDesde||a.horaRealDesde||"99:99").localeCompare(b.horaPlanDesde||b.horaRealDesde||"99:99") || encUserName(a.userId).localeCompare(encUserName(b.userId)));
+      setEncCobertura(merged);setEncCoberturasSegmentos(coverageRows||[]);setEncCoberturaLoadedKey(key);
+    } catch(e) {notifyToast("No se pudo cargar la cobertura de encargadas: "+(e.message||e),"error");setEncCobertura([]);setEncCoberturasSegmentos([]);setEncPlanFuente("sin_confirmar");}
     setEncCoberturaLoading(false);
   }, [editorOpen, fecha, localId, encUserName]);
 
@@ -10251,17 +10532,19 @@ function InformeDiario({ data, reloadData, user }) {
     if(invalid){notifyToast("En los reemplazos seleccioná la encargada que cubre y a quién reemplaza.","warning");return false;}
     setEncCoberturaSaving(true);
     try {
-      await api.deleteEncargadaJornadaRealDia(localId,fecha);
+      await api.deleteEncargadaJornadaRealDiaManual(localId,fecha);
       const payload=(rows||[]).filter(r=>r.userId).map(r=>({
         fecha,local_id:parseInt(localId),user_id:Number(r.userId),
         hora_plan_desde:r.horaPlanDesde||null,hora_plan_hasta:r.horaPlanHasta||null,
         hora_real_desde:r.estado==="ausencia"||r.estado==="vacaciones"?null:(r.horaRealDesde||null),
         hora_real_hasta:r.estado==="ausencia"||r.estado==="vacaciones"?null:(r.horaRealHasta||null),
-        estado:r.estado||"normal",reemplaza_user_id:r.reemplazaUserId?Number(r.reemplazaUserId):null,
-        comentario:String(r.comentario||"").trim()||null,informe_diario_id:informeId?Number(informeId):null,
+        estado:r.estado||"normal",origen:r.origen||"manual",solicitud_vacaciones_id:r.solicitudVacacionesId||null,reemplaza_user_id:r.reemplazaUserId?Number(r.reemplazaUserId):null,
+        comentario:String(r.comentario||"").trim()||null,motivo_ausencia:String(r.motivoAusencia||"").trim()||null,informe_diario_id:informeId?Number(informeId):null,
         creado_por_user_id:user.id,actualizado_por_user_id:user.id,actualizado_en:new Date().toISOString(),
       }));
       if(payload.length) await api.upsertEncargadaJornadaReal(payload);
+      const clearCoverageFor=(rows||[]).filter(r=>r.userId&&(r.horaPlanDesde||r.horaPlanHasta)&&!["ausencia","cambio_turno","vacaciones"].includes(String(r.estado||"normal")));
+      if(clearCoverageFor.length) await Promise.all(clearCoverageFor.map(r=>api.deleteEncargadaCoberturasManual(localId,fecha,r.userId)));
       setEncCobertura(prev=>prev.map(r=>({...r,saved:true,dirty:false})));
       return true;
     } catch(e) {
@@ -10271,13 +10554,41 @@ function InformeDiario({ data, reloadData, user }) {
   }, [encCobertura,fecha,localId,form?.id,user.id]);
 
   const markAllEncAccordingPlan = useCallback(async()=>{
-    const next=encCobertura.map(r=>({...r,estado:"normal",horaRealDesde:r.horaPlanDesde||r.horaRealDesde,horaRealHasta:r.horaPlanHasta||r.horaRealHasta,reemplazaUserId:null,comentario:r.comentario||""}));
+    const next=encCobertura.map(r=>r.origen==="vacaciones"?r:{...r,estado:"normal",horaRealDesde:r.horaPlanDesde||r.horaRealDesde,horaRealHasta:r.horaPlanHasta||r.horaRealHasta,reemplazaUserId:null,comentario:"",motivoAusencia:"",dirty:true});
     setEncCobertura(next);
     const ok=await persistEncCobertura(form?.id||null,next);
     if(ok) notifyToast("Cobertura de encargadas confirmada según planificación.","success");
   },[encCobertura,persistEncCobertura,form?.id]);
 
   const encargadasLocalInforme = useMemo(()=>{const ids=new Set((data.encargadoLocales||[]).filter(x=>Number(x.localId)===Number(localId)).map(x=>Number(x.userId)));return (data.users||[]).filter(u=>u.activo!==false&&ids.has(Number(u.id))).sort((a,b)=>(a.nombre||"").localeCompare(b.nombre||""));},[data.encargadoLocales,data.users,localId]);
+  const encargadasCoberturaInforme = useCallback((currentUserId=null)=>(data.users||[]).filter(u=>u.activo!==false&&isEncargadaOperativa(data,u.id)&&Number(u.id)!==Number(currentUserId)).sort((a,b)=>(a.nombre||"").localeCompare(b.nombre||"")),[data.users,data.encargadoLocales]);
+  const openEncNovedad = useCallback((row,idx,tipo)=>{
+    if(!row?.userId)return;
+    const existing=(encCoberturasSegmentos||[]).find(c=>c.origen==="manual"&&Number(c.reemplazado_user_id)===Number(row.userId)&&c.estado!=="cancelada");
+    const isAbs=tipo==="ausencia";
+    setEncNovedad({idx,tipo,userId:Number(row.userId),motivo:row.motivoAusencia||(isAbs?MOTIVOS_AUSENCIA_ENCARGADA[0]:MOTIVOS_MODIFICACION_ENCARGADA[0]),horaRealDesde:isAbs?"":(row.horaRealDesde||row.horaPlanDesde||""),horaRealHasta:isAbs?"":(row.horaRealHasta||row.horaPlanHasta||""),reemplazoUserId:existing?.reemplazo_user_id?Number(existing.reemplazo_user_id):null,coberturaDesde:String(existing?.hora_desde||row.horaPlanDesde||"").slice(0,5),coberturaHasta:String(existing?.hora_hasta||row.horaPlanHasta||"").slice(0,5),comentario:row.comentario||""});
+  },[encCoberturasSegmentos]);
+  const saveEncNovedad = useCallback(async()=>{
+    if(!encNovedad)return;
+    const row=encCobertura[encNovedad.idx]||encCobertura.find(r=>Number(r.userId)===Number(encNovedad.userId));
+    if(!row)return;
+    const isAbs=encNovedad.tipo==="ausencia";
+    if(!String(encNovedad.motivo||"").trim())return notifyToast("Indicá el motivo de la novedad.","warning");
+    if(!isAbs){const rd=encMinutes(encNovedad.horaRealDesde),rh=encMinutes(encNovedad.horaRealHasta);if(rd==null||rh==null||rh<=rd)return notifyToast("Indicá un horario real válido.","warning");}
+    if(isAbs&&!encNovedad.reemplazoUserId)return notifyToast("La ausencia requiere indicar quién reemplaza a la encargada.","warning");
+    if(encNovedad.reemplazoUserId){const cd=encMinutes(encNovedad.coberturaDesde),ch=encMinutes(encNovedad.coberturaHasta);if(cd==null||ch==null||ch<=cd)return notifyToast("Indicá un horario de cobertura válido.","warning");}
+    setEncNovedadSaving(true);
+    try{
+      const estado=isAbs?"ausencia":"cambio_turno";
+      await api.upsertEncargadaJornadaReal([{fecha,local_id:Number(localId),user_id:Number(row.userId),hora_plan_desde:row.horaPlanDesde||null,hora_plan_hasta:row.horaPlanHasta||null,hora_real_desde:isAbs?null:(encNovedad.horaRealDesde||null),hora_real_hasta:isAbs?null:(encNovedad.horaRealHasta||null),estado,origen:"manual",solicitud_vacaciones_id:null,reemplaza_user_id:null,comentario:String(encNovedad.comentario||encNovedad.motivo||"").trim()||null,motivo_ausencia:String(encNovedad.motivo||"").trim()||null,informe_diario_id:form?.id?Number(form.id):null,creado_por_user_id:user.id,actualizado_por_user_id:user.id,actualizado_en:new Date().toISOString()}]);
+      await api.deleteEncargadaCoberturasManual(localId,fecha,row.userId);
+      if(encNovedad.reemplazoUserId)await api.createEncargadaCobertura({origen:"manual",local_id:Number(localId),fecha,reemplazado_user_id:Number(row.userId),reemplazo_user_id:Number(encNovedad.reemplazoUserId),hora_desde:encNovedad.coberturaDesde,hora_hasta:encNovedad.coberturaHasta,estado:"planificada",motivo:String(encNovedad.motivo||"").trim()||null,creado_por_user_id:user.id,actualizado_por_user_id:user.id,actualizado_en:new Date().toISOString()});
+      setEncNovedad(null);
+      await loadEncCobertura(fecha,localId);
+      notifyToast(isAbs?"Ausencia y reemplazo guardados.":"Modificación de horario guardada.","success");
+    }catch(e){notifyToast(e?.message||"No se pudo guardar la novedad de la encargada.","error");}
+    finally{setEncNovedadSaving(false);}
+  },[encNovedad,encCobertura,fecha,localId,form?.id,user.id,encMinutes,loadEncCobertura]);
   const addEncReplacement = useCallback(()=>{
     const current=new Set(encCobertura.map(r=>Number(r.userId)).filter(Boolean));
     const disponibles=(data.users||[]).filter(u=>u.activo!==false&&isEncargadaOperativa(data,u.id)&&!current.has(Number(u.id)));
@@ -10287,19 +10598,21 @@ function InformeDiario({ data, reloadData, user }) {
 
   const buildEncargadasRealText = useCallback((inf) => {
     if(!encCobertura.length) return "Sin cobertura real registrada.";
-    return encCobertura.map(r=>{
+    const base=encCobertura.map(r=>{
       const diff=encHoursDiff(r);
       const plan=r.horaPlanDesde&&r.horaPlanHasta?`${r.horaPlanDesde}-${r.horaPlanHasta}`:"sin plan";
       const real=r.estado==="ausencia"||r.estado==="vacaciones"?"sin trabajo":(r.horaRealDesde&&r.horaRealHasta?`${r.horaRealDesde}-${r.horaRealHasta}`:"sin dato");
       const repl=r.reemplazaUserId?` · reemplaza a ${encUserName(r.reemplazaUserId)}`:"";
       const delta=Math.abs(diff)>0.001?` · ${diff>0?"+":""}${diff.toFixed(1)} h vs plan`:"";
       return `${encUserName(r.userId)} · Plan ${plan} · Real ${real} · ${r.estado}${repl}${delta}${r.comentario?` · ${r.comentario}`:""}`;
-    }).join("\n");
-  },[encCobertura,encHoursDiff,encUserName]);
+    });
+    const cov=encCoberturasSegmentos.map(c=>`${encUserName(c.reemplazo_user_id)} · cobertura ${String(c.hora_desde).slice(0,5)}-${String(c.hora_hasta).slice(0,5)} · reemplaza a ${encUserName(c.reemplazado_user_id)}${c.origen==="vacaciones"?" · vacaciones":""}`);
+    return [...base,...cov].join("\n");
+  },[encCobertura,encCoberturasSegmentos,encHoursDiff,encUserName]);
 
   const normalizeInformeReclamo = useCallback((r) => {
     const x=normalizeReclamo(r);
-    return { ...x, tempId:r.tempId||null, informeId:r.informe_diario_id??r.informeId??null, motivo:x.motivoTipo||r.motivo||"", resuelto:x.estado!=="pendiente", acciones:x.detalle||r.acciones_realizar||r.acciones||"", _temp:r._temp===true };
+    return { ...x, tempId:r.tempId||null, informeId:r.informe_diario_id??r.informeId??null, motivo:(x.motivos||[]).length?x.motivos.join(" · "):(x.motivoTipo||r.motivo||""), resuelto:x.estado!=="pendiente", acciones:x.detalle||r.acciones_realizar||r.acciones||"", _temp:r._temp===true };
   }, []);
 
   const loadReclamos = useCallback(async (informeId, localId, fecha) => {
@@ -10761,6 +11074,9 @@ function InformeDiario({ data, reloadData, user }) {
 
   const save = async (markSent = false) => {
     if (!form?.fecha || !form?.localId) return notifyToast("Seleccion\u00e1 fecha y local.", "warning");
+    if (markSent && encPlanFuente !== "confirmado") return notifyToast("No podés confirmar el informe: la planificación de encargadas de este día no está confirmada.", "warning", {title:"Falta confirmar encargadas"});
+    if (markSent) { const pending=getAsistenciaInforme(form).pendientesVencidas||[]; if(pending.length){const nombres=pending.map(x=>x.manicura?.nombre).filter(Boolean).join(", ");return notifyToast(`No podés confirmar el informe. Hay ${pending.length} asistencia${pending.length===1?"":"s"} pendiente${pending.length===1?"":"s"}: ${nombres}`,"warning",{title:"Asistencias pendientes",duration:8000});} }
+    if (markSent && encCobertura.some(r=>r.dirty)) return notifyToast("Guardá primero los cambios de horarios de encargadas.","warning");
     if (autoSaveTimerRef.current) window.clearTimeout(autoSaveTimerRef.current);
     manualSavingRef.current = true;
     setSaving(true);
@@ -11025,7 +11341,7 @@ function InformeDiario({ data, reloadData, user }) {
     </div>}
 
     {editorOpen && <div style={{ marginTop:10,marginBottom:14 }}>
-      <div style={{ border:"1px solid var(--color-border-tertiary)",borderRadius:14,padding:"10px 12px",background:"var(--color-background-primary)",marginBottom:10 }}>
+<div style={{ border:"1px solid var(--color-border-tertiary)",borderRadius:14,padding:"10px 12px",background:"var(--color-background-primary)",marginBottom:10 }}>
         <div style={{ display:"grid",gridTemplateColumns:"repeat(4,minmax(0,1fr))",gap:10 }} className="niki-mobile-one-column">
           <Field label="Local"><Select value={localId} onChange={v=>{setLocalId(v); setLocalFiltro(v);}}>{locales.map(l=><option key={l.id} value={l.id}>{l.nombre}</option>)}</Select></Field>
           <Field label="Fecha"><input type="date" value={fecha} onChange={e=>{setFecha(e.target.value); setMesFiltro(String(e.target.value).slice(0,7));}} style={{ width:"100%",border:`1px solid ${COLORS.pink}`,borderRadius:8,padding:"8px 10px",fontSize:14,fontWeight:700,background:COLORS.pinkLight,color:COLORS.pinkDark,boxSizing:"border-box",fontFamily:"inherit" }}/></Field>
@@ -11077,12 +11393,13 @@ function InformeDiario({ data, reloadData, user }) {
             </div>
             <div style={{ padding:10 }}>
               <div style={{ display:"grid",gridTemplateColumns:"repeat(4,minmax(0,1fr))",gap:6,marginBottom:9 }}>
-                <div style={{ borderRadius:9,padding:"7px 6px",background:COLORS.successLight,textAlign:"center" }}><strong style={{ display:"block",fontSize:17,color:COLORS.success }}>{Math.max(0,asistenciaInforme.total-asistenciaInforme.ausente.length)}</strong><span style={{ fontSize:9,color:"var(--color-text-secondary)" }}>Asistieron</span></div>
+                <div style={{ borderRadius:9,padding:"7px 6px",background:COLORS.successLight,textAlign:"center" }}><strong style={{ display:"block",fontSize:17,color:COLORS.success }}>{asistenciaInforme.presente.length}</strong><span style={{ fontSize:9,color:"var(--color-text-secondary)" }}>Presentes</span></div>
                 <div style={{ borderRadius:9,padding:"7px 6px",background:COLORS.amberLight,textAlign:"center" }}><strong style={{ display:"block",fontSize:17,color:COLORS.amber }}>{asistenciaInforme.tarde.length}</strong><span style={{ fontSize:9,color:"var(--color-text-secondary)" }}>Llegadas tarde</span></div>
                 <div style={{ borderRadius:9,padding:"7px 6px",background:COLORS.dangerLight,textAlign:"center" }}><strong style={{ display:"block",fontSize:17,color:COLORS.danger }}>{asistenciaInforme.ausente.length}</strong><span style={{ fontSize:9,color:"var(--color-text-secondary)" }}>Ausentes</span></div>
-                <div style={{ borderRadius:9,padding:"7px 6px",background:COLORS.infoLight,textAlign:"center" }}><strong style={{ display:"block",fontSize:17,color:COLORS.info }}>{asistenciaInforme.total}</strong><span style={{ fontSize:9,color:"var(--color-text-secondary)" }}>Programadas</span></div>
+                <div style={{ borderRadius:9,padding:"7px 6px",background:COLORS.infoLight,textAlign:"center" }}><strong style={{ display:"block",fontSize:17,color:COLORS.info }}>{asistenciaInforme.sinRegistro.length}</strong><span style={{ fontSize:9,color:"var(--color-text-secondary)" }}>Pendientes</span></div>
               </div>
-              {asistenciaInforme.total===0 ? <p style={{ margin:0,fontSize:12,color:"var(--color-text-secondary)" }}>No hay manicuras con horario cargado para este día.</p> : asistenciaInforme.ok ? <div style={{ display:"flex",alignItems:"center",gap:7,flexWrap:"wrap",borderTop:"1px solid var(--color-border-tertiary)",paddingTop:8 }}><Badge color="success">✓ Todas llegaron a tiempo</Badge>{asistenciaInforme.sinRegistro.length>0&&<span style={{fontSize:10,color:"var(--color-text-secondary)"}}>{asistenciaInforme.sinRegistro.length} sin asistencia registrada</span>}</div> : <div style={{ borderTop:"1px solid var(--color-border-tertiary)",paddingTop:8,display:"flex",flexDirection:"column",gap:5 }}>
+              {asistenciaInforme.total===0 ? <p style={{ margin:0,fontSize:12,color:"var(--color-text-secondary)" }}>No hay manicuras con horario cargado para este día.</p> : asistenciaInforme.ok ? <div style={{ display:"flex",alignItems:"center",gap:7,flexWrap:"wrap",borderTop:"1px solid var(--color-border-tertiary)",paddingTop:8 }}><Badge color="success">✓ Todas registradas en horario</Badge></div> : <div style={{ borderTop:"1px solid var(--color-border-tertiary)",paddingTop:8,display:"flex",flexDirection:"column",gap:5 }}>
+                {asistenciaInforme.sinRegistro.length>0&&<div style={{fontSize:11}}><Badge color={asistenciaInforme.pendientesVencidas.length?"amber":"gray"}>{asistenciaInforme.sinRegistro.length} pendiente{asistenciaInforme.sinRegistro.length===1?"":"s"}</Badge> <span style={{color:"var(--color-text-secondary)"}}>{asistenciaInforme.pendientesVencidas.length?`${asistenciaInforme.pendientesVencidas.length} ya debería${asistenciaInforme.pendientesVencidas.length===1?"":"n"} haber iniciado.`:"Todavía sin asistencia registrada."}</span></div>}
                 {asistenciaInforme.tarde.map(({manicura,asistencia})=><div key={`t-${manicura.id}`} style={{fontSize:11}}><Badge color="amber">Tarde</Badge> <strong>{userLabel(manicura.id,manicura.nombre)}</strong>{asistencia?.entradaReal?` · ${asistencia.entradaReal}`:""}{asistencia?.motivo?` · ${asistencia.motivo}`:""}</div>)}
                 {asistenciaInforme.ausente.map(({manicura,asistencia})=><div key={`a-${manicura.id}`} style={{fontSize:11}}><Badge color="danger">Ausente</Badge> <strong>{userLabel(manicura.id,manicura.nombre)}</strong>{asistencia?.motivo?` · ${asistencia.motivo}`:""}</div>)}
               </div>}
@@ -11091,24 +11408,26 @@ function InformeDiario({ data, reloadData, user }) {
 
           <div style={{ border:"1px solid var(--color-border-tertiary)",borderRadius:14,overflow:"hidden",background:"var(--color-background-primary)",minWidth:0 }}>
             <div style={{ background:COLORS.infoLight,padding:"9px 11px",borderBottom:"1px solid var(--color-border-tertiary)",display:"flex",justifyContent:"space-between",alignItems:"center",gap:8,flexWrap:"wrap" }}>
-              <div style={{ display:"flex",alignItems:"center",gap:8,minWidth:0 }}><span style={{ width:30,height:30,borderRadius:"50%",background:"rgba(255,255,255,.72)",display:"inline-flex",alignItems:"center",justifyContent:"center",fontSize:15 }}>🕒</span><div><h3 style={{ margin:0,fontSize:14,fontWeight:800,color:COLORS.info }}>Horarios encargadas</h3><p style={{ margin:"1px 0 0",fontSize:10,color:COLORS.info }}>{encPlanFuente==="confirmado"?"Planificación confirmada":encPlanFuente==="semana_tipo"?`Semana ${String(encPlanSemana||"a").toUpperCase()} como referencia`:"Sin planificación previa"}</p><p style={{margin:"2px 0 0",fontSize:9,color:"var(--color-text-secondary)"}}>La asistencia queda confirmada al guardar estos horarios o al usar “Todo según planificación”.</p></div></div>
-              <div style={{display:"flex",gap:5,flexWrap:"wrap"}}><Btn size="sm" variant="secondary" onClick={()=>loadEncCobertura(fecha,localId)} disabled={encCoberturaLoading||encCoberturaSaving}>↻</Btn><Btn size="sm" variant="success" onClick={markAllEncAccordingPlan} disabled={encCoberturaLoading||encCoberturaSaving||!encCobertura.length}>✓ Todo según planificación</Btn></div>
+              <div style={{ display:"flex",alignItems:"center",gap:8,minWidth:0 }}><span style={{ width:30,height:30,borderRadius:"50%",background:"rgba(255,255,255,.72)",display:"inline-flex",alignItems:"center",justifyContent:"center",fontSize:15 }}>🕒</span><div><h3 style={{ margin:0,fontSize:14,fontWeight:800,color:COLORS.info }}>Horarios encargadas</h3><p style={{ margin:"1px 0 0",fontSize:10,color:COLORS.info }}>{encPlanFuente==="confirmado"?"Planificación confirmada":"Planificación NO confirmada"}</p><p style={{margin:"2px 0 0",fontSize:9,color:"var(--color-text-secondary)"}}>La asistencia queda confirmada al guardar estos horarios o al usar “Todo según planificación”.</p></div></div>
+              <div style={{display:"flex",gap:5,flexWrap:"wrap"}}><Btn size="sm" variant="secondary" onClick={()=>loadEncCobertura(fecha,localId)} disabled={encCoberturaLoading||encCoberturaSaving}>↻</Btn><Btn size="sm" variant="success" onClick={markAllEncAccordingPlan} disabled={encCoberturaLoading||encCoberturaSaving||encPlanFuente!=="confirmado"||!encCobertura.length}>✓ Todo según planificación</Btn></div>
             </div>
             <div style={{ padding:10 }}>
               {encCoberturaLoading ? <p style={{margin:0,fontSize:12,color:"var(--color-text-secondary)"}}>Cargando horarios...</p> : <>
-                {encPlanFuente==="semana_tipo"&&<div style={{padding:"5px 7px",borderRadius:7,background:COLORS.amberLight,color:COLORS.amber,fontSize:9,marginBottom:7}}>⚠ Plan no confirmado; se usa Semana Tipo.</div>}
+                {encPlanFuente!=="confirmado"&&<div style={{padding:"8px 9px",borderRadius:8,background:COLORS.dangerLight,color:COLORS.danger,fontSize:10,fontWeight:700,marginBottom:8}}>⚠ No hay encargadas asignadas porque el calendario mensual no está confirmado. Confirmá el plan para poder avanzar.</div>}
+                {encCoberturasSegmentos.length>0&&<div style={{display:"grid",gap:6,marginBottom:9}}>{encCoberturasSegmentos.map(c=>{const locked=c.origen==="vacaciones";return <div key={c.id} style={{padding:"8px 9px",borderRadius:9,background:COLORS.infoLight,border:"1px solid rgba(24,95,165,.16)"}}><div style={{display:"flex",justifyContent:"space-between",gap:8,alignItems:"center",flexWrap:"wrap"}}><div><strong style={{fontSize:11,color:COLORS.info}}>{encUserName(c.reemplazo_user_id)} cubre a {encUserName(c.reemplazado_user_id)}</strong><div style={{fontSize:9,color:"var(--color-text-secondary)"}}>{String(c.hora_desde).slice(0,5)}–{String(c.hora_hasta).slice(0,5)} · {locked?"Vacaciones aprobadas":"Ausencia / cobertura"}</div></div><Badge color={c.estado==="confirmada"?"success":"info"}>{c.estado==="confirmada"?"✓ Confirmada":"Planificada"}</Badge></div><div style={{display:"grid",gridTemplateColumns:"1fr 1fr auto",gap:6,marginTop:6,alignItems:"end"}} className="niki-mobile-one-column"><Field label="Entrada real"><input type="time" value={String(c.hora_real_desde||c.hora_desde||"").slice(0,5)} onChange={e=>setEncCoberturasSegmentos(prev=>prev.map(x=>x.id===c.id?{...x,hora_real_desde:e.target.value}:x))}/></Field><Field label="Salida real"><input type="time" value={String(c.hora_real_hasta||c.hora_hasta||"").slice(0,5)} onChange={e=>setEncCoberturasSegmentos(prev=>prev.map(x=>x.id===c.id?{...x,hora_real_hasta:e.target.value}:x))}/></Field><Btn size="sm" variant={c.estado==="confirmada"?"secondary":"success"} onClick={async()=>{try{const current=encCoberturasSegmentos.find(x=>x.id===c.id)||c;await api.updateEncargadaCobertura(c.id,{hora_real_desde:current.hora_real_desde||current.hora_desde,hora_real_hasta:current.hora_real_hasta||current.hora_hasta,estado:"confirmada",actualizado_por_user_id:user.id,actualizado_en:new Date().toISOString()});await loadEncCobertura(fecha,localId);notifyToast("Cobertura confirmada.","success");}catch(e){notifyToast(e.message||"No se pudo confirmar la cobertura.","error");}}}>{c.estado==="confirmada"?"Actualizar":"✓ Confirmar"}</Btn></div></div>})}</div>}
                 {encCobertura.length===0 ? <p style={{margin:0,fontSize:12,color:"var(--color-text-secondary)"}}>No hay encargadas planificadas ni jornadas reales registradas.</p> : <div style={{display:"flex",flexDirection:"column",gap:7}}>
-                  {encCobertura.map((r,idx)=>{const diff=encHoursDiff(r);const absent=r.estado==="ausencia"||r.estado==="vacaciones";const extraRow=!r.horaPlanDesde&&!r.horaPlanHasta;return <div key={`${r.userId}-${idx}`} style={{borderBottom:idx===encCobertura.length-1?"none":"1px solid var(--color-border-tertiary)",paddingBottom:7}}>
-                    <div style={{display:"flex",justifyContent:"space-between",gap:6,alignItems:"center",marginBottom:5}}><div style={{display:"flex",alignItems:"center",gap:7,minWidth:0}}><Avatar nombre={encUserName(r.userId)} userId={r.userId} size={26}/><div style={{minWidth:0}}><strong style={{fontSize:12}}>{encUserName(r.userId)}</strong><p style={{margin:0,fontSize:9,color:"var(--color-text-secondary)"}}>Plan {r.horaPlanDesde&&r.horaPlanHasta?`${r.horaPlanDesde}–${r.horaPlanHasta}`:"sin horario"}</p></div></div><Badge color={r.estado==="normal"&&Math.abs(diff)<0.001?"success":r.estado==="reemplazo"?"info":"amber"}>{r.estado==="normal"&&Math.abs(diff)<0.001?"Según plan":r.estado==="normal"?"Modificado":r.estado.replace("_"," ")}</Badge></div>
+                  {encCobertura.map((r,idx)=>{const diff=encHoursDiff(r);const absent=r.estado==="ausencia"||r.estado==="vacaciones";const vacation=r.estado==="vacaciones"||r.origen==="vacaciones";const modified=r.estado==="cambio_turno";const extraRow=!r.horaPlanDesde&&!r.horaPlanHasta;const manualCoverage=(encCoberturasSegmentos||[]).find(c=>c.origen==="manual"&&Number(c.reemplazado_user_id)===Number(r.userId)&&c.estado!=="cancelada");const badgeLabel=vacation?"Vacaciones":!r.saved?"Pendiente diario":r.estado==="normal"?(Math.abs(diff)<0.001?"Según planificación":"Modificado"):modified?"Presente con modificación":r.estado==="ausencia"?"Ausente":r.estado==="reemplazo"?"Cobertura":String(r.estado||"Novedad").replace("_"," ");const badgeColor=vacation?"info":!r.saved?"gray":r.estado==="normal"&&Math.abs(diff)<0.001?"success":r.estado==="ausencia"?"danger":modified?"amber":r.estado==="reemplazo"?"info":"amber";return <div key={`${r.userId}-${idx}`} style={{borderBottom:idx===encCobertura.length-1?"none":"1px solid var(--color-border-tertiary)",paddingBottom:7}}>
+                    <div style={{display:"flex",justifyContent:"space-between",gap:6,alignItems:"center",marginBottom:5}}><div style={{display:"flex",alignItems:"center",gap:7,minWidth:0}}><Avatar nombre={encUserName(r.userId)} userId={r.userId} size={26}/><div style={{minWidth:0}}><strong style={{fontSize:12}}>{encUserName(r.userId)}</strong><p style={{margin:0,fontSize:9,color:"var(--color-text-secondary)"}}>Plan {r.horaPlanDesde&&r.horaPlanHasta?`${r.horaPlanDesde}–${r.horaPlanHasta}`:"sin horario"}</p></div></div><Badge color={badgeColor}>{badgeLabel}</Badge></div>
                     <div style={{display:"grid",gridTemplateColumns:extraRow?"1.2fr 1fr .8fr .8fr":"1.1fr .8fr .8fr",gap:6,alignItems:"end"}} className="niki-mobile-one-column">
                       {extraRow&&<Field label="Encargada que cubre"><Select value={r.userId||""} onChange={v=>setEncCobertura(prev=>prev.map((x,i)=>i===idx?{...x,userId:v?Number(v):"",dirty:true}:x))}><option value="">Seleccionar...</option>{(data.users||[]).filter(u=>u.activo!==false&&isEncargadaOperativa(data,u.id)&&(!encCobertura.some((x,j)=>j!==idx&&Number(x.userId)===Number(u.id)))).sort((a,b)=>(a.nombre||"").localeCompare(b.nombre||"")).map(u=><option key={u.id} value={u.id}>{u.nombre}</option>)}</Select></Field>}
-                      <Field label="Estado"><Select value={r.estado} onChange={v=>setEncCobertura(prev=>prev.map((x,i)=>i===idx?{...x,estado:v,dirty:true,...((v==="ausencia"||v==="vacaciones")?{horaRealDesde:"",horaRealHasta:""}:{}),...((v!=="reemplazo")?{reemplazaUserId:null}:{})}:x))}><option value="normal">Normal</option><option value="ausencia">Ausencia</option><option value="vacaciones">Vacaciones</option><option value="reemplazo">Reemplazo</option><option value="cambio_turno">Cambio de turno</option><option value="otro">Otro</option></Select></Field>
-                      <Field label="Entrada real"><input type="time" disabled={absent} value={r.horaRealDesde||""} onChange={e=>setEncCobertura(prev=>prev.map((x,i)=>i===idx?{...x,horaRealDesde:e.target.value,dirty:true}:x))} style={{width:"100%",border:"0.5px solid var(--color-border-secondary)",borderRadius:7,padding:"7px 7px",fontSize:11,boxSizing:"border-box"}}/></Field>
-                      <Field label="Salida real"><input type="time" disabled={absent} value={r.horaRealHasta||""} onChange={e=>setEncCobertura(prev=>prev.map((x,i)=>i===idx?{...x,horaRealHasta:e.target.value,dirty:true}:x))} style={{width:"100%",border:"0.5px solid var(--color-border-secondary)",borderRadius:7,padding:"7px 7px",fontSize:11,boxSizing:"border-box"}}/></Field>
+                      <Field label="Estado">{extraRow?<Select value={r.estado||"reemplazo"} onChange={()=>{}} disabled><option value="reemplazo">Cobertura / reemplazo</option></Select>:vacation?<Select value="vacaciones" onChange={()=>{}} disabled><option value="vacaciones">Vacaciones aprobadas</option></Select>:<Select value={r.estado||"normal"} onChange={v=>{if(v==="ausencia"||v==="cambio_turno"){openEncNovedad(r,idx,v);return;}setEncCobertura(prev=>prev.map((x,i)=>i===idx?{...x,estado:"normal",horaRealDesde:x.horaPlanDesde||x.horaRealDesde,horaRealHasta:x.horaPlanHasta||x.horaRealHasta,motivoAusencia:"",comentario:"",dirty:true}:x));}}><option value="normal">Según planificación</option><option value="cambio_turno">Presente con modificación</option><option value="ausencia">Ausente</option></Select>}</Field>
+                      <Field label="Entrada real"><input type="time" disabled={absent||modified} value={r.horaRealDesde||""} onChange={e=>setEncCobertura(prev=>prev.map((x,i)=>i===idx?{...x,horaRealDesde:e.target.value,dirty:true}:x))} style={{width:"100%",border:"0.5px solid var(--color-border-secondary)",borderRadius:7,padding:"7px 7px",fontSize:11,boxSizing:"border-box"}}/></Field>
+                      <Field label="Salida real"><input type="time" disabled={absent||modified} value={r.horaRealHasta||""} onChange={e=>setEncCobertura(prev=>prev.map((x,i)=>i===idx?{...x,horaRealHasta:e.target.value,dirty:true}:x))} style={{width:"100%",border:"0.5px solid var(--color-border-secondary)",borderRadius:7,padding:"7px 7px",fontSize:11,boxSizing:"border-box"}}/></Field>
                     </div>
-                    {r.estado==="reemplazo"&&<div style={{marginTop:5}}><Field label="Reemplaza a"><Select value={r.reemplazaUserId||""} onChange={v=>setEncCobertura(prev=>prev.map((x,i)=>i===idx?{...x,reemplazaUserId:v?Number(v):null,dirty:true}:x))}><option value="">Seleccionar encargada del local...</option>{encargadasLocalInforme.filter(u=>Number(u.id)!==Number(r.userId)).map(u=><option key={u.id} value={u.id}>{u.nombre}</option>)}</Select></Field></div>}
-                    <div style={{display:"grid",gridTemplateColumns:"1fr auto",gap:6,alignItems:"center",marginTop:5}}><input placeholder="Comentario / motivo" value={r.comentario||""} onChange={e=>setEncCobertura(prev=>prev.map((x,i)=>i===idx?{...x,comentario:e.target.value,dirty:true}:x))} style={{width:"100%",border:"0.5px solid var(--color-border-secondary)",borderRadius:7,padding:"6px 8px",fontSize:10,boxSizing:"border-box"}}/><span style={{fontSize:10,fontWeight:800,color:diff>0?COLORS.amber:diff<0?COLORS.danger:COLORS.success,whiteSpace:"nowrap"}}>{Math.abs(diff)<0.001?"Sin diferencia":`${diff>0?"+":""}${diff.toFixed(1)} h`}</span></div>
-                    {extraRow&&<div style={{marginTop:4}}><Btn size="sm" variant="ghost" onClick={()=>setEncCobertura(prev=>prev.filter((_,i)=>i!==idx))}>Quitar línea</Btn></div>}
+                    {r.estado==="reemplazo"&&<div style={{display:"grid",gridTemplateColumns:"minmax(180px,1fr) minmax(180px,1fr)",gap:6,marginTop:5}} className="niki-mobile-one-column"><Field label="Reemplaza a"><Select value={r.reemplazaUserId||""} onChange={v=>setEncCobertura(prev=>prev.map((x,i)=>i===idx?{...x,reemplazaUserId:v?Number(v):null,dirty:true}:x))}><option value="">Seleccionar encargada del local...</option>{encargadasLocalInforme.filter(u=>Number(u.id)!==Number(r.userId)).map(u=><option key={u.id} value={u.id}>{u.nombre}</option>)}</Select></Field><Field label="Comentario"><input value={r.comentario||""} onChange={e=>setEncCobertura(prev=>prev.map((x,i)=>i===idx?{...x,comentario:e.target.value,dirty:true}:x))} style={{width:"100%",border:"0.5px solid var(--color-border-secondary)",borderRadius:7,padding:"7px 8px",fontSize:10,boxSizing:"border-box"}}/></Field></div>}
+                    {!extraRow&&(r.estado==="ausencia"||modified||vacation)&&<div style={{marginTop:6,padding:"7px 8px",borderRadius:8,background:vacation?COLORS.infoLight:r.estado==="ausencia"?COLORS.dangerLight:COLORS.amberLight,display:"flex",justifyContent:"space-between",gap:8,alignItems:"center",flexWrap:"wrap"}}><div style={{fontSize:10,lineHeight:1.45}}><strong>{vacation?"Vacaciones aprobadas":r.estado==="ausencia"?"Motivo":"Motivo de modificación"}:</strong> {r.motivoAusencia||r.comentario||"Sin definir"}{manualCoverage&&<span> · <strong>Reemplazo:</strong> {encUserName(manualCoverage.reemplazo_user_id)} {String(manualCoverage.hora_desde||"").slice(0,5)}–{String(manualCoverage.hora_hasta||"").slice(0,5)}</span>}{r.estado==="ausencia"&&!manualCoverage&&!vacation&&<span style={{color:COLORS.danger,fontWeight:800}}> · Falta reemplazo</span>}{modified&&!manualCoverage&&<span style={{color:"var(--color-text-secondary)"}}> · Sin reemplazo</span>}</div>{!vacation&&<Btn size="sm" variant="secondary" onClick={()=>openEncNovedad(r,idx,r.estado==="ausencia"?"ausencia":"cambio_turno")}>Editar novedad</Btn>}</div>}
+                    {!extraRow&&!absent&&!modified&&<div style={{display:"grid",gridTemplateColumns:"1fr auto",gap:6,alignItems:"center",marginTop:5}}><input placeholder="Comentario opcional" value={r.comentario||""} onChange={e=>setEncCobertura(prev=>prev.map((x,i)=>i===idx?{...x,comentario:e.target.value,dirty:true}:x))} style={{width:"100%",border:"0.5px solid var(--color-border-secondary)",borderRadius:7,padding:"6px 8px",fontSize:10,boxSizing:"border-box"}}/><span style={{fontSize:10,fontWeight:800,color:diff>0?COLORS.amber:COLORS.success,whiteSpace:"nowrap"}}>{Math.abs(diff)<0.001?"Sin diferencia":`${diff>0?"+":""}${diff.toFixed(1)} h`}</span></div>}
+                    {extraRow&&<div style={{display:"flex",justifyContent:"flex-end",marginTop:4}}><Btn size="sm" variant="ghost" onClick={()=>setEncCobertura(prev=>prev.filter((_,i)=>i!==idx))}>Quitar línea</Btn></div>}
                   </div>})}
                 </div>}
                 <div style={{display:"flex",justifyContent:"space-between",gap:6,flexWrap:"wrap",marginTop:8,borderTop:"1px solid var(--color-border-tertiary)",paddingTop:7}}><Btn size="sm" variant="secondary" onClick={addEncReplacement}>+ Reemplazo / cobertura</Btn><Btn size="sm" onClick={()=>persistEncCobertura(form?.id||null)} disabled={encCoberturaSaving}>{encCoberturaSaving?"Guardando...":"Guardar horarios"}</Btn></div>
@@ -11171,6 +11490,18 @@ function InformeDiario({ data, reloadData, user }) {
       </div>}
     </div>}
 
+    {encNovedad && <Modal title={encNovedad.tipo==="ausencia"?`Ausencia · ${encUserName(encNovedad.userId)}`:`Horario modificado · ${encUserName(encNovedad.userId)}`} onClose={()=>setEncNovedad(null)} width={620}>
+      <div style={{display:"grid",gap:12}}>
+        <div style={{padding:"9px 10px",borderRadius:9,background:encNovedad.tipo==="ausencia"?COLORS.dangerLight:COLORS.amberLight,fontSize:11,lineHeight:1.45}}>{encNovedad.tipo==="ausencia"?<><strong>La ausencia no descuenta horas.</strong> Es obligatorio definir motivo, reemplazo y franja de cobertura.</>:<><strong>Presente con horario modificado.</strong> Indicá el horario real y el motivo. El reemplazo es opcional.</>}</div>
+        <ModalSelect label="Motivo" value={encNovedad.motivo||""} onChange={v=>setEncNovedad(n=>({...n,motivo:v}))}>{(encNovedad.tipo==="ausencia"?MOTIVOS_AUSENCIA_ENCARGADA:MOTIVOS_MODIFICACION_ENCARGADA).map(m=><option key={m} value={m}>{m}</option>)}</ModalSelect>
+        {encNovedad.tipo!=="ausencia"&&<div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:9}}><ModalInput label="Entrada real" type="time" value={encNovedad.horaRealDesde||""} onChange={v=>setEncNovedad(n=>({...n,horaRealDesde:v}))}/><ModalInput label="Salida real" type="time" value={encNovedad.horaRealHasta||""} onChange={v=>setEncNovedad(n=>({...n,horaRealHasta:v}))}/></div>}
+        <ModalSelect label={encNovedad.tipo==="ausencia"?"Quién la reemplaza":"Reemplazo / cobertura (opcional)"} value={encNovedad.reemplazoUserId||""} onChange={v=>setEncNovedad(n=>({...n,reemplazoUserId:v?Number(v):null}))}><option value="">{encNovedad.tipo==="ausencia"?"Seleccionar...":"Sin reemplazo"}</option>{encargadasCoberturaInforme(encNovedad.userId).map(u=><option key={u.id} value={u.id}>{u.nombre}</option>)}</ModalSelect>
+        {encNovedad.reemplazoUserId&&<div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:9}}><ModalInput label="Cobertura desde" type="time" value={encNovedad.coberturaDesde||""} onChange={v=>setEncNovedad(n=>({...n,coberturaDesde:v}))}/><ModalInput label="Cobertura hasta" type="time" value={encNovedad.coberturaHasta||""} onChange={v=>setEncNovedad(n=>({...n,coberturaHasta:v}))}/></div>}
+        <ModalInput label="Observación (opcional)" value={encNovedad.comentario||""} onChange={v=>setEncNovedad(n=>({...n,comentario:v}))}/>
+        <div style={{display:"flex",justifyContent:"flex-end",gap:8}}><Btn variant="secondary" onClick={()=>setEncNovedad(null)}>Cancelar</Btn><Btn onClick={saveEncNovedad} disabled={encNovedadSaving}>{encNovedadSaving?"Guardando...":encNovedad.tipo==="ausencia"?"Guardar ausencia y cobertura":"Guardar modificación"}</Btn></div>
+      </div>
+    </Modal>}
+
     {gastoModal && <Modal title={gastoModal.id||gastoModal.tempId?"Editar pago":"Agregar pago"} onClose={()=>setGastoModal(null)} width={620}>
       <div style={{display:"grid",gap:12}}>
         <ModalSelect label="Concepto" value={gastoModal.conceptoId||""} onChange={v=>setGastoModal(r=>({...r,conceptoId:Number(v)}))}>{gastoConceptos.filter(c=>c.activo||Number(c.id)===Number(gastoModal.conceptoId)).map(c=><option key={c.id} value={c.id}>{c.codigo?`${c.codigo} · `:""}{c.nombre}</option>)}</ModalSelect>
@@ -11189,7 +11520,7 @@ function InformeDiario({ data, reloadData, user }) {
       </div>
     </Modal>}
 
-    {reclamoModal && <ReclamoEditorModal data={data} user={user} initial={reclamoModal?.id?reclamoModal:null} forcedLocalId={form?.localId||null} defaultFecha={form?.fecha||dateKey(new Date())} informeId={form?.id||null} onClose={()=>setReclamoModal(null)} onSaved={async()=>{setReclamoModal(null);await loadReclamos(form?.id,form?.localId,form?.fecha);}}/>}
+    {reclamoModal && <ReclamoEditorModal data={data} user={user} initial={reclamoModal?.id?reclamoModal:null} forcedLocalId={form?.localId||null} defaultFecha={form?.fecha||dateKey(new Date())} informeId={form?.id||null} onClose={()=>setReclamoModal(null)} onSaved={async()=>{await loadReclamos(form?.id,form?.localId,form?.fecha);}} onChanged={async()=>{await loadReclamos(form?.id,form?.localId,form?.fecha);}}/>}
 
     {preview && <Modal title="Informe diario" onClose={()=>setPreview(null)} width={720}>
       <div style={{ display:"flex",justifyContent:"space-between",alignItems:"center",gap:8,flexWrap:"wrap",marginBottom:12 }}>
@@ -12025,7 +12356,7 @@ function AgendaTurnos({ data, reloadData, user, agendaOpenRequest, onAgendaOpenR
         draft = { ...draft, inicio:agendaTime(start), fin:agendaTime(originalEnd), userId:turno.userId };
       } else if (mode === "bottom") {
         const end = Math.max(originalStart + 15, Math.min(calendarEnd, raw));
-        draft = { ...draft, inicio:agendaTime(originalStart), fin:agendaTime(end), userId:turno.userId };
+draft = { ...draft, inicio:agendaTime(originalStart), fin:agendaTime(end), userId:turno.userId };
       } else {
         const x = ev.clientX - rect.left - 60;
         const col = Math.max(0, Math.min(calManicuras.length-1, Math.floor(x / colW)));
@@ -13025,7 +13356,7 @@ function ReportePagoComisiones({ data, setData, user }) {
     const localRegla=status?.anchorLocalId||localIdValue||0;
     const cfg = getConfigManicuraPago(uid, localRegla);
     const manicura = userById.get(Number(uid));
-    const esFinSemana = manicura?.soloFinDeSemana === true;
+const esFinSemana = manicura?.soloFinDeSemana === true;
     const horasGeneral = esFinSemana
       ? Number(configGeneralPagoComisiones.horasObjetivoFinSemana ?? configGeneralPagoComisiones.horasObjetivoDefault ?? 36)
       : Number(configGeneralPagoComisiones.horasObjetivoDefault || 36);
@@ -14025,7 +14356,7 @@ function ReclutamientoCalendarioPage({ data, user, onOpenProcess }) {
     try{
       await api.reclutamientoStorageRequest({action:"delete",actor:user,candidataId:selected.candidata_id,instanciaId:selected.id,path:archivo.storage_path});
       await api.deleteReclutamientoArchivo(archivo.id);
-      await refreshSelected();
+await refreshSelected();
     }catch(e){notifyToast("No se pudo eliminar la foto. "+(e.message||e),"error");}
   };
 
@@ -14363,7 +14694,7 @@ function HorariosEncargadasLocal({ data, user }) {
   const now=new Date();
   const [monthCursor,setMonthCursor]=useState(()=>new Date(now.getFullYear(),now.getMonth(),1,12,0,0,0));
   const [referenceA,setReferenceA]=useState("");
-  const [planRows,setPlanRows]=useState([]),[planLoading,setPlanLoading]=useState(false),[confirming,setConfirming]=useState(false);
+  const [planRows,setPlanRows]=useState([]),[planConfirmedDays,setPlanConfirmedDays]=useState(new Set()),[planLoading,setPlanLoading]=useState(false),[confirming,setConfirming]=useState(false);
   const [dayDetail,setDayDetail]=useState(null);
   const [planModalOpen,setPlanModalOpen]=useState(false);
 
@@ -14415,15 +14746,16 @@ function HorariosEncargadasLocal({ data, user }) {
     return assignedToLocal(selectedLocal).map(emp=>{const r=effectiveRowForWeek(selectedLocal,emp.id,day,wt);return r?{local_id:Number(selectedLocal),user_id:Number(emp.id),fecha:dateKey(d),hora_desde:String(r.hora_desde).slice(0,5),hora_hasta:String(r.hora_hasta).slice(0,5),estado:"confirmado",origen:"semana_tipo",observacion:r.observacion||null,semana_tipo:wt}:null;}).filter(Boolean);
   },[selectedLocal,localDay,weekTypeForDate,assignedToLocal,effectiveRowForWeek]);
 
-  const loadPlan=useCallback(async(localId=selectedLocal)=>{if(!localId)return;setPlanLoading(true);try{const [cfg,plan]=await Promise.all([api.getEncargadaPlanificacionConfig(localId),api.getEncargadaPlanificacion(localId,monthRange.startKey,monthRange.endKey)]);const c=Array.isArray(cfg)?cfg[0]:null;setReferenceA(c?.fecha_referencia_a?normalizeMondayKey(c.fecha_referencia_a):monthRange.startKey);setPlanRows(plan||[]);}catch(e){notifyToast("No se pudo cargar la planificación mensual. "+(e.message||e),"error");}finally{setPlanLoading(false);}},[selectedLocal,monthRange.startKey,monthRange.endKey]);
+  const loadPlan=useCallback(async(localId=selectedLocal)=>{if(!localId)return;setPlanLoading(true);try{const [cfg,plan,confirmedDays]=await Promise.all([api.getEncargadaPlanificacionConfig(localId),api.getEncargadaPlanificacion(localId,monthRange.startKey,monthRange.endKey),api.getEncargadaPlanConfirmaciones(localId,monthRange.startKey,monthRange.endKey)]);const c=Array.isArray(cfg)?cfg[0]:null;setReferenceA(c?.fecha_referencia_a?normalizeMondayKey(c.fecha_referencia_a):monthRange.startKey);setPlanRows(plan||[]);setPlanConfirmedDays(new Set((confirmedDays||[]).map(x=>String(x.fecha).slice(0,10))));}catch(e){notifyToast("No se pudo cargar la planificación mensual. "+(e.message||e),"error");}finally{setPlanLoading(false);}},[selectedLocal,monthRange.startKey,monthRange.endKey]);
   useEffect(()=>{if(selectedLocal&&planModalOpen)loadPlan(selectedLocal);},[selectedLocal,planModalOpen,monthRange.startKey,monthRange.endKey]);
 
   const saveReferenceA=async value=>{const monday=normalizeMondayKey(value);if(!monday)return;setReferenceA(monday);try{await api.upsertEncargadaPlanificacionConfig({local_id:Number(selectedLocal),fecha_referencia_a:monday,actualizado_por_user_id:user.id,actualizado_en:new Date().toISOString()});notifyToast("Semana A de referencia guardada.","success");}catch(e){notifyToast("No se pudo guardar la semana A de referencia. "+(e.message||e),"error");}};
 
   const confirmedForDate=useCallback(dk=>(planRows||[]).filter(r=>String(r.fecha).slice(0,10)===dk),[planRows]);
-  const confirmDay=async d=>{if(!canEdit)return;const dk=dateKey(d),theory=theoreticalForDate(d);setConfirming(true);try{await api.deleteEncargadaPlanificacionDia(selectedLocal,dk);if(theory.length){const payload=theory.map(r=>({...r,confirmado_por_user_id:user.id,confirmado_en:new Date().toISOString(),actualizado_en:new Date().toISOString()}));await api.upsertEncargadaPlanificacion(payload);}await loadPlan();notifyToast(`Asignaciones del ${fmtFecha(d)} confirmadas.`,"success");}catch(e){notifyToast("No se pudo confirmar el día. "+(e.message||e),"error");}finally{setConfirming(false);}};
-  const unconfirmDay=async d=>{if(!canEdit)return;setConfirming(true);try{await api.deleteEncargadaPlanificacionDia(selectedLocal,dateKey(d));await loadPlan();notifyToast("El día volvió a planificación teórica.","success");}catch(e){notifyToast("No se pudo quitar la confirmación. "+(e.message||e),"error");}finally{setConfirming(false);}};
-  const confirmMonth=async()=>{if(!canEdit)return false;const payload=monthRange.weeks.flatMap(w=>w.flatMap(d=>theoreticalForDate(d))).map(r=>({...r,confirmado_por_user_id:user.id,confirmado_en:new Date().toISOString(),actualizado_en:new Date().toISOString()}));setConfirming(true);try{await api.deleteEncargadaPlanificacionRango(selectedLocal,monthRange.startKey,monthRange.endKey);if(payload.length)await api.upsertEncargadaPlanificacion(payload);await loadPlan();notifyToast("Planificación visible confirmada.","success");return true;}catch(e){notifyToast("No se pudo confirmar la planificación. "+(e.message||e),"error");return false;}finally{setConfirming(false);}};
+  const isPlanDayConfirmed=useCallback(dk=>planConfirmedDays.has(dk),[planConfirmedDays]);
+  const confirmDay=async d=>{if(!canEdit)return;const dk=dateKey(d),theory=theoreticalForDate(d),nowIso=new Date().toISOString();setConfirming(true);try{await api.deleteEncargadaPlanificacionDia(selectedLocal,dk);if(theory.length){const payload=theory.map(r=>({...r,confirmado_por_user_id:user.id,confirmado_en:nowIso,actualizado_en:nowIso}));await api.upsertEncargadaPlanificacion(payload);}await api.upsertEncargadaPlanConfirmaciones([{local_id:Number(selectedLocal),fecha:dk,confirmado_por_user_id:user.id,confirmado_en:nowIso,actualizado_en:nowIso}]);await loadPlan();notifyToast(`Asignaciones del ${fmtFecha(d)} confirmadas.`,"success");}catch(e){notifyToast("No se pudo confirmar el día. "+(e.message||e),"error");}finally{setConfirming(false);}};
+  const unconfirmDay=async d=>{if(!canEdit)return;const dk=dateKey(d);setConfirming(true);try{await Promise.all([api.deleteEncargadaPlanificacionDia(selectedLocal,dk),api.deleteEncargadaPlanConfirmacionDia(selectedLocal,dk)]);await loadPlan();notifyToast("El día volvió a planificación teórica.","success");}catch(e){notifyToast("No se pudo quitar la confirmación. "+(e.message||e),"error");}finally{setConfirming(false);}};
+  const confirmMonth=async()=>{if(!canEdit)return false;const visibleDays=monthRange.weeks.flat();const payload=visibleDays.flatMap(d=>theoreticalForDate(d)).map(r=>({...r,confirmado_por_user_id:user.id,confirmado_en:new Date().toISOString(),actualizado_en:new Date().toISOString()}));const nowIso=new Date().toISOString();const confirmations=visibleDays.map(d=>({local_id:Number(selectedLocal),fecha:dateKey(d),confirmado_por_user_id:user.id,confirmado_en:nowIso,actualizado_en:nowIso}));setConfirming(true);try{await Promise.all([api.deleteEncargadaPlanificacionRango(selectedLocal,monthRange.startKey,monthRange.endKey),api.deleteEncargadaPlanConfirmacionesRango(selectedLocal,monthRange.startKey,monthRange.endKey)]);if(payload.length)await api.upsertEncargadaPlanificacion(payload);if(confirmations.length)await api.upsertEncargadaPlanConfirmaciones(confirmations);await loadPlan();notifyToast("Planificación visible confirmada.","success");return true;}catch(e){notifyToast("No se pudo confirmar la planificación. "+(e.message||e),"error");return false;}finally{setConfirming(false);}};
 
   const renderLocalCard=local=>{const emps=assignedToLocal(local.id);let gaps=0;for(const wt of ["a","b"])for(const d of [1,2,3,4,5,6])if(coverageForDay(local.id,d,wt).status==="gap")gaps++;return <Card key={local.id} onClick={()=>setSelectedLocal(Number(local.id))} style={{cursor:"pointer",padding:16,minHeight:142}}><div style={{display:"flex",justifyContent:"space-between",gap:10,alignItems:"flex-start"}}><div><h3 style={{margin:0,fontSize:15}}>{local.nombre}</h3><p style={{margin:"3px 0 0",fontSize:10,color:"var(--color-text-secondary)"}}>{(local.tipoLocal||local.tipo_local||"propio")==="franquicia"?"Franquicia":"Local propio"}</p></div><Badge color={gaps?"amber":"success"}>{gaps?`${gaps} hueco${gaps===1?"":"s"} A/B`:"Cobertura completa"}</Badge></div><div style={{display:"flex",alignItems:"center",gap:6,marginTop:13,minHeight:34,flexWrap:"wrap"}}>{emps.map(e=><div key={e.id} style={{display:"flex",alignItems:"center",gap:5,background:colorFor(e.id,emps).bg,color:colorFor(e.id,emps).fg,borderRadius:999,padding:"4px 8px 4px 4px",fontSize:10,fontWeight:700}}><Avatar nombre={e.nombre} userId={e.id} size={23}/>{e.nombre}</div>)}{!emps.length&&<span style={{fontSize:11,color:"var(--color-text-secondary)"}}>Sin encargadas asignadas</span>}</div></Card>};
 
@@ -14460,14 +14792,14 @@ function HorariosEncargadasLocal({ data, user }) {
       <div style={{display:"flex",flexDirection:"column",gap:12}}>
         <div style={{display:"flex",justifyContent:"space-between",gap:12,alignItems:"center",flexWrap:"wrap"}}><div><strong style={{fontSize:14}}>Calendario teórico / confirmado</strong><p style={{margin:"3px 0 0",fontSize:10,color:"var(--color-text-secondary)"}}>Incluye completas la primera y la última semana aunque tengan días de otro mes.</p></div><div style={{display:"flex",gap:7,alignItems:"center",flexWrap:"wrap"}}><Btn size="sm" variant="secondary" onClick={()=>setMonthCursor(d=>new Date(d.getFullYear(),d.getMonth()-1,1,12))}>‹</Btn><strong style={{minWidth:145,textAlign:"center",fontSize:13}}>{monthLabel}</strong><Btn size="sm" variant="secondary" onClick={()=>setMonthCursor(d=>new Date(d.getFullYear(),d.getMonth()+1,1,12))}>›</Btn></div></div>
         <div style={{display:"flex",gap:9,alignItems:"center",flexWrap:"wrap",padding:"10px 11px",borderRadius:10,background:"var(--color-background-secondary)"}}><span style={{fontSize:11,fontWeight:700}}>Semana A de referencia</span><input type="date" value={referenceA||""} onChange={e=>saveReferenceA(e.target.value)} disabled={!canEdit} style={{border:"1px solid #ddd",borderRadius:8,padding:"6px 8px",fontSize:11,background:"#fff"}}/><span style={{fontSize:10,color:"var(--color-text-secondary)"}}>La siguiente será B y luego alternan automáticamente.</span></div>
-        {planLoading?<div style={{padding:"28px 0",textAlign:"center",fontSize:12}}>Cargando planificación...</div>:<div style={{overflowX:"auto"}}><div style={{minWidth:930}}><div style={{display:"grid",gridTemplateColumns:"repeat(6,minmax(145px,1fr))",gap:7,marginBottom:7}}>{["Lun","Mar","Mié","Jue","Vie","Sáb"].map(x=><div key={x} style={{fontSize:10,fontWeight:800,color:"var(--color-text-secondary)",textAlign:"center"}}>{x}</div>)}</div>{monthRange.weeks.map((week,wi)=><div key={wi} style={{display:"grid",gridTemplateColumns:"repeat(6,minmax(145px,1fr))",gap:7,marginBottom:7}}>{week.map(d=>{const dk=dateKey(d),confirmed=confirmedForDate(dk),theory=theoreticalForDate(d),used=confirmed.length?confirmed:theory,isConfirmed=confirmed.length>0,outMonth=d.getMonth()!==shownMonth,wt=weekTypeForDate(d);return <button key={dk} type="button" onClick={()=>setDayDetail({date:d,confirmed,theory})} style={{minHeight:112,textAlign:"left",border:`1px solid ${isConfirmed?"#b9d5aa":"#e3e3e3"}`,borderRadius:11,padding:9,background:outMonth?"#f7f7f7":"#fff",cursor:"pointer",opacity:outMonth?.72:1}}><div style={{display:"flex",justifyContent:"space-between",alignItems:"center",gap:6,marginBottom:7}}><strong style={{fontSize:10}}>{d.getDate()} {MESES[d.getMonth()].slice(0,3).toUpperCase()}</strong><span style={{fontSize:8,fontWeight:800,padding:"2px 6px",borderRadius:999,background:wt==="a"?COLORS.pinkLight:COLORS.successLight,color:wt==="a"?COLORS.pinkDark:COLORS.success}}>SEM {wt.toUpperCase()}</span></div><div style={{display:"flex",flexDirection:"column",gap:5}}>{used.map(r=>{const emp=emps.find(e=>Number(e.id)===Number(r.user_id)),c=colorFor(r.user_id,emps);return <div key={`${r.user_id}-${r.fecha}`} style={{padding:"5px 6px",borderRadius:7,background:c.bg,color:c.fg,fontSize:9,border:`1px solid ${isConfirmed?c.border:"transparent"}`}}><strong>{emp?.nombre||"Encargada"}</strong> · {String(r.hora_desde).slice(0,5)}–{String(r.hora_hasta).slice(0,5)}</div>})}{!used.length&&<span style={{fontSize:9,color:"#aaa"}}>Sin asignación</span>}</div><div style={{marginTop:7,fontSize:8,fontWeight:700,color:isConfirmed?COLORS.success:"var(--color-text-secondary)"}}>{isConfirmed?"✓ Confirmado":"○ Teórico"}</div></button>})}</div>)}</div></div>}
+        {planLoading?<div style={{padding:"28px 0",textAlign:"center",fontSize:12}}>Cargando planificación...</div>:<div style={{overflowX:"auto"}}><div style={{minWidth:930}}><div style={{display:"grid",gridTemplateColumns:"repeat(6,minmax(145px,1fr))",gap:7,marginBottom:7}}>{["Lun","Mar","Mié","Jue","Vie","Sáb"].map(x=><div key={x} style={{fontSize:10,fontWeight:800,color:"var(--color-text-secondary)",textAlign:"center"}}>{x}</div>)}</div>{monthRange.weeks.map((week,wi)=><div key={wi} style={{display:"grid",gridTemplateColumns:"repeat(6,minmax(145px,1fr))",gap:7,marginBottom:7}}>{week.map(d=>{const dk=dateKey(d),confirmed=confirmedForDate(dk),theory=theoreticalForDate(d),isConfirmed=isPlanDayConfirmed(dk),used=isConfirmed?confirmed:theory,outMonth=d.getMonth()!==shownMonth,wt=weekTypeForDate(d);return <button key={dk} type="button" onClick={()=>setDayDetail({date:d,confirmed,theory})} style={{minHeight:112,textAlign:"left",border:`1px solid ${isConfirmed?"#b9d5aa":"#e3e3e3"}`,borderRadius:11,padding:9,background:outMonth?"#f7f7f7":"#fff",cursor:"pointer",opacity:outMonth?.72:1}}><div style={{display:"flex",justifyContent:"space-between",alignItems:"center",gap:6,marginBottom:7}}><strong style={{fontSize:10}}>{d.getDate()} {MESES[d.getMonth()].slice(0,3).toUpperCase()}</strong><span style={{fontSize:8,fontWeight:800,padding:"2px 6px",borderRadius:999,background:wt==="a"?COLORS.pinkLight:COLORS.successLight,color:wt==="a"?COLORS.pinkDark:COLORS.success}}>SEM {wt.toUpperCase()}</span></div><div style={{display:"flex",flexDirection:"column",gap:5}}>{used.map(r=>{const emp=emps.find(e=>Number(e.id)===Number(r.user_id)),c=colorFor(r.user_id,emps);return <div key={`${r.user_id}-${r.fecha}`} style={{padding:"5px 6px",borderRadius:7,background:c.bg,color:c.fg,fontSize:9,border:`1px solid ${isConfirmed?c.border:"transparent"}`}}><strong>{emp?.nombre||"Encargada"}</strong> · {String(r.hora_desde).slice(0,5)}–{String(r.hora_hasta).slice(0,5)}</div>})}{!used.length&&<span style={{fontSize:9,color:"#aaa"}}>Sin asignación</span>}</div><div style={{marginTop:7,fontSize:8,fontWeight:700,color:isConfirmed?COLORS.success:"var(--color-text-secondary)"}}>{isConfirmed?"✓ Confirmado":"○ Teórico"}</div></button>})}</div>)}</div></div>}
         <div style={{display:"flex",justifyContent:"space-between",gap:10,alignItems:"center",flexWrap:"wrap",paddingTop:11,borderTop:"1px solid #eee"}}><span style={{fontSize:10,color:"var(--color-text-secondary)"}}>Al confirmar la vista se guarda una copia del calendario visible y volvés a la Semana Tipo.</span><div style={{display:"flex",gap:8}}><Btn variant="secondary" onClick={()=>{setPlanModalOpen(false);setDayDetail(null);}}>Cancelar</Btn>{canEdit&&<Btn onClick={async()=>{const ok=await confirmMonth();if(ok){setPlanModalOpen(false);setDayDetail(null);}}} disabled={confirming||planLoading}>{confirming?"Confirmando...":"✓ Confirmar y volver"}</Btn>}</div></div>
       </div>
     </Modal>}
 
     {editRow&&<Modal title={`${encDayLabel(editRow.dia_semana)} · ${emps.find(e=>Number(e.id)===Number(editRow.user_id))?.nombre||"Encargada"}`} onClose={()=>{setEditRow(null);setDraftRows({});}} width={520}><div style={{display:"flex",flexDirection:"column",gap:12}}><div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10}}><ModalInput label="Desde" type="time" value={String(editRow.hora_desde||"").slice(0,5)} onChange={v=>setEditRow(r=>({...r,hora_desde:v}))}/><ModalInput label="Hasta" type="time" value={String(editRow.hora_hasta||"").slice(0,5)} onChange={v=>setEditRow(r=>({...r,hora_hasta:v}))}/></div><ModalSelect label="Aplicar a" value={editRow.tipo_semana||"todas"} onChange={v=>setEditRow(r=>({...r,tipo_semana:v}))}><option value="todas">Todas las semanas</option><option value="a">Solo Semana A</option><option value="b">Solo Semana B</option></ModalSelect><div><label style={{fontSize:13,fontWeight:500,color:"#555",display:"block",marginBottom:6}}>Comentario habitual</label><textarea value={editRow.observacion||""} onChange={e=>setEditRow(r=>({...r,observacion:e.target.value}))} style={{width:"100%",minHeight:72,border:"1.5px solid #e0e0e0",borderRadius:8,padding:"9px 12px",fontSize:13,boxSizing:"border-box"}}/></div><div style={{display:"flex",justifyContent:"space-between",gap:8}}><div>{editRow.id&&<Btn variant="danger" onClick={()=>deleteRow(editRow)} disabled={saving}>Eliminar</Btn>}</div><div style={{display:"flex",gap:8}}><Btn variant="secondary" onClick={()=>{setEditRow(null);setDraftRows({});}}>Cancelar</Btn><Btn onClick={()=>saveRow(editRow)} disabled={saving}>{saving?"Guardando...":"Guardar"}</Btn></div></div></div></Modal>}
 
-    {dayDetail&&<Modal title={`${encDayLabel(dayDetail.date.getDay())} ${fmtFecha(dayDetail.date)} · ${weekTypeForDate(dayDetail.date)==="a"?"Semana A":"Semana B"}`} onClose={()=>setDayDetail(null)} width={560}><div style={{display:"flex",flexDirection:"column",gap:10}}><div style={{padding:9,borderRadius:9,background:dayDetail.confirmed.length?COLORS.successLight:"var(--color-background-secondary)",fontSize:11}}>{dayDetail.confirmed.length?"✓ Las asignaciones de este día están confirmadas.":"○ Este día todavía muestra la planificación teórica derivada de la Semana Tipo."}</div>{(dayDetail.confirmed.length?dayDetail.confirmed:dayDetail.theory).map(r=>{const emp=emps.find(e=>Number(e.id)===Number(r.user_id)),c=colorFor(r.user_id,emps);return <div key={r.user_id} style={{display:"flex",justifyContent:"space-between",alignItems:"center",gap:8,padding:"9px 10px",border:`1px solid ${c.border}`,borderRadius:9,background:c.bg,color:c.fg}}><strong style={{fontSize:12}}>{emp?.nombre||"Encargada"}</strong><span style={{fontSize:11,fontWeight:700}}>{String(r.hora_desde).slice(0,5)}–{String(r.hora_hasta).slice(0,5)}</span></div>})}{!(dayDetail.confirmed.length?dayDetail.confirmed:dayDetail.theory).length&&<p style={{fontSize:11,color:"var(--color-text-secondary)"}}>Sin asignaciones para este día.</p>}<div style={{display:"flex",justifyContent:"flex-end",gap:8,marginTop:4}}>{canEdit&&dayDetail.confirmed.length>0&&<Btn variant="secondary" onClick={async()=>{await unconfirmDay(dayDetail.date);setDayDetail(null);}} disabled={confirming}>Volver a teórico</Btn>}{canEdit&&dayDetail.confirmed.length===0&&<Btn onClick={async()=>{await confirmDay(dayDetail.date);setDayDetail(null);}} disabled={confirming}>✓ Confirmar día</Btn>}<Btn variant="secondary" onClick={()=>setDayDetail(null)}>Cerrar</Btn></div></div></Modal>}
+    {dayDetail&&<Modal title={`${encDayLabel(dayDetail.date.getDay())} ${fmtFecha(dayDetail.date)} · ${weekTypeForDate(dayDetail.date)==="a"?"Semana A":"Semana B"}`} onClose={()=>setDayDetail(null)} width={560}><div style={{display:"flex",flexDirection:"column",gap:10}}><div style={{padding:9,borderRadius:9,background:dayDetail.confirmed.length?COLORS.successLight:"var(--color-background-secondary)",fontSize:11}}>{isPlanDayConfirmed(dateKey(dayDetail.date))?"✓ Las asignaciones de este día están confirmadas.":"○ Este día todavía muestra la planificación teórica derivada de la Semana Tipo."}</div>{(isPlanDayConfirmed(dateKey(dayDetail.date))?dayDetail.confirmed:dayDetail.theory).map(r=>{const emp=emps.find(e=>Number(e.id)===Number(r.user_id)),c=colorFor(r.user_id,emps);return <div key={r.user_id} style={{display:"flex",justifyContent:"space-between",alignItems:"center",gap:8,padding:"9px 10px",border:`1px solid ${c.border}`,borderRadius:9,background:c.bg,color:c.fg}}><strong style={{fontSize:12}}>{emp?.nombre||"Encargada"}</strong><span style={{fontSize:11,fontWeight:700}}>{String(r.hora_desde).slice(0,5)}–{String(r.hora_hasta).slice(0,5)}</span></div>})}{!(isPlanDayConfirmed(dateKey(dayDetail.date))?dayDetail.confirmed:dayDetail.theory).length&&<p style={{fontSize:11,color:"var(--color-text-secondary)"}}>Sin asignaciones para este día.</p>}<div style={{display:"flex",justifyContent:"flex-end",gap:8,marginTop:4}}>{canEdit&&isPlanDayConfirmed(dateKey(dayDetail.date))&&<Btn variant="secondary" onClick={async()=>{await unconfirmDay(dayDetail.date);setDayDetail(null);}} disabled={confirming}>Volver a teórico</Btn>}{canEdit&&!isPlanDayConfirmed(dateKey(dayDetail.date))&&<Btn onClick={async()=>{await confirmDay(dayDetail.date);setDayDetail(null);}} disabled={confirming}>✓ Confirmar día</Btn>}<Btn variant="secondary" onClick={()=>setDayDetail(null)}>Cerrar</Btn></div></div></Modal>}
   </div>;
 }
 
@@ -15025,7 +15357,7 @@ function DashboardComercial({ data, user }) {
       const scoped=(rows||[]).filter(r=>visibleIds.has(Number(r.local_id??r.localId)));
       const actuales=scoped.filter(r=>String(r.fecha||"")>=actualDesde&&String(r.fecha||"")<=actualHasta);
       const anteriores=scoped.filter(r=>String(r.fecha||"")>=anteriorDesde&&String(r.fecha||"")<=anteriorHasta);
-      const reclamos=actuales.length;
+const reclamos=actuales.length;
       const reclamosAnt=anteriores.length;
       const incidencia=totals.visitas?reclamos/totals.visitas*100:0;
       const incidenciaAnt=totals.visitasAnt?reclamosAnt/totals.visitasAnt*100:0;
@@ -15963,10 +16295,10 @@ function defaultSectionForRole(role) {
 
 function sectionAllowedForRole(section, role) {
   const reportesOperativos = ["reportes","reportes_horas","reportes_cobertura","reportes_comisiones","reporte_pago_comisiones"];
-  const admin = ["inicio","dashboard","dashboard_manicuras","clientes_crm","ayuda","roadmap","asistencia","horarios","pizarra_semanal","horarios_encargadas","bloqueo_horarios",...reportesOperativos,"preliquidacion_encargadas","turnos","servicios","listas_precios","adelantos","garantias","reclamos","auditorias","informes","informes_mensajeria","manicuras","encargadas","reclutamiento_busquedas","reclutamiento_candidatas","reclutamiento_calendario","reclutamiento_aprobaciones","reclutamiento_antiguedad","reclutamiento_config","locales","cobertura_config","perfil"];
-  const casaMatriz = ["inicio","dashboard","dashboard_manicuras","clientes_crm","ayuda","roadmap","asistencia","horarios","pizarra_semanal","horarios_encargadas","bloqueo_horarios",...reportesOperativos,"preliquidacion_encargadas","servicios","listas_precios","adelantos","garantias","reclamos","auditorias","informes","informes_mensajeria","manicuras","encargadas","reclutamiento_busquedas","reclutamiento_candidatas","reclutamiento_calendario","reclutamiento_aprobaciones","reclutamiento_antiguedad","reclutamiento_config","locales","cobertura_config","perfil"];
+  const admin = ["inicio","dashboard","dashboard_manicuras","clientes_crm","ayuda","roadmap","asistencia","horarios","pizarra_semanal","horarios_encargadas","vacaciones_encargadas","bloqueo_horarios",...reportesOperativos,"preliquidacion_encargadas","turnos","servicios","listas_precios","adelantos","garantias","reclamos","auditorias","informes","informes_mensajeria","manicuras","encargadas","reclutamiento_busquedas","reclutamiento_candidatas","reclutamiento_calendario","reclutamiento_aprobaciones","reclutamiento_antiguedad","reclutamiento_config","locales","cobertura_config","perfil"];
+  const casaMatriz = ["inicio","dashboard","dashboard_manicuras","clientes_crm","ayuda","roadmap","asistencia","horarios","pizarra_semanal","horarios_encargadas","vacaciones_encargadas","bloqueo_horarios",...reportesOperativos,"preliquidacion_encargadas","servicios","listas_precios","adelantos","garantias","reclamos","auditorias","informes","informes_mensajeria","manicuras","encargadas","reclutamiento_busquedas","reclutamiento_candidatas","reclutamiento_calendario","reclutamiento_aprobaciones","reclutamiento_antiguedad","reclutamiento_config","locales","cobertura_config","perfil"];
   const franquiciado = ["inicio","dashboard","dashboard_manicuras","clientes_crm","ayuda","asistencia","horarios","pizarra_semanal","horarios_encargadas","bloqueo_horarios",...reportesOperativos,"preliquidacion_encargadas","adelantos","garantias","reclamos","informes","informes_mensajeria","manicuras","encargadas","cobertura_config","perfil"];
-  const encargada = ["inicio","dashboard","dashboard_manicuras","clientes_crm","ayuda","asistencia","horarios","pizarra_semanal","bloqueo_horarios",...reportesOperativos,"preliquidacion_encargadas","adelantos","garantias","reclamos","informes","informes_mensajeria","manicuras","cobertura_config","perfil"];
+  const encargada = ["inicio","dashboard","dashboard_manicuras","clientes_crm","ayuda","asistencia","horarios","pizarra_semanal","vacaciones_encargadas","bloqueo_horarios",...reportesOperativos,"preliquidacion_encargadas","adelantos","garantias","reclamos","informes","informes_mensajeria","manicuras","cobertura_config","perfil"];
   const manicura = ["inicio","ayuda","horarios","pizarra_semanal","reportes","reportes_horas","reportes_comisiones","perfil"];
   const allowed = role === "admin" ? admin : role === "casa_matriz" ? casaMatriz : role === "franquiciado" ? franquiciado : role === "encargada" ? encargada : manicura;
   return allowed.includes(section);
@@ -16025,7 +16357,7 @@ export default function App() {
     activityEvents.forEach(eventName => window.addEventListener(eventName, onActivity, { passive:true }));
 
     const timer = window.setInterval(check, 60 * 1000);
-    const refreshTimer = window.setInterval(check, 10 * 60 * 1000);
+const refreshTimer = window.setInterval(check, 10 * 60 * 1000);
     const onVisible = () => { if (document.visibilityState === "visible") check(); };
     window.addEventListener("focus", check);
     document.addEventListener("visibilitychange", onVisible);
@@ -16477,6 +16809,7 @@ export default function App() {
         { id: "horarios", label: "Horarios", icon: "🗓️" },
         { id: "pizarra_semanal", label: "Pizarra semanal", icon: "▦" },
         { id: "horarios_encargadas", label: "Horarios de encargadas", icon: "🧭" },
+         { id: "vacaciones_encargadas", label: "Vacaciones encargadas", icon: "🏖️" },
         { id: "bloqueo_horarios", label: "Bloqueos", icon: "🔐" },
         { id: "reportes_horas", label: "Horas y asistencia", icon: "⏱️" },
         { id: "reportes_cobertura", label: "Cobertura", icon: "📈" },
@@ -16897,6 +17230,7 @@ export default function App() {
     if (seccion==="horarios") return <CalendarioHorarios data={data} setData={setData} reloadData={reloadData} user={appUser} agendaRequest={agendaRequest} savedState={screenState.horarios} onStateChange={(state)=>saveScreenState("horarios", state)} onBackToReport={()=>{ setSeccion("reportes_cobertura"); setMenuOpen(false); setMobileMenuGroup(null); }}/>;
     if (seccion==="pizarra_semanal") return <PizarraSemanal data={data} user={appUser}/>;
     if (seccion==="horarios_encargadas") return ["admin","casa_matriz","franquiciado"].includes(effectiveRole) ? <HorariosEncargadasLocal data={data} user={appUser}/> : null;
+    if (seccion==="vacaciones_encargadas") return ["admin","casa_matriz","encargada"].includes(effectiveRole) ? <VacacionesEncargadas data={data} user={appUser}/> : null;
     if (seccion==="bloqueo_horarios") return <BloqueoHorarios data={data} setData={setData} reloadData={reloadData} user={appUser} savedState={screenState.bloqueoHorarios} onStateChange={(state)=>saveScreenState("bloqueoHorarios", state)}/>;
     if (seccion==="reportes_horas") return renderReportes("horas", "reportes_horas");
     if (seccion==="reportes_cobertura") return effectiveRole!=="manicura" ? renderReportes("cobertura", "reportes_cobertura") : null;
@@ -17025,7 +17359,7 @@ export default function App() {
                         padding:"10px 10px",
                         display:"flex",
                         alignItems:"center",
-                        justifyContent:"space-between",
+justifyContent:"space-between",
                         gap:8,
                         cursor:"pointer",
                         transition:"background 180ms ease, color 180ms ease",
