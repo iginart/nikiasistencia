@@ -201,6 +201,7 @@ if (!document.getElementById("niki-font-global-style")) {
 document.body.style.fontFamily = "'Montserrat', sans-serif";
 
 const MAX_GARANTIA_FOTOS = 3;
+const MAX_AUDITORIA_FOTOS = 5;
 const MAX_GARANTIA_FOTO_BYTES = 200 * 1024;
 const MAX_FOTO_PERFIL_BYTES = 500 * 1024;
 const MAX_DOCUMENTO_IMAGEN_BYTES = 1024 * 1024;
@@ -912,6 +913,24 @@ const api = {
   updateAuditoria: (id,d) => sb(`auditorias?id=eq.${parseInt(id)}`, { method:"PATCH", body:JSON.stringify(d) }),
   deleteAuditoria: (id) => sb(`auditorias?id=eq.${parseInt(id)}`, { method:"DELETE", prefer:"" }),
   upsertAuditoriaRespuestas: (rows) => sb("auditoria_respuestas?on_conflict=auditoria_id,criterio_id", { method:"POST", prefer:"resolution=merge-duplicates,return=representation", body:JSON.stringify(rows) }),
+  uploadAuditoriaFoto: async (auditoriaId, file) => {
+    const compressed = await compressImageToMaxSize(file, MAX_GARANTIA_FOTO_BYTES);
+    const safeName = safeStorageName(compressed.name || "foto.jpg");
+    const path = `${parseInt(auditoriaId)}/${Date.now()}_${safeName}`;
+    const res = await fetch(`${SUPABASE_URL}/storage/v1/object/auditorias/${path}`, {
+      method:"POST",
+      headers:{ apikey:SUPABASE_KEY, Authorization:`Bearer ${SUPABASE_KEY}`, "Content-Type":compressed.type || "image/jpeg", "x-upsert":"true" },
+      body:compressed,
+    });
+    if(!res.ok) throw new Error(await res.text());
+    return { path, url:`${SUPABASE_URL}/storage/v1/object/public/auditorias/${path}`, name:compressed.name, size:compressed.size, type:compressed.type, compressed:true };
+  },
+  deleteAuditoriaFoto: async (path) => {
+    if(!path) return;
+    const res = await fetch(`${SUPABASE_URL}/storage/v1/object/auditorias/${path}`, { method:"DELETE", headers:{ apikey:SUPABASE_KEY, Authorization:`Bearer ${SUPABASE_KEY}` } });
+    if(!res.ok && res.status!==404) throw new Error(await res.text());
+  },
+  auditoriaFotoUrl: (path) => path ? `${SUPABASE_URL}/storage/v1/object/public/auditorias/${path}` : "",
   getMensajeriaInformesRango: (desde,hasta) => sbAll(`mensajeria_informes_diarios?select=*&fecha=gte.${desde}&fecha=lte.${hasta}&order=fecha.desc,local_id.asc,id.desc`),
   getMensajeriaInformeDiaLocal: (localId,fecha) => sb(`mensajeria_informes_diarios?select=*&local_id=eq.${parseInt(localId)}&fecha=eq.${encodeURIComponent(fecha)}&limit=1`),
   upsertMensajeriaInforme: (d) => sb("mensajeria_informes_diarios?on_conflict=local_id,fecha", { method:"POST", prefer:"resolution=merge-duplicates,return=representation", body:JSON.stringify(d) }),
@@ -958,6 +977,17 @@ const api = {
     if(!res.ok && res.status!==404) throw new Error(await res.text());
   },
   informeGastoComprobanteUrl: (path) => path ? `${SUPABASE_URL}/storage/v1/object/public/informes-diarios/${path}` : "",
+  gastosRequest: async (actor, payload = {}) => {
+    const res = await nikiProtectedFetch(`${SUPABASE_URL}/functions/v1/gastos-niki`, {
+      method:"POST",
+      headers:{ apikey:SUPABASE_KEY, Authorization:`Bearer ${SUPABASE_KEY}`, "Content-Type":"application/json" },
+      body:JSON.stringify({ ...payload, actor_id:Number(actor?.id || 0), session_token:String(actor?.sessionToken || "") }),
+    });
+    const txt = await res.text();
+    const out = txt ? JSON.parse(txt) : {};
+    if (!res.ok || out?.ok === false) throw new Error(out?.error || txt || "No se pudo gestionar gastos y vencimientos");
+    return out;
+  },
   createInformeDiario: (d) => sb("informes_diarios", { method: "POST", body: JSON.stringify(d) }),
   upsertInformeDiario: (d) => patchOrPost("informes_diarios", `fecha=eq.${d.fecha}&local_id=eq.${d.local_id}&turno=eq.${encodeURIComponent(d.turno || "dia")}`, d),
   updateInformeDiario: (id, d) => sb(`informes_diarios?id=eq.${id}`, { method: "PATCH", body: JSON.stringify(d) }),
@@ -9190,7 +9220,17 @@ const RECLAMO_MOTIVOS = [
   "No le sirvieron café",
   "No se respetó el horario",
   "Trato de encargada",
+  "Problema con agenda / reserva",
 ];
+const RECLAMO_MOTIVOS_IMPACTAN_MANICURA = new Set([
+  "Servicio mal realizado",
+  "Trato de la manicura",
+  "Atención tarde",
+  "No se respetó el horario",
+]);
+function reclamoImpactaManicuraPorMotivos(motivos=[]) {
+  return (motivos||[]).some(m=>RECLAMO_MOTIVOS_IMPACTAN_MANICURA.has(String(m||"").trim()));
+}
 const RECLAMO_ESTADOS = [
   { value:"pendiente", label:"Pendiente" },
   { value:"resuelto", label:"Resuelto" },
@@ -9204,6 +9244,10 @@ function normalizeReclamo(r) {
     ...(!motivosRaw.length && (r.motivo_tipo ?? r.motivoTipo) ? [String(r.motivo_tipo ?? r.motivoTipo).trim()] : []),
   ]));
   const cerradoEn = r.cerrado_en || r.cerradoEn || "";
+  const sinCliente = r.sin_cliente === true || r.sinCliente === true;
+  const sinServicio = r.sin_servicio === true || r.sinServicio === true;
+  const impactoRaw = r.impacta_score_manicura ?? r.impactaScoreManicura;
+  const impactaScoreManicura = impactoRaw == null ? reclamoImpactaManicuraPorMotivos(motivos) : impactoRaw === true;
   return {
     id:r.id ?? null,
     informeId:r.informe_diario_id ?? r.informeId ?? null,
@@ -9212,6 +9256,9 @@ function normalizeReclamo(r) {
     turno:r.turno || "",
     clienteId:r.cliente_id ?? r.clienteId ?? null,
     cliente:r.cliente || "",
+    sinCliente,
+    sinServicio,
+    impactaScoreManicura,
     comisionOriginalId:r.comision_original_id ?? r.comisionOriginalId ?? null,
     fechaServicioOriginal:r.fecha_servicio_original || r.fechaServicioOriginal || "",
     manicuraOriginalId:r.manicura_original_id ?? r.manicuraOriginalId ?? null,
@@ -9256,6 +9303,9 @@ function ReclamoEditorModal({ data, user, initial=null, forcedLocalId=null, allo
     fecha:defaultFecha || seed?.fecha || dateKey(hoy),
     cliente:seed?.cliente || "",
     clienteId:seed?.clienteId || null,
+    sinCliente:seed?.sinCliente === true,
+    sinServicio:seed?.sinServicio === true,
+    impactaScoreManicura:seed ? seed.impactaScoreManicura !== false : false,
     comisionOriginalId:seed?.comisionOriginalId || "",
     fechaServicioOriginal:seed?.fechaServicioOriginal || "",
     manicuraOriginalId:seed?.manicuraOriginalId || "",
@@ -9288,10 +9338,12 @@ function ReclamoEditorModal({ data, user, initial=null, forcedLocalId=null, allo
   const [seguimientoModalOpen,setSeguimientoModalOpen]=useState(false);
   const [seguimientoDraft,setSeguimientoDraft]=useState({fecha:dateKey(new Date()),comentario:"",proximaFecha:"",proximaAccion:"",cerrar:false});
   const fechaReferenciaManicuraArreglo = form.fechaArreglo || form.fecha || dateKey(hoy);
+  const fechaReferenciaReclamo = form.fecha || dateKey(hoy);
   const manicurasLocal=(data.users||[]).filter(u=>u.rol==="manicura"&&u.activo!==false&&manicuraAsignadaEnLocal(data,u.id,form.localId,fechaReferenciaManicuraArreglo));
+  const manicurasReclamoLocal=(data.users||[]).filter(u=>u.rol==="manicura"&&u.activo!==false&&manicuraAsignadaEnLocal(data,u.id,form.localId,fechaReferenciaReclamo)).sort((a,b)=>(a.nombre||"").localeCompare(b.nombre||"","es"));
 
   useEffect(()=>{
-    if(!form.localId || clienteQuery.trim().length<2 || clienteSeleccionado===clienteQuery.trim()) { setClienteOpciones([]); return; }
+    if(form.sinCliente || !form.localId || clienteQuery.trim().length<2 || clienteSeleccionado===clienteQuery.trim()) { setClienteOpciones([]); return; }
     let alive=true;
     const timer=setTimeout(()=>{
       setLoadingClientes(true);
@@ -9303,7 +9355,7 @@ function ReclamoEditorModal({ data, user, initial=null, forcedLocalId=null, allo
       }).catch(e=>{if(alive)setErr(e?.message||"No se pudieron buscar clientes.");}).finally(()=>{if(alive)setLoadingClientes(false);});
     },260);
     return()=>{alive=false;clearTimeout(timer);};
-  },[form.localId,clienteQuery,clienteSeleccionado]);
+  },[form.localId,form.sinCliente,clienteQuery,clienteSeleccionado]);
 
   const elegirCliente=async(nombre)=>{
     const n=String(nombre||"").trim(); if(!n)return;
@@ -9369,8 +9421,9 @@ function ReclamoEditorModal({ data, user, initial=null, forcedLocalId=null, allo
   const save=async()=>{
     setErr("");
     if(!form.localId) return setErr("Seleccioná el local.");
-    if(!clienteSeleccionado || !form.cliente) return setErr("Seleccioná una clienta desde el buscador.");
-    if(!form.comisionOriginalId || !form.fechaServicioOriginal || !form.manicuraOriginalId || !form.servicio) return setErr("Seleccioná uno de los últimos servicios de la clienta.");
+    if(!form.sinCliente && (!clienteSeleccionado || !form.cliente)) return setErr("Seleccioná una clienta desde el buscador o marcá que el reclamo es sin cliente registrado.");
+    if(!form.sinServicio && (!form.comisionOriginalId || !form.fechaServicioOriginal || !form.manicuraOriginalId || !form.servicio)) return setErr("Seleccioná uno de los últimos servicios o marcá que no hubo servicio / venta asociada.");
+    if(form.impactaScoreManicura && !form.manicuraOriginalId) return setErr("Seleccioná la manicura relacionada para poder atribuir este reclamo en sus estadísticas.");
     if(!(form.motivos||[]).length) return setErr("Seleccioná al menos un motivo del reclamo.");
     if(!String(form.detalle||"").trim()) return setErr("Detallá el reclamo.");
     if(((form.fotos||[]).length+files.length)>MAX_GARANTIA_FOTOS) return setErr(`Máximo ${MAX_GARANTIA_FOTOS} fotos por reclamo.`);
@@ -9382,10 +9435,11 @@ function ReclamoEditorModal({ data, user, initial=null, forcedLocalId=null, allo
       const payload={
         informe_diario_id:informeId||seed?.informeId||null,
         local_id:Number(form.localId), fecha:form.fecha, turno:null,
-        cliente:form.cliente, cliente_id:form.clienteId||null,
-        comision_original_id:Number(form.comisionOriginalId), fecha_servicio_original:form.fechaServicioOriginal,
-        manicura_original_id:Number(form.manicuraOriginalId), nombre_manicura_original:mOriginal?.nombre||seed?.nombreManicuraOriginal||"",
-        servicio:form.servicio, motivos:form.motivos||[], motivo_tipo:(form.motivos||[])[0]||null, detalle:String(form.detalle||"").trim(),
+        cliente:form.sinCliente?"Sin cliente registrado":form.cliente, cliente_id:form.sinCliente?null:(form.clienteId||null),
+        sin_cliente:form.sinCliente===true, sin_servicio:form.sinServicio===true, impacta_score_manicura:form.impactaScoreManicura===true,
+        comision_original_id:form.sinServicio?null:Number(form.comisionOriginalId), fecha_servicio_original:form.sinServicio?null:form.fechaServicioOriginal,
+        manicura_original_id:form.manicuraOriginalId?Number(form.manicuraOriginalId):null, nombre_manicura_original:form.manicuraOriginalId?(mOriginal?.nombre||seed?.nombreManicuraOriginal||""):"",
+        servicio:form.sinServicio?"Sin servicio":form.servicio, motivos:form.motivos||[], motivo_tipo:(form.motivos||[])[0]||null, detalle:String(form.detalle||"").trim(),
         motivo:String(form.detalle||"").trim(), fotos:form.fotos||[], fecha_arreglo:form.fechaArreglo||null,
         manicura_arreglo_id:form.manicuraArregloId?Number(form.manicuraArregloId):null, nombre_manicura_arreglo:mArreglo?.nombre||null,
         atendido:form.atendido===true || form.estado==="cerrado", estado:form.estado==="cerrado"?"resuelto":(form.estado||"pendiente"), resuelto:form.estado==="cerrado" || (form.estado||"pendiente")!=="pendiente",
@@ -9415,15 +9469,21 @@ function ReclamoEditorModal({ data, user, initial=null, forcedLocalId=null, allo
     setSaving(false);
   };
 
-  return <Modal title={recordId?`Reclamo · ${form.cliente||"Clienta"}`:"Nuevo reclamo"} onClose={onClose} width={940}>
+  return <Modal title={recordId?`Reclamo · ${form.sinCliente?"Sin cliente registrado":(form.cliente||"Clienta")}`:"Nuevo reclamo"} onClose={onClose} width={940}>
     <div style={{display:"grid",gap:12}}>
       <div style={{display:"grid",gridTemplateColumns:"220px 1fr",gap:12,alignItems:"end"}} className="niki-mobile-one-column">
         <div><label style={{fontSize:12,fontWeight:700,display:"block",marginBottom:5}}>Local</label><Select value={String(form.localId||"")} disabled={!!forcedLocalId} onChange={v=>{setForm(f=>({...f,localId:v,cliente:"",comisionOriginalId:"",fechaServicioOriginal:"",manicuraOriginalId:"",servicio:""}));setClienteQuery("");setClienteSeleccionado("");setServiciosCliente([]);}}><option value="">Seleccionar...</option>{locales.map(l=><option key={l.id} value={l.id}>{l.nombre}</option>)}</Select></div>
-        <div style={{position:"relative"}}><label style={{fontSize:12,fontWeight:700,display:"block",marginBottom:5}}>Cliente</label><input value={clienteQuery} disabled={!form.localId} onChange={e=>{setClienteQuery(e.target.value);setClienteSeleccionado("");setServiciosCliente([]);setForm(f=>({...f,cliente:"",comisionOriginalId:"",fechaServicioOriginal:"",manicuraOriginalId:"",servicio:""}));}} placeholder={form.localId?"Buscar clienta...":"Primero seleccioná el local"} style={{width:"100%",boxSizing:"border-box",border:"1.5px solid #e0e0e0",borderRadius:8,padding:"9px 12px",fontSize:14,background:form.localId?"#fafafa":"#f3f3f3"}}/>{loadingClientes&&<span style={{position:"absolute",right:10,bottom:10,fontSize:10,color:"var(--color-text-secondary)"}}>Buscando...</span>}{clienteOpciones.length>0&&<div style={{position:"absolute",left:0,right:0,top:"100%",marginTop:4,zIndex:40,background:"#fff",border:"1px solid #ddd",borderRadius:10,boxShadow:"0 8px 24px rgba(0,0,0,.14)",maxHeight:220,overflowY:"auto"}}>{clienteOpciones.map(n=><button key={n} type="button" onClick={()=>elegirCliente(n)} style={{display:"block",width:"100%",textAlign:"left",border:"none",borderBottom:"1px solid #f2f2f2",background:"#fff",padding:"9px 11px",fontSize:13,cursor:"pointer"}}>{n}</button>)}</div>}</div>
+        <div>
+          <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",gap:8,marginBottom:5,flexWrap:"wrap"}}><label style={{fontSize:12,fontWeight:700}}>Cliente</label><label style={{display:"inline-flex",alignItems:"center",gap:6,fontSize:10.5,fontWeight:700,color:form.sinCliente?COLORS.pinkDark:"var(--color-text-secondary)",cursor:"pointer"}}><input type="checkbox" checked={form.sinCliente} onChange={e=>{const checked=e.target.checked;setForm(f=>({...f,sinCliente:checked,sinServicio:checked?true:f.sinServicio,cliente:"",clienteId:null,comisionOriginalId:checked?"":f.comisionOriginalId,fechaServicioOriginal:checked?"":f.fechaServicioOriginal,servicio:checked?"":f.servicio,manicuraOriginalId:f.manicuraOriginalId}));setClienteQuery("");setClienteSeleccionado("");setClienteOpciones([]);setServiciosCliente([]);}}/> Reclamo sin cliente registrado</label></div>
+          {form.sinCliente?<div style={{padding:"9px 11px",borderRadius:9,background:COLORS.infoLight,border:`1px solid ${COLORS.info}22`,fontSize:10.5,color:COLORS.info,lineHeight:1.4}}>No se vinculará a una clienta. Si necesitás guardar nombre o datos de contacto, incluilos en el detalle del reclamo.</div>:<div style={{position:"relative"}}><input value={clienteQuery} disabled={!form.localId} onChange={e=>{setClienteQuery(e.target.value);setClienteSeleccionado("");setServiciosCliente([]);setForm(f=>({...f,cliente:"",comisionOriginalId:"",fechaServicioOriginal:"",manicuraOriginalId:"",servicio:""}));}} placeholder={form.localId?"Buscar clienta...":"Primero seleccioná el local"} style={{width:"100%",boxSizing:"border-box",border:"1.5px solid #e0e0e0",borderRadius:8,padding:"9px 12px",fontSize:14,background:form.localId?"#fafafa":"#f3f3f3"}}/>{loadingClientes&&<span style={{position:"absolute",right:10,bottom:10,fontSize:10,color:"var(--color-text-secondary)"}}>Buscando...</span>}{clienteOpciones.length>0&&<div style={{position:"absolute",left:0,right:0,top:"100%",marginTop:4,zIndex:40,background:"#fff",border:"1px solid #ddd",borderRadius:10,boxShadow:"0 8px 24px rgba(0,0,0,.14)",maxHeight:220,overflowY:"auto"}}>{clienteOpciones.map(n=><button key={n} type="button" onClick={()=>elegirCliente(n)} style={{display:"block",width:"100%",textAlign:"left",border:"none",borderBottom:"1px solid #f2f2f2",background:"#fff",padding:"9px 11px",fontSize:13,cursor:"pointer"}}>{n}</button>)}</div>}</div>}
+        </div>
       </div>
-      {clienteSeleccionado&&<div style={{border:"1px solid rgba(120,120,120,.16)",borderRadius:10,padding:10}}><div style={{display:"flex",justifyContent:"space-between",gap:8,marginBottom:7}}><div><strong style={{fontSize:12,color:COLORS.pinkDark}}>Últimos servicios de {clienteSeleccionado}</strong><p style={{margin:"2px 0 0",fontSize:10,color:"var(--color-text-secondary)"}}>Seleccioná el servicio relacionado con el reclamo.</p></div>{loadingServicios&&<span style={{fontSize:10}}>Cargando...</span>}</div>{!loadingServicios&&serviciosCliente.length===0?<p style={{margin:0,fontSize:11,color:"var(--color-text-secondary)"}}>No encontramos servicios recientes en este local.</p>:<div style={{display:"grid",gap:6}}>{serviciosCliente.map(c=>{const selected=String(form.comisionOriginalId)===String(c.id);return <button key={c.id} type="button" onClick={()=>elegirServicio(c)} style={{display:"grid",gridTemplateColumns:"88px minmax(0,1fr) 150px",gap:8,textAlign:"left",border:selected?`1.5px solid ${COLORS.pink}`:"1px solid rgba(120,120,120,.16)",background:selected?COLORS.pinkLight:"#fff",borderRadius:9,padding:"8px 10px",cursor:"pointer"}}><span style={{fontSize:11,fontWeight:700}}>{String(c.fechaPago||"").split("-").reverse().join("/")}</span><strong style={{fontSize:12}}>{c.servicio||"Servicio"}</strong><span style={{fontSize:10,color:"var(--color-text-secondary)"}}>{(data.users||[]).find(u=>u.id===c.userId)?.nombre||c.nombreManicura||"—"}</span></button>;})}</div>}</div>}
-      {!!form.comisionOriginalId&&<div style={{display:"grid",gridTemplateColumns:"120px 1fr 1fr",gap:10,background:"var(--color-background-secondary)",padding:10,borderRadius:10}} className="niki-mobile-one-column"><ModalInput label="Fecha servicio" value={String(form.fechaServicioOriginal||"").split("-").reverse().join("/")} onChange={()=>{}} disabled/><ModalInput label="Servicio" value={form.servicio} onChange={()=>{}} disabled/><ModalInput label="Manicura" value={(data.users||[]).find(u=>Number(u.id)===Number(form.manicuraOriginalId))?.nombre||seed?.nombreManicuraOriginal||""} onChange={()=>{}} disabled/></div>}
-      <div style={{display:"grid",gridTemplateColumns:"1fr 180px",gap:12,alignItems:"start"}} className="niki-mobile-one-column"><div><label style={{fontSize:12,fontWeight:700,display:"block",marginBottom:6}}>Motivos <span style={{fontWeight:500,color:"var(--color-text-secondary)"}}>(podés elegir más de uno)</span></label><div style={{display:"flex",gap:6,flexWrap:"wrap"}}>{RECLAMO_MOTIVOS.map(x=>{const on=(form.motivos||[]).includes(x);return <button key={x} type="button" onClick={()=>setForm(f=>({...f,motivos:on?(f.motivos||[]).filter(m=>m!==x):[...(f.motivos||[]),x]}))} style={{border:`1px solid ${on?COLORS.pinkDark:"#ddd"}`,background:on?COLORS.pinkLight:"#fff",color:on?COLORS.pinkDark:"#555",borderRadius:999,padding:"6px 9px",fontSize:10.5,fontWeight:on?700:500,cursor:"pointer"}}>{on?"✓ ":""}{x}</button>;})}</div></div><ModalInput label="Fecha del reclamo" type="date" value={form.fecha} onChange={v=>setForm(f=>({...f,fecha:v}))}/></div>
+      <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",gap:10,flexWrap:"wrap",padding:"8px 10px",borderRadius:10,background:form.sinServicio?"#fff8ed":"var(--color-background-secondary)",border:`1px solid ${form.sinServicio?"rgba(196,129,33,.22)":"rgba(120,120,120,.12)"}`}}><div><strong style={{fontSize:11.5}}>Vinculación con un servicio</strong><p style={{margin:"2px 0 0",fontSize:9.5,color:"var(--color-text-secondary)"}}>{form.sinServicio?"El reclamo no tiene una venta/servicio para vincular. Podés indicar la manicura manualmente.":"Si hubo una atención registrada, vinculala para tomar fecha, servicio y manicura automáticamente."}</p></div><label style={{display:"inline-flex",alignItems:"center",gap:6,fontSize:10.5,fontWeight:700,cursor:"pointer"}}><input type="checkbox" checked={form.sinServicio} disabled={form.sinCliente} onChange={e=>{const checked=e.target.checked;setForm(f=>({...f,sinServicio:checked,comisionOriginalId:checked?"":f.comisionOriginalId,fechaServicioOriginal:checked?"":f.fechaServicioOriginal,servicio:checked?"":f.servicio,manicuraOriginalId:checked?f.manicuraOriginalId:""}));}}/> No hubo servicio / no hay venta asociada</label></div>
+      {!form.sinServicio&&clienteSeleccionado&&<div style={{border:"1px solid rgba(120,120,120,.16)",borderRadius:10,padding:10}}><div style={{display:"flex",justifyContent:"space-between",gap:8,marginBottom:7}}><div><strong style={{fontSize:12,color:COLORS.pinkDark}}>Últimos servicios de {clienteSeleccionado}</strong><p style={{margin:"2px 0 0",fontSize:10,color:"var(--color-text-secondary)"}}>Seleccioná el servicio relacionado con el reclamo.</p></div>{loadingServicios&&<span style={{fontSize:10}}>Cargando...</span>}</div>{!loadingServicios&&serviciosCliente.length===0?<p style={{margin:0,fontSize:11,color:"var(--color-text-secondary)"}}>No encontramos servicios recientes en este local. Podés marcar <strong>No hubo servicio / no hay venta asociada</strong> y continuar manualmente.</p>:<div style={{display:"grid",gap:6}}>{serviciosCliente.map(c=>{const selected=String(form.comisionOriginalId)===String(c.id);return <button key={c.id} type="button" onClick={()=>elegirServicio(c)} style={{display:"grid",gridTemplateColumns:"88px minmax(0,1fr) 150px",gap:8,textAlign:"left",border:selected?`1.5px solid ${COLORS.pink}`:"1px solid rgba(120,120,120,.16)",background:selected?COLORS.pinkLight:"#fff",borderRadius:9,padding:"8px 10px",cursor:"pointer"}}><span style={{fontSize:11,fontWeight:700}}>{String(c.fechaPago||"").split("-").reverse().join("/")}</span><strong style={{fontSize:12}}>{c.servicio||"Servicio"}</strong><span style={{fontSize:10,color:"var(--color-text-secondary)"}}>{(data.users||[]).find(u=>u.id===c.userId)?.nombre||c.nombreManicura||"—"}</span></button>;})}</div>}</div>}
+      {!form.sinServicio&&!!form.comisionOriginalId&&<div style={{display:"grid",gridTemplateColumns:"120px 1fr 1fr",gap:10,background:"var(--color-background-secondary)",padding:10,borderRadius:10}} className="niki-mobile-one-column"><ModalInput label="Fecha servicio" value={String(form.fechaServicioOriginal||"").split("-").reverse().join("/")} onChange={()=>{}} disabled/><ModalInput label="Servicio" value={form.servicio} onChange={()=>{}} disabled/><ModalInput label="Manicura" value={(data.users||[]).find(u=>Number(u.id)===Number(form.manicuraOriginalId))?.nombre||seed?.nombreManicuraOriginal||""} onChange={()=>{}} disabled/></div>}
+      {form.sinServicio&&<div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10,padding:10,borderRadius:10,background:"#fffaf2",border:"1px solid rgba(196,129,33,.18)"}} className="niki-mobile-one-column"><div><label style={{fontSize:12,fontWeight:700,display:"block",marginBottom:5}}>Manicura relacionada</label><Select value={String(form.manicuraOriginalId||"")} onChange={v=>setForm(f=>({...f,manicuraOriginalId:v}))}><option value="">Sin manicura / no corresponde</option>{manicurasReclamoLocal.map(m=><option key={m.id} value={m.id}>{m.nombre}</option>)}</Select><span style={{display:"block",marginTop:4,fontSize:9.5,color:"var(--color-text-secondary)"}}>Aunque no haya servicio, podés atribuir el reclamo a la manicura involucrada.</span></div><div style={{alignSelf:"center",padding:"8px 10px",borderRadius:9,background:"rgba(255,255,255,.72)",fontSize:10.5,lineHeight:1.45,color:"#735b2f"}}>La fecha utilizada para la estadística será la <strong>fecha del reclamo</strong>, ya que no existe un servicio asociado.</div></div>}
+      <div style={{display:"grid",gridTemplateColumns:"1fr 180px",gap:12,alignItems:"start"}} className="niki-mobile-one-column"><div><label style={{fontSize:12,fontWeight:700,display:"block",marginBottom:6}}>Motivos <span style={{fontWeight:500,color:"var(--color-text-secondary)"}}>(podés elegir más de uno)</span></label><div style={{display:"flex",gap:6,flexWrap:"wrap"}}>{RECLAMO_MOTIVOS.map(x=>{const on=(form.motivos||[]).includes(x);return <button key={x} type="button" onClick={()=>setForm(f=>{const next=on?(f.motivos||[]).filter(m=>m!==x):[...(f.motivos||[]),x];return {...f,motivos:next,impactaScoreManicura:reclamoImpactaManicuraPorMotivos(next)};})} style={{border:`1px solid ${on?COLORS.pinkDark:"#ddd"}`,background:on?COLORS.pinkLight:"#fff",color:on?COLORS.pinkDark:"#555",borderRadius:999,padding:"6px 9px",fontSize:10.5,fontWeight:on?700:500,cursor:"pointer"}}>{on?"✓ ":""}{x}</button>;})}</div></div><ModalInput label="Fecha del reclamo" type="date" value={form.fecha} onChange={v=>setForm(f=>({...f,fecha:v}))}/></div>
+      <div style={{display:"grid",gridTemplateColumns:"1fr 250px",gap:10,alignItems:"center",padding:"9px 11px",borderRadius:10,background:form.impactaScoreManicura?"#fff7fa":"#f7f7f7",border:`1px solid ${form.impactaScoreManicura?"rgba(114,36,62,.16)":"rgba(120,120,120,.14)"}`}} className="niki-mobile-one-column"><div><strong style={{display:"block",fontSize:11.5,color:form.impactaScoreManicura?COLORS.pinkDark:"#555"}}>Responsabilidad de la manicura</strong><span style={{display:"block",marginTop:2,fontSize:9.5,color:"var(--color-text-secondary)",lineHeight:1.4}}>{form.impactaScoreManicura?"Este reclamo impactará en el indicador de calidad de la manicura seleccionada.":"El reclamo queda registrado, pero no afectará el score de la manicura."} La propuesta se ajusta automáticamente según los motivos y podés corregirla manualmente.</span></div><Select value={form.impactaScoreManicura?"si":"no"} onChange={v=>setForm(f=>({...f,impactaScoreManicura:v==="si"}))}><option value="si">Sí · impacta en score</option><option value="no">No · no es responsabilidad</option></Select></div>
       <div>
         <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",gap:8,marginBottom:5,flexWrap:"wrap"}}>
           <div>
@@ -9936,6 +9996,55 @@ function InformesMensajeriaPage({ data, user }) {
   </div>;
 }
 
+
+function AuditGrowingTextarea({ value="", onValueChange, disabled=false, placeholder="", minHeight=54, style={} }) {
+  const ref = useRef(null);
+  const resize = useCallback(() => {
+    const el = ref.current;
+    if (!el) return;
+    el.style.height = "auto";
+    el.style.height = `${Math.max(minHeight, el.scrollHeight)}px`;
+  }, [minHeight]);
+  useLayoutEffect(() => { resize(); }, [value, resize]);
+  const onKeyDown = (e) => {
+    if (disabled || e.key !== "Enter" || e.shiftKey || e.ctrlKey || e.metaKey || e.altKey) return;
+    const el = e.currentTarget;
+    const start = el.selectionStart ?? 0;
+    const end = el.selectionEnd ?? start;
+    const text = String(value || "");
+    const lineStart = text.lastIndexOf("\n", Math.max(0, start - 1)) + 1;
+    const currentLine = text.slice(lineStart, start);
+    const match = currentLine.match(/^(\s*)([-*•])\s+(.*)$/);
+    if (!match) return;
+    if (!match[3].trim()) return;
+    e.preventDefault();
+    const insert = `\n${match[1]}${match[2]} `;
+    const next = text.slice(0, start) + insert + text.slice(end);
+    onValueChange?.(next);
+    window.requestAnimationFrame(() => {
+      if (!ref.current) return;
+      const pos = start + insert.length;
+      ref.current.selectionStart = pos;
+      ref.current.selectionEnd = pos;
+      resize();
+    });
+  };
+  return <textarea
+    ref={ref}
+    disabled={disabled}
+    value={value || ""}
+    onChange={e=>{ onValueChange?.(e.target.value); window.requestAnimationFrame(resize); }}
+    onKeyDown={onKeyDown}
+    placeholder={placeholder}
+    rows={1}
+    style={{width:"100%",minHeight,overflow:"hidden",resize:"none",boxSizing:"border-box",fontFamily:"inherit",lineHeight:1.45,...style}}
+  />;
+}
+
+function escapeAuditHtml(value) {
+  return String(value ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#039;"}[c] || c));
+}
+
 function AuditoriasPage({ data, user }) {
   const hoy = new Date();
   const periodoActual = `${hoy.getFullYear()}-${String(hoy.getMonth()+1).padStart(2,"0")}`;
@@ -9953,6 +10062,15 @@ function AuditoriasPage({ data, user }) {
   const [respuestas, setRespuestas] = useState({});
   const [metricas, setMetricas] = useState({ loading:false, informePct:null, informeDetalle:"", reclamosResumen:"", reclamos:[] });
   const [respuestasDashboard, setRespuestasDashboard] = useState([]);
+  const [criteriosTocados, setCriteriosTocados] = useState({});
+  const [autoSaveState, setAutoSaveState] = useState("idle");
+  const [autoSavedAt, setAutoSavedAt] = useState(null);
+  const [uploadingFotos, setUploadingFotos] = useState(false);
+  const [reportData, setReportData] = useState(null);
+  const auditPhotoInputRef = useRef(null);
+  const auditAutoSaveTimerRef = useRef(null);
+  const auditAutoSaveBusyRef = useRef(false);
+  const auditAutoSaveLastSignatureRef = useRef("");
 
   const normalizarAuditoria = useCallback(r=>({
     id:r.id, tipoId:Number(r.tipo_id), localId:Number(r.local_id), periodo:r.periodo||"", fecha:r.fecha||"",
@@ -9960,9 +10078,23 @@ function AuditoriasPage({ data, user }) {
     puntajeObtenido:Number(r.puntaje_obtenido||0), puntajeMax:Number(r.puntaje_max||0), cumplimiento:Number(r.cumplimiento||0),
     informeDiarioCumplimiento:r.informe_diario_cumplimiento==null?null:Number(r.informe_diario_cumplimiento),
     informeDiarioDetalle:r.informe_diario_detalle||"", reclamosResumen:r.reclamos_resumen||"", analisis:r.analisis||"", conclusiones:r.conclusiones||"",
-    creadoEn:r.creado_en||"", actualizadoEn:r.actualizado_en||""
+    fotos:Array.isArray(r.fotos)?r.fotos:[], creadoEn:r.creado_en||"", actualizadoEn:r.actualizado_en||""
   }),[]);
   const normalizarCriterio = useCallback(c=>({ id:Number(c.id), tipoId:Number(c.tipo_id), codigo:c.codigo, nombre:c.nombre, descripcion:c.descripcion||"", seccion:c.seccion||"general", orden:Number(c.orden||0), puntajeMax:Number(c.puntaje_max||2) }),[]);
+
+  const buildAuditSignature = useCallback((source, answerMap) => JSON.stringify({
+    localId:Number(source?.localId||0), periodo:source?.periodo||"", fecha:source?.fecha||"",
+    analisis:source?.analisis||"", conclusiones:source?.conclusiones||"", fotos:(source?.fotos||[]).map(f=>f.path||f.url||f.name||""),
+    respuestas:(criterios||[]).map(c=>({id:c.id,puntaje:answerMap?.[c.id]?.puntaje??"",observacion:String(answerMap?.[c.id]?.observacion||"")}))
+  }), [criterios]);
+
+  const hasMeaningfulAuditData = useCallback((source, touchedMap) => {
+    if(source?.id) return true;
+    if(Object.keys(touchedMap||{}).length) return true;
+    if(String(source?.analisis||"").trim() || String(source?.conclusiones||"").trim()) return true;
+    if((source?.fotos||[]).length) return true;
+    return false;
+  }, []);
 
   const loadBase = useCallback(async()=>{
     setLoading(true);
@@ -10027,8 +10159,14 @@ function AuditoriasPage({ data, user }) {
 
   const abrirNueva = async()=>{
     const lid=locales[0]?.id||"";
-    setRespuestas(Object.fromEntries(criterios.map(c=>[c.id,{puntaje:0,observacion:""}])));
-    setEditor({ id:null, tipoId:Number(tipoId), localId:lid, periodo, fecha:dateKey(new Date()), estado:"borrador", analisis:"", conclusiones:"" });
+    const map=Object.fromEntries(criterios.map(c=>[c.id,{puntaje:"",observacion:""}]));
+    const next={ id:null, tipoId:Number(tipoId), localId:lid, periodo, fecha:dateKey(new Date()), auditorUserId:Number(user.id), estado:"borrador", analisis:"", conclusiones:"", fotos:[] };
+    setRespuestas(map);
+    setCriteriosTocados({});
+    setEditor(next);
+    auditAutoSaveLastSignatureRef.current=buildAuditSignature(next,map);
+    setAutoSaveState("idle");
+    setAutoSavedAt(null);
     if(lid) await loadMetricas(lid,periodo);
   };
   const abrirEditar = async(a)=>{
@@ -10037,8 +10175,13 @@ function AuditoriasPage({ data, user }) {
       const map={};
       criterios.forEach(c=>{map[c.id]={puntaje:0,observacion:""};});
       (raw||[]).forEach(r=>{map[Number(r.criterio_id)]={puntaje:Number(r.puntaje||0),observacion:r.observacion||""};});
+      const next={...a,fotos:Array.isArray(a.fotos)?a.fotos:[]};
       setRespuestas(map);
-      setEditor({...a});
+      setCriteriosTocados({});
+      setEditor(next);
+      auditAutoSaveLastSignatureRef.current=buildAuditSignature(next,map);
+      setAutoSaveState("saved");
+      setAutoSavedAt(a.actualizadoEn?new Date(a.actualizadoEn):null);
       await loadMetricas(a.localId,a.periodo);
     } catch(e){ notifyToast("No se pudo abrir la auditoria: "+(e.message||e),"error"); }
   };
@@ -10047,39 +10190,184 @@ function AuditoriasPage({ data, user }) {
   const puntajeObtenido = criterios.reduce((acc,c)=>acc+Math.min(Number(respuestas[c.id]?.puntaje||0),Number(c.puntajeMax||0)),0);
   const cumplimiento = puntajeMax ? (puntajeObtenido/puntajeMax)*100 : 0;
 
-  const guardar = async(finalizar=false)=>{
-    if(!editor?.localId) return notifyToast("Selecciona un local.","warning");
-    if(!editor?.periodo) return notifyToast("Selecciona el periodo.","warning");
-    setSaving(true);
-    try {
-      const payload={
-        tipo_id:Number(editor.tipoId||tipoId), local_id:Number(editor.localId), periodo:editor.periodo, fecha:editor.fecha||dateKey(new Date()), auditor_user_id:Number(user.id),
-        estado:finalizar?"finalizada":(editor.estado||"borrador"), puntaje_obtenido:puntajeObtenido, puntaje_max:puntajeMax, cumplimiento:puntajeMax?puntajeObtenido/puntajeMax:0,
-        informe_diario_cumplimiento:metricas.informePct==null?null:metricas.informePct/100, informe_diario_detalle:metricas.informeDetalle||null,
-        reclamos_resumen:metricas.reclamosResumen||null, analisis:String(editor.analisis||"").trim()||null, conclusiones:String(editor.conclusiones||"").trim()||null, actualizado_en:new Date().toISOString()
-      };
-      let id=editor.id;
-      if(id){ await api.updateAuditoria(id,payload); }
-      else {
-        const created=await api.createAuditoria({...payload,creado_en:new Date().toISOString()});
-        const row=Array.isArray(created)?created[0]:created;
-        id=row?.id;
-        if(!id){
-          const found=(await api.getAuditoriasPeriodo(editor.periodo)||[]).find(x=>Number(x.tipo_id)===Number(payload.tipo_id)&&Number(x.local_id)===Number(payload.local_id));
-          id=found?.id;
-        }
+  const persistAuditoria = useCallback(async({ finalizar=false, silent=false, allowEmpty=false, closeAfter=false }={})=>{
+    if(!editor?.localId) { if(!silent) notifyToast("Selecciona un local.","warning"); return null; }
+    if(!editor?.periodo) { if(!silent) notifyToast("Selecciona el periodo.","warning"); return null; }
+    if(!allowEmpty && !hasMeaningfulAuditData(editor,criteriosTocados)) return null;
+    const nowIso=new Date().toISOString();
+    const payload={
+      tipo_id:Number(editor.tipoId||tipoId), local_id:Number(editor.localId), periodo:editor.periodo, fecha:editor.fecha||dateKey(new Date()), auditor_user_id:Number(user.id),
+      estado:finalizar?"finalizada":(editor.estado==="finalizada"?"finalizada":"borrador"), puntaje_obtenido:puntajeObtenido, puntaje_max:puntajeMax, cumplimiento:puntajeMax?puntajeObtenido/puntajeMax:0,
+      informe_diario_cumplimiento:metricas.informePct==null?null:metricas.informePct/100, informe_diario_detalle:metricas.informeDetalle||null,
+      reclamos_resumen:metricas.reclamosResumen||null, analisis:String(editor.analisis||"").trim()||null, conclusiones:String(editor.conclusiones||"").trim()||null,
+      fotos:Array.isArray(editor.fotos)?editor.fotos:[], actualizado_en:nowIso
+    };
+    let id=editor.id;
+    if(id){ await api.updateAuditoria(id,payload); }
+    else {
+      const created=await api.createAuditoria({...payload,creado_en:nowIso});
+      const row=Array.isArray(created)?created[0]:created;
+      id=row?.id;
+      if(!id){
+        const found=(await api.getAuditoriasPeriodo(editor.periodo)||[]).find(x=>Number(x.tipo_id)===Number(payload.tipo_id)&&Number(x.local_id)===Number(payload.local_id));
+        id=found?.id;
       }
-      if(!id) throw new Error("No se pudo obtener el ID de la auditoria guardada.");
-      const rr=criterios.map(c=>({auditoria_id:Number(id),criterio_id:Number(c.id),puntaje:Number(respuestas[c.id]?.puntaje||0),observacion:String(respuestas[c.id]?.observacion||"").trim()||null,actualizado_en:new Date().toISOString()}));
-      if(rr.length) await api.upsertAuditoriaRespuestas(rr);
-      notifyToast(finalizar?"Auditoria finalizada.":"Auditoria guardada.","success");
-      setEditor(null); await loadBase();
-    } catch(e){ notifyToast("No se pudo guardar la auditoria: "+(e.message||e),"error"); }
+    }
+    if(!id) throw new Error("No se pudo obtener el ID de la auditoria guardada.");
+    const rr=criterios.map(c=>({auditoria_id:Number(id),criterio_id:Number(c.id),puntaje:Number(respuestas[c.id]?.puntaje||0),observacion:String(respuestas[c.id]?.observacion||"").trim()||null,actualizado_en:nowIso}));
+    if(rr.length) await api.upsertAuditoriaRespuestas(rr);
+    const nextEditor={...editor,id:Number(id),estado:payload.estado,actualizadoEn:nowIso,fotos:payload.fotos};
+    setEditor(prev=>prev?{...prev,id:Number(id),estado:payload.estado,actualizadoEn:nowIso,fotos:payload.fotos}:prev);
+    auditAutoSaveLastSignatureRef.current=buildAuditSignature(nextEditor,respuestas);
+    setAutoSavedAt(new Date());
+    setAutoSaveState(finalizar?"finalized":"saved");
+    if(!silent) notifyToast(finalizar?"Auditoria finalizada.":"Auditoria guardada.","success");
+    if(closeAfter){ setEditor(null); await loadBase(); }
+    return Number(id);
+  },[editor,criteriosTocados,tipoId,user.id,puntajeObtenido,puntajeMax,metricas,criterios,respuestas,hasMeaningfulAuditData,buildAuditSignature,loadBase]);
+
+  const guardar = async(finalizar=false)=>{
+    if(!hasMeaningfulAuditData(editor,criteriosTocados)) return notifyToast("Todavia no hay informacion cargada para guardar la auditoria.","warning");
+    setSaving(true);
+    try { await persistAuditoria({finalizar,silent:false,allowEmpty:false,closeAfter:true}); }
+    catch(e){ notifyToast("No se pudo guardar la auditoria: "+(e.message||e),"error"); }
     finally{setSaving(false);}
+  };
+
+  useEffect(()=>{
+    if(!editor || !puedeEditar || saving || uploadingFotos) return;
+    if(!hasMeaningfulAuditData(editor,criteriosTocados)) { setAutoSaveState("idle"); return; }
+    const signature=buildAuditSignature(editor,respuestas);
+    if(signature===auditAutoSaveLastSignatureRef.current) return;
+    setAutoSaveState("pending");
+    if(auditAutoSaveTimerRef.current) window.clearTimeout(auditAutoSaveTimerRef.current);
+    auditAutoSaveTimerRef.current=window.setTimeout(async()=>{
+      if(auditAutoSaveBusyRef.current) return;
+      auditAutoSaveBusyRef.current=true;
+      setAutoSaveState("saving");
+      try { await persistAuditoria({silent:true}); }
+      catch(e){ console.warn("Autoguardado auditoria",e); setAutoSaveState("error"); }
+      finally{ auditAutoSaveBusyRef.current=false; }
+    },800);
+    return ()=>{ if(auditAutoSaveTimerRef.current) window.clearTimeout(auditAutoSaveTimerRef.current); };
+  },[editor,respuestas,criteriosTocados,puedeEditar,saving,uploadingFotos,hasMeaningfulAuditData,buildAuditSignature,persistAuditoria]);
+
+  const cerrarEditor = async()=>{
+    if(saving||uploadingFotos||autoSaveState==="saving") return;
+    if(auditAutoSaveTimerRef.current) window.clearTimeout(auditAutoSaveTimerRef.current);
+    try {
+      if(puedeEditar && hasMeaningfulAuditData(editor,criteriosTocados)){
+        const signature=buildAuditSignature(editor,respuestas);
+        if(signature!==auditAutoSaveLastSignatureRef.current) await persistAuditoria({silent:true});
+      }
+    } catch(e){ notifyToast("No se pudo completar el autoguardado: "+(e.message||e),"warning"); return; }
+    setEditor(null);
+    await loadBase();
+  };
+
+  const subirFotosAuditoria = async(fileList)=>{
+    const available=Math.max(0,MAX_AUDITORIA_FOTOS-(editor?.fotos||[]).length);
+    const files=Array.from(fileList||[]).filter(f=>String(f.type||"").startsWith("image/")).slice(0,available);
+    if(!files.length){ if(available<=0) notifyToast(`La auditoria admite hasta ${MAX_AUDITORIA_FOTOS} imagenes.`,"warning"); return; }
+    setUploadingFotos(true);
+    try {
+      let id=editor?.id;
+      if(!id) id=await persistAuditoria({silent:true,allowEmpty:true});
+      if(!id) throw new Error("No se pudo crear el borrador para adjuntar imagenes.");
+      const uploaded=[];
+      for(const file of files) uploaded.push(await api.uploadAuditoriaFoto(id,file));
+      const nextFotos=[...(editor?.fotos||[]),...uploaded].slice(0,MAX_AUDITORIA_FOTOS);
+      const nowIso=new Date().toISOString();
+      await api.updateAuditoria(id,{fotos:nextFotos,actualizado_en:nowIso});
+      const nextEditor={...editor,id:Number(id),fotos:nextFotos,actualizadoEn:nowIso};
+      setEditor(nextEditor);
+      auditAutoSaveLastSignatureRef.current=buildAuditSignature(nextEditor,respuestas);
+      setAutoSavedAt(new Date()); setAutoSaveState("saved");
+      notifyToast(`${uploaded.length} imagen${uploaded.length===1?"":"es"} agregada${uploaded.length===1?"":"s"}.`,"success");
+    } catch(e){ notifyToast("No se pudieron subir las imagenes: "+(e.message||e),"error"); }
+    finally{ setUploadingFotos(false); if(auditPhotoInputRef.current) auditPhotoInputRef.current.value=""; }
+  };
+
+  const quitarFotoAuditoria = async(index)=>{
+    const foto=(editor?.fotos||[])[index];
+    if(!foto) return;
+    setUploadingFotos(true);
+    try {
+      if(foto.path) await api.deleteAuditoriaFoto(foto.path);
+      const nextFotos=(editor?.fotos||[]).filter((_,i)=>i!==index);
+      const nowIso=new Date().toISOString();
+      if(editor?.id) await api.updateAuditoria(editor.id,{fotos:nextFotos,actualizado_en:nowIso});
+      const nextEditor={...editor,fotos:nextFotos,actualizadoEn:nowIso};
+      setEditor(nextEditor);
+      auditAutoSaveLastSignatureRef.current=buildAuditSignature(nextEditor,respuestas);
+      setAutoSavedAt(new Date()); setAutoSaveState("saved");
+    } catch(e){ notifyToast("No se pudo quitar la imagen: "+(e.message||e),"error"); }
+    finally{setUploadingFotos(false);}
   };
 
   const localName=id=>locales.find(l=>Number(l.id)===Number(id))?.nombre || data.locales.find(l=>Number(l.id)===Number(id))?.nombre || `Local ${id}`;
   const userName=id=>(data.users||[]).find(u=>Number(u.id)===Number(id))?.nombre||"—";
+  const scoreLabel=(puntaje)=>puntaje===""||puntaje==null?"Sin evaluar":Number(puntaje)===2?"Cumple":Number(puntaje)===1?"Parcial":"No cumple";
+  const reportFromEditor=()=>({
+    audit:{...editor,puntajeObtenido,puntajeMax,cumplimiento:puntajeMax?puntajeObtenido/puntajeMax:0,informeDiarioCumplimiento:metricas.informePct==null?null:metricas.informePct/100,informeDiarioDetalle:metricas.informeDetalle||"",reclamosResumen:metricas.reclamosResumen||""},
+    answers:respuestas,
+  });
+  const abrirInformeEditor=()=>setReportData(reportFromEditor());
+  const abrirInformeFila=async(a)=>{
+    try{
+      const raw=await api.getAuditoriaRespuestas(a.id);
+      const map={}; criterios.forEach(c=>{map[c.id]={puntaje:0,observacion:""};});
+      (raw||[]).forEach(r=>{map[Number(r.criterio_id)]={puntaje:Number(r.puntaje||0),observacion:r.observacion||""};});
+      setReportData({audit:a,answers:map});
+    }catch(e){notifyToast("No se pudo generar el informe: "+(e.message||e),"error");}
+  };
+  const buildAuditReportText=(report)=>{
+    const a=report?.audit||{}; const ans=report?.answers||{};
+    const pct=((Number(a.cumplimiento||0))*100).toFixed(1);
+    const lines=[
+      "INFORME DE AUDITORIA - WHATSAPP",
+      `Local: ${localName(a.localId)}`,
+      `Periodo: ${a.periodo||"—"}`,
+      `Fecha: ${a.fecha?parseDateLabel(a.fecha):"—"}`,
+      `Auditor/a: ${a.auditorUserId?userName(a.auditorUserId):user.nombre}`,
+      `Cumplimiento: ${pct}% (${Number(a.puntajeObtenido||0)} / ${Number(a.puntajeMax||0)})`,
+      "",
+      "EVALUACION GENERAL",
+    ];
+    criterios.forEach((c,idx)=>{
+      const rr=ans[c.id]||{puntaje:0,observacion:""};
+      lines.push(`${idx+1}. ${c.nombre}: ${Number(rr.puntaje||0)}/${c.puntajeMax} - ${scoreLabel(rr.puntaje)}`);
+      if(String(rr.observacion||"").trim()) lines.push(String(rr.observacion).trim());
+    });
+    lines.push("",`Informe de mensajeria: ${a.informeDiarioCumplimiento==null?"—":`${(Number(a.informeDiarioCumplimiento)*100).toFixed(1)}%`}`);
+    if(a.informeDiarioDetalle) lines.push(a.informeDiarioDetalle);
+    lines.push(`Reclamos: ${a.reclamosResumen||"Sin reclamos"}`);
+    if(String(a.analisis||"").trim()) lines.push("","ANALISIS",String(a.analisis).trim());
+    if(String(a.conclusiones||"").trim()) lines.push("","CONCLUSIONES Y RECOMENDACIONES",String(a.conclusiones).trim());
+    if((a.fotos||[]).length) lines.push("",`Evidencia fotografica: ${(a.fotos||[]).length} imagen${a.fotos.length===1?"":"es"} adjunta${a.fotos.length===1?"":"s"} en NikiOS.`);
+    return lines.join("\n");
+  };
+  const compartirAuditoriaWhatsApp=(report)=>{
+    const text=buildAuditReportText(report);
+    window.open(`https://wa.me/?text=${encodeURIComponent(text)}`,"_blank","noopener,noreferrer");
+  };
+  const enviarAuditoriaEmail=(report)=>{
+    const a=report?.audit||{};
+    const local=(data.locales||[]).find(l=>Number(l.id)===Number(a.localId));
+    const to=String(local?.franquiciadoEmail||local?.franquiciado_email||"").trim();
+    const subject=`Auditoria WhatsApp · ${localName(a.localId)} · ${a.periodo||""}`;
+    const body=buildAuditReportText(report);
+    window.location.href=`mailto:${encodeURIComponent(to)}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
+  };
+  const imprimirAuditoria=(report)=>{
+    const a=report?.audit||{}; const ans=report?.answers||{};
+    const pct=((Number(a.cumplimiento||0))*100).toFixed(1);
+    const criteriosHtml=criterios.map((c,idx)=>{const rr=ans[c.id]||{puntaje:0,observacion:""};return `<div class="criterion"><div class="criterion-head"><strong>${idx+1}. ${escapeAuditHtml(c.nombre)}</strong><span>${Number(rr.puntaje||0)}/${Number(c.puntajeMax||2)} · ${escapeAuditHtml(scoreLabel(rr.puntaje))}</span></div>${c.descripcion?`<div class="desc">${escapeAuditHtml(c.descripcion)}</div>`:""}${String(rr.observacion||"").trim()?`<div class="obs">${escapeAuditHtml(rr.observacion).replace(/\n/g,"<br>")}</div>`:""}</div>`;}).join("");
+    const fotosHtml=(a.fotos||[]).map(f=>{const url=f.url||api.auditoriaFotoUrl(f.path);return url?`<img src="${escapeAuditHtml(url)}" alt="Evidencia"/>`:"";}).join("");
+    const w=window.open("","_blank"); if(!w) return notifyToast("El navegador bloqueo la ventana de impresion.","warning");
+    w.document.write(`<!doctype html><html><head><meta charset="utf-8"><title>Auditoria ${escapeAuditHtml(localName(a.localId))}</title><style>body{font-family:Arial,sans-serif;color:#2d1b22;margin:32px;line-height:1.45}.header{border-bottom:3px solid #8d2948;padding-bottom:14px;margin-bottom:18px}.brand{color:#8d2948;font-size:12px;font-weight:700;text-transform:uppercase}.title{font-size:24px;margin:4px 0}.meta{font-size:12px;color:#6f5b63}.score{margin:18px 0;padding:14px 16px;background:#f8e9ee;border-radius:12px;display:flex;justify-content:space-between;align-items:center}.score strong:last-child{font-size:24px;color:#8d2948}.section{margin-top:20px}.section h2{font-size:15px;color:#8d2948;margin:0 0 10px}.criterion{border:1px solid #e7d8de;border-radius:10px;padding:11px 12px;margin-bottom:8px;break-inside:avoid}.criterion-head{display:flex;justify-content:space-between;gap:12px;font-size:12px}.criterion-head span{font-weight:700;color:#8d2948}.desc{font-size:10px;color:#76646b;margin-top:3px}.obs{margin-top:8px;padding:9px 10px;background:#faf6f8;border-radius:8px;font-size:11px;white-space:normal}.metrics{display:grid;grid-template-columns:1fr 1fr;gap:10px}.metric{border:1px solid #e7d8de;border-radius:10px;padding:10px;font-size:11px}.textblock{white-space:pre-wrap;font-size:11px;border:1px solid #e7d8de;border-radius:10px;padding:11px}.photos{display:grid;grid-template-columns:repeat(3,1fr);gap:8px}.photos img{width:100%;height:160px;object-fit:cover;border-radius:8px}.footer{margin-top:24px;font-size:9px;color:#8a777f}@media print{body{margin:15mm}.no-print{display:none}} </style></head><body><div class="header"><div class="brand">Niki Beauty Bar · Auditoria WhatsApp</div><div class="title">${escapeAuditHtml(localName(a.localId))}</div><div class="meta">Periodo ${escapeAuditHtml(a.periodo||"—")} · ${a.fecha?escapeAuditHtml(parseDateLabel(a.fecha)):"—"} · Auditor/a ${escapeAuditHtml(a.auditorUserId?userName(a.auditorUserId):user.nombre)}</div></div><div class="score"><strong>Puntaje ${Number(a.puntajeObtenido||0)} / ${Number(a.puntajeMax||0)}</strong><strong>${pct}%</strong></div><div class="section"><h2>Evaluacion general</h2>${criteriosHtml}</div><div class="section"><h2>Metricas especiales</h2><div class="metrics"><div class="metric"><strong>Informe de Mensajeria</strong><div>${a.informeDiarioCumplimiento==null?"—":`${(Number(a.informeDiarioCumplimiento)*100).toFixed(1)}%`}</div><div>${escapeAuditHtml(a.informeDiarioDetalle||"")}</div></div><div class="metric"><strong>Reclamos del periodo</strong><div>${escapeAuditHtml(a.reclamosResumen||"Sin reclamos")}</div></div></div></div>${String(a.analisis||"").trim()?`<div class="section"><h2>Analisis</h2><div class="textblock">${escapeAuditHtml(a.analisis)}</div></div>`:""}${String(a.conclusiones||"").trim()?`<div class="section"><h2>Conclusiones y recomendaciones</h2><div class="textblock">${escapeAuditHtml(a.conclusiones)}</div></div>`:""}${fotosHtml?`<div class="section"><h2>Evidencia fotografica</h2><div class="photos">${fotosHtml}</div></div>`:""}<div class="footer">Generado desde NikiOS. Desde el dialogo de impresion podes elegir Guardar como PDF.</div><script>window.onload=()=>setTimeout(()=>window.print(),250);<\/script></body></html>`);
+    w.document.close();
+  };
   const auditoriasFinalizadas=rows.filter(r=>r.estado==="finalizada");
   const promedio=auditoriasFinalizadas.length?auditoriasFinalizadas.reduce((a,r)=>a+r.cumplimiento*100,0)/auditoriasFinalizadas.length:0;
   const esperadas=locales.length;
@@ -10093,6 +10381,8 @@ function AuditoriasPage({ data, user }) {
     const promedio=vals.length?vals.reduce((a,v)=>a+v,0)/vals.length:null;
     return {...c, promedio, porcentaje:promedio==null?null:(promedio/Math.max(1,c.puntajeMax))*100};
   });
+  const auditAutoSaveLabel=autoSaveState==="saving"?"Guardando automaticamente...":autoSaveState==="pending"?"Cambios pendientes...":autoSaveState==="error"?"Error de autoguardado":autoSaveState==="finalized"?"Auditoria finalizada":autoSavedAt?`Guardado automaticamente ${new Intl.DateTimeFormat("es-AR",{hour:"2-digit",minute:"2-digit",second:"2-digit"}).format(autoSavedAt)}`:"Autoguardado activado";
+  const auditAutoSaveTone=autoSaveState==="error"?{bg:COLORS.dangerLight,fg:COLORS.danger}:autoSaveState==="saving"||autoSaveState==="pending"?{bg:COLORS.amberLight,fg:COLORS.amber}:autoSaveState==="finalized"?{bg:COLORS.successLight,fg:COLORS.success}:{bg:COLORS.infoLight,fg:COLORS.info};
 
   return <div style={{padding:"20px 22px 34px",maxWidth:1500,margin:"0 auto"}}>
     <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",gap:12,flexWrap:"wrap",marginBottom:16}}>
@@ -10128,26 +10418,51 @@ function AuditoriasPage({ data, user }) {
 
     <Card style={{padding:0,overflow:"hidden"}}>
       <div style={{padding:"12px 14px",borderBottom:"1px solid var(--color-border-tertiary)",display:"flex",justifyContent:"space-between",alignItems:"center"}}><strong style={{fontSize:13}}>Auditorias realizadas</strong><span style={{fontSize:10,color:"var(--color-text-secondary)"}}>{rows.length} registro{rows.length===1?"":"s"}</span></div>
-      <div style={{overflowX:"auto"}}><table style={{width:"100%",borderCollapse:"collapse",minWidth:820,fontSize:11}}><thead><tr style={{background:"var(--color-background-secondary)",textAlign:"left"}}><th style={{padding:"9px 12px"}}>Local</th><th>Periodo</th><th>Fecha</th><th>Auditor</th><th>Cumplimiento</th><th>Informe mensajeria</th><th>Reclamos</th><th>Estado</th><th style={{width:140}}></th></tr></thead><tbody>{rows.map(a=><tr key={a.id} style={{borderTop:"1px solid var(--color-border-tertiary)"}}><td style={{padding:"10px 12px",fontWeight:700}}>{localName(a.localId)}</td><td>{a.periodo}</td><td>{a.fecha?parseDateLabel(a.fecha):"—"}</td><td>{userName(a.auditorUserId)}</td><td><strong>{(a.cumplimiento*100).toFixed(1)}%</strong></td><td>{a.informeDiarioCumplimiento==null?"—":`${(a.informeDiarioCumplimiento*100).toFixed(1)}%`}</td><td style={{maxWidth:230,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}} title={a.reclamosResumen}>{a.reclamosResumen||"—"}</td><td><Badge color={a.estado==="finalizada"?"success":"gray"}>{a.estado==="finalizada"?"Finalizada":"Borrador"}</Badge></td><td><button type="button" onClick={()=>abrirEditar(a)} style={{border:"none",background:"transparent",color:COLORS.pinkDark,fontWeight:700,cursor:"pointer"}}>{puedeEditar?"Ver / editar":"Ver detalle"}</button></td></tr>)}</tbody></table></div>
+      <div style={{overflowX:"auto"}}><table style={{width:"100%",borderCollapse:"collapse",minWidth:820,fontSize:11}}><thead><tr style={{background:"var(--color-background-secondary)",textAlign:"left"}}><th style={{padding:"9px 12px"}}>Local</th><th>Periodo</th><th>Fecha</th><th>Auditor</th><th>Cumplimiento</th><th>Informe mensajeria</th><th>Reclamos</th><th>Estado</th><th style={{width:210}}></th></tr></thead><tbody>{rows.map(a=><tr key={a.id} style={{borderTop:"1px solid var(--color-border-tertiary)"}}><td style={{padding:"10px 12px",fontWeight:700}}>{localName(a.localId)}</td><td>{a.periodo}</td><td>{a.fecha?parseDateLabel(a.fecha):"—"}</td><td>{userName(a.auditorUserId)}</td><td><strong>{(a.cumplimiento*100).toFixed(1)}%</strong></td><td>{a.informeDiarioCumplimiento==null?"—":`${(a.informeDiarioCumplimiento*100).toFixed(1)}%`}</td><td style={{maxWidth:230,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}} title={a.reclamosResumen}>{a.reclamosResumen||"—"}</td><td><Badge color={a.estado==="finalizada"?"success":"gray"}>{a.estado==="finalizada"?"Finalizada":"Borrador"}</Badge></td><td><div style={{display:"flex",gap:8,justifyContent:"flex-end"}}><button type="button" onClick={()=>abrirInformeFila(a)} style={{border:"none",background:"transparent",color:COLORS.info,fontWeight:700,cursor:"pointer"}}>Informe</button><button type="button" onClick={()=>abrirEditar(a)} style={{border:"none",background:"transparent",color:COLORS.pinkDark,fontWeight:700,cursor:"pointer"}}>{puedeEditar?"Ver / editar":"Ver detalle"}</button></div></td></tr>)}</tbody></table></div>
     </Card>
 
-    {editor&&<Modal title={`${editor.id?"Auditoria":"Nueva auditoria"} · WhatsApp`} onClose={()=>!saving&&setEditor(null)} width={980}>
+    {editor&&<Modal title={`${editor.id?"Auditoria":"Nueva auditoria"} · WhatsApp`} onClose={cerrarEditor} width={1040}>
       <div style={{display:"grid",gap:14}}>
         <div style={{display:"grid",gridTemplateColumns:"1.2fr 1fr 1fr",gap:10}} className="niki-mobile-one-column">
           <div><label style={{fontSize:11,fontWeight:700,display:"block",marginBottom:5}}>Local</label><select disabled={!puedeEditar||!!editor.id} value={editor.localId||""} onChange={async e=>{const lid=Number(e.target.value);setEditor(v=>({...v,localId:lid}));await loadMetricas(lid,editor.periodo);}} style={{width:"100%",height:38,border:"1px solid var(--color-border-secondary)",borderRadius:8,padding:"0 9px",background:"#fff"}}>{locales.map(l=><option key={l.id} value={l.id}>{l.nombre}</option>)}</select></div>
           <div><label style={{fontSize:11,fontWeight:700,display:"block",marginBottom:5}}>Mes / ano auditado</label><input disabled={!puedeEditar||!!editor.id} type="month" value={editor.periodo||""} onChange={async e=>{const p=e.target.value;setEditor(v=>({...v,periodo:p}));await loadMetricas(editor.localId,p);}} style={{width:"100%",height:38,boxSizing:"border-box",border:"1px solid var(--color-border-secondary)",borderRadius:8,padding:"0 9px"}}/></div>
           <div><label style={{fontSize:11,fontWeight:700,display:"block",marginBottom:5}}>Fecha de auditoria</label><input disabled={!puedeEditar} type="date" value={editor.fecha||""} onChange={e=>setEditor(v=>({...v,fecha:e.target.value}))} style={{width:"100%",height:38,boxSizing:"border-box",border:"1px solid var(--color-border-secondary)",borderRadius:8,padding:"0 9px"}}/></div>
         </div>
-        <div style={{fontSize:11,color:"var(--color-text-secondary)"}}>Auditor/a: <strong style={{color:"var(--color-text-primary)"}}>{user.nombre}</strong></div>
+        <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",gap:10,flexWrap:"wrap"}}>
+          <div style={{fontSize:11,color:"var(--color-text-secondary)"}}>Auditor/a: <strong style={{color:"var(--color-text-primary)"}}>{user.nombre}</strong></div>
+          {puedeEditar&&<span style={{display:"inline-flex",alignItems:"center",gap:6,borderRadius:999,padding:"6px 10px",background:auditAutoSaveTone.bg,color:auditAutoSaveTone.fg,fontSize:9.5,fontWeight:800}}><span style={{width:6,height:6,borderRadius:"50%",background:"currentColor"}}/>{auditAutoSaveLabel}</span>}
+        </div>
 
-        <div><div style={{fontSize:12,fontWeight:800,marginBottom:7}}>1. Evaluacion general</div><div style={{display:"grid",gap:8}}>{criterios.map((c,idx)=>{const rr=respuestas[c.id]||{puntaje:0,observacion:""};return <div key={c.id} style={{border:"1px solid var(--color-border-tertiary)",borderRadius:10,padding:"10px 11px",display:"grid",gridTemplateColumns:"minmax(250px,1.25fr) 120px minmax(220px,1fr)",gap:10,alignItems:"center"}} className="niki-mobile-one-column"><div><strong style={{fontSize:12}}>{idx+1}. {c.nombre}</strong><p style={{margin:"3px 0 0",fontSize:10,color:"var(--color-text-secondary)",lineHeight:1.35}}>{c.descripcion}</p></div><div><label style={{fontSize:9,fontWeight:700,display:"block",marginBottom:4}}>Puntaje 0-2</label><select disabled={!puedeEditar} value={rr.puntaje} onChange={e=>setRespuestas(prev=>({...prev,[c.id]:{...rr,puntaje:Number(e.target.value)}}))} style={{width:"100%",height:34,border:"1px solid var(--color-border-secondary)",borderRadius:7,background:"#fff"}}><option value={0}>0 · No cumple</option><option value={1}>1 · Parcial</option><option value={2}>2 · Cumple</option></select></div><div><label style={{fontSize:9,fontWeight:700,display:"block",marginBottom:4}}>Observaciones</label><input disabled={!puedeEditar} value={rr.observacion||""} onChange={e=>setRespuestas(prev=>({...prev,[c.id]:{...rr,observacion:e.target.value}}))} style={{width:"100%",height:34,boxSizing:"border-box",border:"1px solid var(--color-border-secondary)",borderRadius:7,padding:"0 8px"}} placeholder="Observacion opcional"/></div></div>})}</div></div>
+        <div><div style={{fontSize:12,fontWeight:800,marginBottom:7}}>1. Evaluacion general</div><div style={{display:"grid",gap:8}}>{criterios.map((c,idx)=>{const rr=respuestas[c.id]||{puntaje:"",observacion:""};return <div key={c.id} style={{border:"1px solid var(--color-border-tertiary)",borderRadius:10,padding:"10px 11px",display:"grid",gridTemplateColumns:"minmax(250px,1.15fr) 120px minmax(260px,1fr)",gap:10,alignItems:"start"}} className="niki-mobile-one-column"><div><strong style={{fontSize:12}}>{idx+1}. {c.nombre}</strong><p style={{margin:"3px 0 0",fontSize:10,color:"var(--color-text-secondary)",lineHeight:1.35}}>{c.descripcion}</p></div><div><label style={{fontSize:9,fontWeight:700,display:"block",marginBottom:4}}>Puntaje 0-2</label><select disabled={!puedeEditar} value={rr.puntaje} onChange={e=>{setCriteriosTocados(prev=>({...prev,[c.id]:true}));setRespuestas(prev=>({...prev,[c.id]:{...rr,puntaje:Number(e.target.value)}}));}} style={{width:"100%",height:34,border:"1px solid var(--color-border-secondary)",borderRadius:7,background:"#fff"}}><option value="" disabled>Seleccionar</option><option value={0}>0 · No cumple</option><option value={1}>1 · Parcial</option><option value={2}>2 · Cumple</option></select></div><div><label style={{fontSize:9,fontWeight:700,display:"block",marginBottom:4}}>Observaciones</label><AuditGrowingTextarea disabled={!puedeEditar} value={rr.observacion||""} onValueChange={value=>{setCriteriosTocados(prev=>({...prev,[c.id]:true}));setRespuestas(prev=>({...prev,[c.id]:{...rr,observacion:value}}));}} minHeight={48} placeholder="Observacion opcional. Admite parrafos, saltos de linea y listas con - o •" style={{border:"1px solid var(--color-border-secondary)",borderRadius:7,padding:"8px 9px",fontSize:10.5,background:puedeEditar?"#fff":"var(--color-background-secondary)"}}/></div></div>})}</div></div>
         <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"11px 12px",borderRadius:10,background:COLORS.pinkLight}}><strong>Puntaje: {puntajeObtenido} / {puntajeMax}</strong><strong style={{fontSize:18,color:COLORS.pinkDark}}>{cumplimiento.toFixed(1)}%</strong></div>
 
-        <div><div style={{fontSize:12,fontWeight:800,marginBottom:7}}>2. Metricas especiales</div><div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10}} className="niki-mobile-one-column"><div style={{border:"1px solid var(--color-border-tertiary)",borderRadius:10,padding:11}}><div style={{fontSize:10,textTransform:"uppercase",color:"var(--color-text-secondary)"}}>Utilizacion Informe de Mensajeria</div><strong style={{display:"block",fontSize:20,margin:"4px 0"}}>{metricas.loading?"…":metricas.informePct==null?"—":`${metricas.informePct.toFixed(1)}%`}</strong><span style={{fontSize:10,color:"var(--color-text-secondary)"}}>{metricas.informeDetalle||"Calculado automaticamente desde Informe de Mensajeria"}</span></div><div style={{border:"1px solid var(--color-border-tertiary)",borderRadius:10,padding:11}}><div style={{fontSize:10,textTransform:"uppercase",color:"var(--color-text-secondary)"}}>Reclamos del periodo</div><strong style={{display:"block",fontSize:16,margin:"6px 0"}}>{metricas.loading?"…":metricas.reclamosResumen||"Sin reclamos"}</strong><span style={{fontSize:10,color:"var(--color-text-secondary)"}}>Calculado automaticamente desde Reclamos</span></div></div></div>
+        <div style={{border:"1px solid var(--color-border-tertiary)",borderRadius:11,padding:12,background:"#fff"}}>
+          <div style={{display:"flex",justifyContent:"space-between",gap:10,alignItems:"center",flexWrap:"wrap",marginBottom:(editor.fotos||[]).length?10:0}}><div><strong style={{fontSize:12}}>2. Evidencia fotografica</strong><div style={{fontSize:9.5,color:"var(--color-text-secondary)",marginTop:2}}>Hasta {MAX_AUDITORIA_FOTOS} imagenes. Se comprimen automaticamente a aproximadamente 200 KB cada una.</div></div>{puedeEditar&&<><input ref={auditPhotoInputRef} type="file" accept="image/jpeg,image/png,image/webp" multiple hidden onChange={e=>subirFotosAuditoria(e.target.files)}/><Btn size="sm" variant="secondary" disabled={uploadingFotos||(editor.fotos||[]).length>=MAX_AUDITORIA_FOTOS} onClick={()=>auditPhotoInputRef.current?.click()}>{uploadingFotos?"Subiendo...":"+ Agregar imagenes"}</Btn></>}</div>
+          {(editor.fotos||[]).length>0&&<div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(120px,1fr))",gap:8}}>{editor.fotos.map((f,i)=>{const url=f.url||api.auditoriaFotoUrl(f.path);return <div key={f.path||f.url||i} style={{position:"relative",border:"1px solid var(--color-border-tertiary)",borderRadius:9,overflow:"hidden",background:"var(--color-background-secondary)"}}><a href={url} target="_blank" rel="noreferrer"><img src={url} alt={`Evidencia ${i+1}`} style={{width:"100%",height:96,display:"block",objectFit:"cover"}}/></a>{puedeEditar&&<button type="button" disabled={uploadingFotos} onClick={()=>quitarFotoAuditoria(i)} style={{position:"absolute",top:5,right:5,width:22,height:22,borderRadius:"50%",border:"none",background:"rgba(190,42,72,.9)",color:"#fff",cursor:"pointer",fontWeight:800}}>×</button>}</div>})}</div>}
+        </div>
 
-        <div><label style={{fontSize:12,fontWeight:800,display:"block",marginBottom:5}}>3. Analisis</label><textarea disabled={!puedeEditar} rows={4} value={editor.analisis||""} onChange={e=>setEditor(v=>({...v,analisis:e.target.value}))} placeholder="Consistencia de la informacion, casos destacados, tendencias detectadas..." style={{width:"100%",boxSizing:"border-box",border:"1px solid var(--color-border-secondary)",borderRadius:9,padding:10,fontFamily:"inherit",resize:"vertical"}}/></div>
-        <div><label style={{fontSize:12,fontWeight:800,display:"block",marginBottom:5}}>4. Conclusiones y recomendaciones</label><textarea disabled={!puedeEditar} rows={4} value={editor.conclusiones||""} onChange={e=>setEditor(v=>({...v,conclusiones:e.target.value}))} placeholder="Conclusion general y recomendaciones puntuales para el equipo..." style={{width:"100%",boxSizing:"border-box",border:"1px solid var(--color-border-secondary)",borderRadius:9,padding:10,fontFamily:"inherit",resize:"vertical"}}/></div>
-        <div style={{display:"flex",justifyContent:"flex-end",gap:8,flexWrap:"wrap"}}><Btn variant="secondary" onClick={()=>setEditor(null)} disabled={saving}>Cerrar</Btn>{puedeEditar&&<><Btn variant="secondary" onClick={()=>guardar(false)} disabled={saving}>{saving?"Guardando...":"Guardar borrador"}</Btn><Btn onClick={()=>guardar(true)} disabled={saving}>{saving?"Guardando...":"Finalizar auditoria"}</Btn></>}</div>
+        <div><div style={{fontSize:12,fontWeight:800,marginBottom:7}}>3. Metricas especiales</div><div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10}} className="niki-mobile-one-column"><div style={{border:"1px solid var(--color-border-tertiary)",borderRadius:10,padding:11}}><div style={{fontSize:10,textTransform:"uppercase",color:"var(--color-text-secondary)"}}>Utilizacion Informe de Mensajeria</div><strong style={{display:"block",fontSize:20,margin:"4px 0"}}>{metricas.loading?"…":metricas.informePct==null?"—":`${metricas.informePct.toFixed(1)}%`}</strong><span style={{fontSize:10,color:"var(--color-text-secondary)"}}>{metricas.informeDetalle||"Calculado automaticamente desde Informe de Mensajeria"}</span></div><div style={{border:"1px solid var(--color-border-tertiary)",borderRadius:10,padding:11}}><div style={{fontSize:10,textTransform:"uppercase",color:"var(--color-text-secondary)"}}>Reclamos del periodo</div><strong style={{display:"block",fontSize:16,margin:"6px 0"}}>{metricas.loading?"…":metricas.reclamosResumen||"Sin reclamos"}</strong><span style={{fontSize:10,color:"var(--color-text-secondary)"}}>Calculado automaticamente desde Reclamos</span></div></div></div>
+
+        <div><label style={{fontSize:12,fontWeight:800,display:"block",marginBottom:5}}>4. Analisis</label><AuditGrowingTextarea disabled={!puedeEditar} value={editor.analisis||""} onValueChange={value=>setEditor(v=>({...v,analisis:value}))} minHeight={84} placeholder="Consistencia de la informacion, casos destacados, tendencias detectadas..." style={{border:"1px solid var(--color-border-secondary)",borderRadius:9,padding:10,fontSize:11}}/></div>
+        <div><label style={{fontSize:12,fontWeight:800,display:"block",marginBottom:5}}>5. Conclusiones y recomendaciones</label><AuditGrowingTextarea disabled={!puedeEditar} value={editor.conclusiones||""} onValueChange={value=>setEditor(v=>({...v,conclusiones:value}))} minHeight={84} placeholder="Conclusion general y recomendaciones puntuales para el equipo..." style={{border:"1px solid var(--color-border-secondary)",borderRadius:9,padding:10,fontSize:11}}/></div>
+        <div style={{display:"flex",justifyContent:"space-between",gap:8,flexWrap:"wrap",alignItems:"center"}}><Btn variant="secondary" onClick={abrirInformeEditor}>Ver informe</Btn><div style={{display:"flex",justifyContent:"flex-end",gap:8,flexWrap:"wrap"}}><Btn variant="secondary" onClick={cerrarEditor} disabled={saving||uploadingFotos||autoSaveState==="saving"}>Cerrar</Btn>{puedeEditar&&<><Btn variant="secondary" onClick={()=>guardar(false)} disabled={saving||uploadingFotos||autoSaveState==="saving"}>{saving?"Guardando...":"Guardar ahora"}</Btn><Btn onClick={()=>guardar(true)} disabled={saving||uploadingFotos||autoSaveState==="saving"}>{saving?"Guardando...":"Finalizar auditoria"}</Btn></>}</div></div>
+      </div>
+    </Modal>}
+
+    {reportData&&<Modal title={`Informe de auditoria · ${localName(reportData.audit?.localId)}`} onClose={()=>setReportData(null)} width={920}>
+      <div style={{display:"grid",gap:14}}>
+        <div style={{border:"1px solid rgba(114,36,62,.16)",borderRadius:14,overflow:"hidden",background:"#fff"}}>
+          <div style={{background:"linear-gradient(135deg,#fff5f8,#f7e3ea)",padding:"18px 20px",borderBottom:"1px solid rgba(114,36,62,.12)"}}><div style={{fontSize:10,fontWeight:800,textTransform:"uppercase",letterSpacing:.7,color:COLORS.pinkDark}}>Niki Beauty Bar · Auditoria WhatsApp</div><div style={{fontSize:22,fontWeight:800,marginTop:4}}>{localName(reportData.audit?.localId)}</div><div style={{fontSize:11,color:"var(--color-text-secondary)",marginTop:4}}>Periodo {reportData.audit?.periodo||"—"} · {reportData.audit?.fecha?parseDateLabel(reportData.audit.fecha):"—"} · Auditor/a {reportData.audit?.auditorUserId?userName(reportData.audit.auditorUserId):user.nombre}</div></div>
+          <div style={{padding:18}}>
+            <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",gap:10,padding:"12px 14px",borderRadius:11,background:COLORS.pinkLight,marginBottom:16}}><strong>Puntaje {Number(reportData.audit?.puntajeObtenido||0)} / {Number(reportData.audit?.puntajeMax||0)}</strong><strong style={{fontSize:22,color:COLORS.pinkDark}}>{(Number(reportData.audit?.cumplimiento||0)*100).toFixed(1)}%</strong></div>
+            <div style={{fontSize:12,fontWeight:800,marginBottom:8}}>Evaluacion general</div><div style={{display:"grid",gap:8}}>{criterios.map((c,idx)=>{const rr=reportData.answers?.[c.id]||{puntaje:0,observacion:""};return <div key={`rep-${c.id}`} style={{border:"1px solid var(--color-border-tertiary)",borderRadius:10,padding:"10px 11px"}}><div style={{display:"flex",justifyContent:"space-between",gap:12,alignItems:"flex-start"}}><strong style={{fontSize:11.5}}>{idx+1}. {c.nombre}</strong><span style={{fontSize:10,fontWeight:800,color:COLORS.pinkDark,whiteSpace:"nowrap"}}>{Number(rr.puntaje||0)}/{c.puntajeMax} · {scoreLabel(rr.puntaje)}</span></div>{c.descripcion&&<div style={{fontSize:9.5,color:"var(--color-text-secondary)",marginTop:3}}>{c.descripcion}</div>}{String(rr.observacion||"").trim()&&<div style={{whiteSpace:"pre-wrap",marginTop:8,padding:"8px 9px",borderRadius:8,background:"var(--color-background-secondary)",fontSize:10.5,lineHeight:1.45}}>{rr.observacion}</div>}</div>})}</div>
+            <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10,marginTop:16}} className="niki-mobile-one-column"><div style={{border:"1px solid var(--color-border-tertiary)",borderRadius:10,padding:11}}><div style={{fontSize:9.5,textTransform:"uppercase",color:"var(--color-text-secondary)"}}>Informe de Mensajeria</div><strong style={{fontSize:18}}>{reportData.audit?.informeDiarioCumplimiento==null?"—":`${(Number(reportData.audit.informeDiarioCumplimiento)*100).toFixed(1)}%`}</strong><div style={{fontSize:9.5,color:"var(--color-text-secondary)",marginTop:3}}>{reportData.audit?.informeDiarioDetalle||""}</div></div><div style={{border:"1px solid var(--color-border-tertiary)",borderRadius:10,padding:11}}><div style={{fontSize:9.5,textTransform:"uppercase",color:"var(--color-text-secondary)"}}>Reclamos del periodo</div><strong style={{display:"block",fontSize:13,marginTop:5}}>{reportData.audit?.reclamosResumen||"Sin reclamos"}</strong></div></div>
+            {String(reportData.audit?.analisis||"").trim()&&<div style={{marginTop:16}}><div style={{fontSize:12,fontWeight:800,marginBottom:6}}>Analisis</div><div style={{whiteSpace:"pre-wrap",fontSize:11,lineHeight:1.5,border:"1px solid var(--color-border-tertiary)",borderRadius:10,padding:11}}>{reportData.audit.analisis}</div></div>}
+            {String(reportData.audit?.conclusiones||"").trim()&&<div style={{marginTop:16}}><div style={{fontSize:12,fontWeight:800,marginBottom:6}}>Conclusiones y recomendaciones</div><div style={{whiteSpace:"pre-wrap",fontSize:11,lineHeight:1.5,border:"1px solid var(--color-border-tertiary)",borderRadius:10,padding:11}}>{reportData.audit.conclusiones}</div></div>}
+            {(reportData.audit?.fotos||[]).length>0&&<div style={{marginTop:16}}><div style={{fontSize:12,fontWeight:800,marginBottom:7}}>Evidencia fotografica</div><div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(150px,1fr))",gap:8}}>{reportData.audit.fotos.map((f,i)=>{const url=f.url||api.auditoriaFotoUrl(f.path);return <a key={f.path||f.url||i} href={url} target="_blank" rel="noreferrer"><img src={url} alt={`Evidencia ${i+1}`} style={{width:"100%",height:120,objectFit:"cover",borderRadius:9,border:"1px solid var(--color-border-tertiary)"}}/></a>})}</div></div>}
+          </div>
+        </div>
+        <div style={{display:"flex",justifyContent:"space-between",gap:8,flexWrap:"wrap"}}><div style={{display:"flex",gap:8,flexWrap:"wrap"}}><Btn variant="secondary" onClick={()=>compartirAuditoriaWhatsApp(reportData)}>WhatsApp</Btn><Btn variant="secondary" onClick={()=>enviarAuditoriaEmail(reportData)}>Enviar por email</Btn><Btn variant="secondary" onClick={()=>imprimirAuditoria(reportData)}>Imprimir / Guardar PDF</Btn></div><Btn onClick={()=>setReportData(null)}>Cerrar</Btn></div>
       </div>
     </Modal>}
   </div>;
@@ -10210,36 +10525,92 @@ function ReclamosPage({ data, user }) {
   const groups=Array.from(filtrados.reduce((m,r)=>{const k=groupKey(r);if(!m.has(k))m.set(k,[]);m.get(k).push(r);return m;},new Map()).entries());
   const del=async r=>{if(!confirm("¿Eliminar este reclamo?"))return;await api.deleteInformeReclamo(r.id);await Promise.all([load(),refreshKpi()]);};
   const pctText=Number.isFinite(kpi.variacion)?`${kpi.variacion>=0?"+":""}${kpi.variacion.toFixed(1)}%`:"—";
-  return <div><div style={{display:"flex",justifyContent:"space-between",gap:8,alignItems:"center",marginBottom:14,flexWrap:"wrap"}}><div><h2 style={{margin:0,fontSize:18,fontWeight:600}}>Reclamos</h2><p style={{margin:"3px 0 0",fontSize:11,color:"var(--color-text-secondary)"}}>Seguimiento de reclamos de clientas y resolución por local.</p></div><Btn size="sm" onClick={()=>setModal({})}>+ Nuevo reclamo</Btn></div>
-    <div style={{display:"grid",gridTemplateColumns:locales.length===1?"150px 170px minmax(0,1fr)":"150px 170px minmax(0,1fr)",gap:10,marginBottom:14,alignItems:"stretch"}} className="niki-mobile-one-column">
-      <Card style={{padding:"12px 14px",minHeight:92}}><p style={{margin:0,fontSize:9,textTransform:"uppercase",color:"var(--color-text-secondary)",fontWeight:800}}>Reclamos del mes</p><strong style={{display:"block",fontSize:26,lineHeight:1.05,marginTop:7}}>{kpi.actual}</strong><small style={{display:"block",marginTop:5,color:"var(--color-text-secondary)",fontSize:9}}>mes actual</small></Card>
-      <Card style={{padding:"12px 14px",minHeight:92}}><p style={{margin:0,fontSize:9,textTransform:"uppercase",color:"var(--color-text-secondary)",fontWeight:800}}>Vs. mes anterior</p><strong style={{display:"block",fontSize:23,lineHeight:1.05,marginTop:7,color:(kpi.variacion||0)>0?COLORS.danger:COLORS.success}}>{pctText}</strong><small style={{display:"block",marginTop:5,color:"var(--color-text-secondary)",fontSize:9}}>Anterior: {kpi.anterior}</small></Card>
-      <Card style={{padding:"11px 14px",minHeight:92}}>{kpi.incidencia.length?(()=>{
+  const variationIsBetter=(kpi.variacion||0)<=0;
+
+  const LOCAL_TONES=[
+    { accent:"#8f3653", strong:"#72243e", header:"#f3dfe5", soft:"#fff7f9", row:"#fffafb", border:"#e8cbd4" },
+    { accent:"#5e6fa8", strong:"#435589", header:"#e5e9f6", soft:"#f8f9fd", row:"#fbfcff", border:"#d2d8ed" },
+    { accent:"#9a6b3f", strong:"#7b512d", header:"#f3e6d8", soft:"#fcf8f3", row:"#fefbf8", border:"#ead7c4" },
+    { accent:"#5f8872", strong:"#406a56", header:"#e2efe8", soft:"#f6fbf8", row:"#fafffc", border:"#cfe3d8" },
+    { accent:"#8a6094", strong:"#6b4575", header:"#eee3f1", soft:"#faf7fb", row:"#fdfbfe", border:"#dfcee4" },
+    { accent:"#b2766b", strong:"#8d564d", header:"#f5e4e0", soft:"#fdf8f7", row:"#fffafa", border:"#ebd2cd" },
+  ];
+  const toneForLocalId=id=>{
+    const n=Number(id);
+    const idx=Number.isFinite(n)?Math.abs(n)%LOCAL_TONES.length:String(id||"").split("").reduce((a,c)=>a+c.charCodeAt(0),0)%LOCAL_TONES.length;
+    return LOCAL_TONES[idx];
+  };
+  const toneForGroup=g=>{
+    if(agrupar==="local"){
+      const loc=data.locales.find(l=>l.nombre===g);
+      if(loc) return toneForLocalId(loc.id);
+    }
+    if(agrupar==="estado"){
+      if(g.toLowerCase().includes("pendiente")) return {accent:COLORS.amber,strong:"#8f5b11",header:COLORS.amberLight,soft:"#fffaf1",row:"#fffdf8",border:"#efd6ad"};
+      if(g.toLowerCase().includes("resuelto")) return {accent:COLORS.success,strong:"#477719",header:COLORS.successLight,soft:"#f8fcf3",row:"#fbfef8",border:"#d6e6c0"};
+    }
+    return LOCAL_TONES[0];
+  };
+
+  return <div>
+    <div style={{
+      display:"flex",justifyContent:"space-between",gap:14,alignItems:"center",marginBottom:14,flexWrap:"wrap",
+      padding:"15px 16px",borderRadius:14,border:"1px solid rgba(114,36,62,.13)",
+      background:"linear-gradient(105deg,#fff9fb 0%,#f7e9ee 54%,#fff 100%)",boxShadow:"0 8px 24px rgba(93,45,61,.055)"
+    }}>
+      <div style={{display:"flex",alignItems:"center",gap:11}}>
+        <div style={{width:36,height:36,borderRadius:11,background:COLORS.pinkDark,color:"#fff",display:"flex",alignItems:"center",justifyContent:"center",fontSize:18,fontWeight:800,boxShadow:"0 5px 12px rgba(114,36,62,.17)"}}>!</div>
+        <div><div style={{display:"flex",alignItems:"center",gap:7,flexWrap:"wrap"}}><h2 style={{margin:0,fontSize:19,fontWeight:700,color:COLORS.pinkDark}}>Reclamos</h2><span style={{fontSize:8.5,fontWeight:800,textTransform:"uppercase",letterSpacing:.3,padding:"3px 7px",borderRadius:99,background:"rgba(114,36,62,.09)",color:COLORS.pinkDark}}>Experiencia cliente</span></div><p style={{margin:"3px 0 0",fontSize:11,color:"#765461"}}>Seguimiento de reclamos de clientas y resolución por local.</p></div>
+      </div>
+      <Btn size="sm" onClick={()=>setModal({})}>+ Nuevo reclamo</Btn>
+    </div>
+
+    <div style={{display:"grid",gridTemplateColumns:"165px 185px minmax(0,1fr)",gap:10,marginBottom:14,alignItems:"stretch"}} className="niki-mobile-one-column">
+      <Card style={{padding:"13px 14px",minHeight:100,border:"1px solid #ead3da",borderLeft:`4px solid ${COLORS.pinkDark}`,background:"linear-gradient(145deg,#fff 0%,#fff6f8 100%)",boxShadow:"0 7px 20px rgba(93,45,61,.05)"}}>
+        <div style={{display:"flex",alignItems:"center",gap:6}}><span style={{width:7,height:7,borderRadius:"50%",background:COLORS.pinkDark}}/><p style={{margin:0,fontSize:9,textTransform:"uppercase",color:COLORS.pinkDark,fontWeight:800}}>Reclamos del mes</p></div>
+        <strong style={{display:"block",fontSize:29,lineHeight:1,marginTop:9,color:"#38262d"}}>{kpi.actual}</strong>
+        <small style={{display:"block",marginTop:7,color:"var(--color-text-secondary)",fontSize:9}}>Mes actual</small>
+      </Card>
+      <Card style={{padding:"13px 14px",minHeight:100,border:`1px solid ${variationIsBetter?"#d5e5c1":"#f0cccc"}`,borderLeft:`4px solid ${variationIsBetter?COLORS.success:COLORS.danger}`,background:variationIsBetter?"linear-gradient(145deg,#fff 0%,#f7fbf2 100%)":"linear-gradient(145deg,#fff 0%,#fff5f5 100%)",boxShadow:"0 7px 20px rgba(70,70,50,.04)"}}>
+        <div style={{display:"flex",alignItems:"center",gap:6}}><span style={{fontSize:11,fontWeight:900,color:variationIsBetter?COLORS.success:COLORS.danger}}>{variationIsBetter?"↓":"↑"}</span><p style={{margin:0,fontSize:9,textTransform:"uppercase",color:variationIsBetter?"#527d20":"#b83d3c",fontWeight:800}}>Vs. mes anterior</p></div>
+        <strong style={{display:"block",fontSize:25,lineHeight:1,marginTop:9,color:variationIsBetter?COLORS.success:COLORS.danger}}>{pctText}</strong>
+        <div style={{display:"flex",alignItems:"center",gap:5,marginTop:7}}><small style={{color:"var(--color-text-secondary)",fontSize:9}}>Anterior: {kpi.anterior}</small><span style={{fontSize:8,padding:"2px 5px",borderRadius:99,background:variationIsBetter?COLORS.successLight:COLORS.dangerLight,color:variationIsBetter?"#4d791a":"#b13b3a",fontWeight:800}}>{variationIsBetter?"Mejora":"A revisar"}</span></div>
+      </Card>
+      <Card style={{padding:"12px 14px",minHeight:100,border:"1px solid #e7d9de",borderLeft:"4px solid #8a6094",background:"linear-gradient(145deg,#fff 0%,#fcf8fb 100%)",boxShadow:"0 7px 20px rgba(80,55,90,.045)"}}>{kpi.incidencia.length?(()=>{
         if(locales.length===1){
           const x=kpi.incidencia[0]||{nombre:locales[0]?.nombre||"Local",reclamos:0,visitas:0,tasa:0};
-          return <div style={{height:"100%",display:"grid",gridTemplateColumns:"minmax(150px,.9fr) 1fr",gap:16,alignItems:"center"}}><div><p style={{margin:"0 0 4px",fontSize:9,textTransform:"uppercase",color:"var(--color-text-secondary)",fontWeight:800}}>Incidencia del mes</p><strong style={{fontSize:22,color:COLORS.pinkDark}}>{x.tasa.toFixed(2)}</strong><span style={{fontSize:10,color:"var(--color-text-secondary)"}}> reclamos cada 100 visitas</span></div><div><strong style={{fontSize:12}}>{x.nombre}</strong><p style={{margin:"4px 0 0",fontSize:10,color:"var(--color-text-secondary)"}}>{x.reclamos} reclamo{x.reclamos===1?"":"s"} · {x.visitas} visitas</p></div></div>;
+          const tone=toneForLocalId(x.id||locales[0]?.id);
+          return <div style={{height:"100%",display:"grid",gridTemplateColumns:"minmax(150px,.9fr) 1fr",gap:16,alignItems:"center"}}><div><p style={{margin:"0 0 4px",fontSize:9,textTransform:"uppercase",color:"#765461",fontWeight:800}}>Incidencia del mes</p><strong style={{fontSize:24,color:tone.strong}}>{x.tasa.toFixed(2)}</strong><span style={{fontSize:10,color:"var(--color-text-secondary)"}}> reclamos cada 100 visitas</span></div><div style={{padding:"7px 9px",borderRadius:9,background:tone.header,border:`1px solid ${tone.border}`}}><strong style={{fontSize:11,color:tone.strong}}>{x.nombre}</strong><p style={{margin:"3px 0 0",fontSize:9,color:"var(--color-text-secondary)"}}>{x.reclamos} reclamo{x.reclamos===1?"":"s"} · {x.visitas} visitas</p></div></div>;
         }
         const items=kpi.incidencia;
         const maxTasa=Math.max(0.01,...items.map(x=>x.tasa||0));
         const sinReclamos=Math.max(0,locales.length-items.length);
         return <div style={{height:"100%"}}>
-          <div style={{display:"flex",justifyContent:"space-between",alignItems:"baseline",gap:8,marginBottom:7}}>
-            <p style={{margin:0,fontSize:9,textTransform:"uppercase",color:"var(--color-text-secondary)",fontWeight:800}}>Incidencia del mes · reclamos cada 100 visitas</p>
-            {sinReclamos>0&&<small style={{fontSize:8.5,color:"var(--color-text-secondary)",whiteSpace:"nowrap"}}>{sinReclamos} local{sinReclamos===1?"":"es"} sin reclamos</small>}
+          <div style={{display:"flex",justifyContent:"space-between",alignItems:"baseline",gap:8,marginBottom:8}}>
+            <p style={{margin:0,fontSize:9,textTransform:"uppercase",color:"#765461",fontWeight:800}}>Incidencia del mes · reclamos cada 100 visitas</p>
+            {sinReclamos>0&&<small style={{fontSize:8.5,color:"var(--color-text-secondary)",whiteSpace:"nowrap",background:"#f4f1f2",padding:"2px 6px",borderRadius:99}}>{sinReclamos} local{sinReclamos===1?"":"es"} sin reclamos</small>}
           </div>
-          <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(220px,1fr))",columnGap:16,rowGap:6}}>
-            {items.map((x,idx)=><div key={x.id} style={{display:"grid",gridTemplateColumns:"minmax(105px,.8fr) minmax(80px,1fr) 34px",gap:7,alignItems:"center",minWidth:0}}>
-              <div style={{minWidth:0}}><strong style={{display:"block",fontSize:9.5,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{idx===0?"▲ ":idx===items.length-1&&items.length>1?"▼ ":""}{x.nombre}</strong><small style={{display:"block",fontSize:8,color:"var(--color-text-secondary)",whiteSpace:"nowrap"}}>{x.reclamos} reclamo{x.reclamos===1?"":"s"} · {x.visitas} visitas</small></div>
-              <div style={{height:7,borderRadius:99,background:"var(--color-background-secondary)",overflow:"hidden"}}><div style={{height:"100%",width:`${Math.max(4,(x.tasa/maxTasa)*100)}%`,borderRadius:99,background:idx===0?COLORS.danger:"#dfc2c9"}}/></div>
-              <strong style={{fontSize:9.5,textAlign:"right"}}>{x.tasa.toFixed(2)}</strong>
-            </div>)}
+          <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(220px,1fr))",columnGap:10,rowGap:6}}>
+            {items.map((x,idx)=>{const tone=toneForLocalId(x.id);return <div key={x.id} style={{display:"grid",gridTemplateColumns:"minmax(110px,.82fr) minmax(80px,1fr) 34px",gap:7,alignItems:"center",minWidth:0,padding:"4px 6px",borderRadius:7,background:idx===0?tone.soft:"transparent",border:idx===0?`1px solid ${tone.border}`:"1px solid transparent"}}>
+              <div style={{minWidth:0}}><strong style={{display:"flex",alignItems:"center",gap:5,fontSize:9.5,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis",color:idx===0?tone.strong:"inherit"}}><span style={{width:6,height:6,borderRadius:"50%",background:tone.accent,flex:"0 0 auto"}}/>{idx===0?"▲ ":idx===items.length-1&&items.length>1?"▼ ":""}{x.nombre}</strong><small style={{display:"block",fontSize:8,color:"var(--color-text-secondary)",whiteSpace:"nowrap",paddingLeft:11}}>{x.reclamos} reclamo{x.reclamos===1?"":"s"} · {x.visitas} visitas</small></div>
+              <div style={{height:7,borderRadius:99,background:"#eee9eb",overflow:"hidden"}}><div style={{height:"100%",width:`${Math.max(4,(x.tasa/maxTasa)*100)}%`,borderRadius:99,background:tone.accent}}/></div>
+              <strong style={{fontSize:9.5,textAlign:"right",color:idx===0?tone.strong:"inherit"}}>{x.tasa.toFixed(2)}</strong>
+            </div>;})}
           </div>
         </div>;
-      })():<div><p style={{margin:"0 0 4px",fontSize:9,textTransform:"uppercase",color:"var(--color-text-secondary)",fontWeight:800}}>Incidencia del mes</p><span style={{fontSize:11,color:"var(--color-text-secondary)"}}>Sin reclamos en el mes actual.</span></div>}</Card>
+      })():<div><p style={{margin:"0 0 6px",fontSize:9,textTransform:"uppercase",color:"#765461",fontWeight:800}}>Incidencia del mes</p><div style={{display:"inline-flex",alignItems:"center",gap:6,padding:"6px 9px",borderRadius:8,background:COLORS.successLight,color:"#4f781f",fontSize:10,fontWeight:700}}><span>✓</span> Sin reclamos en el mes actual</div></div>}</Card>
     </div>
-    <Card style={{padding:12,marginBottom:12}}><div style={{display:"flex",gap:8,flexWrap:"wrap",alignItems:"end"}}><ModalInput label="Desde" type="date" value={desde} onChange={setDesde}/><ModalInput label="Hasta" type="date" value={hasta} onChange={setHasta}/><div><label style={{fontSize:10,fontWeight:700,display:"block",marginBottom:4}}>Local</label><Select value={localFiltro} onChange={setLocalFiltro}><option value="todos">Todos</option>{locales.map(l=><option key={l.id} value={l.id}>{l.nombre}</option>)}</Select></div><div><label style={{fontSize:10,fontWeight:700,display:"block",marginBottom:4}}>Tipo</label><Select value={motivoFiltro} onChange={setMotivoFiltro}><option value="todos">Todos</option>{RECLAMO_MOTIVOS.map(x=><option key={x}>{x}</option>)}</Select></div><div><label style={{fontSize:10,fontWeight:700,display:"block",marginBottom:4}}>Estado</label><Select value={estadoFiltro} onChange={setEstadoFiltro}><option value="todos">Todos</option>{RECLAMO_ESTADOS.map(x=><option key={x.value} value={x.value}>{x.label}</option>)}</Select></div><div><label style={{fontSize:10,fontWeight:700,display:"block",marginBottom:4}}>Agrupar por</label><Select value={agrupar} onChange={setAgrupar}><option value="ninguno">Sin agrupar</option><option value="local">Local</option><option value="tipo">Tipo</option><option value="estado">Estado</option></Select></div><Btn variant="ghost" size="sm" onClick={()=>Promise.all([load(),refreshKpi()])}>↻ Actualizar</Btn></div></Card>
-    {loading?<Card style={{padding:18}}>Cargando reclamos...</Card>:filtrados.length===0?<Card style={{padding:18,textAlign:"center",color:"var(--color-text-secondary)"}}>No hay reclamos para los filtros seleccionados.</Card>:<div style={{display:"grid",gap:10}}>{groups.map(([g,items])=><Card key={g} style={{padding:0,overflow:"hidden"}}><div style={{padding:"9px 12px",background:"var(--color-background-secondary)",display:"flex",justifyContent:"space-between"}}><strong style={{fontSize:12}}>{g}</strong><Badge color="gray">{items.length}</Badge></div><div style={{overflowX:"auto"}}><table style={{width:"100%",borderCollapse:"collapse",fontSize:11,minWidth:1180}}><thead><tr style={{textAlign:"left",color:"var(--color-text-secondary)",fontSize:9,textTransform:"uppercase"}}>{["Fecha","Local","Cliente","Servicio","Manicura","Motivos","Estado","Próximo seguimiento","Fotos",""].map(h=><th key={h} style={{padding:"8px 9px"}}>{h}</th>)}</tr></thead><tbody>{items.map(r=>{const loc=data.locales.find(l=>l.id===r.localId);const vencido=r.proximoSeguimientoFecha&&r.estado!=="cerrado"&&r.proximoSeguimientoFecha<dateKey(new Date());return <tr key={r.id} style={{borderTop:"1px solid rgba(120,120,120,.09)"}}><td style={{padding:9}}>{String(r.fecha||"").split("-").reverse().join("/")}</td><td style={{padding:9}}>{loc?.nombre||"—"}</td><td style={{padding:9,fontWeight:700}}>{r.cliente}</td><td style={{padding:9}}>{r.servicio||"—"}</td><td style={{padding:9}}>{r.nombreManicuraOriginal||(data.users||[]).find(u=>u.id===r.manicuraOriginalId)?.nombre||"—"}</td><td style={{padding:9,maxWidth:250}}><div style={{display:"flex",gap:4,flexWrap:"wrap"}}>{(r.motivos||[]).length?(r.motivos||[]).map(m=><span key={m} style={{fontSize:8.5,padding:"3px 5px",borderRadius:999,background:COLORS.pinkLight,color:COLORS.pinkDark,fontWeight:700}}>{m}</span>):"—"}</div></td><td style={{padding:9}}><Badge color={estadoColor(r.estado)}>{estadoLabel(r.estado)}</Badge></td><td style={{padding:9}}>{r.estado==="cerrado"?<span style={{color:"var(--color-text-secondary)"}}>Finalizado</span>:r.proximoSeguimientoFecha?<div><strong style={{fontSize:10,color:vencido?COLORS.danger:COLORS.info}}>{vencido?"⚠ ":""}{String(r.proximoSeguimientoFecha).split("-").reverse().join("/")}</strong>{r.proximoSeguimientoAccion&&<small style={{display:"block",marginTop:2,maxWidth:220,color:"var(--color-text-secondary)"}}>{r.proximoSeguimientoAccion}</small>}</div>:"—"}</td><td style={{padding:9}}>{r.fotos?.length?`📷 ${r.fotos.length}`:"—"}</td><td style={{padding:7,whiteSpace:"nowrap"}}><Btn size="sm" variant="ghost" onClick={()=>setModal(r)}>Abrir</Btn><Btn size="sm" variant="ghost" style={{color:COLORS.danger}} onClick={()=>del(r)}>Eliminar</Btn></td></tr>;})}</tbody></table></div></Card>)}</div>}
-    {modal&&<ReclamoEditorModal data={data} user={user} initial={modal.id?modal:null} onClose={()=>setModal(null)} onSaved={()=>Promise.all([load(),refreshKpi()])} onChanged={()=>Promise.all([load(),refreshKpi()])}/>}
+
+    <Card style={{padding:12,marginBottom:12,background:"#fffafb",border:"1px solid #eadce1"}}><div style={{display:"flex",gap:8,flexWrap:"wrap",alignItems:"end"}}><ModalInput label="Desde" type="date" value={desde} onChange={setDesde}/><ModalInput label="Hasta" type="date" value={hasta} onChange={setHasta}/><div><label style={{fontSize:10,fontWeight:700,display:"block",marginBottom:4}}>Local</label><Select value={localFiltro} onChange={setLocalFiltro}><option value="todos">Todos</option>{locales.map(l=><option key={l.id} value={l.id}>{l.nombre}</option>)}</Select></div><div><label style={{fontSize:10,fontWeight:700,display:"block",marginBottom:4}}>Tipo</label><Select value={motivoFiltro} onChange={setMotivoFiltro}><option value="todos">Todos</option>{RECLAMO_MOTIVOS.map(x=><option key={x}>{x}</option>)}</Select></div><div><label style={{fontSize:10,fontWeight:700,display:"block",marginBottom:4}}>Estado</label><Select value={estadoFiltro} onChange={setEstadoFiltro}><option value="todos">Todos</option>{RECLAMO_ESTADOS.map(x=><option key={x.value} value={x.value}>{x.label}</option>)}</Select></div><div><label style={{fontSize:10,fontWeight:700,display:"block",marginBottom:4}}>Agrupar por</label><Select value={agrupar} onChange={setAgrupar}><option value="ninguno">Sin agrupar</option><option value="local">Local</option><option value="tipo">Tipo</option><option value="estado">Estado</option></Select></div><Btn variant="ghost" size="sm" onClick={()=>Promise.all([load(),refreshKpi()])}>↻ Actualizar</Btn></div></Card>
+
+    {loading?<Card style={{padding:18}}>Cargando reclamos...</Card>:filtrados.length===0?<Card style={{padding:18,textAlign:"center",color:"var(--color-text-secondary)",background:"#fffafb",border:"1px solid #eadce1"}}>No hay reclamos para los filtros seleccionados.</Card>:<div style={{display:"grid",gap:12}}>{groups.map(([g,items])=>{const tone=toneForGroup(g);return <Card key={g} style={{padding:0,overflow:"hidden",border:`1px solid ${tone.border}`,boxShadow:"0 7px 20px rgba(73,46,57,.045)"}}>
+      <div style={{padding:"10px 12px",background:`linear-gradient(90deg,${tone.header} 0%,${tone.soft} 68%,#fff 100%)`,display:"flex",justifyContent:"space-between",alignItems:"center",borderLeft:`5px solid ${tone.accent}`}}>
+        <div style={{display:"flex",alignItems:"center",gap:8,minWidth:0}}><span style={{width:9,height:9,borderRadius:"50%",background:tone.accent,boxShadow:`0 0 0 4px ${tone.soft}`}}/><div style={{minWidth:0}}><strong style={{display:"block",fontSize:12.5,color:tone.strong,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{g}</strong><small style={{display:"block",marginTop:1,fontSize:8.5,color:"#7c6770"}}>{items.length} reclamo{items.length===1?"":"s"} en la selección</small></div></div>
+        <span style={{minWidth:24,height:24,padding:"0 7px",borderRadius:99,display:"inline-flex",alignItems:"center",justifyContent:"center",fontSize:9.5,fontWeight:800,color:tone.strong,background:"rgba(255,255,255,.72)",border:`1px solid ${tone.border}`}}>{items.length}</span>
+      </div>
+      <div style={{overflowX:"auto",background:tone.row}}><table style={{width:"100%",borderCollapse:"collapse",fontSize:11,minWidth:1180}}><thead><tr style={{textAlign:"left",color:"#77656c",fontSize:9,textTransform:"uppercase",background:"rgba(255,255,255,.65)"}}>{["Fecha","Local","Cliente","Servicio","Manicura","Motivos","Estado","Próximo seguimiento","Fotos",""].map(h=><th key={h} style={{padding:"8px 9px",borderBottom:`1px solid ${tone.border}`}}>{h}</th>)}</tr></thead><tbody>{items.map((r,rowIndex)=>{const loc=data.locales.find(l=>l.id===r.localId);const locTone=toneForLocalId(r.localId);const vencido=r.proximoSeguimientoFecha&&r.estado!=="cerrado"&&r.proximoSeguimientoFecha<dateKey(new Date());return <tr key={r.id} style={{borderTop:"1px solid rgba(120,120,120,.075)",background:rowIndex%2?tone.row:"#fff"}}><td style={{padding:9}}>{String(r.fecha||"").split("-").reverse().join("/")}</td><td style={{padding:9}}><span style={{display:"inline-flex",alignItems:"center",gap:5,padding:"3px 7px",borderRadius:99,background:locTone.header,color:locTone.strong,fontWeight:700,fontSize:9.5,border:`1px solid ${locTone.border}`,whiteSpace:"nowrap"}}><span style={{width:5,height:5,borderRadius:"50%",background:locTone.accent}}/>{loc?.nombre||"—"}</span></td><td style={{padding:9,fontWeight:700}}>{r.sinCliente?<span style={{color:"var(--color-text-secondary)",fontWeight:600}}>Sin cliente</span>:(r.cliente||"—")}</td><td style={{padding:9}}>{r.sinServicio?<span style={{color:"var(--color-text-secondary)"}}>Sin servicio</span>:(r.servicio||"—")}</td><td style={{padding:9}}><span>{r.nombreManicuraOriginal||(data.users||[]).find(u=>u.id===r.manicuraOriginalId)?.nombre||"—"}</span>{r.manicuraOriginalId&&r.impactaScoreManicura===false&&<small style={{display:"block",marginTop:2,color:"var(--color-text-secondary)",fontSize:8.5}}>No impacta score</small>}</td><td style={{padding:9,maxWidth:250}}><div style={{display:"flex",gap:4,flexWrap:"wrap"}}>{(r.motivos||[]).length?(r.motivos||[]).map(m=><span key={m} style={{fontSize:8.5,padding:"3px 6px",borderRadius:999,background:COLORS.pinkLight,color:COLORS.pinkDark,fontWeight:700,border:"1px solid #efdce2"}}>{m}</span>):"—"}</div></td><td style={{padding:9}}><Badge color={estadoColor(r.estado)}>{estadoLabel(r.estado)}</Badge></td><td style={{padding:9}}>{r.estado==="cerrado"?<span style={{color:"var(--color-text-secondary)"}}>Finalizado</span>:r.proximoSeguimientoFecha?<div><strong style={{fontSize:10,color:vencido?COLORS.danger:COLORS.info}}>{vencido?"⚠ ":""}{String(r.proximoSeguimientoFecha).split("-").reverse().join("/")}</strong>{r.proximoSeguimientoAccion&&<small style={{display:"block",marginTop:2,maxWidth:220,color:"var(--color-text-secondary)"}}>{r.proximoSeguimientoAccion}</small>}</div>:"—"}</td><td style={{padding:9}}>{r.fotos?.length?`📷 ${r.fotos.length}`:"—"}</td><td style={{padding:7,whiteSpace:"nowrap"}}><Btn size="sm" variant="ghost" onClick={()=>setModal(r)}>Abrir</Btn><Btn size="sm" variant="ghost" style={{color:COLORS.danger}} onClick={()=>del(r)}>Eliminar</Btn></td></tr>;})}</tbody></table></div>
+    </Card>;})}</div>}
+    {modal&&<ReclamoEditorModal data={data} user={user} initial={modal.id?modal:null} onClose={()=>setModal(null)} onSaved={()=>Promise.all([load(),refreshKpi()])} onChanged={()=>Promise.all([load(),refreshKpi()])}/>} 
   </div>;
 }
 
@@ -15795,7 +16166,7 @@ function DashboardManicuras({ data, user }) {
     const claims=new Map(),warranty=new Map();
     const add=(map,id)=>{if(!id)return;map.set(Number(id),(map.get(Number(id))||0)+1);};
     const userByName=new Map((data.users||[]).filter(u=>u.rol==="manicura").map(u=>[dashboardManicuraText(u.nombre),Number(u.id)]));
-    reclamos.filter(r=>visibleLocalSet.has(Number(r.localId))).forEach(r=>{
+    reclamos.filter(r=>visibleLocalSet.has(Number(r.localId))&&r.impactaScoreManicura!==false).forEach(r=>{
       const f=String(r.fechaServicioOriginal||r.fecha||"").slice(0,10); if(f<meta.desde||f>meta.hasta)return;
       add(claims,r.manicuraOriginalId||userByName.get(dashboardManicuraText(r.nombreManicuraOriginal)));
     });
@@ -15943,7 +16314,7 @@ function DashboardManicuras({ data, user }) {
 
     <Card style={{ padding:0,overflow:"hidden" }}><div style={{ padding:"14px 16px",borderBottom:"1px solid rgba(120,120,120,.12)" }}><h3 style={{ margin:0,fontSize:14 }}>Asistencia y productividad por local</h3><p style={{ margin:"3px 0 0",fontSize:10.5,color:"var(--color-text-secondary)" }}>Permite detectar diferencias operativas entre sucursales y contextualizar los rankings individuales.</p></div><div style={{ overflowX:"auto" }}><table style={{ width:"100%",borderCollapse:"collapse",fontSize:10.5,minWidth:900 }}><thead style={{ background:"#f5e8ec",color:COLORS.pinkDark,textTransform:"uppercase",fontSize:9 }}><tr><th style={{ textAlign:"left",padding:"9px 11px" }}>Local</th><th style={{ textAlign:"right" }}>Servicios</th><th style={{ textAlign:"right" }}>Manicuras</th><th style={{ textAlign:"right" }}>Serv./jornada</th><th style={{ textAlign:"right" }}>Serv./hora</th><th style={{ textAlign:"right" }}>Ticket</th><th style={{ textAlign:"right" }}>Ausencias</th><th style={{ textAlign:"right" }}>Tardes</th><th style={{ textAlign:"right",paddingRight:12 }}>Pendientes</th></tr></thead><tbody>{localStats.map((r,i)=><tr key={r.localId} style={{ borderTop:"1px solid rgba(120,120,120,.09)",background:i%2?"rgba(120,120,120,.018)":"transparent" }}><td style={{ padding:"9px 11px",fontWeight:800 }}>{r.local}</td><td style={{ textAlign:"right" }}>{r.services}</td><td style={{ textAlign:"right" }}>{r.manicuras}</td><td style={{ textAlign:"right",fontWeight:800,color:COLORS.pinkDark }}>{fmt1(r.servicesPerDay)}</td><td style={{ textAlign:"right" }}>{r.servicesPerHour?fmt1(r.servicesPerHour):"—"}</td><td style={{ textAlign:"right" }}>{fmtMoney(r.ticket)}</td><td style={{ textAlign:"right",color:r.absencePct>0?COLORS.danger:"var(--color-text-primary)" }}>{fmtPct(r.absencePct)}</td><td style={{ textAlign:"right",color:r.latePct>0?COLORS.amber:"var(--color-text-primary)" }}>{fmtPct(r.latePct)}</td><td style={{ textAlign:"right",paddingRight:12 }}>{r.pending}</td></tr>)}</tbody></table></div></Card>
 
-    <Card style={{ padding:0,overflow:"hidden" }}><div style={{ padding:"14px 16px",borderBottom:"1px solid rgba(120,120,120,.12)",display:"flex",justifyContent:"space-between",gap:10,alignItems:"baseline",flexWrap:"wrap" }}><div><h3 style={{ margin:0,fontSize:14 }}>Calidad · reclamos y garantías</h3><p style={{ margin:"3px 0 0",fontSize:10.5,color:"var(--color-text-secondary)" }}>Tasa cada 100 servicios, atribuida a la manicura original cuando el dato está disponible.</p></div><Badge color="gray">Menor es mejor</Badge></div><div style={{ overflowX:"auto" }}><table style={{ width:"100%",borderCollapse:"collapse",fontSize:10.5,minWidth:860 }}><thead style={{ background:"#f5e8ec",color:COLORS.pinkDark,textTransform:"uppercase",fontSize:9 }}><tr><th style={{ textAlign:"left",padding:"9px 11px" }}>Manicura</th><th style={{ textAlign:"right" }}>Servicios</th><th style={{ textAlign:"right" }}>Reclamos</th><th style={{ textAlign:"right" }}>Reclamos / 100</th><th style={{ textAlign:"right" }}>Garantías</th><th style={{ textAlign:"right" }}>Garantías / 100</th><th style={{ textAlign:"right",paddingRight:12 }}>Incidencias / 100</th></tr></thead><tbody>{qualityRanking.map((r,i)=>{const totalRate=r.claimsPer100+r.warrantyPer100;return <tr key={r.userId} onClick={()=>setSelectedManicuraId(r.userId)} title="Ver ficha de performance" style={{ borderTop:"1px solid rgba(120,120,120,.09)",background:i%2?"rgba(120,120,120,.018)":"transparent",cursor:"pointer" }}><td style={{ padding:"9px 11px" }}><strong style={{ display:"block" }}>{r.nombre}</strong><small style={{ display:"block",marginTop:2,color:COLORS.pinkDark,fontWeight:700 }}>{r.localLabel}</small></td><td style={{ textAlign:"right" }}>{r.services}</td><td style={{ textAlign:"right" }}>{r.claims}</td><td style={{ textAlign:"right" }}>{fmt1(r.claimsPer100)}</td><td style={{ textAlign:"right" }}>{r.warranty}</td><td style={{ textAlign:"right" }}>{fmt1(r.warrantyPer100)}</td><td style={{ textAlign:"right",paddingRight:12,fontWeight:800,color:totalRate>3?COLORS.danger:totalRate>1?COLORS.amber:COLORS.success }}>{fmt1(totalRate)}</td></tr>;})}</tbody></table></div></Card>
+    <Card style={{ padding:0,overflow:"hidden" }}><div style={{ padding:"14px 16px",borderBottom:"1px solid rgba(120,120,120,.12)",display:"flex",justifyContent:"space-between",gap:10,alignItems:"baseline",flexWrap:"wrap" }}><div><h3 style={{ margin:0,fontSize:14 }}>Calidad · reclamos y garantías</h3><p style={{ margin:"3px 0 0",fontSize:10.5,color:"var(--color-text-secondary)" }}>Tasa cada 100 servicios. Solo cuenta reclamos marcados como responsabilidad de la manicura; los reclamos operativos del local quedan excluidos.</p></div><Badge color="gray">Menor es mejor</Badge></div><div style={{ overflowX:"auto" }}><table style={{ width:"100%",borderCollapse:"collapse",fontSize:10.5,minWidth:860 }}><thead style={{ background:"#f5e8ec",color:COLORS.pinkDark,textTransform:"uppercase",fontSize:9 }}><tr><th style={{ textAlign:"left",padding:"9px 11px" }}>Manicura</th><th style={{ textAlign:"right" }}>Servicios</th><th style={{ textAlign:"right" }}>Reclamos</th><th style={{ textAlign:"right" }}>Reclamos / 100</th><th style={{ textAlign:"right" }}>Garantías</th><th style={{ textAlign:"right" }}>Garantías / 100</th><th style={{ textAlign:"right",paddingRight:12 }}>Incidencias / 100</th></tr></thead><tbody>{qualityRanking.map((r,i)=>{const totalRate=r.claimsPer100+r.warrantyPer100;return <tr key={r.userId} onClick={()=>setSelectedManicuraId(r.userId)} title="Ver ficha de performance" style={{ borderTop:"1px solid rgba(120,120,120,.09)",background:i%2?"rgba(120,120,120,.018)":"transparent",cursor:"pointer" }}><td style={{ padding:"9px 11px" }}><strong style={{ display:"block" }}>{r.nombre}</strong><small style={{ display:"block",marginTop:2,color:COLORS.pinkDark,fontWeight:700 }}>{r.localLabel}</small></td><td style={{ textAlign:"right" }}>{r.services}</td><td style={{ textAlign:"right" }}>{r.claims}</td><td style={{ textAlign:"right" }}>{fmt1(r.claimsPer100)}</td><td style={{ textAlign:"right" }}>{r.warranty}</td><td style={{ textAlign:"right" }}>{fmt1(r.warrantyPer100)}</td><td style={{ textAlign:"right",paddingRight:12,fontWeight:800,color:totalRate>3?COLORS.danger:totalRate>1?COLORS.amber:COLORS.success }}>{fmt1(totalRate)}</td></tr>;})}</tbody></table></div></Card>
 
     {selectedPerformance&&<Modal title={`Performance · ${selectedPerformance.nombre}`} onClose={()=>setSelectedManicuraId(null)} width={940}>
       <div style={{ display:"grid",gap:12 }}>
@@ -16284,6 +16655,206 @@ function ClientesCrm({ data, user }) {
   </div>;
 }
 
+const GASTOS_CATEGORIAS = ["Alquiler","Expensas","Impuesto inmobiliario","Luz","Agua","Internet","Seguro","Alarma","Honorarios","Mantenimiento","Impuestos y tasas","Otros"];
+const GASTOS_FORMAS_PAGO = ["Transferencia","Débito automático","Tarjeta","PagoMisCuentas","Mercado Pago","Efectivo","Otro"];
+const GASTOS_FRECUENCIAS = [
+  { value:1, label:"Mensual" },
+  { value:2, label:"Bimestral" },
+  { value:3, label:"Trimestral" },
+  { value:6, label:"Semestral" },
+  { value:12, label:"Anual" },
+];
+
+function gastoEstadoVencimiento(row, today = dateKey(new Date())) {
+  if (row?.estado === "pagado") return "pagado";
+  if (row?.estado === "anulado") return "anulado";
+  if (String(row?.fecha_vencimiento || "") < today) return "vencido";
+  const limit = dateKey(addDaysLocal(today, 7));
+  if (String(row?.fecha_vencimiento || "") <= limit) return "proximo";
+  return "pendiente";
+}
+function gastoEstadoMeta(estado) {
+  if (estado === "pagado") return { label:"Pagado", bg:COLORS.successLight, fg:COLORS.success, icon:"✓" };
+  if (estado === "vencido") return { label:"Vencido", bg:COLORS.dangerLight, fg:COLORS.danger, icon:"!" };
+  if (estado === "proximo") return { label:"Próximo", bg:COLORS.amberLight, fg:COLORS.amber, icon:"◷" };
+  if (estado === "anulado") return { label:"Anulado", bg:"#f3f3f3", fg:"#777", icon:"—" };
+  return { label:"Pendiente", bg:COLORS.infoLight, fg:COLORS.info, icon:"○" };
+}
+function gastoParseAlertas(value) {
+  return [...new Set(String(value || "").split(/[,;\s]+/).map(Number).filter(n=>Number.isInteger(n)&&n>=0&&n<=60))].sort((a,b)=>b-a);
+}
+function gastoConfigInitial(localId, userId) {
+  const today = new Date();
+  const first = new Date(today.getFullYear(), today.getMonth(), Math.min(today.getDate()+5, 28));
+  return {
+    local_id:String(localId || ""), categoria:"Alquiler", descripcion:"", proveedor:"", numero_cliente:"", numero_cuenta:"", codigo_pago:"",
+    forma_pago:"Transferencia", datos_pago:"", portal_pago:"", frecuencia_meses:"1", fecha_primer_vencimiento:dateKey(first), tipo_importe:"variable",
+    importe_estimado:"", responsable_user_id:String(userId || ""), alertas_dias:"7, 3, 1", fecha_fin:"", observaciones:"", activo:true,
+  };
+}
+
+function GastoEstadoBadge({ estado }) {
+  const m=gastoEstadoMeta(estado);
+  return <span style={{ display:"inline-flex",alignItems:"center",gap:5,background:m.bg,color:m.fg,borderRadius:999,padding:"4px 8px",fontSize:10.5,fontWeight:800,whiteSpace:"nowrap" }}><span>{m.icon}</span>{m.label}</span>;
+}
+
+function GastosVencimientosPage({ data, user }) {
+  const allowedLocalIds = useMemo(() => new Set(getAssignedLocalIds(data,user).map(Number)), [data,user?.id,user?.rol]);
+  const locales = useMemo(() => (data?.locales || []).filter(l=>allowedLocalIds.has(Number(l.id))).sort((a,b)=>String(a.nombre||"").localeCompare(String(b.nombre||""),"es")), [data?.locales, allowedLocalIds]);
+  const [tab,setTab]=useState("vencimientos");
+  const [loading,setLoading]=useState(true);
+  const [saving,setSaving]=useState(false);
+  const [error,setError]=useState("");
+  const [rows,setRows]=useState([]);
+  const [configs,setConfigs]=useState([]);
+  const [responsables,setResponsables]=useState([]);
+  const [localFilter,setLocalFilter]=useState("todos");
+  const [monthFilter,setMonthFilter]=useState(dateKey(new Date()).slice(0,7));
+  const [estadoFilter,setEstadoFilter]=useState("todos");
+  const [categoriaFilter,setCategoriaFilter]=useState("todos");
+  const [configModal,setConfigModal]=useState(null);
+  const [dueModal,setDueModal]=useState(null);
+  const [payModal,setPayModal]=useState(null);
+
+  const localMap=useMemo(()=>new Map(locales.map(l=>[Number(l.id),l])),[locales]);
+  const configMap=useMemo(()=>new Map(configs.map(c=>[Number(c.id),c])),[configs]);
+  const userMap=useMemo(()=>new Map(responsables.map(u=>[Number(u.id),u])),[responsables]);
+  const today=dateKey(new Date());
+
+  const load=useCallback(async()=>{
+    setLoading(true);setError("");
+    try{
+      const res=await api.gastosRequest(user,{action:"bootstrap"});
+      setConfigs(res.configuraciones||[]); setRows(res.vencimientos||[]); setResponsables(res.responsables||[]);
+    }catch(e){setError(e?.message||"No se pudieron cargar los gastos.");}
+    finally{setLoading(false);}
+  },[user?.id,user?.sessionToken]);
+  useEffect(()=>{void load();},[load]);
+
+  const visibleRows=useMemo(()=>rows.filter(r=>{
+    const cfg=configMap.get(Number(r.gasto_id)); if(!cfg)return false;
+    const st=gastoEstadoVencimiento(r,today);
+    if(localFilter!=="todos"&&Number(cfg.local_id)!==Number(localFilter))return false;
+    if(monthFilter&&String(r.fecha_vencimiento||"").slice(0,7)!==monthFilter)return false;
+    if(estadoFilter!=="todos"&&st!==estadoFilter)return false;
+    if(categoriaFilter!=="todos"&&String(cfg.categoria)!==categoriaFilter)return false;
+    return true;
+  }).sort((a,b)=>String(a.fecha_vencimiento).localeCompare(String(b.fecha_vencimiento))),[rows,configMap,localFilter,monthFilter,estadoFilter,categoriaFilter,today]);
+
+  const alertRows=useMemo(()=>rows.filter(r=>r.estado==="pendiente"&&configMap.has(Number(r.gasto_id))&&String(r.fecha_vencimiento||"")<=dateKey(addDaysLocal(today,7))).sort((a,b)=>String(a.fecha_vencimiento).localeCompare(String(b.fecha_vencimiento))),[rows,configMap,today]);
+  const overdueRows=alertRows.filter(r=>String(r.fecha_vencimiento)<today);
+  const nextRows=alertRows.filter(r=>String(r.fecha_vencimiento)>=today);
+  const monthRows=rows.filter(r=>String(r.fecha_vencimiento||"").slice(0,7)===monthFilter&&configMap.has(Number(r.gasto_id))&&(localFilter==="todos"||Number(configMap.get(Number(r.gasto_id))?.local_id)===Number(localFilter)));
+  const monthPending=monthRows.filter(r=>r.estado==="pendiente");
+  const monthPaid=monthRows.filter(r=>r.estado==="pagado");
+  const sumExpected=list=>list.reduce((a,r)=>a+Number(r.importe_previsto||0),0);
+  const sumPaid=list=>list.reduce((a,r)=>a+Number(r.importe_pagado||0),0);
+
+  const openNewConfig=()=>setConfigModal({mode:"new",form:gastoConfigInitial(locales[0]?.id,user?.id)});
+  const openEditConfig=cfg=>setConfigModal({mode:"edit",id:cfg.id,form:{...gastoConfigInitial(cfg.local_id,user?.id),...cfg,local_id:String(cfg.local_id||""),frecuencia_meses:String(cfg.frecuencia_meses||1),responsable_user_id:String(cfg.responsable_user_id||""),importe_estimado:cfg.importe_estimado??"",fecha_fin:cfg.fecha_fin||"",alertas_dias:(cfg.alertas_dias||[]).join(", ")}});
+  const saveConfig=async()=>{
+    const form=configModal?.form;if(!form)return;
+    if(!form.local_id||!form.descripcion.trim()||!form.categoria.trim()||!form.fecha_primer_vencimiento){notifyToast("Completá local, categoría, descripción y primer vencimiento.","warning");return;}
+    setSaving(true);
+    try{
+      const payload={...form,local_id:Number(form.local_id),frecuencia_meses:Number(form.frecuencia_meses),importe_estimado:form.importe_estimado===""?null:Number(form.importe_estimado),responsable_user_id:form.responsable_user_id?Number(form.responsable_user_id):null,alertas_dias:gastoParseAlertas(form.alertas_dias),fecha_fin:form.fecha_fin||null};
+      await api.gastosRequest(user,{action:configModal.mode==="edit"?"update_config":"create_config",...(configModal.id?{id:configModal.id}:{}),...payload});
+      setConfigModal(null); await load(); notifyToast("Gasto guardado y próximos vencimientos actualizados.","success");
+    }catch(e){notifyToast(e?.message||"No se pudo guardar el gasto.","error");}
+    finally{setSaving(false);}
+  };
+  const toggleConfig=async cfg=>{
+    const next=!cfg.activo;
+    if(!window.confirm(next?"¿Reactivar este gasto y generar próximos vencimientos?":"¿Desactivar este gasto? Los pagos históricos se conservan."))return;
+    setSaving(true);
+    try{await api.gastosRequest(user,{action:"update_config",id:cfg.id,...cfg,local_id:Number(cfg.local_id),responsable_user_id:cfg.responsable_user_id?Number(cfg.responsable_user_id):null,alertas_dias:cfg.alertas_dias||[],activo:next});await load();}
+    catch(e){notifyToast(e?.message||"No se pudo actualizar el gasto.","error");}
+    finally{setSaving(false);}
+  };
+  const openDue=r=>setDueModal({id:r.id,form:{fecha_vencimiento:r.fecha_vencimiento||"",importe_previsto:r.importe_previsto??"",documento_referencia:r.documento_referencia||"",observaciones:r.observaciones||""}});
+  const saveDue=async()=>{
+    if(!dueModal?.form?.fecha_vencimiento)return;
+    setSaving(true);
+    try{await api.gastosRequest(user,{action:"update_due",id:dueModal.id,...dueModal.form,importe_previsto:dueModal.form.importe_previsto===""?null:Number(dueModal.form.importe_previsto)});setDueModal(null);await load();notifyToast("Vencimiento actualizado.","success");}
+    catch(e){notifyToast(e?.message||"No se pudo actualizar el vencimiento.","error");}finally{setSaving(false);}
+  };
+  const openPay=r=>{const cfg=configMap.get(Number(r.gasto_id));setPayModal({id:r.id,row:r,cfg,form:{fecha_pago:today,importe_pagado:r.importe_previsto??"",forma_pago_real:cfg?.forma_pago||"Transferencia",referencia_pago:"",observaciones:r.observaciones||""}});};
+  const savePay=async()=>{
+    const form=payModal?.form;if(!form)return;
+    if(form.importe_pagado===""||Number(form.importe_pagado)<0){notifyToast("Ingresá el importe pagado.","warning");return;}
+    setSaving(true);
+    try{await api.gastosRequest(user,{action:"pay_due",id:payModal.id,...form,importe_pagado:Number(form.importe_pagado)});setPayModal(null);await load();notifyToast("Pago registrado.","success");}
+    catch(e){notifyToast(e?.message||"No se pudo registrar el pago.","error");}finally{setSaving(false);}
+  };
+  const reopen=async r=>{
+    if(!window.confirm("¿Reabrir este pago? Se eliminarán los datos de pago registrados."))return;
+    setSaving(true);try{await api.gastosRequest(user,{action:"reopen_due",id:r.id});await load();notifyToast("Pago reabierto.","success");}catch(e){notifyToast(e?.message||"No se pudo reabrir.","error");}finally{setSaving(false);}
+  };
+
+  const tabBtn=(id,label)=><button type="button" onClick={()=>setTab(id)} style={{border:"none",borderBottom:tab===id?`3px solid ${COLORS.pink}`:"3px solid transparent",background:"transparent",color:tab===id?COLORS.pinkDark:"#777",padding:"9px 12px",fontSize:12,fontWeight:800,cursor:"pointer"}}>{label}</button>;
+  const fieldStyle={width:"100%",border:"1.5px solid #e0e0e0",borderRadius:8,padding:"9px 11px",fontSize:12.5,background:"#fafafa",boxSizing:"border-box",outline:"none"};
+  const labelStyle={fontSize:11.5,fontWeight:700,color:"#555",display:"block",marginBottom:5};
+  const kpi=(icon,label,value,detail,tone="neutral")=>{
+    const tones={danger:{bg:COLORS.dangerLight,fg:COLORS.danger},amber:{bg:COLORS.amberLight,fg:COLORS.amber},success:{bg:COLORS.successLight,fg:COLORS.success},neutral:{bg:COLORS.pinkLight,fg:COLORS.pinkDark}};const t=tones[tone]||tones.neutral;
+    return <Card style={{padding:13,borderRadius:16,minHeight:95}}><div style={{display:"flex",justifyContent:"space-between",gap:8}}><span style={{width:30,height:30,borderRadius:10,display:"grid",placeItems:"center",background:t.bg,color:t.fg,fontSize:15}}>{icon}</span><strong style={{fontSize:19,color:"var(--color-text-primary)"}}>{value}</strong></div><p style={{margin:"7px 0 2px",fontSize:10.5,fontWeight:800,color:"var(--color-text-secondary)",textTransform:"uppercase",letterSpacing:".04em"}}>{label}</p><small style={{fontSize:10,color:"var(--color-text-secondary)"}}>{detail}</small></Card>;
+  };
+
+  if(loading)return <div style={{padding:24}}><Card><p style={{margin:0,fontSize:13,color:"#777"}}>Cargando gastos y vencimientos...</p></Card></div>;
+  return <div style={{display:"flex",flexDirection:"column",gap:12}}>
+    <div style={{display:"flex",justifyContent:"space-between",gap:12,alignItems:"flex-start",flexWrap:"wrap"}}>
+      <div><p style={{margin:"0 0 3px",fontSize:10.5,fontWeight:800,color:COLORS.pinkDark,textTransform:"uppercase",letterSpacing:".08em"}}>Administración</p><h2 style={{margin:0,fontSize:22,color:"var(--color-text-primary)"}}>Gastos y vencimientos</h2><p style={{margin:"4px 0 0",fontSize:11.5,color:"var(--color-text-secondary)"}}>Organizá obligaciones recurrentes, vencimientos y pagos por local.</p></div>
+      <div style={{display:"flex",gap:8,flexWrap:"wrap"}}><button type="button" onClick={()=>void load()} style={{border:"1px solid rgba(114,36,62,.16)",background:"#fff",color:COLORS.pinkDark,borderRadius:10,padding:"9px 12px",fontSize:11.5,fontWeight:800,cursor:"pointer"}}>↻ Actualizar</button><button type="button" onClick={openNewConfig} style={{border:"none",background:COLORS.pink,color:"#fff",borderRadius:10,padding:"9px 13px",fontSize:11.5,fontWeight:800,cursor:"pointer"}}>+ Nuevo gasto</button></div>
+    </div>
+    {error&&<div style={{background:COLORS.dangerLight,color:COLORS.danger,borderRadius:12,padding:"10px 12px",fontSize:12}}>{error}</div>}
+
+    <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(170px,1fr))",gap:8}}>
+      {kpi("!","Vencidos",overdueRows.length,fmtMoney(sumExpected(overdueRows)),"danger")}
+      {kpi("◷","Próximos 7 días",nextRows.length,fmtMoney(sumExpected(nextRows)),"amber")}
+      {kpi("○","Pendiente del mes",monthPending.length,fmtMoney(sumExpected(monthPending)),"neutral")}
+      {kpi("✓","Pagado del mes",monthPaid.length,fmtMoney(sumPaid(monthPaid)),"success")}
+    </div>
+
+    {alertRows.length>0&&<Card style={{padding:0,borderRadius:16,overflow:"hidden",border:`1px solid ${overdueRows.length?"rgba(176,75,75,.22)":"rgba(196,129,33,.22)"}`}}>
+      <div style={{padding:"10px 13px",background:overdueRows.length?COLORS.dangerLight:COLORS.amberLight,display:"flex",justifyContent:"space-between",alignItems:"center",gap:10,flexWrap:"wrap"}}><div><strong style={{fontSize:12.5,color:overdueRows.length?COLORS.danger:COLORS.amber}}>Pagos que requieren atención</strong><p style={{margin:"2px 0 0",fontSize:10.5,color:"#6b5a5a"}}>{overdueRows.length?`${overdueRows.length} vencido${overdueRows.length===1?"":"s"}`:"Sin vencidos"} · {nextRows.length} próximo{nextRows.length===1?"":"s"} en 7 días</p></div><button type="button" onClick={()=>{setTab("vencimientos");setMonthFilter("");setEstadoFilter(overdueRows.length?"vencido":"proximo");}} style={{border:"none",background:"#fff",borderRadius:9,padding:"6px 9px",fontSize:10.5,fontWeight:800,cursor:"pointer",color:COLORS.pinkDark}}>Ver todos →</button></div>
+      <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(240px,1fr))",gap:7,padding:9}}>{alertRows.slice(0,6).map(r=>{const cfg=configMap.get(Number(r.gasto_id));const loc=localMap.get(Number(cfg?.local_id));const st=gastoEstadoVencimiento(r,today);return <button key={r.id} type="button" onClick={()=>r.estado==="pendiente"?openPay(r):null} style={{border:"1px solid rgba(120,120,120,.12)",background:"#fff",borderRadius:11,padding:"9px 10px",textAlign:"left",cursor:"pointer",display:"grid",gridTemplateColumns:"auto 1fr auto",gap:8,alignItems:"center"}}><GastoEstadoBadge estado={st}/><span style={{minWidth:0}}><strong style={{display:"block",fontSize:11.5,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{cfg?.descripcion||"Gasto"}</strong><small style={{fontSize:9.5,color:"#777"}}>{loc?.nombre||"Local"} · vence {parseDateLabel(r.fecha_vencimiento)}</small></span><strong style={{fontSize:11.5}}>{fmtMoney(r.importe_previsto)}</strong></button>;})}</div>
+    </Card>}
+
+    <Card style={{padding:0,borderRadius:16,overflow:"hidden"}}>
+      <div style={{display:"flex",gap:4,borderBottom:"1px solid rgba(120,120,120,.12)",padding:"0 10px"}}>{tabBtn("vencimientos","Vencimientos")}{tabBtn("configuracion","Gastos configurados")}</div>
+      {tab==="vencimientos"&&<>
+        <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(145px,1fr))",gap:8,padding:12,borderBottom:"1px solid rgba(120,120,120,.10)"}}>
+          <div><label style={labelStyle}>Local</label><select value={localFilter} onChange={e=>setLocalFilter(e.target.value)} style={fieldStyle}><option value="todos">Todos</option>{locales.map(l=><option key={l.id} value={l.id}>{l.nombre}</option>)}</select></div>
+          <div><label style={labelStyle}>Mes</label><input type="month" value={monthFilter} onChange={e=>setMonthFilter(e.target.value)} style={fieldStyle}/></div>
+          <div><label style={labelStyle}>Estado</label><select value={estadoFilter} onChange={e=>setEstadoFilter(e.target.value)} style={fieldStyle}><option value="todos">Todos</option><option value="vencido">Vencidos</option><option value="proximo">Próximos 7 días</option><option value="pendiente">Pendientes</option><option value="pagado">Pagados</option></select></div>
+          <div><label style={labelStyle}>Categoría</label><select value={categoriaFilter} onChange={e=>setCategoriaFilter(e.target.value)} style={fieldStyle}><option value="todos">Todas</option>{GASTOS_CATEGORIAS.map(x=><option key={x}>{x}</option>)}</select></div>
+        </div>
+        <div style={{overflowX:"auto"}}><table style={{width:"100%",borderCollapse:"collapse",minWidth:920,fontSize:11.5}}><thead><tr style={{background:"#faf8f9",color:"#66545b",textAlign:"left"}}>{["Vence","Local","Gasto","Proveedor / cuenta","Importe","Forma de pago","Estado",""] .map(h=><th key={h} style={{padding:"9px 10px",fontSize:10,textTransform:"uppercase",letterSpacing:".03em"}}>{h}</th>)}</tr></thead><tbody>{visibleRows.map(r=>{const cfg=configMap.get(Number(r.gasto_id));const loc=localMap.get(Number(cfg?.local_id));const st=gastoEstadoVencimiento(r,today);return <tr key={r.id} style={{borderTop:"1px solid rgba(120,120,120,.09)",background:st==="vencido"?"#fffafa":"#fff"}}><td style={{padding:"10px",whiteSpace:"nowrap",fontWeight:st==="vencido"?800:600,color:st==="vencido"?COLORS.danger:"inherit"}}>{parseDateLabel(r.fecha_vencimiento)}</td><td style={{padding:"10px"}}>{loc?.nombre||"—"}</td><td style={{padding:"10px",maxWidth:210}}><strong style={{display:"block"}}>{cfg?.descripcion||"—"}</strong><small style={{color:"#777"}}>{cfg?.categoria||""}</small></td><td style={{padding:"10px",maxWidth:210}}><span style={{display:"block"}}>{cfg?.proveedor||"—"}</span><small style={{color:"#777"}}>{cfg?.numero_cliente?`Cliente ${cfg.numero_cliente}`:cfg?.numero_cuenta?`Cuenta ${cfg.numero_cuenta}`:""}</small></td><td style={{padding:"10px",fontWeight:800,whiteSpace:"nowrap"}}>{fmtMoney(r.estado==="pagado"?(r.importe_pagado??r.importe_previsto):r.importe_previsto)}</td><td style={{padding:"10px"}}>{r.estado==="pagado"?(r.forma_pago_real||cfg?.forma_pago||"—"):(cfg?.forma_pago||"—")}</td><td style={{padding:"10px"}}><GastoEstadoBadge estado={st}/>{r.estado==="pagado"&&r.fecha_pago&&<small style={{display:"block",marginTop:3,color:"#777"}}>{parseDateLabel(r.fecha_pago)}</small>}</td><td style={{padding:"10px",whiteSpace:"nowrap",textAlign:"right"}}>{r.estado==="pagado"?<><button type="button" onClick={()=>openDue(r)} style={{border:"none",background:"transparent",color:COLORS.pinkDark,fontSize:10.5,fontWeight:800,cursor:"pointer"}}>Ver</button><button type="button" onClick={()=>void reopen(r)} style={{border:"none",background:"transparent",color:"#777",fontSize:10.5,fontWeight:700,cursor:"pointer"}}>Reabrir</button></>:<><button type="button" onClick={()=>openDue(r)} style={{border:"none",background:"transparent",color:"#777",fontSize:10.5,fontWeight:700,cursor:"pointer"}}>Editar</button><button type="button" onClick={()=>openPay(r)} style={{border:"none",background:COLORS.pinkLight,color:COLORS.pinkDark,borderRadius:8,padding:"6px 9px",fontSize:10.5,fontWeight:800,cursor:"pointer"}}>Pagar</button></>}</td></tr>;})}{!visibleRows.length&&<tr><td colSpan="8" style={{padding:28,textAlign:"center",color:"#888"}}>No hay vencimientos para estos filtros.</td></tr>}</tbody></table></div>
+      </>}
+      {tab==="configuracion"&&<div style={{padding:12,display:"grid",gap:8}}>{configs.filter(c=>localFilter==="todos"||Number(c.local_id)===Number(localFilter)).map(cfg=>{const loc=localMap.get(Number(cfg.local_id));const responsable=userMap.get(Number(cfg.responsable_user_id));const next=rows.filter(r=>Number(r.gasto_id)===Number(cfg.id)&&r.estado==="pendiente"&&String(r.fecha_vencimiento)>=today).sort((a,b)=>String(a.fecha_vencimiento).localeCompare(String(b.fecha_vencimiento)))[0];return <div key={cfg.id} style={{border:"1px solid rgba(120,120,120,.12)",borderRadius:13,padding:"11px 12px",display:"grid",gridTemplateColumns:"minmax(0,1.6fr) minmax(150px,.7fr) minmax(150px,.7fr) auto",gap:10,alignItems:"center",opacity:cfg.activo?1:.58}}><div style={{minWidth:0}}><div style={{display:"flex",gap:6,alignItems:"center",flexWrap:"wrap"}}><strong style={{fontSize:12.5}}>{cfg.descripcion}</strong><span style={{fontSize:9.5,background:COLORS.pinkLight,color:COLORS.pinkDark,borderRadius:999,padding:"3px 6px",fontWeight:800}}>{cfg.categoria}</span>{!cfg.activo&&<span style={{fontSize:9.5,background:"#eee",color:"#666",borderRadius:999,padding:"3px 6px",fontWeight:800}}>Inactivo</span>}</div><small style={{display:"block",marginTop:3,color:"#777"}}>{loc?.nombre||"—"} · {cfg.proveedor||"Sin proveedor"}{cfg.numero_cliente?` · Cliente ${cfg.numero_cliente}`:""}</small></div><div><small style={{display:"block",fontSize:9.5,color:"#888"}}>Próximo vencimiento</small><strong style={{fontSize:11.5}}>{next?parseDateLabel(next.fecha_vencimiento):"—"}</strong></div><div><small style={{display:"block",fontSize:9.5,color:"#888"}}>Responsable</small><strong style={{fontSize:11.5}}>{responsable?.nombre||"Sin asignar"}</strong></div><div style={{display:"flex",gap:5}}><button type="button" onClick={()=>openEditConfig(cfg)} style={{border:"1px solid rgba(114,36,62,.15)",background:"#fff",color:COLORS.pinkDark,borderRadius:8,padding:"6px 8px",fontSize:10.5,fontWeight:800,cursor:"pointer"}}>Editar</button><button type="button" disabled={saving} onClick={()=>void toggleConfig(cfg)} style={{border:"none",background:"#f4f4f4",color:"#666",borderRadius:8,padding:"6px 8px",fontSize:10.5,fontWeight:700,cursor:"pointer"}}>{cfg.activo?"Desactivar":"Activar"}</button></div></div>;})}{!configs.length&&<div style={{padding:30,textAlign:"center",color:"#888",fontSize:12}}>Todavía no configuraste gastos recurrentes.</div>}</div>}
+    </Card>
+
+    {configModal&&<Modal title={configModal.mode==="edit"?"Editar gasto recurrente":"Nuevo gasto recurrente"} onClose={()=>!saving&&setConfigModal(null)} width={860}><div style={{display:"grid",gap:13}}>
+      <div style={{display:"grid",gridTemplateColumns:"repeat(2,minmax(0,1fr))",gap:10}}><ModalSelect label="Local" value={configModal.form.local_id} onChange={v=>setConfigModal(m=>({...m,form:{...m.form,local_id:v}}))}><option value="">Seleccionar</option>{locales.map(l=><option key={l.id} value={l.id}>{l.nombre}</option>)}</ModalSelect><ModalSelect label="Categoría" value={configModal.form.categoria} onChange={v=>setConfigModal(m=>({...m,form:{...m.form,categoria:v}}))}>{GASTOS_CATEGORIAS.map(x=><option key={x}>{x}</option>)}</ModalSelect></div>
+      <ModalInput label="Descripción" value={configModal.form.descripcion} onChange={v=>setConfigModal(m=>({...m,form:{...m.form,descripcion:v}}))}/>
+      <div style={{display:"grid",gridTemplateColumns:"repeat(2,minmax(0,1fr))",gap:10}}><ModalInput label="Proveedor / acreedor" value={configModal.form.proveedor} onChange={v=>setConfigModal(m=>({...m,form:{...m.form,proveedor:v}}))}/><ModalSelect label="Responsable" value={configModal.form.responsable_user_id} onChange={v=>setConfigModal(m=>({...m,form:{...m.form,responsable_user_id:v}}))}><option value="">Sin asignar</option>{responsables.map(u=><option key={u.id} value={u.id}>{u.nombre}</option>)}</ModalSelect></div>
+      <div style={{display:"grid",gridTemplateColumns:"repeat(3,minmax(0,1fr))",gap:10}}><ModalInput label="N° de cliente" value={configModal.form.numero_cliente} onChange={v=>setConfigModal(m=>({...m,form:{...m.form,numero_cliente:v}}))}/><ModalInput label="N° de cuenta / contrato" value={configModal.form.numero_cuenta} onChange={v=>setConfigModal(m=>({...m,form:{...m.form,numero_cuenta:v}}))}/><ModalInput label="Código de pago" value={configModal.form.codigo_pago} onChange={v=>setConfigModal(m=>({...m,form:{...m.form,codigo_pago:v}}))}/></div>
+      <div style={{display:"grid",gridTemplateColumns:"repeat(2,minmax(0,1fr))",gap:10}}><ModalSelect label="Forma de pago habitual" value={configModal.form.forma_pago} onChange={v=>setConfigModal(m=>({...m,form:{...m.form,forma_pago:v}}))}>{GASTOS_FORMAS_PAGO.map(x=><option key={x}>{x}</option>)}</ModalSelect><ModalInput label="Datos de pago (CBU, alias, tarjeta, etc.)" value={configModal.form.datos_pago} onChange={v=>setConfigModal(m=>({...m,form:{...m.form,datos_pago:v}}))}/></div>
+      <ModalInput label="Portal / referencia para pagar" value={configModal.form.portal_pago} onChange={v=>setConfigModal(m=>({...m,form:{...m.form,portal_pago:v}}))}/>
+      <div style={{display:"grid",gridTemplateColumns:"repeat(3,minmax(0,1fr))",gap:10}}><ModalSelect label="Frecuencia" value={configModal.form.frecuencia_meses} onChange={v=>setConfigModal(m=>({...m,form:{...m.form,frecuencia_meses:v}}))}>{GASTOS_FRECUENCIAS.map(x=><option key={x.value} value={x.value}>{x.label}</option>)}</ModalSelect><ModalInput label="Primer vencimiento" type="date" value={configModal.form.fecha_primer_vencimiento} onChange={v=>setConfigModal(m=>({...m,form:{...m.form,fecha_primer_vencimiento:v}}))}/><ModalInput label="Activo hasta (opcional)" type="date" value={configModal.form.fecha_fin} onChange={v=>setConfigModal(m=>({...m,form:{...m.form,fecha_fin:v}}))}/></div>
+      <div style={{display:"grid",gridTemplateColumns:"repeat(3,minmax(0,1fr))",gap:10}}><ModalSelect label="Importe" value={configModal.form.tipo_importe} onChange={v=>setConfigModal(m=>({...m,form:{...m.form,tipo_importe:v}}))}><option value="variable">Variable / estimado</option><option value="fijo">Fijo</option></ModalSelect><ModalInput label={configModal.form.tipo_importe==="fijo"?"Importe fijo":"Importe estimado"} type="number" value={configModal.form.importe_estimado} onChange={v=>setConfigModal(m=>({...m,form:{...m.form,importe_estimado:v}}))}/><ModalInput label="Alertas (días antes)" value={configModal.form.alertas_dias} onChange={v=>setConfigModal(m=>({...m,form:{...m.form,alertas_dias:v}}))}/></div>
+      <div><label style={labelStyle}>Observaciones</label><textarea value={configModal.form.observaciones||""} onChange={e=>setConfigModal(m=>({...m,form:{...m.form,observaciones:e.target.value}}))} style={{...fieldStyle,minHeight:74,resize:"vertical"}}/></div>
+      <label style={{display:"flex",gap:8,alignItems:"center",fontSize:11.5,fontWeight:700}}><input type="checkbox" checked={configModal.form.activo!==false} onChange={e=>setConfigModal(m=>({...m,form:{...m.form,activo:e.target.checked}}))}/> Gasto activo</label>
+      <div style={{background:"#f8f4f6",borderRadius:10,padding:"9px 11px",fontSize:10.5,color:"#6c5960"}}>Al guardar se generan automáticamente los próximos 18 meses de vencimientos. Si editás la frecuencia o el primer vencimiento, se regeneran solamente los vencimientos futuros pendientes; los pagos históricos se conservan.</div>
+      <div style={{display:"flex",justifyContent:"flex-end",gap:8}}><button type="button" onClick={()=>setConfigModal(null)} disabled={saving} style={{border:"1px solid #ddd",background:"#fff",borderRadius:9,padding:"8px 12px",fontSize:11.5,fontWeight:700,cursor:"pointer"}}>Cancelar</button><button type="button" onClick={()=>void saveConfig()} disabled={saving} style={{border:"none",background:COLORS.pink,color:"#fff",borderRadius:9,padding:"8px 13px",fontSize:11.5,fontWeight:800,cursor:"pointer",opacity:saving?.7:1}}>{saving?"Guardando...":"Guardar gasto"}</button></div>
+    </div></Modal>}
+
+    {dueModal&&(()=>{const row=rows.find(r=>Number(r.id)===Number(dueModal.id));const cfg=configMap.get(Number(row?.gasto_id));return <Modal title={row?.estado==="pagado"?"Detalle del pago":"Editar vencimiento"} onClose={()=>setDueModal(null)} width={620}><div style={{display:"grid",gap:12}}><div style={{background:"#faf8f9",borderRadius:10,padding:10}}><strong style={{fontSize:12.5}}>{cfg?.descripcion||"Gasto"}</strong><p style={{margin:"3px 0 0",fontSize:10.5,color:"#777"}}>{cfg?.proveedor||"Sin proveedor"}{cfg?.codigo_pago?` · Código ${cfg.codigo_pago}`:""}</p></div>{row?.estado==="pagado"?<><div style={{display:"grid",gridTemplateColumns:"repeat(2,minmax(0,1fr))",gap:10}}><div><small style={{color:"#888"}}>Fecha de pago</small><strong style={{display:"block",marginTop:3}}>{parseDateLabel(row.fecha_pago)}</strong></div><div><small style={{color:"#888"}}>Importe pagado</small><strong style={{display:"block",marginTop:3}}>{fmtMoney(row.importe_pagado)}</strong></div><div><small style={{color:"#888"}}>Forma de pago</small><strong style={{display:"block",marginTop:3}}>{row.forma_pago_real||"—"}</strong></div><div><small style={{color:"#888"}}>Referencia</small><strong style={{display:"block",marginTop:3}}>{row.referencia_pago||"—"}</strong></div></div>{row.observaciones&&<div style={{fontSize:11.5,lineHeight:1.5,background:"#fafafa",padding:10,borderRadius:9}}>{row.observaciones}</div>}</>:<><div style={{display:"grid",gridTemplateColumns:"repeat(2,minmax(0,1fr))",gap:10}}><ModalInput label="Fecha de vencimiento" type="date" value={dueModal.form.fecha_vencimiento} onChange={v=>setDueModal(m=>({...m,form:{...m.form,fecha_vencimiento:v}}))}/><ModalInput label="Importe previsto" type="number" value={dueModal.form.importe_previsto} onChange={v=>setDueModal(m=>({...m,form:{...m.form,importe_previsto:v}}))}/></div><ModalInput label="N° factura / referencia" value={dueModal.form.documento_referencia} onChange={v=>setDueModal(m=>({...m,form:{...m.form,documento_referencia:v}}))}/><div><label style={labelStyle}>Observaciones</label><textarea value={dueModal.form.observaciones} onChange={e=>setDueModal(m=>({...m,form:{...m.form,observaciones:e.target.value}}))} style={{...fieldStyle,minHeight:70}}/></div><div style={{display:"flex",justifyContent:"flex-end"}}><button type="button" onClick={()=>void saveDue()} disabled={saving} style={{border:"none",background:COLORS.pink,color:"#fff",borderRadius:9,padding:"8px 13px",fontSize:11.5,fontWeight:800,cursor:"pointer"}}>Guardar cambios</button></div></>}</div></Modal>;})()}
+
+    {payModal&&<Modal title="Registrar pago" onClose={()=>!saving&&setPayModal(null)} width={640}><div style={{display:"grid",gap:12}}><div style={{background:COLORS.pinkLight,borderRadius:11,padding:11}}><strong style={{fontSize:13,color:COLORS.pinkDark}}>{payModal.cfg?.descripcion||"Gasto"}</strong><p style={{margin:"3px 0 0",fontSize:10.5,color:"#705762"}}>{localMap.get(Number(payModal.cfg?.local_id))?.nombre||"Local"} · vencimiento {parseDateLabel(payModal.row?.fecha_vencimiento)}</p></div><div style={{display:"grid",gridTemplateColumns:"repeat(2,minmax(0,1fr))",gap:10}}><ModalInput label="Fecha de pago" type="date" value={payModal.form.fecha_pago} onChange={v=>setPayModal(m=>({...m,form:{...m.form,fecha_pago:v}}))}/><ModalInput label="Importe pagado" type="number" value={payModal.form.importe_pagado} onChange={v=>setPayModal(m=>({...m,form:{...m.form,importe_pagado:v}}))}/></div><ModalSelect label="Forma de pago" value={payModal.form.forma_pago_real} onChange={v=>setPayModal(m=>({...m,form:{...m.form,forma_pago_real:v}}))}>{GASTOS_FORMAS_PAGO.map(x=><option key={x}>{x}</option>)}</ModalSelect><ModalInput label="Referencia / comprobante" value={payModal.form.referencia_pago} onChange={v=>setPayModal(m=>({...m,form:{...m.form,referencia_pago:v}}))}/><div><label style={labelStyle}>Observaciones</label><textarea value={payModal.form.observaciones} onChange={e=>setPayModal(m=>({...m,form:{...m.form,observaciones:e.target.value}}))} style={{...fieldStyle,minHeight:70}}/></div><div style={{display:"flex",justifyContent:"flex-end",gap:8}}><button type="button" onClick={()=>setPayModal(null)} disabled={saving} style={{border:"1px solid #ddd",background:"#fff",borderRadius:9,padding:"8px 12px",fontSize:11.5,fontWeight:700,cursor:"pointer"}}>Cancelar</button><button type="button" onClick={()=>void savePay()} disabled={saving} style={{border:"none",background:COLORS.success,color:"#fff",borderRadius:9,padding:"8px 13px",fontSize:11.5,fontWeight:800,cursor:"pointer"}}>{saving?"Guardando...":"Confirmar pago"}</button></div></div></Modal>}
+  </div>;
+}
+
+
 // ── APP PRINCIPAL ──────────────────────────────────────────────────
 function readSectionHash() {
   const h = (window.location.hash || "").replace(/^#\/?/, "").trim();
@@ -16295,9 +16866,9 @@ function defaultSectionForRole(role) {
 
 function sectionAllowedForRole(section, role) {
   const reportesOperativos = ["reportes","reportes_horas","reportes_cobertura","reportes_comisiones","reporte_pago_comisiones"];
-  const admin = ["inicio","dashboard","dashboard_manicuras","clientes_crm","ayuda","roadmap","asistencia","horarios","pizarra_semanal","horarios_encargadas","vacaciones_encargadas","bloqueo_horarios",...reportesOperativos,"preliquidacion_encargadas","turnos","servicios","listas_precios","adelantos","garantias","reclamos","auditorias","informes","informes_mensajeria","manicuras","encargadas","reclutamiento_busquedas","reclutamiento_candidatas","reclutamiento_calendario","reclutamiento_aprobaciones","reclutamiento_antiguedad","reclutamiento_config","locales","cobertura_config","perfil"];
-  const casaMatriz = ["inicio","dashboard","dashboard_manicuras","clientes_crm","ayuda","roadmap","asistencia","horarios","pizarra_semanal","horarios_encargadas","vacaciones_encargadas","bloqueo_horarios",...reportesOperativos,"preliquidacion_encargadas","servicios","listas_precios","adelantos","garantias","reclamos","auditorias","informes","informes_mensajeria","manicuras","encargadas","reclutamiento_busquedas","reclutamiento_candidatas","reclutamiento_calendario","reclutamiento_aprobaciones","reclutamiento_antiguedad","reclutamiento_config","locales","cobertura_config","perfil"];
-  const franquiciado = ["inicio","dashboard","dashboard_manicuras","clientes_crm","ayuda","asistencia","horarios","pizarra_semanal","horarios_encargadas","bloqueo_horarios",...reportesOperativos,"preliquidacion_encargadas","adelantos","garantias","reclamos","informes","informes_mensajeria","manicuras","encargadas","cobertura_config","perfil"];
+  const admin = ["inicio","dashboard","dashboard_manicuras","clientes_crm","ayuda","roadmap","asistencia","horarios","pizarra_semanal","horarios_encargadas","vacaciones_encargadas","bloqueo_horarios",...reportesOperativos,"preliquidacion_encargadas","turnos","servicios","listas_precios","adelantos","garantias","gastos_vencimientos","reclamos","auditorias","informes","informes_mensajeria","manicuras","encargadas","reclutamiento_busquedas","reclutamiento_candidatas","reclutamiento_calendario","reclutamiento_aprobaciones","reclutamiento_antiguedad","reclutamiento_config","locales","cobertura_config","perfil"];
+  const casaMatriz = ["inicio","dashboard","dashboard_manicuras","clientes_crm","ayuda","roadmap","asistencia","horarios","pizarra_semanal","horarios_encargadas","vacaciones_encargadas","bloqueo_horarios",...reportesOperativos,"preliquidacion_encargadas","servicios","listas_precios","adelantos","garantias","gastos_vencimientos","reclamos","auditorias","informes","informes_mensajeria","manicuras","encargadas","reclutamiento_busquedas","reclutamiento_candidatas","reclutamiento_calendario","reclutamiento_aprobaciones","reclutamiento_antiguedad","reclutamiento_config","locales","cobertura_config","perfil"];
+  const franquiciado = ["inicio","dashboard","dashboard_manicuras","clientes_crm","ayuda","asistencia","horarios","pizarra_semanal","horarios_encargadas","bloqueo_horarios",...reportesOperativos,"preliquidacion_encargadas","adelantos","garantias","gastos_vencimientos","reclamos","informes","informes_mensajeria","manicuras","encargadas","cobertura_config","perfil"];
   const encargada = ["inicio","dashboard","dashboard_manicuras","clientes_crm","ayuda","asistencia","horarios","pizarra_semanal","vacaciones_encargadas","bloqueo_horarios",...reportesOperativos,"preliquidacion_encargadas","adelantos","garantias","reclamos","informes","informes_mensajeria","manicuras","cobertura_config","perfil"];
   const manicura = ["inicio","ayuda","horarios","pizarra_semanal","reportes","reportes_horas","reportes_comisiones","perfil"];
   const allowed = role === "admin" ? admin : role === "casa_matriz" ? casaMatriz : role === "franquiciado" ? franquiciado : role === "encargada" ? encargada : manicura;
@@ -16414,6 +16985,7 @@ const refreshTimer = window.setInterval(check, 10 * 60 * 1000);
   });
   const [homeKpis, setHomeKpis] = useState({ loading:false, error:"", ventas:0, ventasAnt:0, visitas:0, visitasAnt:0, ticket:0, ticketAnt:0, fechaHasta:"" });
   const [homeReclamosPendientes, setHomeReclamosPendientes] = useState({ loading:false, error:"", rows:[] });
+  const gastosAlertLoadedRef = useRef("");
   const [operatingMode, setOperatingMode] = useState("manicura");
   const dualOperationalProfile = !!user && user.rol === "manicura" && !!data && isEncargadaOperativa(data,user.id);
   const effectiveRole = dualOperationalProfile ? (operatingMode === "encargada" ? "encargada" : "manicura") : user?.rol;
@@ -16485,6 +17057,30 @@ const refreshTimer = window.setInterval(check, 10 * 60 * 1000);
     }
   }, [notificationOpen]);
 
+  useEffect(() => {
+    if (!effectiveUser?.id || !["admin","casa_matriz","franquiciado"].includes(effectiveRole)) return;
+    const key = `${effectiveUser.id}|${effectiveRole}`;
+    if (gastosAlertLoadedRef.current === key) return;
+    gastosAlertLoadedRef.current = key;
+    let cancelled = false;
+    api.gastosRequest(effectiveUser,{ action:"alerts" }).then(res => {
+      if (cancelled) return;
+      const items = res?.items || [];
+      const vencidos = items.filter(x => String(x.fecha_vencimiento || "") < String(res.today || dateKey(new Date())));
+      const proximos = items.filter(x => String(x.fecha_vencimiento || "") >= String(res.today || dateKey(new Date())));
+      if (!items.length) return;
+      const total = items.reduce((a,x)=>a+Number(x.importe_previsto||0),0);
+      pushNotification({
+        type:vencidos.length?"warning":"info",
+        title:"Gastos y vencimientos",
+        message:`${vencidos.length ? `${vencidos.length} vencido${vencidos.length===1?"":"s"}` : "Sin vencidos"} · ${proximos.length} próximo${proximos.length===1?"":"s"} según tus alertas · ${fmtMoney(total)}`,
+        action:{ kind:"openGastos" },
+        duration:6500,
+      });
+    }).catch(() => {});
+    return () => { cancelled = true; };
+  }, [effectiveUser?.id,effectiveUser?.sessionToken,effectiveRole,pushNotification]);
+
   const handleNotificationAction = useCallback((action, notificationId = null) => {
     if (!action) return;
     if (notificationId) dismissToast(notificationId);
@@ -16494,6 +17090,13 @@ const refreshTimer = window.setInterval(check, 10 * 60 * 1000);
       setAgendaOpenRequest({ ...action, nonce:Date.now() });
       setSeccion("turnos");
       setMenuOpen(false);
+      return;
+    }
+    if (action.kind === "openGastos" && sectionAllowedForRole("gastos_vencimientos", effectiveRole)) {
+      window.history.replaceState(null, "", "#gastos_vencimientos");
+      setSeccion("gastos_vencimientos");
+      setMenuOpen(false);
+      setMobileMenuGroup(null);
       return;
     }
   }, [dismissToast, effectiveRole]);
@@ -16841,6 +17444,14 @@ const refreshTimer = window.setInterval(check, 10 * 60 * 1000);
         { id: "reporte_pago_comisiones", label: "Pago de comisiones", icon: "💳" },
         { id: "garantias", label: "Garantías", icon: "🛠️" },
         { id: "adelantos", label: "Adelantos", icon: "💸" },
+      ],
+    },
+    {
+      id: "administracion",
+      label: "Administración",
+      icon: "🧾",
+      items: [
+        { id: "gastos_vencimientos", label: "Gastos y vencimientos", icon: "🧾" },
       ],
     },
     {
@@ -17240,6 +17851,7 @@ const refreshTimer = window.setInterval(check, 10 * 60 * 1000);
     if (seccion==="preliquidacion_encargadas") return ["admin","casa_matriz","franquiciado","encargada"].includes(effectiveRole) ? <PreliquidacionEncargadas data={data} user={appUser}/> : null;
     if (seccion==="adelantos") return effectiveRole!=="manicura" ? <AdelantosManicuras data={data} reloadData={reloadData} user={appUser}/> : null;
     if (seccion==="garantias") return effectiveRole!=="manicura" ? <GarantiasServicios data={data} reloadData={reloadData} user={appUser}/> : null;
+    if (seccion==="gastos_vencimientos") return ["admin","casa_matriz","franquiciado"].includes(effectiveRole) ? <GastosVencimientosPage data={data} user={appUser}/> : null;
     if (seccion==="informes_mensajeria") return effectiveRole!=="manicura" ? <InformesMensajeriaPage data={data} user={appUser}/> : null;
     if (seccion==="reclamos") return effectiveRole!=="manicura" ? <ReclamosPage data={data} user={appUser}/> : null;
     if (seccion==="auditorias") return ["admin","casa_matriz"].includes(effectiveRole) ? <AuditoriasPage data={data} user={appUser}/> : null;
