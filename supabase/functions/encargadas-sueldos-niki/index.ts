@@ -73,6 +73,12 @@ function hoursOutside(planDesde: string | null, planHasta: string | null, realDe
   const after = Math.max(0, re - Math.max(rs, pe));
   return (before + after) / 60;
 }
+function intervalHours(rows:any[]){
+  const ints=rows.map(r=>[minutes(r.desde),minutes(r.hasta)]).filter(x=>x[0]!=null&&x[1]!=null&&x[1]>x[0]).sort((a:any,b:any)=>a[0]-b[0]);
+  let total=0,start:number|null=null,end:number|null=null;
+  for(const [a,b] of ints as any){if(start==null){start=a;end=b;continue;}if(a<=end!){end=Math.max(end!,b);}else{total+=end!-start;start=a;end=b;}}
+  if(start!=null&&end!=null)total+=end-start;return total/60;
+}
 function worked(row: any) {
   if (!row) return false;
   if (["ausencia","vacaciones"].includes(String(row.estado || ""))) return false;
@@ -204,41 +210,20 @@ Deno.serve(async (req) => {
       const semDesde = `${y}-${String(semesterStartMonth).padStart(2,"0")}-01`;
       const semHasta = m <= 6 ? `${y}-06-30` : `${y}-12-31`;
 
-      const [usersQ,localesQ,planQ,weekQ,cfgQ,realQ,ferQ,salaryQ,histQ] = await Promise.all([
+      const [usersQ,localesQ,planQ,realQ,ferQ,salaryQ,histQ,vacQ,covQ] = await Promise.all([
         admin.from("users").select("id,nombre,activo").in("id",userIds),
         admin.from("locales").select("id,nombre").in("id",localIds),
         admin.from("encargada_planificacion").select("*").in("local_id",localIds).gte("fecha",desde).lte("fecha",hasta),
-        admin.from("encargada_semana_tipo").select("*").in("local_id",localIds),
-        admin.from("encargada_planificacion_config").select("*").in("local_id",localIds),
         admin.from("encargada_jornada_real").select("*").in("local_id",localIds).gte("fecha",desde).lte("fecha",hasta),
         admin.from("feriados").select("fecha,descripcion").gte("fecha",desde).lte("fecha",hasta),
         admin.from("encargada_sueldo_historial").select("*").in("user_id",userIds).lte("vigencia_desde",hasta).order("vigencia_desde",{ascending:true}),
         admin.from("usuario_historial_laboral").select("user_id,fecha_inicio,fecha_fin").in("user_id",userIds),
+        admin.from("encargada_vacaciones_solicitudes").select("*").in("user_id",userIds).eq("estado","aprobada").eq("periodo_liquidacion",periodo),
+        admin.from("encargada_coberturas_segmentos").select("*").in("reemplazo_user_id",userIds).gte("fecha",desde).lte("fecha",hasta).eq("estado","confirmada"),
       ]);
-      const err = [usersQ,localesQ,planQ,weekQ,cfgQ,realQ,ferQ,salaryQ,histQ].find((x:any)=>x.error)?.error; if (err) throw err;
-      const users = usersQ.data||[], locales = localesQ.data||[], confirmed = planQ.data||[], templates = weekQ.data||[], configs = cfgQ.data||[], real = realQ.data||[], feriados = new Set((ferQ.data||[]).map((x:any)=>String(x.fecha)));
-      const salary = salaryQ.data||[], laborHist = histQ.data||[];
-      const confirmedByKey = new Map<string,any>();
-      confirmed.forEach((r:any)=>confirmedByKey.set(`${r.local_id}|${r.user_id}|${r.fecha}`,r));
-      const cfgByLocal = new Map(configs.map((c:any)=>[Number(c.local_id),c]));
-      const templateByKey = new Map<string,any>();
-      templates.forEach((r:any)=>templateByKey.set(`${r.local_id}|${r.user_id}|${r.dia_semana}|${r.tipo_semana}`,r));
-      const rels = encRel||[];
-      const planRows:any[] = [];
-      for (let f=desde; f<=hasta; f=addDays(f,1)) {
-        const dow = dayOfWeek(f);
-        for (const rel of rels) {
-          const uid=Number(rel.user_id), lid=Number(rel.local_id);
-          if (!userIds.includes(uid) || !localIds.includes(lid)) continue;
-          const conf = confirmedByKey.get(`${lid}|${uid}|${f}`);
-          if (conf) { planRows.push({local_id:lid,user_id:uid,fecha:f,hora_desde:conf.hora_desde,hora_hasta:conf.hora_hasta,fuente:"confirmado"}); continue; }
-          const wt = weekType(f, cfgByLocal.get(lid)?.fecha_referencia_a || null);
-          const specific = templateByKey.get(`${lid}|${uid}|${dow}|${wt}`);
-          const common = templateByKey.get(`${lid}|${uid}|${dow}|todas`);
-          const t = specific || common;
-          if (t?.hora_desde && t?.hora_hasta) planRows.push({local_id:lid,user_id:uid,fecha:f,hora_desde:t.hora_desde,hora_hasta:t.hora_hasta,fuente:"semana_tipo"});
-        }
-      }
+      const err = [usersQ,localesQ,planQ,realQ,ferQ,salaryQ,histQ,vacQ,covQ].find((x:any)=>x.error)?.error; if (err) throw err;
+      const users = usersQ.data||[], locales = localesQ.data||[], planRows = (planQ.data||[]).map((r:any)=>({local_id:Number(r.local_id),user_id:Number(r.user_id),fecha:String(r.fecha),hora_desde:r.hora_desde,hora_hasta:r.hora_hasta,fuente:"confirmado"})), real = realQ.data||[], feriados = new Set((ferQ.data||[]).map((x:any)=>String(x.fecha)));
+      const salary = salaryQ.data||[], laborHist = histQ.data||[], vacations=vacQ.data||[], coverages=covQ.data||[];
       const planByKey = new Map(planRows.map(r=>[`${r.local_id}|${r.user_id}|${r.fecha}`,r]));
       const realByUser = new Map<number,any[]>();
       (real||[]).filter((r:any)=>userIds.includes(Number(r.user_id))).forEach((r:any)=>{ const uid=Number(r.user_id); if(!realByUser.has(uid))realByUser.set(uid,[]);realByUser.get(uid)!.push(r); });
@@ -250,12 +235,13 @@ Deno.serve(async (req) => {
         const trabajados=new Set(reals.filter(worked).map((r:any)=>String(r.fecha)));
         const ausencias=new Set(reals.filter((r:any)=>String(r.estado)==="ausencia").map((r:any)=>String(r.fecha)));
         let extra=0;
-        reals.filter(worked).forEach((r:any)=>{
-          const plan = planByKey.get(`${r.local_id}|${uid}|${r.fecha}`);
-          const pd = r.hora_plan_desde || plan?.hora_desde || null;
-          const ph = r.hora_plan_hasta || plan?.hora_hasta || null;
-          extra += hoursOutside(pd, ph, r.hora_real_desde, r.hora_real_hasta);
-        });
+        const allDates=Array.from(new Set([...plans.map((p:any)=>String(p.fecha)),...reals.map((r:any)=>String(r.fecha)),...coverages.filter((c:any)=>Number(c.reemplazo_user_id)===uid).map((c:any)=>String(c.fecha))]));
+        for(const f of allDates){
+          const baseIntervals=plans.filter((p:any)=>String(p.fecha)===f).map((p:any)=>({desde:p.hora_desde,hasta:p.hora_hasta}));
+          const realIntervals=reals.filter((r:any)=>String(r.fecha)===f&&worked(r)).map((r:any)=>({desde:r.hora_real_desde,hasta:r.hora_real_hasta}));
+          const covIntervals=coverages.filter((c:any)=>Number(c.reemplazo_user_id)===uid&&String(c.fecha)===f).map((c:any)=>({desde:c.hora_real_desde||c.hora_desde,hasta:c.hora_real_hasta||c.hora_hasta}));
+          extra+=Math.max(0,intervalHours([...realIntervals,...covIntervals])-intervalHours(baseIntervals));
+        }
         extra = Math.round(extra*100)/100;
         const feriadosTrabajados = new Set(reals.filter((r:any)=>worked(r)&&feriados.has(String(r.fecha))).map((r:any)=>String(r.fecha))).size;
         const salaryRows=salary.filter((s:any)=>Number(s.user_id)===uid&&String(s.vigencia_desde)<=hasta);
@@ -268,14 +254,20 @@ Deno.serve(async (req) => {
         const bestBase = semSalary.length ? Math.max(...semSalary.map((s:any)=>Number(s.sueldo_base||0))) : sueldoBase;
         const mesesTrabajados = monthsWorkedInSemester(laborHist,uid,semDesde,semHasta);
         const aguinaldo = (m===6||m===12) && bestBase>0 ? (bestBase/2)*(mesesTrabajados/6) : 0;
-        const total = sueldoBase + montoExtras + montoFeriados + aguinaldo;
+        const vacRows=vacations.filter((v:any)=>Number(v.user_id)===uid);
+        const diasVacaciones=vacRows.reduce((acc:number,v:any)=>acc+Math.max(0,Math.floor((dateUtc(String(v.fecha_fin)).getTime()-dateUtc(String(v.fecha_inicio)).getTime())/86400000)+1),0);
+        const baseVac=vacRows.length&&Number(vacRows[0].remuneracion_base_vacaciones||0)>0?Number(vacRows[0].remuneracion_base_vacaciones):sueldoBase;
+        // Plus incremental: el sueldo mensual ya contiene el valor normal (base/30).
+        // Vacaciones mensualizadas: valor vacacional base/25. Variables/convenio requieren ajuste contable.
+        const plusVacacional=baseVac>0?Math.max(0,(baseVac/25-baseVac/30)*diasVacaciones):0;
+        const total = sueldoBase + montoExtras + montoFeriados + aguinaldo + plusVacacional;
         const detail = Array.from(new Set([...plans.map((p:any)=>String(p.fecha)),...reals.map((r:any)=>String(r.fecha))])).sort().map(fecha=>{
           const dayPlans=plans.filter((p:any)=>String(p.fecha)===fecha);
           const dayReals=reals.filter((r:any)=>String(r.fecha)===fecha);
           const extraDay = dayReals.filter(worked).reduce((acc:number,r:any)=>{ const p=planByKey.get(`${r.local_id}|${uid}|${fecha}`); return acc+hoursOutside(r.hora_plan_desde||p?.hora_desde||null,r.hora_plan_hasta||p?.hora_hasta||null,r.hora_real_desde,r.hora_real_hasta); },0);
           return { fecha, agendado:dayPlans.length>0, trabajado:dayReals.some(worked), ausencia:dayReals.some((r:any)=>String(r.estado)==="ausencia"), cambio_turno:dayReals.some((r:any)=>String(r.estado)==="cambio_turno"), feriado:feriados.has(fecha), horas_extra:Math.round(extraDay*100)/100, plan:dayPlans, real:dayReals };
         });
-        return { user_id:uid,nombre:u.nombre,dias_agendados:agendados.size,dias_trabajados:trabajados.size,ausencias:ausencias.size,horas_extra:extra,feriados_trabajados:feriadosTrabajados,sueldo_base:sueldoBase,horas_diarias_habituales:horasDia,valor_hora_extra:valorHoraExtra,monto_horas_extra:montoExtras,monto_feriados:montoFeriados,aguinaldo,mejor_sueldo_base_semestre:bestBase,meses_trabajados_semestre:mesesTrabajados,total_estimado:total,config_vigencia_desde:current?.vigencia_desde||null,detalle:detail};
+        return { user_id:uid,nombre:u.nombre,dias_agendados:agendados.size,dias_trabajados:trabajados.size,ausencias:ausencias.size,horas_extra:extra,feriados_trabajados:feriadosTrabajados,sueldo_base:sueldoBase,horas_diarias_habituales:horasDia,valor_hora_extra:valorHoraExtra,monto_horas_extra:montoExtras,monto_feriados:montoFeriados,aguinaldo,dias_vacaciones_liquidadas:diasVacaciones,plus_vacacional:plusVacacional,base_vacaciones:baseVac,mejor_sueldo_base_semestre:bestBase,meses_trabajados_semestre:mesesTrabajados,total_estimado:total,config_vigencia_desde:current?.vigencia_desde||null,detalle:detail};
       }).sort((a:any,b:any)=>String(a.nombre||"").localeCompare(String(b.nombre||"")));
       return json({ok:true,periodo,rows,locales});
     }
