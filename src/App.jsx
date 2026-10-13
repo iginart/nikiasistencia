@@ -583,7 +583,8 @@ async function nikiProtectedFetch(url, options = {}) {
 const recruitmentEdge = async (action, payload = {}) => {
   const actor = window.__nikiCurrentUser || null;
   if (!actor?.id || !actor?.sessionToken) throw new Error("Sesión inválida para Reclutamiento.");
-  const res = await nikiProtectedFetch(`${SUPABASE_URL}/functions/v1/reclutamiento-niki`, {
+  const edgeName = ["franquiciado","encargada"].includes(actor?.rol) ? "reclutamiento-local-niki" : "reclutamiento-niki";
+  const res = await nikiProtectedFetch(`${SUPABASE_URL}/functions/v1/${edgeName}`, {
     method:"POST",
     headers:{ apikey:SUPABASE_KEY, Authorization:`Bearer ${SUPABASE_KEY}`, "Content-Type":"application/json" },
     body:JSON.stringify({ action, actor_id:actor.id, session_token:actor.sessionToken, ...payload }),
@@ -591,6 +592,20 @@ const recruitmentEdge = async (action, payload = {}) => {
   const txt = await res.text();
   const data = txt ? JSON.parse(txt) : {};
   if (!res.ok || data?.ok === false) throw new Error(data?.error || txt || "Error de Reclutamiento");
+  return data;
+};
+
+const recruitmentCandidateEdge = async (payload = {}) => {
+  const actor = window.__nikiCurrentUser || null;
+  if (!actor?.id || !actor?.sessionToken) throw new Error("Sesión inválida para Reclutamiento.");
+  const res = await nikiProtectedFetch(`${SUPABASE_URL}/functions/v1/reclutamiento-local-niki`, {
+    method:"POST",
+    headers:{ apikey:SUPABASE_KEY, Authorization:`Bearer ${SUPABASE_KEY}`, "Content-Type":"application/json" },
+    body:JSON.stringify({ action:"save_candidate", actor_id:actor.id, session_token:actor.sessionToken, ...payload }),
+  });
+  const txt = await res.text();
+  const data = txt ? JSON.parse(txt) : {};
+  if (!res.ok || data?.ok === false) throw new Error(data?.error || txt || "No se pudo guardar la candidata");
   return data;
 };
 
@@ -619,8 +634,49 @@ const encargadasVacacionesEdge = async (action, payload = {}) => {
     body:JSON.stringify({ action, actor_id:actor.id, session_token:actor.sessionToken, ...payload }),
   });
   const txt = await res.text();
-  const data = txt ? JSON.parse(txt) : {};
-  if (!res.ok || data?.ok === false) throw new Error(data?.error || txt || "Error al gestionar vacaciones.");
+  let data = {};
+  try { data = txt ? JSON.parse(txt) : {}; } catch { data = {}; }
+  if (!res.ok || data?.ok === false) throw new Error(edgeErrorMessage(data?.error, txt || "Error al gestionar vacaciones."));
+  return data;
+};
+
+const edgeErrorMessage = (value, fallback = "Error inesperado") => {
+  if (!value) return fallback;
+  if (typeof value === "string") return value;
+  if (value instanceof Error) {
+    if (value.message && value.message !== "[object Object]") return value.message;
+    if (value.cause) return edgeErrorMessage(value.cause, fallback);
+    return fallback;
+  }
+  if (typeof value === "object") {
+    const parts = [value.message, value.details, value.hint, value.code].filter(Boolean).map(String);
+    if (parts.length) return parts.join(" · ");
+    if (value.error && value.error !== value) return edgeErrorMessage(value.error, fallback);
+    if (value.cause && value.cause !== value) return edgeErrorMessage(value.cause, fallback);
+    try {
+      const serialized = JSON.stringify(value);
+      if (serialized && serialized !== "{}") return serialized;
+    } catch {}
+  }
+  const text = String(value || "");
+  return text && text !== "[object Object]" ? text : fallback;
+};
+
+const planificacionPersonalEdge = async (action, payload = {}) => {
+  const actor = window.__nikiCurrentUser || null;
+  if (!actor?.id || !actor?.sessionToken) throw new Error("Sesion invalida para Planificacion.");
+  const res = await nikiProtectedFetch(`${SUPABASE_URL}/functions/v1/planificacion-personal-niki`, {
+    method:"POST",
+    headers:{ apikey:SUPABASE_KEY, Authorization:`Bearer ${SUPABASE_KEY}`, "Content-Type":"application/json" },
+    body:JSON.stringify({ action, actor_id:actor.id, session_token:actor.sessionToken, ...payload }),
+  });
+  const txt = await res.text();
+  let data = {};
+  try { data = txt ? JSON.parse(txt) : {}; } catch { data = {}; }
+  if (!res.ok || data?.ok === false) {
+    const detail = edgeErrorMessage(data?.error, txt || "Error al gestionar la planificacion.");
+    throw new Error(`${detail}${res.status ? ` (HTTP ${res.status})` : ""}`);
+  }
   return data;
 };
 
@@ -1086,7 +1142,7 @@ return data;
   getReclutamientoEventoDetalle: async (instanciaId) => (await recruitmentEdge("event_detail",{instancia_id:instanciaId})).detail,
   getReclutamientoProcesoCandidata: async (candidataId) => (await recruitmentEdge("candidate_process",{candidata_id:candidataId})).data,
   getReclutamientoAprobacionesPendientes: async () => (await recruitmentEdge("pending_approvals")).candidatas || [],
-  saveReclutamientoCandidataCompleta: (candidate,localIds,servicios,busquedaIds=null) => recruitmentEdge("save_candidate",{candidate,local_ids:localIds||[],servicios:servicios||[],...(Array.isArray(busquedaIds)?{busqueda_ids:busquedaIds}:{})}),
+  saveReclutamientoCandidataCompleta: (candidate,localIds,servicios,busquedaIds=null) => recruitmentCandidateEdge({candidate,local_ids:localIds||[],servicios:servicios||[],...(Array.isArray(busquedaIds)?{busqueda_ids:busquedaIds}:{})}),
   saveReclutamientoBusqueda: (search,localIds,servicios,candidataIds=null) => recruitmentEdge("search_save",{search,local_ids:localIds||[],servicios:servicios||[],...(Array.isArray(candidataIds)?{candidata_ids:candidataIds}:{})}),
   setReclutamientoBusquedaCandidata: (busquedaId,candidataId,activo=true) => recruitmentEdge("search_candidate_set",{busqueda_id:busquedaId,candidata_id:candidataId,activo}),
   updateReclutamientoBusquedaEstado: (id,estado) => recruitmentEdge("search_status",{id,estado}),
@@ -1112,7 +1168,7 @@ return data;
   deleteReclutamientoEtapaPlantilla: id => recruitmentEdge("config_stage_delete",{id}),
   marcarReclutamientoIncorporada: (candidataId,userId) => recruitmentEdge("candidate_incorporated",{candidata_id:candidataId,user_id:userId}),
   createReclutamientoAuditoria: async () => null,
-  reclutamientoStorageRequest: async ({action,actor,candidataId,instanciaId=null,tipo="otro",file=null,path="",expiresIn=600}) => { const fd=new FormData();fd.append("action",action);fd.append("actor_id",String(actor?.id||""));fd.append("session_token",String(actor?.sessionToken||""));fd.append("candidata_id",String(candidataId||""));if(instanciaId)fd.append("instancia_id",String(instanciaId));if(tipo)fd.append("tipo",tipo);if(path)fd.append("path",path);fd.append("expires_in",String(expiresIn));if(file)fd.append("file",file,file.name);const res=await nikiProtectedFetch(`${SUPABASE_URL}/functions/v1/reclutamiento-archivos-niki`,{method:"POST",headers:{apikey:SUPABASE_KEY,Authorization:`Bearer ${SUPABASE_KEY}`},body:fd});const txt=await res.text();const data=txt?JSON.parse(txt):{};if(!res.ok||data?.ok===false)throw new Error(data?.error||txt||"Error al gestionar archivo de reclutamiento");return data; },
+  reclutamientoStorageRequest: async ({action,actor,candidataId,instanciaId=null,tipo="otro",file=null,path="",expiresIn=600}) => { const fd=new FormData();fd.append("action",action);fd.append("actor_id",String(actor?.id||""));fd.append("session_token",String(actor?.sessionToken||""));fd.append("candidata_id",String(candidataId||""));if(instanciaId)fd.append("instancia_id",String(instanciaId));if(tipo)fd.append("tipo",tipo);if(path)fd.append("path",path);fd.append("expires_in",String(expiresIn));if(file)fd.append("file",file,file.name);const edgeName=["franquiciado","encargada"].includes(actor?.rol)?"reclutamiento-local-archivos-niki":"reclutamiento-archivos-niki";const res=await nikiProtectedFetch(`${SUPABASE_URL}/functions/v1/${edgeName}`,{method:"POST",headers:{apikey:SUPABASE_KEY,Authorization:`Bearer ${SUPABASE_KEY}`},body:fd});const txt=await res.text();const data=txt?JSON.parse(txt):{};if(!res.ok||data?.ok===false)throw new Error(data?.error||txt||"Error al gestionar archivo de reclutamiento");return data; },
 
   moverManicuraLocal: (payload) => sb("rpc/mover_manicura_local", { method:"POST", body:JSON.stringify(payload), prefer:"" }),
   desactivarManicura: (payload) => sb("rpc/desactivar_manicura", { method:"POST", body:JSON.stringify(payload), prefer:"" }),
@@ -9137,76 +9193,51 @@ function PreliquidacionEncargadas({ data, user }) {
 
 
 function VacacionesEncargadas({ data, user }) {
-  const isApprover=["admin","casa_matriz"].includes(user.rol);
-  const [rows,setRows]=useState([]),[users,setUsers]=useState([]),[loading,setLoading]=useState(true),[err,setErr]=useState("");
-  const [requestModal,setRequestModal]=useState(false),[form,setForm]=useState({fechaInicio:"",fechaFin:"",anio:new Date().getFullYear(),observacion:""});
+  const isApprover=["admin","casa_matriz","franquiciado"].includes(user.rol);
+  const canRequest=["manicura","encargada","casa_matriz"].includes(user.rol) || isEncargadaOperativa(data,user.id) || getActiveManicuraLocalIds(data,user.id).length>0;
+  const canConfigure=["admin","casa_matriz","franquiciado"].includes(user.rol);
+  const [rows,setRows]=useState([]),[users,setUsers]=useState([]),[responsibles,setResponsibles]=useState([]),[loading,setLoading]=useState(true),[err,setErr]=useState("");
+  const [requestModal,setRequestModal]=useState(false),[form,setForm]=useState({fechaInicio:"",fechaFin:"",anio:new Date().getFullYear(),observacion:"",localId:""});
   const [approval,setApproval]=useState(null),[approvalDetail,setApprovalDetail]=useState(null),[segments,setSegments]=useState([]),[periodo,setPeriodo]=useState(""),[saving,setSaving]=useState(false);
   const [bulkReplacement,setBulkReplacement]=useState("");
-  const name=id=>users.find(u=>Number(u.id)===Number(id))?.nombre||(data.users||[]).find(u=>Number(u.id)===Number(id))?.nombre||"Encargada";
+  const [setupModal,setSetupModal]=useState(false),[setup,setSetup]=useState(null),[setupLoading,setSetupLoading]=useState(false),[quotaDraft,setQuotaDraft]=useState({}),[responsibleDraft,setResponsibleDraft]=useState({});
+  const localMap=useMemo(()=>new Map((data.locales||[]).map(l=>[Number(l.id),l])),[data.locales]);
+  const name=id=>users.find(u=>Number(u.id)===Number(id))?.nombre||(data.users||[]).find(u=>Number(u.id)===Number(id))?.nombre||"Equipo Niki";
   const fmtDate=v=>String(v||"").split("-").reverse().join("/");
-  const vacationDays=(a,b)=>{
-    const pa=String(a||"").split("-").map(Number),pb=String(b||"").split("-").map(Number);
-    if(pa.length!==3||pb.length!==3||pa.some(x=>!Number.isFinite(x))||pb.some(x=>!Number.isFinite(x)))return 0;
-    const diff=Date.UTC(pb[0],pb[1]-1,pb[2])-Date.UTC(pa[0],pa[1]-1,pa[2]);
-    return diff>=0?Math.floor(diff/86400000)+1:0;
-  };
+  const profileLabel=p=>p==="manicura"?"Manicura":p==="encargada"?"Encargada":p==="casa_matriz"?"Casa Matriz":p;
+  const rowProfiles=r=>Array.isArray(r.perfiles_impactados)&&r.perfiles_impactados.length?r.perfiles_impactados:["encargada"];
+  const vacationDays=(a,b)=>{const pa=String(a||"").split("-").map(Number),pb=String(b||"").split("-").map(Number);if(pa.length!==3||pb.length!==3||pa.some(x=>!Number.isFinite(x))||pb.some(x=>!Number.isFinite(x)))return 0;const diff=Date.UTC(pb[0],pb[1]-1,pb[2])-Date.UTC(pa[0],pa[1]-1,pa[2]);return diff>=0?Math.floor(diff/86400000)+1:0;};
   const requestDays=vacationDays(form.fechaInicio,form.fechaFin);
   const approvalDays=approval?(approvalDetail?.days?.length||vacationDays(approval.fecha_inicio,approval.fecha_fin)):0;
-  const load=useCallback(async()=>{setLoading(true);setErr("");try{const r=await encargadasVacacionesEdge("list");setRows(r.rows||[]);setUsers(r.users||[]);}catch(e){setErr(e.message||String(e));}finally{setLoading(false);}},[]);
+  const requestLocalIds=useMemo(()=>Array.from(new Set([...getActiveManicuraLocalIds(data,user.id),...getEncargadaOperationalLocalIds(data,user.id)].map(Number).filter(Boolean))),[data,user.id]);
+  const requestLocals=(data.locales||[]).filter(l=>requestLocalIds.includes(Number(l.id))&&localActivo(l));
+  useEffect(()=>{if(requestLocals.length===1&&!form.localId)setForm(f=>({...f,localId:String(requestLocals[0].id)}));},[requestLocals.length]);
+  const load=useCallback(async()=>{setLoading(true);setErr("");try{const r=await encargadasVacacionesEdge("list");setRows(r.rows||[]);setUsers(r.users||[]);setResponsibles(r.responsibles||[]);}catch(e){setErr(e.message||String(e));}finally{setLoading(false);}},[]);
   useEffect(()=>{load();},[load]);
   const closeApproval=()=>{setApproval(null);setApprovalDetail(null);setSegments([]);setBulkReplacement("");};
   const openApproval=async r=>{setSaving(true);try{const d=await encargadasVacacionesEdge("detail",{id:r.id});setApproval(r);setApprovalDetail(d);setPeriodo(r.fecha_inicio.slice(0,7));setBulkReplacement("");setSegments((d.plan||[]).map(p=>({local_id:Number(p.local_id),fecha:p.fecha,hora_desde:String(p.hora_desde).slice(0,5),hora_hasta:String(p.hora_hasta).slice(0,5),reemplazo_user_id:""})));}catch(e){notifyToast(e.message||"No se pudo abrir la solicitud.","error");}finally{setSaving(false);}};
-  const submitRequest=async()=>{try{setSaving(true);if(!form.fechaInicio||!form.fechaFin)throw new Error("Indicá fecha de inicio y fin.");await encargadasVacacionesEdge("create",{fecha_inicio:form.fechaInicio,fecha_fin:form.fechaFin,anio_vacaciones:Number(form.anio),observacion:form.observacion});setRequestModal(false);setForm({fechaInicio:"",fechaFin:"",anio:new Date().getFullYear(),observacion:""});await load();notifyToast("Solicitud de vacaciones enviada.","success");}catch(e){notifyToast(e.message||"No se pudo enviar la solicitud.","error");}finally{setSaving(false);}};
-  const approve=async()=>{try{setSaving(true);if((approvalDetail?.missing_confirmations||[]).length)throw new Error("Hay días de la solicitud cuya planificación todavía no está confirmada.");if(segments.some(s=>!s.reemplazo_user_id))throw new Error("Definí un reemplazo para todos los turnos.");await encargadasVacacionesEdge("approve",{id:approval.id,periodo_liquidacion:periodo,segments:segments.map(s=>({...s,reemplazo_user_id:Number(s.reemplazo_user_id)}))});closeApproval();await load();notifyToast("Vacaciones aprobadas y coberturas generadas.","success");}catch(e){notifyToast(e.message||"No se pudo aprobar.","error");}finally{setSaving(false);}};
+  const submitRequest=async()=>{try{setSaving(true);if(!form.fechaInicio||!form.fechaFin)throw new Error("Indicá fecha de inicio y fin.");if(user.rol!=="casa_matriz"&&requestLocals.length>1&&!form.localId)throw new Error("Seleccioná el local de referencia.");await encargadasVacacionesEdge("create",{fecha_inicio:form.fechaInicio,fecha_fin:form.fechaFin,anio_vacaciones:Number(form.anio),observacion:form.observacion,local_id_solicitud:form.localId?Number(form.localId):null});setRequestModal(false);setForm({fechaInicio:"",fechaFin:"",anio:new Date().getFullYear(),observacion:"",localId:requestLocals.length===1?String(requestLocals[0].id):""});await load();notifyToast("Solicitud de vacaciones enviada.","success");}catch(e){notifyToast(e.message||"No se pudo enviar la solicitud.","error");}finally{setSaving(false);}};
+  const approve=async()=>{try{setSaving(true);if((approvalDetail?.missing_confirmations||[]).length)throw new Error("Hay días de la solicitud cuya planificación todavía no está confirmada.");if(approvalDetail?.requires_coverage&&segments.some(s=>!s.reemplazo_user_id))throw new Error("Definí un reemplazo para todos los turnos.");await encargadasVacacionesEdge("approve",{id:approval.id,periodo_liquidacion:periodo,segments:segments.map(s=>({...s,reemplazo_user_id:Number(s.reemplazo_user_id)}))});closeApproval();await load();notifyToast("Vacaciones aprobadas.","success");}catch(e){notifyToast(e.message||"No se pudo aprobar.","error");}finally{setSaving(false);}};
   const reject=async r=>{try{setSaving(true);await encargadasVacacionesEdge("reject",{id:r.id});await load();notifyToast("Solicitud rechazada.","success");}catch(e){notifyToast(e.message||"No se pudo rechazar.","error");}finally{setSaving(false);}};
   const cancel=async r=>{try{setSaving(true);await encargadasVacacionesEdge("cancel",{id:r.id});await load();notifyToast("Solicitud cancelada.","success");}catch(e){notifyToast(e.message||"No se pudo cancelar.","error");}finally{setSaving(false);}};
   const badgeColor=s=>s==="aprobada"?"success":s==="rechazada"||s==="cancelada"?"danger":"amber";
-  const applyBulkReplacement=v=>{
-    setBulkReplacement(v);
-    if(v)setSegments(prev=>prev.map(x=>({...x,reemplazo_user_id:v})));
-  };
+  const applyBulkReplacement=v=>{setBulkReplacement(v);if(v)setSegments(prev=>prev.map(x=>({...x,reemplazo_user_id:v})));};
+  const openSetup=async()=>{setSetupModal(true);setSetupLoading(true);try{const d=await encargadasVacacionesEdge("setup");setSetup(d);const q={};(d.quotas||[]).forEach(x=>{q[`${x.perfil}|${x.local_id==null?"cm":Number(x.local_id)}`]=Number(x.cupo_simultaneo)});(d.locals||[]).forEach(l=>{if(q[`manicura|${l.id}`]==null)q[`manicura|${l.id}`]=1;if(q[`encargada|${l.id}`]==null)q[`encargada|${l.id}`]=1;});if(q["casa_matriz|cm"]==null)q["casa_matriz|cm"]=1;setQuotaDraft(q);const rr={};(d.locals||[]).forEach(l=>rr[l.id]=(d.responsibles||[]).filter(x=>Number(x.local_id)===Number(l.id)).map(x=>Number(x.user_id)));setResponsibleDraft(rr);}catch(e){notifyToast(e.message||"No se pudo cargar la configuración.","error");setSetupModal(false);}finally{setSetupLoading(false);}};
+  const saveSetup=async()=>{if(!setup)return;setSetupLoading(true);try{for(const l of setup.locals||[]){for(const p of ["manicura","encargada"]){await encargadasVacacionesEdge("save_quota",{local_id:Number(l.id),perfil:p,cupo_simultaneo:Number(quotaDraft[`${p}|${l.id}`]??1)});}}if(setup.can_assign_responsibles){await encargadasVacacionesEdge("save_quota",{local_id:null,perfil:"casa_matriz",cupo_simultaneo:Number(quotaDraft["casa_matriz|cm"]??1)});for(const l of setup.locals||[])await encargadasVacacionesEdge("set_responsibles",{local_id:Number(l.id),user_ids:responsibleDraft[l.id]||[]});}setSetupModal(false);notifyToast("Cupos de vacaciones guardados.","success");}catch(e){notifyToast(e.message||"No se pudo guardar la configuración.","error");}finally{setSetupLoading(false);}};
+  const capacitySummary=approvalDetail?.capacity||[];
+  const hasCapacityError=capacitySummary.some(x=>x.excede);
+  const responsibleNamesFor=lid=>(responsibles||[]).filter(x=>Number(x.local_id)===Number(lid)).map(x=>(data.users||[]).find(u=>Number(u.id)===Number(x.user_id))?.nombre).filter(Boolean);
   return <div>
     <div style={{display:"flex",justifyContent:"space-between",gap:12,alignItems:"flex-start",flexWrap:"wrap",marginBottom:14}}>
-      <div><h2 style={{margin:0,fontSize:19}}>Vacaciones de encargadas</h2><p style={{margin:"4px 0 0",fontSize:12,color:"var(--color-text-secondary)"}}>Las vacaciones aprobadas impactan automáticamente en horarios, coberturas e Informe Diario.</p></div>
-      <Btn onClick={()=>setRequestModal(true)}>+ Solicitar vacaciones</Btn>
+      <div><h2 style={{margin:0,fontSize:19}}>Vacaciones</h2><p style={{margin:"4px 0 0",fontSize:12,color:"var(--color-text-secondary)"}}>Cupos por local para manicuras y encargadas, cupo de Casa Matriz y autorización por Casa Matriz o Franquiciado en su sucursal.</p></div>
+      <div style={{display:"flex",gap:8,flexWrap:"wrap"}}>{canConfigure&&<Btn variant="secondary" onClick={openSetup}>⚙ Cupos y responsables</Btn>}{canRequest&&<Btn onClick={()=>setRequestModal(true)}>+ Solicitar vacaciones</Btn>}</div>
     </div>
     {err&&<div style={{padding:10,borderRadius:9,background:COLORS.dangerLight,color:COLORS.danger,marginBottom:10}}>{err}</div>}
-    {isApprover&&<Card style={{padding:12,marginBottom:12}}>
-      <strong style={{fontSize:13}}>Pendientes de aprobación</strong>
-      <div style={{display:"grid",gap:7,marginTop:8}}>{rows.filter(r=>r.estado==="solicitada").map(r=>{const dias=vacationDays(r.fecha_inicio,r.fecha_fin);return <div key={r.id} style={{display:"grid",gridTemplateColumns:"1fr auto auto",gap:8,alignItems:"center",padding:"8px 9px",border:"1px solid rgba(120,120,120,.14)",borderRadius:9}}><div><strong style={{fontSize:12}}>{name(r.user_id)}</strong><div style={{fontSize:10,color:"var(--color-text-secondary)"}}>{fmtDate(r.fecha_inicio)} → {fmtDate(r.fecha_fin)} · <strong>{dias} día{dias===1?"":"s"} corrido{dias===1?"":"s"}</strong></div></div><Btn size="sm" onClick={()=>openApproval(r)}>Revisar</Btn><Btn size="sm" variant="danger" onClick={()=>reject(r)}>Rechazar</Btn></div>})}{!rows.some(r=>r.estado==="solicitada")&&<span style={{fontSize:11,color:"var(--color-text-secondary)"}}>No hay solicitudes pendientes.</span>}</div>
-    </Card>}
-    <Card style={{padding:0,overflow:"hidden"}}>
-      <div style={{padding:"11px 13px",borderBottom:"1px solid rgba(120,120,120,.12)"}}><strong>Historial</strong></div>
-      {loading?<p style={{padding:13}}>Cargando...</p>:<div>{rows.map(r=>{const dias=vacationDays(r.fecha_inicio,r.fecha_fin);return <div key={r.id} style={{display:"grid",gridTemplateColumns:"minmax(150px,1fr) minmax(220px,1fr) 110px auto",gap:9,alignItems:"center",padding:"10px 13px",borderTop:"1px solid rgba(120,120,120,.08)"}} className="niki-mobile-one-column"><strong style={{fontSize:12}}>{name(r.user_id)}</strong><span style={{fontSize:11}}>{fmtDate(r.fecha_inicio)} → {fmtDate(r.fecha_fin)} · {dias} día{dias===1?"":"s"}</span><Badge color={badgeColor(r.estado)}>{r.estado}</Badge><div>{(r.estado==="solicitada"&&(!isApprover||Number(r.user_id)===Number(user.id)))&&<Btn size="sm" variant="ghost" onClick={()=>cancel(r)}>Cancelar</Btn>}</div></div>})}</div>}
-    </Card>
-    {requestModal&&<Modal title="Solicitar vacaciones" onClose={()=>setRequestModal(false)} width={520}>
-      <div style={{display:"grid",gap:12}}>
-        <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10}}><ModalInput label="Desde" type="date" value={form.fechaInicio} onChange={v=>setForm(f=>({...f,fechaInicio:v}))}/><ModalInput label="Hasta" type="date" value={form.fechaFin} onChange={v=>setForm(f=>({...f,fechaFin:v}))}/></div>
-        {requestDays>0&&<div style={{display:"flex",alignItems:"center",justifyContent:"space-between",gap:8,padding:"8px 10px",borderRadius:9,background:COLORS.infoLight,color:COLORS.info,fontSize:11}}><span>Duración solicitada</span><strong>{requestDays} día{requestDays===1?"":"s"} corrido{requestDays===1?"":"s"}</strong></div>}
-        <ModalInput label="Año de vacaciones" type="number" value={form.anio} onChange={v=>setForm(f=>({...f,anio:v}))}/>
-        <div><label style={{fontSize:12,fontWeight:700}}>Observación</label><textarea value={form.observacion} onChange={e=>setForm(f=>({...f,observacion:e.target.value}))} style={{width:"100%",boxSizing:"border-box",minHeight:76,marginTop:5,border:"1px solid #ddd",borderRadius:8,padding:8}}/></div>
-        <div style={{display:"flex",justifyContent:"flex-end",gap:8}}><Btn variant="secondary" onClick={()=>setRequestModal(false)}>Cancelar</Btn><Btn onClick={submitRequest} disabled={saving}>{saving?"Enviando...":"Enviar solicitud"}</Btn></div>
-      </div>
-    </Modal>}
-    {approval&&approvalDetail&&<Modal title={`Aprobar vacaciones · ${name(approval.user_id)}`} onClose={closeApproval} width={780}>
-      <div style={{display:"grid",gap:9}}>
-        {(approvalDetail.missing_confirmations||[]).length>0&&<div style={{padding:8,borderRadius:9,background:COLORS.dangerLight,color:COLORS.danger,fontSize:10.5,fontWeight:700}}>Hay planificación sin confirmar dentro del período. Confirmala antes de aprobar las vacaciones.</div>}
-        <div style={{display:"grid",gridTemplateColumns:"1fr 175px",gap:10,alignItems:"end"}} className="niki-mobile-one-column">
-          <div><div style={{display:"flex",gap:8,alignItems:"center",flexWrap:"wrap"}}><strong>{fmtDate(approval.fecha_inicio)} → {fmtDate(approval.fecha_fin)}</strong><span style={{padding:"3px 8px",borderRadius:999,background:COLORS.infoLight,color:COLORS.info,fontSize:10,fontWeight:800}}>{approvalDays} día{approvalDays===1?"":"s"} corrido{approvalDays===1?"":"s"}</span></div><p style={{margin:"5px 0 0",fontSize:9.5,lineHeight:1.35,color:"var(--color-text-secondary)"}}>Definí quién cubre cada turno. Si una encargada ya trabaja en ese local, la cobertura se suma sin modificar su plan base.</p></div>
-          <ModalInput label="Mes de liquidación" type="month" value={periodo} onChange={setPeriodo}/>
-        </div>
-        {segments.length>0&&<div style={{display:"grid",gridTemplateColumns:"1fr 150px",gap:8,alignItems:"end",padding:"8px 9px",border:"1px solid rgba(114,36,62,.12)",borderRadius:9,background:"var(--color-background-secondary)"}} className="niki-mobile-one-column">
-          <div><label style={{fontSize:10,fontWeight:800,display:"block",marginBottom:4}}>Reemplazo masivo</label><Select value={bulkReplacement} onChange={applyBulkReplacement} style={{fontSize:11,padding:"5px 7px"}}><option value="">Seleccionar y aplicar a todos...</option>{(approvalDetail.candidates||[]).map(c=><option key={c.id} value={c.id}>{c.nombre}</option>)}</Select></div>
-          <div style={{fontSize:9.5,lineHeight:1.35,color:"var(--color-text-secondary)"}}>Al seleccionar se asigna a todos los turnos. Después podés cambiar excepciones abajo.</div>
-        </div>}
-        <div style={{maxHeight:300,overflowY:"auto",border:segments.length?"1px solid rgba(120,120,120,.14)":"none",borderRadius:9}}>
-          {segments.length>0&&<div style={{display:"grid",gridTemplateColumns:"82px minmax(110px,1fr) 88px minmax(155px,190px)",gap:6,padding:"6px 7px",position:"sticky",top:0,zIndex:2,background:"var(--color-background-primary)",borderBottom:"1px solid rgba(120,120,120,.12)",fontSize:9,fontWeight:800,color:"var(--color-text-secondary)"}} className="niki-mobile-one-column"><span>Fecha</span><span>Local</span><span>Horario</span><span>Reemplazo</span></div>}
-          {segments.map((s,i)=>{const local=data.locales.find(l=>Number(l.id)===Number(s.local_id));return <div key={`${s.local_id}-${s.fecha}-${i}`} style={{display:"grid",gridTemplateColumns:"82px minmax(110px,1fr) 88px minmax(155px,190px)",gap:6,alignItems:"center",padding:"5px 7px",borderTop:i?"1px solid rgba(120,120,120,.08)":"none",minHeight:34}} className="niki-mobile-one-column"><span style={{fontSize:10,fontWeight:700}}>{fmtDate(s.fecha)}</span><span style={{fontSize:10}}>{local?.nombre||"Local"}</span><span style={{fontSize:10,whiteSpace:"nowrap"}}>{s.hora_desde}–{s.hora_hasta}</span><Select value={s.reemplazo_user_id||""} onChange={v=>setSegments(prev=>prev.map((x,j)=>j===i?{...x,reemplazo_user_id:v}:x))} style={{fontSize:10.5,padding:"4px 6px"}}><option value="">Seleccionar...</option>{(approvalDetail.candidates||[]).map(c=><option key={c.id} value={c.id}>{c.nombre}</option>)}</Select></div>})}
-          {!segments.length&&<div style={{padding:9,background:COLORS.infoLight,borderRadius:8,fontSize:11}}>No hay turnos confirmados para cubrir en este período.</div>}
-        </div>
-        <div style={{display:"flex",justifyContent:"flex-end",gap:8,paddingTop:2}}><Btn variant="secondary" onClick={closeApproval}>Cancelar</Btn><Btn onClick={approve} disabled={saving||(approvalDetail.missing_confirmations||[]).length>0}>{saving?"Aprobando...":"✓ Aprobar y generar coberturas"}</Btn></div>
-      </div>
-    </Modal>}
+    {isApprover&&<Card style={{padding:12,marginBottom:12}}><div style={{display:"flex",justifyContent:"space-between",gap:8,alignItems:"baseline"}}><strong style={{fontSize:13}}>Pendientes de aprobación</strong><span style={{fontSize:10,color:"var(--color-text-secondary)"}}>{rows.filter(r=>r.estado==="solicitada").length} pendiente(s)</span></div><div style={{display:"grid",gap:7,marginTop:8}}>{rows.filter(r=>r.estado==="solicitada").map(r=>{const dias=vacationDays(r.fecha_inicio,r.fecha_fin),local=localMap.get(Number(r.local_id_solicitud)),resp=responsibleNamesFor(r.local_id_solicitud);return <div key={r.id} style={{display:"grid",gridTemplateColumns:"minmax(180px,1fr) minmax(190px,1fr) auto auto",gap:8,alignItems:"center",padding:"9px 10px",border:"1px solid rgba(120,120,120,.14)",borderRadius:10}} className="niki-mobile-one-column"><div><strong style={{fontSize:12}}>{name(r.user_id)}</strong><div style={{fontSize:9.5,color:"var(--color-text-secondary)"}}>{rowProfiles(r).map(profileLabel).join(" + ")}{local?` · ${local.nombre}`:" · Casa Matriz"}</div></div><div style={{fontSize:10.5}}>{fmtDate(r.fecha_inicio)} → {fmtDate(r.fecha_fin)} · <strong>{dias} día{dias===1?"":"s"}</strong>{resp.length>0&&<div style={{fontSize:9,color:COLORS.info,marginTop:2}}>Responsable CM: {resp.join(", ")}</div>}</div><Btn size="sm" onClick={()=>openApproval(r)}>Revisar</Btn><Btn size="sm" variant="danger" onClick={()=>reject(r)}>Rechazar</Btn></div>})}{!rows.some(r=>r.estado==="solicitada")&&<span style={{fontSize:11,color:"var(--color-text-secondary)"}}>No hay solicitudes pendientes.</span>}</div></Card>}
+    <Card style={{padding:0,overflow:"hidden"}}><div style={{padding:"11px 13px",borderBottom:"1px solid rgba(120,120,120,.12)"}}><strong>Historial</strong></div>{loading?<p style={{padding:13}}>Cargando...</p>:<div>{rows.map(r=>{const dias=vacationDays(r.fecha_inicio,r.fecha_fin),local=localMap.get(Number(r.local_id_solicitud));return <div key={r.id} style={{display:"grid",gridTemplateColumns:"minmax(150px,1fr) minmax(210px,1fr) minmax(130px,.7fr) 110px auto",gap:9,alignItems:"center",padding:"10px 13px",borderTop:"1px solid rgba(120,120,120,.08)"}} className="niki-mobile-one-column"><div><strong style={{fontSize:12}}>{name(r.user_id)}</strong><div style={{fontSize:9.5,color:"var(--color-text-secondary)"}}>{rowProfiles(r).map(profileLabel).join(" + ")}</div></div><span style={{fontSize:11}}>{fmtDate(r.fecha_inicio)} → {fmtDate(r.fecha_fin)} · {dias} día{dias===1?"":"s"}</span><span style={{fontSize:10.5}}>{local?.nombre||"Casa Matriz"}</span><Badge color={badgeColor(r.estado)}>{r.estado}</Badge><div>{r.estado==="solicitada"&&Number(r.user_id)===Number(user.id)&&<Btn size="sm" variant="ghost" onClick={()=>cancel(r)}>Cancelar</Btn>}</div></div>})}</div>}</Card>
+    {requestModal&&<Modal title="Solicitar vacaciones" onClose={()=>setRequestModal(false)} width={560}><div style={{display:"grid",gap:12}}>{user.rol!=="casa_matriz"&&requestLocals.length>0&&<ModalSelect label="Local de referencia" value={form.localId} onChange={v=>setForm(f=>({...f,localId:v}))}><option value="">Seleccionar...</option>{requestLocals.map(l=><option key={l.id} value={l.id}>{l.nombre}</option>)}</ModalSelect>}<div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10}}><ModalInput label="Desde" type="date" value={form.fechaInicio} onChange={v=>setForm(f=>({...f,fechaInicio:v}))}/><ModalInput label="Hasta" type="date" value={form.fechaFin} onChange={v=>setForm(f=>({...f,fechaFin:v}))}/></div>{requestDays>0&&<div style={{display:"flex",alignItems:"center",justifyContent:"space-between",gap:8,padding:"8px 10px",borderRadius:9,background:COLORS.infoLight,color:COLORS.info,fontSize:11}}><span>Duración solicitada</span><strong>{requestDays} día{requestDays===1?"":"s"} corrido{requestDays===1?"":"s"}</strong></div>}<ModalInput label="Año de vacaciones" type="number" value={form.anio} onChange={v=>setForm(f=>({...f,anio:v}))}/><div><label style={{fontSize:12,fontWeight:700}}>Observación</label><textarea value={form.observacion} onChange={e=>setForm(f=>({...f,observacion:e.target.value}))} style={{width:"100%",boxSizing:"border-box",minHeight:76,marginTop:5,border:"1px solid #ddd",borderRadius:8,padding:8}}/></div><div style={{display:"flex",justifyContent:"flex-end",gap:8}}><Btn variant="secondary" onClick={()=>setRequestModal(false)}>Cancelar</Btn><Btn onClick={submitRequest} disabled={saving}>{saving?"Enviando...":"Enviar solicitud"}</Btn></div></div></Modal>}
+    {approval&&approvalDetail&&<Modal title={`Aprobar vacaciones · ${name(approval.user_id)}`} onClose={closeApproval} width={860}><div style={{display:"grid",gap:10}}>{(approvalDetail.missing_confirmations||[]).length>0&&<div style={{padding:8,borderRadius:9,background:COLORS.dangerLight,color:COLORS.danger,fontSize:10.5,fontWeight:700}}>Hay planificación de encargadas sin confirmar dentro del período.</div>}<div style={{display:"grid",gridTemplateColumns:"1fr 175px",gap:10,alignItems:"end"}} className="niki-mobile-one-column"><div><div style={{display:"flex",gap:8,alignItems:"center",flexWrap:"wrap"}}><strong>{fmtDate(approval.fecha_inicio)} → {fmtDate(approval.fecha_fin)}</strong><Badge color="info">{rowProfiles(approval).map(profileLabel).join(" + ")}</Badge><span style={{padding:"3px 8px",borderRadius:999,background:COLORS.infoLight,color:COLORS.info,fontSize:10,fontWeight:800}}>{approvalDays} día{approvalDays===1?"":"s"}</span></div><p style={{margin:"5px 0 0",fontSize:9.5,lineHeight:1.35,color:"var(--color-text-secondary)"}}>El cupo se controla por día y perfil. Para encargadas se mantiene además la cobertura de los turnos confirmados.</p></div><ModalInput label="Mes de liquidación" type="month" value={periodo} onChange={setPeriodo}/></div><div style={{border:"1px solid rgba(120,120,120,.14)",borderRadius:10,overflow:"hidden"}}><div style={{padding:"7px 9px",background:"var(--color-background-secondary)",fontSize:10,fontWeight:800}}>Control de cupos</div><div style={{maxHeight:190,overflowY:"auto"}}>{capacitySummary.map((c,i)=><div key={`${c.fecha}-${c.perfil}-${c.local_id}-${i}`} style={{display:"grid",gridTemplateColumns:"90px 110px 1fr 120px",gap:8,padding:"6px 9px",borderTop:"1px solid rgba(120,120,120,.08)",fontSize:10,alignItems:"center",background:c.excede?COLORS.dangerLight:"#fff"}} className="niki-mobile-one-column"><strong>{fmtDate(c.fecha)}</strong><span>{profileLabel(c.perfil)}</span><span>{c.local_id?localMap.get(Number(c.local_id))?.nombre||"Local":"Casa Matriz"}</span><span style={{fontWeight:800,color:c.excede?COLORS.danger:c.cupo==null?COLORS.amber:COLORS.success}}>{c.cupo==null?"Sin cupo configurado":`${c.proyectado}/${c.cupo}${c.excede?" · EXCEDE":""}`}</span></div>)}</div></div>{approvalDetail.requires_coverage&&<>{segments.length>0&&<div style={{display:"grid",gridTemplateColumns:"1fr 150px",gap:8,alignItems:"end",padding:"8px 9px",border:"1px solid rgba(114,36,62,.12)",borderRadius:9,background:"var(--color-background-secondary)"}} className="niki-mobile-one-column"><div><label style={{fontSize:10,fontWeight:800,display:"block",marginBottom:4}}>Reemplazo masivo</label><Select value={bulkReplacement} onChange={applyBulkReplacement} style={{fontSize:11,padding:"5px 7px"}}><option value="">Seleccionar y aplicar a todos...</option>{(approvalDetail.candidates||[]).map(c=><option key={c.id} value={c.id}>{c.nombre}</option>)}</Select></div><div style={{fontSize:9.5,color:"var(--color-text-secondary)"}}>Después podés cambiar excepciones.</div></div>}<div style={{maxHeight:280,overflowY:"auto",border:segments.length?"1px solid rgba(120,120,120,.14)":"none",borderRadius:9}}>{segments.map((s,i)=>{const local=localMap.get(Number(s.local_id));return <div key={`${s.local_id}-${s.fecha}-${i}`} style={{display:"grid",gridTemplateColumns:"82px minmax(110px,1fr) 88px minmax(155px,190px)",gap:6,alignItems:"center",padding:"5px 7px",borderTop:i?"1px solid rgba(120,120,120,.08)":"none",minHeight:34}} className="niki-mobile-one-column"><span style={{fontSize:10,fontWeight:700}}>{fmtDate(s.fecha)}</span><span style={{fontSize:10}}>{local?.nombre||"Local"}</span><span style={{fontSize:10,whiteSpace:"nowrap"}}>{s.hora_desde}–{s.hora_hasta}</span><Select value={s.reemplazo_user_id||""} onChange={v=>setSegments(prev=>prev.map((x,j)=>j===i?{...x,reemplazo_user_id:v}:x))} style={{fontSize:10.5,padding:"4px 6px"}}><option value="">Seleccionar...</option>{(approvalDetail.candidates||[]).map(c=><option key={c.id} value={c.id}>{c.nombre}</option>)}</Select></div>})}{!segments.length&&<div style={{padding:9,background:COLORS.infoLight,borderRadius:8,fontSize:11}}>No hay turnos confirmados para cubrir.</div>}</div></>}<div style={{display:"flex",justifyContent:"flex-end",gap:8,paddingTop:2}}><Btn variant="secondary" onClick={closeApproval}>Cancelar</Btn><Btn onClick={approve} disabled={saving||hasCapacityError||(approvalDetail.missing_confirmations||[]).length>0}>{saving?"Aprobando...":hasCapacityError?"Sin cupo disponible":"✓ Aprobar vacaciones"}</Btn></div></div></Modal>}
+    {setupModal&&<Modal title="Cupos de vacaciones y responsables" onClose={()=>!setupLoading&&setSetupModal(false)} width={900}><div style={{display:"grid",gap:12}}>{setupLoading&&!setup?<p>Cargando...</p>:setup&&<><div style={{padding:"9px 10px",borderRadius:9,background:COLORS.infoLight,color:COLORS.info,fontSize:11}}>Casa Matriz puede configurar toda la red. Franquiciado configura únicamente sus sucursales. Los responsables de Casa Matriz ordenan el seguimiento, pero cualquier usuario de Casa Matriz puede autorizar.</div>{setup.can_assign_responsibles&&<div style={{display:"grid",gridTemplateColumns:"1fr 130px",gap:10,alignItems:"end",padding:"10px 11px",border:"1px solid rgba(120,120,120,.14)",borderRadius:10}}><div><strong style={{fontSize:12}}>Casa Matriz</strong><p style={{fontSize:10,color:"var(--color-text-secondary)",margin:"3px 0 0"}}>Cantidad máxima de personas de Casa Matriz de vacaciones al mismo tiempo.</p></div><ModalInput label="Cupo" type="number" value={quotaDraft["casa_matriz|cm"]??1} onChange={v=>setQuotaDraft(q=>({...q,["casa_matriz|cm"]:v}))}/></div>}<div style={{maxHeight:430,overflowY:"auto",border:"1px solid rgba(120,120,120,.14)",borderRadius:10}}>{(setup.locals||[]).map(l=><div key={l.id} style={{display:"grid",gridTemplateColumns:"minmax(150px,1fr) 120px 120px minmax(240px,1.4fr)",gap:10,padding:"9px 10px",borderTop:"1px solid rgba(120,120,120,.08)",alignItems:"center"}} className="niki-mobile-one-column"><strong style={{fontSize:12}}>{l.nombre}</strong><ModalInput label="Manicuras" type="number" value={quotaDraft[`manicura|${l.id}`]??1} onChange={v=>setQuotaDraft(q=>({...q,[`manicura|${l.id}`]:v}))}/><ModalInput label="Encargadas" type="number" value={quotaDraft[`encargada|${l.id}`]??1} onChange={v=>setQuotaDraft(q=>({...q,[`encargada|${l.id}`]:v}))}/><div>{setup.can_assign_responsibles?<><label style={{fontSize:10,fontWeight:800}}>Responsables Casa Matriz</label><div style={{display:"flex",gap:5,flexWrap:"wrap",marginTop:4}}>{(setup.casa_matriz_users||[]).map(cm=>{const on=(responsibleDraft[l.id]||[]).includes(Number(cm.id));return <button key={cm.id} type="button" onClick={()=>setResponsibleDraft(d=>({...d,[l.id]:on?(d[l.id]||[]).filter(x=>Number(x)!==Number(cm.id)):[...(d[l.id]||[]),Number(cm.id)]}))} style={{border:`1px solid ${on?COLORS.pink:"#ddd"}`,background:on?COLORS.pinkLight:"#fff",borderRadius:999,padding:"4px 7px",fontSize:9.5,cursor:"pointer"}}>{on?"✓ ":""}{cm.nombre}</button>})}</div></>:<span style={{fontSize:10,color:"var(--color-text-secondary)"}}>Administrado por el franquiciado.</span>}</div></div>)}</div><div style={{display:"flex",justifyContent:"flex-end",gap:8}}><Btn variant="secondary" onClick={()=>setSetupModal(false)}>Cancelar</Btn><Btn onClick={saveSetup} disabled={setupLoading}>{setupLoading?"Guardando...":"Guardar configuración"}</Btn></div></>}</div></Modal>}
   </div>;
 }
 
@@ -10614,6 +10645,124 @@ function ReclamosPage({ data, user }) {
   </div>;
 }
 
+async function createInformeDiarioPng(report, fileName = "informe-diario.png") {
+  const WIDTH = 840;
+  const SCALE = 1.5;
+  const PAD = 22;
+  const GAP = 12;
+  const CONTENT_W = WIDTH - PAD * 2;
+  const FONT_FAMILY = 'Arial, sans-serif';
+  const measureCanvas = document.createElement("canvas");
+  const measureCtx = measureCanvas.getContext("2d");
+
+  const setFont = (ctx, size, weight = 400) => { ctx.font = `${weight} ${size}px ${FONT_FAMILY}`; };
+  const wrapLines = (text, maxWidth, size = 12.5, weight = 400) => {
+    const value = String(text ?? "-").replace(/\r/g, "");
+    setFont(measureCtx, size, weight);
+    const out = [];
+    const paragraphs = value.split("\n");
+    paragraphs.forEach((paragraph, pi) => {
+      if (!paragraph) { out.push(""); return; }
+      const words = paragraph.split(/\s+/);
+      let line = "";
+      words.forEach(word => {
+        const candidate = line ? `${line} ${word}` : word;
+        if (measureCtx.measureText(candidate).width <= maxWidth || !line) line = candidate;
+        else { out.push(line); line = word; }
+      });
+      if (line) out.push(line);
+      if (pi < paragraphs.length - 1 && paragraph) out.push("");
+    });
+    return out.length ? out : ["-"];
+  };
+  const boxHeight = (text, width, opts = {}) => {
+    const bodySize = opts.bodySize || 12.5;
+    const lineH = opts.lineH || 18;
+    const innerW = width - 26;
+    const lines = wrapLines(text || "-", innerW, bodySize, 400);
+    return 44 + lines.length * lineH + 12;
+  };
+  const twoColHeight = (a, b) => Math.max(boxHeight(a.text, (CONTENT_W - GAP) / 2), boxHeight(b.text, (CONTENT_W - GAP) / 2));
+
+  const topLeft = report.topLeft;
+  const topRight = report.topRight;
+  const sections = report.sections || [];
+  const bottomLeft = report.bottomLeft;
+  const bottomRight = report.bottomRight;
+  const topH = twoColHeight(topLeft, topRight);
+  const sectionHeights = sections.map(x => boxHeight(x.text, CONTENT_W, { bodySize:x.bodySize || 12.2, lineH:x.lineH || 18 }));
+  const bottomH = twoColHeight(bottomLeft, bottomRight);
+  const HEADER_H = 130;
+  const FOOTER_H = 34;
+  const contentHeight = topH + GAP + sectionHeights.reduce((a,b)=>a+b,0) + GAP * Math.max(0, sections.length - 1) + GAP + bottomH;
+  const HEIGHT = HEADER_H + PAD + contentHeight + PAD + FOOTER_H;
+
+  const canvas = document.createElement("canvas");
+  canvas.width = Math.ceil(WIDTH * SCALE);
+  canvas.height = Math.ceil(HEIGHT * SCALE);
+  const ctx = canvas.getContext("2d");
+  ctx.scale(SCALE, SCALE);
+  ctx.fillStyle = "#ffffff";
+  ctx.fillRect(0, 0, WIDTH, HEIGHT);
+
+  const roundedPath = (x,y,w,h,r=12) => {
+    const rr=Math.min(r,w/2,h/2);
+    ctx.beginPath();
+    ctx.moveTo(x+rr,y); ctx.lineTo(x+w-rr,y); ctx.quadraticCurveTo(x+w,y,x+w,y+rr);
+    ctx.lineTo(x+w,y+h-rr); ctx.quadraticCurveTo(x+w,y+h,x+w-rr,y+h);
+    ctx.lineTo(x+rr,y+h); ctx.quadraticCurveTo(x,y+h,x,y+h-rr);
+    ctx.lineTo(x,y+rr); ctx.quadraticCurveTo(x,y,x+rr,y); ctx.closePath();
+  };
+  const drawTextLines = (lines, x, y, opts={}) => {
+    const size=opts.size||12.5, weight=opts.weight||400, lineH=opts.lineH||18;
+    setFont(ctx,size,weight); ctx.fillStyle=opts.color||"#351821"; ctx.textBaseline="top";
+    lines.forEach((line,i)=>ctx.fillText(line,x,y+i*lineH));
+  };
+  const drawBox = (box, x, y, w, h) => {
+    roundedPath(x,y,w,h,13);
+    ctx.fillStyle=box.background||"#ffffff"; ctx.fill();
+    ctx.strokeStyle=box.border||"#eadde2"; ctx.lineWidth=1; ctx.stroke();
+    setFont(ctx,9.5,800); ctx.fillStyle=box.titleColor||"#8b3653"; ctx.textBaseline="top";
+    ctx.fillText(String(box.title||"").toUpperCase(),x+13,y+13);
+    const lines=wrapLines(box.text||"-",w-26,box.bodySize||12.5,400);
+    drawTextLines(lines,x+13,y+34,{size:box.bodySize||12.5,lineH:box.lineH||18,color:box.bodyColor||"#351821"});
+  };
+
+  // Encabezado suave, alineado con la estética de NikiOS.
+  const grad = ctx.createLinearGradient(0,0,WIDTH,HEADER_H);
+  grad.addColorStop(0,"#fbf5f7"); grad.addColorStop(.58,"#f1dfe5"); grad.addColorStop(1,"#f8edf1");
+  ctx.fillStyle=grad; ctx.fillRect(0,0,WIDTH,HEADER_H);
+  setFont(ctx,10,800); ctx.fillStyle="#8b5366"; ctx.textBaseline="top"; ctx.fillText("NIKI BEAUTY BAR · OPERACIONES",PAD,24);
+  setFont(ctx,28,800); ctx.fillStyle="#72243e"; ctx.fillText("Informe diario",PAD,46);
+  setFont(ctx,18,700); ctx.fillStyle="#72243e"; ctx.fillText(report.localName||"Local",PAD,82);
+  const badgeW=166, badgeH=82, bx=WIDTH-PAD-badgeW, by=22;
+  roundedPath(bx,by,badgeW,badgeH,13); ctx.fillStyle="rgba(255,255,255,.66)";ctx.fill();ctx.strokeStyle="rgba(114,36,62,.16)";ctx.stroke();
+  setFont(ctx,15,800);ctx.fillStyle="#72243e";ctx.textAlign="center";ctx.fillText(report.dateLabel||"",bx+badgeW/2,by+14);
+  setFont(ctx,11,600);ctx.fillStyle="#8b5366";ctx.fillText(report.turnoLabel||"",bx+badgeW/2,by+40);
+  setFont(ctx,9.5,600);ctx.fillStyle="#9c7280";ctx.fillText(report.statusLabel||"",bx+badgeW/2,by+60);ctx.textAlign="left";
+
+  let y=HEADER_H+PAD;
+  const colW=(CONTENT_W-GAP)/2;
+  drawBox(topLeft,PAD,y,colW,topH); drawBox(topRight,PAD+colW+GAP,y,colW,topH); y+=topH+GAP;
+  sections.forEach((box,i)=>{const h=sectionHeights[i];drawBox(box,PAD,y,CONTENT_W,h);y+=h+(i===sections.length-1?0:GAP);});
+  y+=GAP;
+  drawBox(bottomLeft,PAD,y,colW,bottomH); drawBox(bottomRight,PAD+colW+GAP,y,colW,bottomH); y+=bottomH;
+
+  ctx.strokeStyle="#eadde2";ctx.beginPath();ctx.moveTo(PAD,y+18);ctx.lineTo(WIDTH-PAD,y+18);ctx.stroke();
+  setFont(ctx,9.5,400);ctx.fillStyle="#8d7b82";ctx.textBaseline="top";ctx.fillText(`Responsable: ${report.responsable||"-"}`,PAD,y+29);
+  ctx.textAlign="right";ctx.fillText(`NIKI OS · ${report.dateLabel||""}`,WIDTH-PAD,y+29);ctx.textAlign="left";
+
+  const blob = await new Promise((resolve,reject)=>canvas.toBlob(b=>b?resolve(b):reject(new Error("No se pudo crear el PNG.")),"image/png"));
+  if (navigator.clipboard?.write && window.ClipboardItem) {
+    await navigator.clipboard.write([new ClipboardItem({"image/png":blob})]);
+    return { copied:true, blob };
+  }
+  const url=URL.createObjectURL(blob);
+  const a=document.createElement("a"); a.href=url; a.download=fileName; document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(()=>URL.revokeObjectURL(url),1200);
+  return { copied:false, blob };
+}
+
 function InformeDiario({ data, reloadData, user }) {
   const hoy = new Date();
   const esAdmin = isAdminLikeRole(user.rol);
@@ -10627,6 +10776,8 @@ function InformeDiario({ data, reloadData, user }) {
   const [editorOpen, setEditorOpen] = useState(false);
   const [saving, setSaving] = useState(false);
   const [preview, setPreview] = useState(null);
+  const shareReportRef = useRef(null);
+  const [copyingReportImage,setCopyingReportImage]=useState(false);
   const [deleteTarget, setDeleteTarget] = useState(null);
   const [encCoberturaLoading, setEncCoberturaLoading] = useState(false);
   const [encCoberturaSaving, setEncCoberturaSaving] = useState(false);
@@ -11508,31 +11659,51 @@ const prev = getPreviousInforme(f, lid, turno, excludeId);
     if (form?.id === deleteTarget.id) { setForm(emptyForm(fecha, localId)); setEditorOpen(false); }
   };
 
-  const printInforme = (inf) => {
-    const local = data.locales.find(l => l.id === inf.localId);
-    const html = `<!doctype html><html><head><title>Informe diario</title><style>body{font-family:Montserrat,Arial,sans-serif;margin:24px;color:#222}.title{text-align:center;font-size:22px;font-weight:700;border:1px solid #aaa;padding:8px;margin-bottom:12px}.row{display:grid;grid-template-columns:220px 1fr;border:1px solid #ddd;border-bottom:none}.row:last-child{border-bottom:1px solid #ddd}.label{background:#f7a8ce;color:white;font-weight:700;padding:10px;border-right:1px solid #ddd;text-align:center}.value{padding:10px;white-space:pre-wrap;min-height:28px}.danger{background:#ee3a37}.total{font-weight:700;background:#f7edf0}</style></head><body><div class="title">INFORME DIARIO ${local?.nombre || ""}</div>${[
-      ["FECHA", parseDateLabel(inf.fecha)],
-      ["IMPORTANTE PARA MAÑANA", inf.importanteManana],
-      ["URGENTES GENERALES", inf.urgentesGenerales, "danger"],
-      ["CAJA EN EFECTIVO", `Saldo inicial: ${fmtMoney(inf.saldoEfectivoAnterior)} · Coincide: ${inf.coincideEfectivoInicial ? "Sí" : "No"}\nSaldo final: ${fmtMoney(inf.efectivoCaja)} · Coincide: ${inf.coincideCaja ? "Sí" : "No"}`],
-      ["MERCADO PAGO / TOTAL / RESERVAS", inf.mercadoPagoTotalReservas],
-      ["PAGOS REALIZADOS", gastosText(inf)],
-      ["CAJA GENERAL", `Saldo anterior: ${fmtMoney(inf.saldoAnterior)}\n+ Traspaso a Caja General: ${fmtMoney(inf.traspasoCajaGeneral)}\n- Traspaso a Caja Efectivo: ${fmtMoney(inf.traspasoCajaEfectivo)}\nSALDO FINAL: ${fmtMoney(calcTotalCaja(inf))}`],
-      ["ASISTENCIA DE MANICURAS", buildAsistenciaText(inf)],
-      ["HORARIOS ENCARGADAS", buildEncargadasRealText(inf)],
-      ["GARANTÍAS DEL DÍA", buildGarantiasText(inf)],
-      ["RECLAMOS", reclamosText(inf)],
-      ["NOVEDADES SALÓN / MANICURAS", inf.novedadesSalonManicuras],
-      ["OBSERVACIONES / EXTRAS", inf.observacionesExtras],
-    ].map(([l,v,c]) => `<div class="row"><div class="label ${c||""}">${l}</div><div class="value">${String(v || "-").replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;")}</div></div>`).join("")}</body></html>`;
-    const w = window.open("", "_blank");
-    if (!w) return notifyToast("El navegador bloqueó la ventana de impresión.", "warning");
-    w.document.write(html); w.document.close(); w.focus(); setTimeout(()=>w.print(), 250);
-  };
 
   const copyReport = async (inf) => {
     await navigator.clipboard.writeText(buildTextReport(inf));
     notifyToast("Informe copiado al portapapeles.", "success", { title:"Informe copiado" });
+  };
+  const copyReportImage = async (inf) => {
+    setCopyingReportImage(true);
+    try{
+      const local=data.locales.find(l=>Number(l.id)===Number(inf.localId));
+      const localName=local?.nombre||"Local";
+      const name=`informe-diario-${String(localName).toLowerCase().replace(/[^a-z0-9]+/gi,"-")}-${inf.fecha}.png`;
+      const cajaEfectivo=[
+        `Inicial: ${fmtMoney(inf.saldoEfectivoAnterior)} · ${inf.coincideEfectivoInicial?"Coincide":"Revisar"}`,
+        `Final: ${fmtMoney(inf.efectivoCaja)} · ${inf.coincideCaja?"Coincide":"Revisar"}`,
+        `Mercado Pago / reservas: ${inf.mercadoPagoTotalReservas||"-"}`,
+      ].join("\n");
+      const cajaGeneral=[
+        `Saldo anterior: ${fmtMoney(inf.saldoAnterior)}`,
+        `+ Traspaso general: ${fmtMoney(inf.traspasoCajaGeneral)}`,
+        `- Traspaso efectivo: ${fmtMoney(inf.traspasoCajaEfectivo)}`,
+        `Saldo final: ${fmtMoney(calcTotalCaja(inf))}`,
+      ].join("\n");
+      const result=await createInformeDiarioPng({
+        localName,
+        dateLabel:parseDateLabel(inf.fecha),
+        turnoLabel:inf.turno==="manana"?"Turno mañana":inf.turno==="tarde"?"Turno tarde":"Día completo",
+        statusLabel:inf.estado==="enviado"?"Confirmado":"Borrador",
+        responsable:userLabel(inf.cerradoPor||inf.creadoPor),
+        topLeft:{title:"Importante para mañana",text:inf.importanteManana||"Sin novedades",background:"#fff8fa",border:"#eadde2"},
+        topRight:{title:"Urgentes generales",text:inf.urgentesGenerales||"Sin urgentes",background:inf.urgentesGenerales?"#fff4f4":"#fafafa",border:inf.urgentesGenerales?"#f0d4d4":"#ece6e8",titleColor:inf.urgentesGenerales?"#b13b3b":"#777"},
+        sections:[
+          {title:"Caja efectivo",text:cajaEfectivo,background:"#fff",border:"#eadde2"},
+          {title:"Caja general",text:cajaGeneral,background:"#fff8fa",border:"#eadde2"},
+          {title:"Pagos realizados",text:gastosText(inf)||"-"},
+          {title:"Asistencia de manicuras",text:buildAsistenciaText(inf)},
+          {title:"Horarios encargadas",text:buildEncargadasRealText(inf)},
+          {title:"Garantías del día",text:buildGarantiasText(inf)},
+          {title:"Reclamos",text:reclamosText(inf)},
+        ],
+        bottomLeft:{title:"Novedades salón / manicuras",text:inf.novedadesSalonManicuras||"-"},
+        bottomRight:{title:"Observaciones / extras",text:inf.observacionesExtras||"-"},
+      },name);
+      notifyToast(result.copied?"Imagen copiada. Ya podés pegarla directamente en WhatsApp.":"Tu navegador no permite copiar imágenes: descargué el PNG.","success",{title:"Informe listo para compartir",duration:6500});
+    }catch(e){notifyToast("No se pudo copiar el informe como imagen. "+(e.message||e),"error");}
+    finally{setCopyingReportImage(false);}
   };
 
   const turnoVisual = useMemo(() => {
@@ -11639,7 +11810,7 @@ const prev = getPreviousInforme(f, lid, turno, excludeId);
     <div style={{ display:"flex",alignItems:"center",justifyContent:"space-between",gap:12,flexWrap:"wrap",marginBottom:16 }}>
       <div style={{ minWidth:0 }}>
         <h2 style={{ margin:0,fontSize:22,fontWeight:700 }}>Informes diarios</h2>
-        <p style={{ margin:"4px 0 0",fontSize:13,color:"var(--color-text-secondary)" }}>{editorOpen ? "Los cambios del borrador se guardan automáticamente mientras trabajás." : "Primero ves los informes existentes. Desde acá podés generar uno nuevo, editar, ver o imprimir."}</p>
+        <p style={{ margin:"4px 0 0",fontSize:13,color:"var(--color-text-secondary)" }}>{editorOpen ? "Los cambios del borrador se guardan automáticamente mientras trabajás." : "Primero ves los informes existentes. Desde acá podés generar uno nuevo, editar, ver o compartir."}</p>
         {editorOpen&&<div style={{ marginTop:8,minHeight:29,display:"flex",alignItems:"center" }}>
           <span style={{ display:"inline-flex",alignItems:"center",justifyContent:"center",gap:6,borderRadius:999,padding:"7px 12px",minWidth:286,boxSizing:"border-box",background:autoSaveTone.bg,color:autoSaveTone.fg,fontSize:10.5,fontWeight:800,whiteSpace:"nowrap" }}>
             <span style={{ width:7,height:7,borderRadius:"50%",background:"currentColor",opacity:autoSaveState==="saving" ? 0.65 : 1 }}/>
@@ -11678,7 +11849,7 @@ const prev = getPreviousInforme(f, lid, turno, excludeId);
             <Badge color={inf.estado==="enviado"?"success":"gray"}>{inf.estado==="enviado"?"Enviado":"Borrador"}</Badge>
             <Btn size="sm" variant="ghost" onClick={()=>openInformeEditor(inf)}>Editar</Btn>
             <Btn size="sm" variant="secondary" onClick={()=>setPreview(inf)}>Ver</Btn>
-            <Btn size="sm" variant="ghost" onClick={()=>printInforme(inf)}>Imprimir</Btn>
+            
             <Btn size="sm" variant="danger" onClick={()=>setDeleteTarget(inf)}>Eliminar</Btn>
           </div>;})}
         </div>}
@@ -11706,7 +11877,7 @@ const prev = getPreviousInforme(f, lid, turno, excludeId);
         </div>
         {localDiaAbierto&&(()=>{const loc=locales.find(l=>Number(l.id)===Number(localDiaAbierto));const rows=informesPorLocalDia.get(Number(localDiaAbierto))||[];return <Card style={{marginTop:13,padding:14}}>
           <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",gap:8,flexWrap:"wrap",marginBottom:10}}><div><h3 style={{margin:0,fontSize:16}}>{loc?.nombre} · {parseDateLabel(fechaFiltroDia)}</h3><p style={{margin:"2px 0 0",fontSize:11,color:"var(--color-text-secondary)"}}>Elegí el informe que querés consultar.</p></div></div>
-          {rows.length===0?<div style={{border:"1px dashed var(--color-border-secondary)",borderRadius:11,padding:14,color:"var(--color-text-secondary)",fontSize:12}}>No hay informes cargados para este local en la fecha seleccionada.</div>:<div style={{display:"flex",flexDirection:"column",gap:7}}>{rows.map(inf=><div key={inf.id} style={{display:"flex",alignItems:"center",gap:8,flexWrap:"wrap",padding:"10px 11px",border:"1px solid rgba(120,120,120,.12)",borderRadius:11,background:"var(--color-background-primary)"}}><div style={{flex:1,minWidth:180}}><strong style={{fontSize:13}}>{inf.turno==="manana"?"Mañana":inf.turno==="tarde"?"Tarde":"Día"}</strong><div style={{fontSize:10,color:"var(--color-text-secondary)",marginTop:2}}>{inf.importanteManana||inf.novedadesSalonManicuras||"Sin observaciones principales"}</div></div><Badge color={inf.estado==="enviado"?"success":"gray"}>{inf.estado==="enviado"?"Enviado":"Borrador"}</Badge><Btn size="sm" variant="ghost" onClick={()=>openInformeEditor(inf)}>Editar</Btn><Btn size="sm" variant="secondary" onClick={()=>setPreview(inf)}>Ver</Btn><Btn size="sm" variant="ghost" onClick={()=>printInforme(inf)}>Imprimir</Btn></div>)}</div>}
+          {rows.length===0?<div style={{border:"1px dashed var(--color-border-secondary)",borderRadius:11,padding:14,color:"var(--color-text-secondary)",fontSize:12}}>No hay informes cargados para este local en la fecha seleccionada.</div>:<div style={{display:"flex",flexDirection:"column",gap:7}}>{rows.map(inf=><div key={inf.id} style={{display:"flex",alignItems:"center",gap:8,flexWrap:"wrap",padding:"10px 11px",border:"1px solid rgba(120,120,120,.12)",borderRadius:11,background:"var(--color-background-primary)"}}><div style={{flex:1,minWidth:180}}><strong style={{fontSize:13}}>{inf.turno==="manana"?"Mañana":inf.turno==="tarde"?"Tarde":"Día"}</strong><div style={{fontSize:10,color:"var(--color-text-secondary)",marginTop:2}}>{inf.importanteManana||inf.novedadesSalonManicuras||"Sin observaciones principales"}</div></div><Badge color={inf.estado==="enviado"?"success":"gray"}>{inf.estado==="enviado"?"Enviado":"Borrador"}</Badge><Btn size="sm" variant="ghost" onClick={()=>openInformeEditor(inf)}>Editar</Btn><Btn size="sm" variant="secondary" onClick={()=>setPreview(inf)}>Ver</Btn></div>)}</div>}
         </Card>})()}
       </div>}
     </div>}
@@ -11893,12 +12064,28 @@ const prev = getPreviousInforme(f, lid, turno, excludeId);
 
     {reclamoModal && <ReclamoEditorModal data={data} user={user} initial={reclamoModal?.id?reclamoModal:null} forcedLocalId={form?.localId||null} defaultFecha={form?.fecha||dateKey(new Date())} informeId={form?.id||null} onClose={()=>setReclamoModal(null)} onSaved={async()=>{await loadReclamos(form?.id,form?.localId,form?.fecha);}} onChanged={async()=>{await loadReclamos(form?.id,form?.localId,form?.fecha);}}/>}
 
-    {preview && <Modal title="Informe diario" onClose={()=>setPreview(null)} width={720}>
+    {preview && <Modal title="Informe diario · vista para compartir" onClose={()=>setPreview(null)} width={980}>
       <div style={{ display:"flex",justifyContent:"space-between",alignItems:"center",gap:8,flexWrap:"wrap",marginBottom:12 }}>
-        <div><p style={{ margin:0,fontSize:17,fontWeight:700 }}>Informe diario {data.locales.find(l=>l.id===preview.localId)?.nombre}</p><p style={{ margin:"2px 0 0",fontSize:13,color:"#777" }}>{parseDateLabel(preview.fecha)} · {preview.turno === "manana" ? "Mañana" : preview.turno === "tarde" ? "Tarde" : "Día"} · Cierre: {userLabel(preview.cerradoPor || preview.creadoPor)}</p></div>
-        <div style={{ display:"flex",gap:8 }}><Btn size="sm" onClick={()=>copyReport(preview)} variant="secondary">Copiar texto</Btn><Btn size="sm" onClick={()=>printInforme(preview)}>Imprimir</Btn></div>
+        <div><p style={{ margin:0,fontSize:13,color:"var(--color-text-secondary)" }}>Vista optimizada para compartir por WhatsApp.</p><p style={{ margin:"2px 0 0",fontSize:10.5,color:"#999" }}>El botón “Copiar como imagen” genera una versión PNG con este mismo diseño, lista para pegar en WhatsApp.</p></div>
+        <div style={{ display:"flex",gap:8,flexWrap:"wrap" }}><Btn size="sm" onClick={()=>copyReportImage(preview)} disabled={copyingReportImage}>{copyingReportImage?"Generando...":"Copiar como imagen"}</Btn><Btn size="sm" onClick={()=>copyReport(preview)} variant="secondary">Copiar texto</Btn></div>
       </div>
-      <pre style={{ whiteSpace:"pre-wrap",fontFamily:"inherit",fontSize:14,lineHeight:1.5,background:"#fafafa",border:"1px solid #eee",borderRadius:10,padding:14,maxHeight:500,overflowY:"auto",color:"#222" }}>{buildTextReport(preview)}</pre>
+      <div style={{overflowX:"auto",padding:"4px 2px 12px"}}>
+        <div ref={shareReportRef} style={{width:840,maxWidth:"100%",margin:"0 auto",background:"#fff",color:"#351821",border:"1px solid #eadde2",borderRadius:18,overflow:"hidden",boxShadow:"0 12px 34px rgba(75,35,49,.09)",fontFamily:"Montserrat,Arial,sans-serif"}}>
+          <div style={{padding:"22px 24px 20px",background:"linear-gradient(135deg,#fbf5f7 0%,#f1dfe5 58%,#f8edf1 100%)",color:COLORS.pinkDark}}>
+            <div style={{display:"flex",justifyContent:"space-between",gap:18,alignItems:"flex-start"}}><div><div style={{fontSize:10,fontWeight:800,letterSpacing:1.6,color:"#8b5366"}}>NIKI BEAUTY BAR · OPERACIONES</div><div style={{fontSize:26,fontWeight:800,marginTop:5,lineHeight:1.08}}>Informe diario</div><div style={{fontSize:17,fontWeight:650,marginTop:4}}>{data.locales.find(l=>Number(l.id)===Number(preview.localId))?.nombre||"Local"}</div></div><div style={{textAlign:"right",background:"rgba(255,255,255,.66)",border:"1px solid rgba(114,36,62,.16)",color:COLORS.pinkDark,borderRadius:12,padding:"10px 12px",minWidth:150}}><div style={{fontSize:15,fontWeight:800}}>{parseDateLabel(preview.fecha)}</div><div style={{fontSize:11,marginTop:3,opacity:.9}}>{preview.turno === "manana" ? "Turno mañana" : preview.turno === "tarde" ? "Turno tarde" : "Día completo"}</div><div style={{fontSize:9.5,marginTop:5,opacity:.78}}>{preview.estado==="enviado"?"Confirmado":"Borrador"}</div></div></div>
+          </div>
+          <div style={{padding:"18px 20px 20px",display:"grid",gap:13}}>
+            <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10}}>
+              <div style={{border:"1px solid #eadde2",borderRadius:13,padding:"12px 13px",background:"#fff8fa"}}><div style={{fontSize:9.5,fontWeight:850,letterSpacing:.7,color:"#8b3653",textTransform:"uppercase"}}>Importante para mañana</div><div style={{marginTop:6,fontSize:12.5,lineHeight:1.5,whiteSpace:"pre-wrap"}}>{preview.importanteManana||"Sin novedades"}</div></div>
+              <div style={{border:"1px solid #f0d4d4",borderRadius:13,padding:"12px 13px",background:preview.urgentesGenerales?"#fff1f1":"#fafafa"}}><div style={{fontSize:9.5,fontWeight:850,letterSpacing:.7,color:preview.urgentesGenerales?"#b13b3b":"#777",textTransform:"uppercase"}}>Urgentes generales</div><div style={{marginTop:6,fontSize:12.5,lineHeight:1.5,whiteSpace:"pre-wrap"}}>{preview.urgentesGenerales||"Sin urgentes"}</div></div>
+            </div>
+            <div style={{border:"1px solid #eadde2",borderRadius:14,overflow:"hidden"}}><div style={{padding:"8px 12px",background:"#f5e8ec",fontSize:11,fontWeight:850,color:"#72243e"}}>CAJA Y PAGOS</div><div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:0}}><div style={{padding:"12px 13px",borderRight:"1px solid #eee"}}><div style={{fontSize:10,fontWeight:800,color:"#777"}}>Caja efectivo</div><div style={{fontSize:11.5,lineHeight:1.55,marginTop:5}}>Inicial: <strong>{fmtMoney(preview.saldoEfectivoAnterior)}</strong> · {preview.coincideEfectivoInicial?"Coincide":"Revisar"}<br/>Final: <strong>{fmtMoney(preview.efectivoCaja)}</strong> · {preview.coincideCaja?"Coincide":"Revisar"}</div><div style={{fontSize:10,fontWeight:800,color:"#777",marginTop:9}}>Mercado Pago / reservas</div><div style={{fontSize:11.5,lineHeight:1.5,whiteSpace:"pre-wrap",marginTop:4}}>{preview.mercadoPagoTotalReservas||"-"}</div></div><div style={{padding:"12px 13px"}}><div style={{fontSize:10,fontWeight:800,color:"#777"}}>Caja general</div><div style={{fontSize:11.5,lineHeight:1.55,marginTop:5}}>Saldo anterior: <strong>{fmtMoney(preview.saldoAnterior)}</strong><br/>+ Traspaso general: <strong>{fmtMoney(preview.traspasoCajaGeneral)}</strong><br/>- Traspaso efectivo: <strong>{fmtMoney(preview.traspasoCajaEfectivo)}</strong><br/><span style={{display:"inline-block",marginTop:5,padding:"4px 7px",borderRadius:7,background:"#f5e8ec",color:"#72243e",fontWeight:850}}>Saldo final {fmtMoney(calcTotalCaja(preview))}</span></div></div></div><div style={{borderTop:"1px solid #eee",padding:"11px 13px"}}><div style={{fontSize:10,fontWeight:800,color:"#777"}}>Pagos realizados</div><div style={{fontSize:11.5,lineHeight:1.55,whiteSpace:"pre-wrap",marginTop:4}}>{gastosText(preview)||"-"}</div></div></div>
+            {[ ["ASISTENCIA DE MANICURAS",buildAsistenciaText(preview)], ["HORARIOS ENCARGADAS",buildEncargadasRealText(preview)], ["GARANTÍAS DEL DÍA",buildGarantiasText(preview)], ["RECLAMOS",reclamosText(preview)] ].map(([title,value])=><div key={title} style={{border:"1px solid #ece6e8",borderRadius:13,padding:"11px 13px",background:"#fff"}}><div style={{fontSize:9.5,fontWeight:850,color:"#8b3653",letterSpacing:.55}}>{title}</div><div style={{fontSize:11.5,lineHeight:1.55,whiteSpace:"pre-wrap",marginTop:5}}>{value||"-"}</div></div>)}
+            <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10}}><div style={{border:"1px solid #ece6e8",borderRadius:13,padding:"11px 13px"}}><div style={{fontSize:9.5,fontWeight:850,color:"#8b3653"}}>NOVEDADES SALÓN / MANICURAS</div><div style={{fontSize:11.5,lineHeight:1.55,whiteSpace:"pre-wrap",marginTop:5}}>{preview.novedadesSalonManicuras||"-"}</div></div><div style={{border:"1px solid #ece6e8",borderRadius:13,padding:"11px 13px"}}><div style={{fontSize:9.5,fontWeight:850,color:"#8b3653"}}>OBSERVACIONES / EXTRAS</div><div style={{fontSize:11.5,lineHeight:1.55,whiteSpace:"pre-wrap",marginTop:5}}>{preview.observacionesExtras||"-"}</div></div></div>
+            <div style={{display:"flex",justifyContent:"space-between",gap:10,borderTop:"1px solid #eadde2",paddingTop:10,fontSize:9.5,color:"#8d7b82"}}><span>Responsable: {userLabel(preview.cerradoPor || preview.creadoPor)}</span><span>NIKI OS · {parseDateLabel(preview.fecha)}</span></div>
+          </div>
+        </div>
+      </div>
     </Modal>}
 
     {deleteTarget && <Modal title="Eliminar informe" onClose={()=>setDeleteTarget(null)} width={420}>
@@ -13599,6 +13786,10 @@ function ReportePagoComisiones({ data, setData, user }) {
   const [anio, setAnio] = useState(String(aniosDisponibles[0] || hoy.getFullYear()));
   const [mes, setMes] = useState(String(hoy.getMonth() + 1));
   const [semana, setSemana] = useState("todas");
+  const [vistaPeriodo, setVistaPeriodo] = useState("mes");
+  const [fechaDia, setFechaDia] = useState(dateKey(hoy));
+  const [cortesQuincenales, setCortesQuincenales] = useState([]);
+  const [corteSaving, setCorteSaving] = useState(false);
   const [localesAplicados, setLocalesAplicados] = useState([]);
   const [localesPendientes, setLocalesPendientes] = useState([]);
   const [detalle, setDetalle] = useState({ tipo:"general", id:null, label:"Detalle del reporte" });
@@ -13622,6 +13813,22 @@ function ReportePagoComisiones({ data, setData, user }) {
   const localNombre = useCallback((id, fallback="") => localById.get(Number(id))?.nombre || fallback || "Sin local", [localById]);
   const localTipo = useCallback((id) => (localById.get(Number(id))?.tipoLocal || localById.get(Number(id))?.tipo_local || "propio"), [localById]);
   const periodo = `${anio}-${String(mes).padStart(2,"0")}`;
+  const lastDayPeriodo = new Date(Number(anio), Number(mes), 0).getDate();
+  const rangoVistaPago = useMemo(() => {
+    if (vistaPeriodo === "q1") return { desde:`${periodo}-01`, hasta:`${periodo}-15`, label:"1ª quincena", quincena:1 };
+    if (vistaPeriodo === "q2") return { desde:`${periodo}-16`, hasta:`${periodo}-${String(lastDayPeriodo).padStart(2,"0")}`, label:"2ª quincena", quincena:2 };
+    if (vistaPeriodo === "dia") {
+      const f=String(fechaDia||"").startsWith(periodo)?String(fechaDia):`${periodo}-01`;
+      return { desde:f, hasta:f, label:"Día", quincena:null };
+    }
+    return { desde:`${periodo}-01`, hasta:`${periodo}-${String(lastDayPeriodo).padStart(2,"0")}`, label:"Mes completo", quincena:null };
+  }, [vistaPeriodo, fechaDia, periodo, lastDayPeriodo]);
+  const loadCortesQuincenales = useCallback(async()=>{
+    try { const r=await planificacionPersonalEdge("cuts_list",{periodo}); setCortesQuincenales(r.rows||[]); }
+    catch(e){ console.warn("No se pudieron cargar cortes quincenales",e); setCortesQuincenales([]); }
+  },[periodo]);
+  useEffect(()=>{void loadCortesQuincenales();},[loadCortesQuincenales]);
+  useEffect(()=>{if(!String(fechaDia||"").startsWith(periodo))setFechaDia(`${periodo}-01`);},[periodo]);
   const refrescarPagoComisiones = useCallback(async ({ silencioso=false } = {}) => {
     const seq = ++refreshPagoSeq.current;
     if (!silencioso) setCargandoPagoComisiones(true);
@@ -13682,7 +13889,7 @@ function ReportePagoComisiones({ data, setData, user }) {
     setPagoComisionesReady(yaHayPeriodo);
     refrescarPagoComisiones({ silencioso:yaHayPeriodo });
   }, [periodo, refrescarPagoComisiones]);
-  const semanaSeleccionada = semana === "todas" ? null : semanas.find(w => String(w.numero) === String(semana));
+  const semanaSeleccionada = vistaPeriodo === "mes" && semana !== "todas" ? semanas.find(w => String(w.numero) === String(semana)) : null;
   const localBaseIds = localesPermitidos
     .filter(l => tipoLocal === "todos" || (l.tipoLocal || l.tipo_local || "propio") === tipoLocal)
     .map(l => Number(l.id));
@@ -13696,6 +13903,7 @@ function ReportePagoComisiones({ data, setData, user }) {
     const pid=r.agendapro_provider_id==null?null:Number(r.agendapro_provider_id);
     if(pid!=null && agendaNoVinculablePagoSet.has(`${lid}|${pid}`)) return false;
     if (semanaSeleccionada && !isDateInRangeKey(r.fecha_pago, semanaSeleccionada.desdeKey, semanaSeleccionada.hastaKey)) return false;
+    if (String(r.fecha_pago||"") < rangoVistaPago.desde || String(r.fecha_pago||"") > rangoVistaPago.hasta) return false;
     return true;
   });
   const agendaPendientesPagoAgrupados = agruparComisionesAgendaProSinVincular(agendaPendientesPagoVisibles);
@@ -13954,7 +14162,8 @@ const esFinSemana = manicura?.soloFinDeSemana === true;
     return rows.sort((a,b)=>String(b.fecha||"").localeCompare(String(a.fecha||"")) || String(a.localNombre).localeCompare(String(b.localNombre)));
   }, [data.comisiones, data.garantias, data.adelantos, data.users, data.manicuraHistorialLocales, localBaseSet, localBaseIds.join("|"), fechaPasaPeriodo, localNombre, localTipo, userById, comisionAplicadaPago, semanaSeleccionada, semanas, minimoPagoParaLocal, criterioPagoComision, periodo, configGeneralPagoComisiones]);
 
-  const rowsFiltradas = useMemo(() => rowsBase.filter(r => filtroLocalSet.has(Number(r.localId))), [rowsBase, filtroLocalSet]);
+  const rowsBasePeriodo = useMemo(() => rowsBase.filter(r => String(r.fecha||"") >= rangoVistaPago.desde && String(r.fecha||"") <= rangoVistaPago.hasta), [rowsBase, rangoVistaPago.desde, rangoVistaPago.hasta]);
+  const rowsFiltradas = useMemo(() => rowsBasePeriodo.filter(r => filtroLocalSet.has(Number(r.localId))), [rowsBasePeriodo, filtroLocalSet]);
 
   const agrupar = (rows, getKey, getLabel) => {
     const map = new Map();
@@ -13969,7 +14178,7 @@ const esFinSemana = manicura?.soloFinDeSemana === true;
     return Array.from(map.values()).sort((a,b)=>Math.abs(b.value)-Math.abs(a.value));
   };
 
-  const porLocalBase = useMemo(() => agrupar(rowsBase, r=>r.localId, r=>r.localNombre).map(x => ({ ...x, sub:`${x.count} movimientos` })), [rowsBase]);
+  const porLocalBase = useMemo(() => agrupar(rowsBasePeriodo, r=>r.localId, r=>r.localNombre).map(x => ({ ...x, sub:`${x.count} movimientos` })), [rowsBasePeriodo]);
   const porLocalFiltrado = useMemo(() => agrupar(rowsFiltradas, r=>r.localId, r=>r.localNombre).map(x => ({ ...x, sub:`${x.count} movimientos` })), [rowsFiltradas]);
   const porLocalVisible = localesAplicados.length ? porLocalFiltrado : porLocalBase;
   const porManicura = useMemo(() => agrupar(rowsFiltradas, r=>r.userId || r.manicuraNombre, r=>r.manicuraNombre).map(x => ({ ...x, sub:`${x.count} movimientos` })).slice(0,12), [rowsFiltradas]);
@@ -14010,6 +14219,33 @@ const esFinSemana = manicura?.soloFinDeSemana === true;
   const pagosTransferencia = useMemo(() => pagosPorManicura.filter(p=>p.formaPago === "transferencia"), [pagosPorManicura]);
   const totalPagosEfectivo = pagosEfectivo.reduce((a,p)=>a+Number(p.importe||0),0);
   const totalPagosTransferencia = pagosTransferencia.reduce((a,p)=>a+Number(p.importe||0),0);
+
+  const cortesVista = useMemo(() => rangoVistaPago.quincena ? (cortesQuincenales||[]).filter(c=>Number(c.quincena)===Number(rangoVistaPago.quincena)&&filtroLocalSet.has(Number(c.local_id))) : [], [cortesQuincenales,rangoVistaPago.quincena,filtroLocalSet]);
+  const corteEstado = !rangoVistaPago.quincena ? "" : cortesVista.length===0 ? "abierto" : cortesVista.length < filtroLocalIds.length ? "parcial" : cortesVista.every(c=>c.estado==="pagado") ? "pagado" : "cerrado";
+  const cerrarCorteQuincenal = useCallback(async()=>{
+    if(!rangoVistaPago.quincena)return;
+    if(!filtroLocalIds.length)return notifyToast("Seleccioná al menos un local.","warning");
+    setCorteSaving(true);
+    try{
+      const snapshots=filtroLocalIds.map(lid=>{
+        const lr=rowsFiltradas.filter(r=>Number(r.localId)===Number(lid));
+        const byUser=new Map();
+        lr.forEach(r=>{const key=Number(r.userId||0)||String(r.manicuraNombre||"Sin manicura");const prev=byUser.get(key)||{userId:Number(r.userId||0)||null,nombre:r.manicuraNombre||"Sin manicura",importe:0};prev.importe+=Number(r.importe||0);byUser.set(key,prev);});
+        return {local_id:Number(lid),total_neto:lr.reduce((a,r)=>a+Number(r.importe||0),0),total_bruto:lr.filter(r=>r.tipo==="comision"||r.tipo==="minimo").reduce((a,r)=>a+Number(r.importe||0),0),total_garantias:lr.filter(r=>r.tipo==="garantia").reduce((a,r)=>a+Number(r.importe||0),0),total_adelantos:lr.filter(r=>r.tipo==="adelanto").reduce((a,r)=>a+Number(r.importe||0),0),detalle:Array.from(byUser.values())};
+      });
+      await planificacionPersonalEdge("cut_close",{periodo,quincena:rangoVistaPago.quincena,fecha_desde:rangoVistaPago.desde,fecha_hasta:rangoVistaPago.hasta,snapshots});
+      await loadCortesQuincenales();
+      notifyToast(`${rangoVistaPago.label} cerrada. El importe quedó congelado como foto del cálculo.`,"success");
+    }catch(e){notifyToast(e.message||"No se pudo cerrar la quincena.","error");}finally{setCorteSaving(false);}
+  },[rangoVistaPago.quincena,rangoVistaPago.desde,rangoVistaPago.hasta,rangoVistaPago.label,filtroLocalIds.join("|"),rowsFiltradas,periodo,loadCortesQuincenales]);
+  const marcarCortePagado = useCallback(async()=>{
+    if(!cortesVista.length)return;setCorteSaving(true);
+    try{await planificacionPersonalEdge("cut_paid",{ids:cortesVista.map(c=>c.id),fecha_pago:dateKey(new Date())});await loadCortesQuincenales();notifyToast("Corte marcado como pagado.","success");}catch(e){notifyToast(e.message||"No se pudo marcar el pago.","error");}finally{setCorteSaving(false);}
+  },[cortesVista,loadCortesQuincenales]);
+  const reabrirCorte = useCallback(async()=>{
+    if(!cortesVista.length)return;setCorteSaving(true);
+    try{await planificacionPersonalEdge("cut_reopen",{ids:cortesVista.map(c=>c.id)});await loadCortesQuincenales();notifyToast("Corte reabierto como cerrado pendiente de pago.","success");}catch(e){notifyToast(e.message||"No se pudo reabrir el corte.","error");}finally{setCorteSaving(false);}
+  },[cortesVista,loadCortesQuincenales]);
 
   const actualizarUsuarioPagoLocal = useCallback((uid, patch) => {
     setData?.(prev => ({
@@ -14059,12 +14295,12 @@ const esFinSemana = manicura?.soloFinDeSemana === true;
   }, [bancoEditUserId, bancoEditValue, actualizarUsuarioPagoLocal]);
 
   const detalleRows = useMemo(() => {
-    if (detalle?.tipo === "local") return rowsBase.filter(r => String(r.localId) === String(detalle.id));
+    if (detalle?.tipo === "local") return rowsBasePeriodo.filter(r => String(r.localId) === String(detalle.id));
     if (detalle?.tipo === "manicura") return rowsFiltradas.filter(r => String(r.userId || r.manicuraNombre) === String(detalle.id));
     if (detalle?.tipo === "semana") return rowsFiltradas.filter(r => String(weekOfMonthValue(r.fecha) || "0") === String(detalle.id));
     if (detalle?.tipo === "tipoLocal") return rowsFiltradas.filter(r => String(r.tipoLocal) === String(detalle.id));
     return rowsFiltradas;
-  }, [detalle, rowsBase, rowsFiltradas]);
+  }, [detalle, rowsBasePeriodo, rowsFiltradas]);
 
   const toggleLocalPendiente = (item) => {
     const id = Number(item.id);
@@ -14124,7 +14360,9 @@ const esFinSemana = manicura?.soloFinDeSemana === true;
         <div><label style={{ fontSize:12,fontWeight:700,color:"var(--color-text-secondary)",display:"block",marginBottom:5 }}>Tipo de local</label><Select value={tipoLocal} onChange={(v)=>{ setTipoLocal(v); setLocalesPendientes([]); setLocalesAplicados([]); }}><option value="todos">Todos</option><option value="propio">Propios</option><option value="franquicia">Franquicias</option></Select></div>
         <div><label style={{ fontSize:12,fontWeight:700,color:"var(--color-text-secondary)",display:"block",marginBottom:5 }}>Año</label><Select value={anio} onChange={setAnio}>{aniosDisponibles.map(y=><option key={y} value={y}>{y}</option>)}</Select></div>
         <div><label style={{ fontSize:12,fontWeight:700,color:"var(--color-text-secondary)",display:"block",marginBottom:5 }}>Mes</label><Select value={mes} onChange={setMes}>{MESES.map((m,i)=><option key={m} value={i+1}>{m}</option>)}</Select></div>
-        <div><label style={{ fontSize:12,fontWeight:700,color:"var(--color-text-secondary)",display:"block",marginBottom:5 }}>Semana</label><Select value={semana} onChange={setSemana}><option value="todas">Todas</option>{semanas.map(w=><option key={w.numero} value={w.numero}>{w.label}</option>)}</Select></div>
+        <div><label style={{ fontSize:12,fontWeight:700,color:"var(--color-text-secondary)",display:"block",marginBottom:5 }}>Vista de pago</label><Select value={vistaPeriodo} onChange={v=>{setVistaPeriodo(v);if(v!=="mes")setSemana("todas");}}><option value="mes">Mes completo</option><option value="q1">1ª quincena · 1 al 15</option><option value="q2">2ª quincena · 16 a fin de mes</option><option value="dia">Por día</option></Select></div>
+        {vistaPeriodo==="mes"&&<div><label style={{ fontSize:12,fontWeight:700,color:"var(--color-text-secondary)",display:"block",marginBottom:5 }}>Semana</label><Select value={semana} onChange={setSemana}><option value="todas">Todas</option>{semanas.map(w=><option key={w.numero} value={w.numero}>{w.label}</option>)}</Select></div>}
+        {vistaPeriodo==="dia"&&<div><label style={{ fontSize:12,fontWeight:700,color:"var(--color-text-secondary)",display:"block",marginBottom:5 }}>Día</label><input type="date" min={`${periodo}-01`} max={`${periodo}-${String(lastDayPeriodo).padStart(2,"0")}`} value={String(fechaDia||"").startsWith(periodo)?fechaDia:`${periodo}-01`} onChange={e=>setFechaDia(e.target.value)} style={{width:"100%",boxSizing:"border-box",border:"1px solid rgba(120,120,120,.22)",borderRadius:8,padding:"8px 10px",fontSize:12.5,background:"#fff"}}/></div>}
       </div>
       <div style={{ marginTop:12,borderTop:"1px solid rgba(120,120,120,0.12)",paddingTop:10 }}>
         <p style={{ margin:"0 0 8px",fontSize:12,fontWeight:800,color:"var(--color-text-secondary)",textTransform:"uppercase",letterSpacing:"0.04em" }}>Locales</p>
@@ -14136,6 +14374,8 @@ const esFinSemana = manicura?.soloFinDeSemana === true;
         </div>
       </div>
     </Card>
+
+    {rangoVistaPago.quincena&&<Card style={{padding:"12px 14px",border:`1px solid ${corteEstado==="pagado"?COLORS.success:corteEstado==="cerrado"?COLORS.info:corteEstado==="parcial"?COLORS.amber:"rgba(114,36,62,.14)"}`}}><div style={{display:"flex",justifyContent:"space-between",gap:12,alignItems:"center",flexWrap:"wrap"}}><div><div style={{display:"flex",gap:7,alignItems:"center",flexWrap:"wrap"}}><strong style={{fontSize:13}}>{rangoVistaPago.label} · {rangoVistaPago.desde.split("-").reverse().join("/")} al {rangoVistaPago.hasta.split("-").reverse().join("/")}</strong><Badge color={corteEstado==="pagado"?"success":corteEstado==="cerrado"?"info":corteEstado==="parcial"?"amber":"gray"}>{corteEstado==="abierto"?"Abierta":corteEstado==="parcial"?"Cierre parcial":corteEstado==="cerrado"?"Cerrada":"Pagada"}</Badge></div><p style={{margin:"4px 0 0",fontSize:10.5,color:"var(--color-text-secondary)"}}>{cortesVista.length?`Foto guardada: ${fmtMoney(cortesVista.reduce((a,c)=>a+Number(c.total_neto||0),0))} · ${cortesVista.length} local(es)`:`Todavía no existe un corte. El total actual es ${fmtMoney(totalNeto)}.`}</p></div><div style={{display:"flex",gap:7,flexWrap:"wrap"}}>{corteEstado!=="pagado"&&<Btn size="sm" onClick={cerrarCorteQuincenal} disabled={corteSaving}>{corteSaving?"Guardando...":cortesVista.length?"Actualizar cierre":"Cerrar quincena"}</Btn>}{cortesVista.length>0&&corteEstado!=="pagado"&&<Btn size="sm" variant="success" onClick={marcarCortePagado} disabled={corteSaving}>Marcar pagada</Btn>}{corteEstado==="pagado"&&<Btn size="sm" variant="secondary" onClick={reabrirCorte} disabled={corteSaving}>Reabrir pago</Btn>}</div></div></Card>}
 
     <div style={{ display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(180px,1fr))",gap:12 }}>
       <MiniKpi label="Neto a pagar" value={fmtMoney(totalNeto)} sub={`${filtroLocalIds.length} local(es) · ${manicurasCantidad} manicura(s)`} tone="success" />
@@ -14306,17 +14546,127 @@ function busquedaMatchInfo(busqueda, candidata, db) {
   const ok=criteria.filter(x=>x.ok).length,total=criteria.length,missingExcl=criteria.filter(x=>x.excluyente&&!x.ok).length;
   return {ok,total,missingExcl,label:total?`${ok}/${total}`:"Sin criterios"};
 }
+const RECLUTAMIENTO_COMPETENCIAS_VACIAS = {
+  manos: { realiza:null, acrilico:null, softgel:null },
+  pies: { realiza:null, pedicuria_bisturi:null },
+  cejas_pestanas: { realiza:null, perfilado:null, hilo:null },
+};
+function normalizarCompetenciasReclutamiento(raw) {
+  const src = raw && typeof raw === "object" ? raw : {};
+  const tri = v => v === true ? true : v === false ? false : null;
+  const manosRealiza = tri(src?.manos?.realiza);
+  const piesRealiza = tri(src?.pies?.realiza);
+  const cejasRealiza = tri(src?.cejas_pestanas?.realiza);
+  return {
+    manos: {
+      realiza: manosRealiza,
+      acrilico: manosRealiza === false ? false : tri(src?.manos?.acrilico),
+      softgel: manosRealiza === false ? false : tri(src?.manos?.softgel),
+    },
+    pies: {
+      realiza: piesRealiza,
+      pedicuria_bisturi: piesRealiza === false ? false : tri(src?.pies?.pedicuria_bisturi),
+    },
+    cejas_pestanas: {
+      realiza: cejasRealiza,
+      perfilado: cejasRealiza === false ? false : tri(src?.cejas_pestanas?.perfilado),
+      hilo: cejasRealiza === false ? false : tri(src?.cejas_pestanas?.hilo),
+    },
+  };
+}
+function ReclutamientoSiNo({ value, onChange, disabled=false }) {
+  const btn=(label,val)=>{
+    const on=value===val;
+    return <button type="button" disabled={disabled} onClick={()=>onChange(val)} style={{border:"1px solid #ddd",background:on?(val?COLORS.successLight:COLORS.dangerLight):"#fff",color:on?(val?COLORS.success:COLORS.danger):"#666",fontWeight:on?800:600,fontSize:10,padding:"5px 9px",cursor:disabled?"default":"pointer",opacity:disabled?.55:1}}>{label}</button>;
+  };
+  return <div style={{display:"inline-flex",borderRadius:8,overflow:"hidden"}}>{btn("Sí",true)}{btn("No",false)}</div>;
+}
+function ReclutamientoCompetenciasManicura({ value, onChange }) {
+  const v=normalizarCompetenciasReclutamiento(value);
+  const set=(grupo,campo,val)=>{
+    const next=normalizarCompetenciasReclutamiento(v);
+    next[grupo]={...next[grupo],[campo]:val};
+    if(campo==="realiza"&&val===false){
+      Object.keys(next[grupo]).forEach(k=>{if(k!=="realiza")next[grupo][k]=false;});
+    }
+    onChange(normalizarCompetenciasReclutamiento(next));
+  };
+  const card=(grupo,titulo,items)=>{
+    const g=v[grupo];
+    return <div style={{border:"1px solid rgba(114,36,62,.13)",borderRadius:11,padding:11,background:"#fff"}}>
+      <div style={{display:"flex",justifyContent:"space-between",gap:10,alignItems:"center",paddingBottom:8,borderBottom:"1px solid #f1e7ea"}}><strong style={{fontSize:12,color:COLORS.pinkDark}}>{titulo}</strong><ReclutamientoSiNo value={g.realiza} onChange={val=>set(grupo,"realiza",val)}/></div>
+      <div style={{display:"grid",gap:8,marginTop:9}}>{items.map(([key,label])=><div key={key} style={{display:"flex",justifyContent:"space-between",gap:10,alignItems:"center"}}><span style={{fontSize:11,color:g.realiza===false?"#aaa":"#444"}}>{label}</span><ReclutamientoSiNo disabled={g.realiza===false} value={g[key]} onChange={val=>set(grupo,key,val)}/></div>)}</div>
+    </div>;
+  };
+  return <div style={{marginTop:13,borderTop:"1px solid #eee",paddingTop:12}}>
+    <p style={{margin:"0 0 3px",fontSize:12,fontWeight:800}}>Competencias de la candidata</p>
+    <p style={{margin:"0 0 9px",fontSize:10,color:"var(--color-text-secondary)"}}>No hace falta marcar cada servicio básico. Indicá las áreas que trabaja y estas técnicas puntuales.</p>
+    <div style={{display:"grid",gridTemplateColumns:"repeat(3,minmax(0,1fr))",gap:9}} className="niki-mobile-one-column">
+      {card("manos","Manos",[["acrilico","Trabaja con Acrílico"],["softgel","Trabaja Softgel"]])}
+      {card("pies","Pies",[["pedicuria_bisturi","Pedicuría con bisturí"]])}
+      {card("cejas_pestanas","Cejas y Pestañas",[["perfilado","Perfilado"],["hilo","Con hilo"]])}
+    </div>
+  </div>;
+}
+function ReclutamientoCompetenciasResumen({ value }) {
+  const v=normalizarCompetenciasReclutamiento(value);
+  const txt=x=>x===true?"Sí":x===false?"No":"Sin indicar";
+  const group=(title,main,items)=><div style={{border:"1px solid #eee",borderRadius:9,padding:"8px 10px",background:"#fff"}}><div style={{display:"flex",justifyContent:"space-between",gap:8}}><strong style={{fontSize:11,color:COLORS.pinkDark}}>{title}</strong><span style={{fontSize:10,fontWeight:800,color:main===true?COLORS.success:main===false?COLORS.danger:"#999"}}>{txt(main)}</span></div>{items.map(([label,val])=><div key={label} style={{display:"flex",justifyContent:"space-between",gap:8,marginTop:5,fontSize:10}}><span>{label}</span><strong style={{color:val===true?COLORS.success:val===false?COLORS.danger:"#999"}}>{txt(val)}</strong></div>)}</div>;
+  return <div style={{margin:"0 0 12px",padding:10,borderRadius:11,background:COLORS.pinkLight,border:"1px solid rgba(114,36,62,.1)"}}><p style={{margin:"0 0 7px",fontSize:10,fontWeight:850,textTransform:"uppercase",color:COLORS.pinkDark}}>Competencias declaradas</p><div style={{display:"grid",gridTemplateColumns:"repeat(3,minmax(0,1fr))",gap:7}} className="niki-mobile-one-column">{group("Manos",v.manos.realiza,[["Acrílico",v.manos.acrilico],["Softgel",v.manos.softgel]])}{group("Pies",v.pies.realiza,[["Pedicuría con bisturí",v.pies.pedicuria_bisturi]])}{group("Cejas y Pestañas",v.cejas_pestanas.realiza,[["Perfilado",v.cejas_pestanas.perfilado],["Con hilo",v.cejas_pestanas.hilo]])}</div></div>;
+}
+
+function ReclutamientoCargaCandidataPage({ data, user }) {
+  const allowedIds=useMemo(()=>new Set(getAssignedLocalIds(data,user).map(Number)),[data,user]);
+  const locales=useMemo(()=>(data.locales||[]).filter(l=>localActivo(l)&&allowedIds.has(Number(l.id))).sort((a,b)=>(a.nombre||"").localeCompare(b.nombre||"")),[data.locales,allowedIds]);
+  const base=useCallback(()=>({nombre:"",email:"",telefono:"",puesto:"manicura",origen:"local",disponibilidadDesde:"",disponibilidadTipo:"full",disponibilidadTurno:"indistinto",trabajaFeriados:false,diasFranco:"",observaciones:"",localIds:locales.length===1?[Number(locales[0].id)]:[],servicios:[],competencias:normalizarCompetenciasReclutamiento(RECLUTAMIENTO_COMPETENCIAS_VACIAS),cvFile:null,fotoFile:null}),[locales]);
+  const [form,setForm]=useState(()=>({nombre:"",email:"",telefono:"",puesto:"manicura",origen:"local",disponibilidadDesde:"",disponibilidadTipo:"full",disponibilidadTurno:"indistinto",trabajaFeriados:false,diasFranco:"",observaciones:"",localIds:[],servicios:[],competencias:normalizarCompetenciasReclutamiento(RECLUTAMIENTO_COMPETENCIAS_VACIAS),cvFile:null,fotoFile:null}));
+  const [saving,setSaving]=useState(false),[err,setErr]=useState(""),[serviceSearch,setServiceSearch]=useState("");
+  useEffect(()=>{if(locales.length===1&&!(form.localIds||[]).length)setForm(f=>({...f,localIds:[Number(locales[0].id)]}));},[locales]);
+  const toggleLocal=id=>setForm(f=>({...f,localIds:(f.localIds||[]).includes(Number(id))?f.localIds.filter(x=>Number(x)!==Number(id)):[...(f.localIds||[]),Number(id)]}));
+  const setSvc=(id,realiza)=>setForm(f=>({...f,servicios:[...(f.servicios||[]).filter(x=>Number(x.servicioId)!==Number(id)),{servicioId:Number(id),realiza,observacion:""}]}));
+  const removeSvc=id=>setForm(f=>({...f,servicios:(f.servicios||[]).filter(x=>Number(x.servicioId)!==Number(id))}));
+  const upload=async(id,tipo,file)=>{const up=await api.reclutamientoStorageRequest({action:"upload",actor:user,candidataId:id,tipo,file});await api.createReclutamientoArchivo({candidata_id:id,instancia_id:null,prueba_servicio_id:null,tipo,nombre_archivo:up.name||file.name,mime_type:up.mimeType||file.type,tamano_bytes:up.size||file.size,storage_path:up.path,creado_por_user_id:user.id});};
+  const save=async()=>{
+    setErr("");
+    if(!String(form.nombre||"").trim())return setErr("El nombre es obligatorio.");
+    if(form.email&&!isValidEmail(form.email))return setErr("El email no es válido.");
+    if(!(form.localIds||[]).length)return setErr("Seleccioná al menos uno de tus locales.");
+    if((form.localIds||[]).some(id=>!allowedIds.has(Number(id))))return setErr("Solo podés cargar candidatas para tus locales asignados.");
+    setSaving(true);
+    try{
+      const payload={nombre:String(form.nombre).trim(),email:String(form.email||"").trim()||null,telefono:String(form.telefono||"").trim()||null,puesto:form.puesto,origen:String(form.origen||"").trim()||null,disponibilidad_desde:form.disponibilidadDesde||null,disponibilidad_tipo:form.disponibilidadTipo||"full",disponibilidad_turno:form.disponibilidadTurno||"indistinto",trabaja_feriados:form.trabajaFeriados===true,dias_franco:String(form.diasFranco||"").trim()||null,observaciones:String(form.observaciones||"").trim()||null,competencias:normalizarCompetenciasReclutamiento(form.competencias)};
+      const saved=await api.saveReclutamientoCandidataCompleta(payload,form.localIds||[],form.servicios||[],null);
+      const id=Number(saved?.id||0);if(!id)throw new Error("No se obtuvo el ID de la candidata.");
+      if(form.cvFile)await upload(id,"cv",form.cvFile);
+      if(form.fotoFile)await upload(id,"foto",form.fotoFile);
+      setForm(base());setServiceSearch("");notifyToast("Candidata cargada. Casa Matriz / Franquiciado podrá continuar el proceso.","success",{title:"Reclutamiento"});
+    }catch(e){setErr("No se pudo cargar la candidata: "+(e.message||e));}
+    finally{setSaving(false);}
+  };
+  if(!locales.length)return <Card><h2 style={{marginTop:0}}>Cargar candidata</h2><p style={{margin:0,color:"var(--color-text-secondary)"}}>No tenés locales asignados. Pedile a Casa Matriz que revise tu asignación.</p></Card>;
+  return <div style={{maxWidth:980}}><div style={{marginBottom:14}}><h2 style={{margin:0,fontSize:20}}>Cargar candidata</h2><p style={{margin:"4px 0 0",fontSize:12,color:"var(--color-text-secondary)"}}>Podés ingresar nuevas candidatas para tus sucursales. No vas a ver ni editar los procesos de selección.</p></div><Card style={{padding:16}}>
+    {err&&<div style={{background:COLORS.dangerLight,color:COLORS.danger,borderRadius:9,padding:"8px 10px",fontSize:11,marginBottom:12}}>{err}</div>}
+    <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:11}} className="niki-mobile-one-column"><ModalInput label="Nombre completo" value={form.nombre} onChange={v=>setForm(f=>({...f,nombre:v}))}/><ModalSelect label="Puesto" value={form.puesto} onChange={v=>setForm(f=>({...f,puesto:v,servicios:v==="manicura"?f.servicios:[]}))}><option value="manicura">Manicura</option><option value="encargada">Encargada</option></ModalSelect><ModalInput label="Email" value={form.email} onChange={v=>setForm(f=>({...f,email:v}))}/><ModalInput label="Teléfono" value={form.telefono} onChange={v=>setForm(f=>({...f,telefono:v}))}/><ModalSelect label="Origen" value={form.origen} onChange={v=>setForm(f=>({...f,origen:v}))}><option value="local">Consulta en local</option><option value="whatsapp">WhatsApp</option><option value="instagram">Instagram</option><option value="contacto">Contacto / referida</option><option value="web">Web</option><option value="mail">Mail</option><option value="otro">Otro</option></ModalSelect><ModalInput label="Disponible desde" type="date" value={form.disponibilidadDesde} onChange={v=>setForm(f=>({...f,disponibilidadDesde:v}))}/><ModalSelect label="Disponibilidad" value={form.disponibilidadTipo} onChange={v=>setForm(f=>({...f,disponibilidadTipo:v}))}><option value="full">Full</option><option value="fin_semana">Fin de semana</option></ModalSelect><ModalSelect label="Preferencia horaria" value={form.disponibilidadTurno} onChange={v=>setForm(f=>({...f,disponibilidadTurno:v}))}><option value="indistinto">Indistinto</option><option value="am">AM</option><option value="pm">PM</option><option value="dia_completo">Día completo</option></ModalSelect></div>
+    <div style={{marginTop:13}}><p style={{margin:"0 0 7px",fontSize:11,fontWeight:800}}>Local(es)</p><div style={{display:"flex",gap:7,flexWrap:"wrap"}}>{locales.map(l=>{const on=(form.localIds||[]).includes(Number(l.id));return <button key={l.id} type="button" onClick={()=>toggleLocal(l.id)} style={{border:`1px solid ${on?COLORS.pink:"#ddd"}`,background:on?COLORS.pinkLight:"#fff",color:on?COLORS.pinkDark:"#555",borderRadius:999,padding:"6px 9px",fontSize:10,fontWeight:on?750:500,cursor:"pointer"}}>{on?"✓ ":""}{l.nombre}</button>})}</div></div>
+    {form.puesto==="manicura"&&<ReclutamientoCompetenciasManicura value={form.competencias} onChange={competencias=>setForm(f=>({...f,competencias}))}/>}
+    <div style={{marginTop:13}}><label style={{fontSize:11,fontWeight:800,display:"block",marginBottom:5}}>Observaciones</label><textarea value={form.observaciones} onChange={e=>setForm(f=>({...f,observaciones:e.target.value}))} rows={4} style={{width:"100%",border:"1px solid #ddd",borderRadius:8,padding:9,resize:"vertical"}}/></div>
+    <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12,marginTop:13}} className="niki-mobile-one-column"><div><p style={{margin:"0 0 6px",fontSize:11,fontWeight:800}}>Foto (opcional)</p><input type="file" accept="image/jpeg,image/png,image/webp" onChange={e=>setForm(f=>({...f,fotoFile:e.target.files?.[0]||null}))}/></div><div><p style={{margin:"0 0 6px",fontSize:11,fontWeight:800}}>CV (opcional)</p><input type="file" accept="application/pdf,image/jpeg,image/png,image/webp" onChange={e=>setForm(f=>({...f,cvFile:e.target.files?.[0]||null}))}/></div></div>
+    <div style={{display:"flex",justifyContent:"flex-end",marginTop:16}}><Btn onClick={save} disabled={saving}>{saving?"Guardando...":"Guardar candidata"}</Btn></div>
+  </Card></div>;
+}
+
 function ReclutamientoBusquedasPage({ data, user }) {
   const empty=()=>({titulo:"",pedidoOriginal:"",puesto:"manicura",cantidadVacantes:1,prioridad:"media",estado:"abierta",turno:"indistinto",horaDesde:"",horaHasta:"",sabados:"indistinto",finSemanaCompleto:false,trabajaFeriados:null,zonaResidencia:"",experienciaMinMeses:"",fechaNecesidad:"",observaciones:"",localIds:[],servicios:[]});
   const [loading,setLoading]=useState(true),[db,setDb]=useState({candidatas:[],locales:[],servicios:[],busquedas:[],busquedaLocales:[],busquedaServicios:[],busquedaCandidatas:[]});
   const [modal,setModal]=useState(null),[form,setForm]=useState(empty()),[texto,setTexto]=useState(""),[candidateSearch,setCandidateSearch]=useState("");
+  const recruitmentLocales=useMemo(()=>{const allowed=["admin","casa_matriz"].includes(user.rol)?null:new Set(getAssignedLocalIds(data,user).map(Number));return (data.locales||[]).filter(l=>localActivo(l)&&(!allowed||allowed.has(Number(l.id)))).sort((a,b)=>(a.nombre||"").localeCompare(b.nombre||""));},[data,user]);
   const load=useCallback(async()=>{setLoading(true);try{const pack=await api.reclutamientoLoad();setDb(pack||{});}catch(e){notifyToast("No se pudieron cargar las búsquedas. "+(e.message||e),"error");}setLoading(false);},[]);
   useEffect(()=>{load();},[load]);
   const localNames=b=>(db.busquedaLocales||[]).filter(x=>Number(x.busqueda_id)===Number(b.id)).map(x=>(data.locales||[]).find(l=>Number(l.id)===Number(x.local_id))?.nombre).filter(Boolean);
   const searchCandidateIds=b=>(db.busquedaCandidatas||[]).filter(x=>Number(x.busqueda_id)===Number(b.id)).map(x=>Number(x.candidata_id));
-  const openNew=()=>{setForm(empty());setTexto("");setModal("new");};
+  const openNew=()=>{setForm({...empty(),localIds:recruitmentLocales.length===1?[Number(recruitmentLocales[0].id)]:[]});setTexto("");setModal("new");};
   const openEdit=b=>{setForm({id:b.id,titulo:b.titulo||"",pedidoOriginal:b.pedido_original||"",puesto:b.puesto||"manicura",cantidadVacantes:Number(b.cantidad_vacantes||1),prioridad:b.prioridad||"media",estado:b.estado||"abierta",turno:b.turno||"indistinto",horaDesde:String(b.hora_desde||"").slice(0,5),horaHasta:String(b.hora_hasta||"").slice(0,5),sabados:b.sabados||"indistinto",finSemanaCompleto:b.fin_semana_completo===true,trabajaFeriados:b.trabaja_feriados,zonaResidencia:b.zona_residencia||"",experienciaMinMeses:b.experiencia_min_meses||"",fechaNecesidad:b.fecha_necesidad||"",observaciones:b.observaciones||"",localIds:(db.busquedaLocales||[]).filter(x=>Number(x.busqueda_id)===Number(b.id)).map(x=>Number(x.local_id)),servicios:(db.busquedaServicios||[]).filter(x=>Number(x.busqueda_id)===Number(b.id)).map(x=>({servicioId:Number(x.servicio_id),nivel:x.nivel||"preferente"}))});setTexto(b.pedido_original||"");setModal("edit");};
-  const interpretar=()=>{if(!texto.trim())return;setForm(f=>({...f,...interpretarBusquedaLocal(texto,data)}));notifyToast("Interpretación local aplicada. Revisá los campos antes de guardar.","info");};
+  const interpretar=()=>{if(!texto.trim())return;setForm(f=>({...f,...interpretarBusquedaLocal(texto,{...data,locales:recruitmentLocales})}));notifyToast("Interpretación local aplicada. Revisá los campos antes de guardar.","info");};
   const save=async()=>{if(!form.titulo.trim())return notifyToast("Ingresá un título para la búsqueda.","warning");try{await api.saveReclutamientoBusqueda({id:form.id||null,titulo:form.titulo,pedido_original:texto||form.pedidoOriginal||null,puesto:form.puesto,cantidad_vacantes:Number(form.cantidadVacantes||1),prioridad:form.prioridad,estado:form.estado,turno:form.turno,hora_desde:form.horaDesde||null,hora_hasta:form.horaHasta||null,sabados:form.sabados,fin_semana_completo:form.finSemanaCompleto,trabaja_feriados:form.trabajaFeriados,zona_residencia:form.zonaResidencia||null,experiencia_min_meses:form.experienciaMinMeses||null,fecha_necesidad:form.fechaNecesidad||null,observaciones:form.observaciones||null},form.localIds||[],form.servicios||[],form.id?searchCandidateIds({id:form.id}):[]);setModal(null);await load();notifyToast("Búsqueda guardada.","success");}catch(e){notifyToast("No se pudo guardar la búsqueda. "+(e.message||e),"error");}};
   const setAssociation=async(busquedaId,candidataId,activo)=>{try{await api.setReclutamientoBusquedaCandidata(busquedaId,candidataId,activo);setDb(prev=>({...prev,busquedaCandidatas:activo?[...(prev.busquedaCandidatas||[]).filter(x=>!(Number(x.busqueda_id)===Number(busquedaId)&&Number(x.candidata_id)===Number(candidataId))),{busqueda_id:Number(busquedaId),candidata_id:Number(candidataId)}]:(prev.busquedaCandidatas||[]).filter(x=>!(Number(x.busqueda_id)===Number(busquedaId)&&Number(x.candidata_id)===Number(candidataId)))}));}catch(e){notifyToast("No se pudo actualizar la asociación.","error");}};
   const active=(db.busquedas||[]).filter(b=>!["cerrada"].includes(b.estado));
@@ -14326,7 +14676,7 @@ function ReclutamientoBusquedasPage({ data, user }) {
   return <div><div style={{display:"flex",justifyContent:"space-between",gap:10,alignItems:"center",marginBottom:14,flexWrap:"wrap"}}><div><h2 style={{margin:0,fontSize:18}}>Búsquedas</h2><p style={{margin:"3px 0 0",fontSize:12,color:"var(--color-text-secondary)"}}>Necesidades de incorporación, requisitos y candidatas asociadas.</p></div><Btn size="sm" onClick={openNew}>+ Nueva búsqueda</Btn></div>
     <Card style={{padding:12,marginBottom:14}}><Input value={candidateSearch} onChange={setCandidateSearch} placeholder="Buscar candidata para arrastrar..."/><div onDragOver={e=>e.preventDefault()} onDrop={e=>{const raw=e.dataTransfer.getData("text/niki-candidate-assoc");if(!raw)return;const x=JSON.parse(raw);if(x.busquedaId)setAssociation(x.busquedaId,x.candidataId,false);}} style={{display:"flex",gap:7,flexWrap:"wrap",marginTop:9,minHeight:44,padding:8,border:"1px dashed rgba(120,120,120,.28)",borderRadius:10,background:"var(--color-background-secondary)"}}>{pool.slice(0,80).map(c=><div key={c.id} draggable onDragStart={e=>e.dataTransfer.setData("text/niki-candidate",String(c.id))} style={{padding:"6px 9px",border:"1px solid #ddd",borderRadius:999,background:"#fff",fontSize:10,fontWeight:650,cursor:"grab"}}>⋮⋮ {c.nombre} <span style={{color:"#888"}}>· {c.puesto}</span></div>)}</div><p style={{margin:"6px 0 0",fontSize:9,color:"var(--color-text-secondary)"}}>Arrastrá una candidata sobre una búsqueda para asociarla. Arrastrala de vuelta a esta zona para quitarla.</p></Card>
     <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(360px,1fr))",gap:12}}>{active.map(b=>{const ids=searchCandidateIds(b),locs=localNames(b),reqs=(db.busquedaServicios||[]).filter(x=>Number(x.busqueda_id)===Number(b.id));return <Card key={b.id} onDragOver={e=>e.preventDefault()} onDrop={e=>{const cid=Number(e.dataTransfer.getData("text/niki-candidate"));if(!cid)return;const cand=(db.candidatas||[]).find(x=>Number(x.id)===cid);if(cand?.puesto!==b.puesto){notifyToast(`Esta búsqueda es para ${b.puesto}.`,"warning");return;}setAssociation(b.id,cid,true);}} style={{padding:14,border:b.prioridad==="alta"?`1.5px solid ${COLORS.amber}`:undefined}}><div style={{display:"flex",justifyContent:"space-between",gap:8}}><div><h3 style={{margin:0,fontSize:14}}>{b.titulo}</h3><div style={{display:"flex",gap:5,flexWrap:"wrap",marginTop:6}}><Badge color={b.puesto==="manicura"?"pink":"info"}>{b.puesto}</Badge><Badge color={b.estado==="cubierta"?"success":b.estado==="pausada"?"amber":"gray"}>{String(b.estado||"").replace("_"," ")}</Badge><Badge color={b.prioridad==="alta"?"amber":"gray"}>{b.prioridad}</Badge><Badge color="success">{ids.length}/{b.cantidad_vacantes} asociadas</Badge></div></div><Btn size="sm" variant="ghost" onClick={()=>openEdit(b)}>Editar</Btn></div><div style={{display:"flex",gap:5,flexWrap:"wrap",marginTop:8}}>{locs.map((x,i)=><span key={x} style={{fontSize:9,fontWeight:750,padding:"3px 7px",borderRadius:999,background:i%2?COLORS.successLight:COLORS.infoLight,color:i%2?COLORS.success:COLORS.info}}>🏠 {x}</span>)}</div>{b.pedido_original&&<p style={{fontSize:11,lineHeight:1.45,color:"#555",margin:"9px 0",padding:"8px 9px",background:"var(--color-background-secondary)",borderRadius:8}}>“{b.pedido_original}”</p>}<div style={{display:"flex",gap:6,flexWrap:"wrap",fontSize:10,color:"var(--color-text-secondary)"}}>{b.turno!=="indistinto"&&<span>🕒 {String(b.turno).toUpperCase()}</span>}{b.hora_desde&&b.hora_hasta&&<span>{String(b.hora_desde).slice(0,5)}–{String(b.hora_hasta).slice(0,5)}</span>}{b.sabados!=="indistinto"&&<span>· Sábados {b.sabados}</span>}{b.zona_residencia&&<span>· 📍 {b.zona_residencia}</span>}</div>{reqs.length>0&&<div style={{display:"flex",gap:5,flexWrap:"wrap",marginTop:8}}>{reqs.map(r=>{const svc=(data.agendaServicios||[]).find(x=>Number(x.id)===Number(r.servicio_id));return <span key={r.servicio_id} style={{fontSize:9,padding:"3px 7px",borderRadius:999,background:r.nivel==="excluyente"?COLORS.dangerLight:COLORS.pinkLight,color:r.nivel==="excluyente"?COLORS.danger:COLORS.pinkDark,fontWeight:700}}>{r.nivel==="excluyente"?"! ":""}{svc?.nombre||`Servicio ${r.servicio_id}`}</span>})}</div>}<div style={{borderTop:"1px solid #eee",marginTop:11,paddingTop:9}}><p style={{margin:"0 0 7px",fontSize:10,fontWeight:800,textTransform:"uppercase"}}>Candidatas asociadas</p><div style={{display:"flex",gap:6,flexWrap:"wrap",minHeight:34}}>{ids.map(cid=>{const c=(db.candidatas||[]).find(x=>Number(x.id)===Number(cid));if(!c)return null;const m=busquedaMatchInfo(b,c,db);return <div key={cid} draggable onDragStart={e=>e.dataTransfer.setData("text/niki-candidate-assoc",JSON.stringify({busquedaId:b.id,candidataId:cid}))} style={{display:"inline-flex",gap:6,alignItems:"center",padding:"5px 7px",border:`1px solid ${m.missingExcl?COLORS.danger:"#ddd"}`,borderRadius:999,background:m.missingExcl?COLORS.dangerLight:"#fff",fontSize:10,cursor:"grab"}}><span>⋮⋮ {c.nombre}</span><strong style={{color:m.missingExcl?COLORS.danger:COLORS.success}}>{m.label}</strong><button type="button" onClick={()=>setAssociation(b.id,cid,false)} style={{border:"none",background:"transparent",cursor:"pointer",color:"#999"}}>×</button></div>})}{!ids.length&&<span style={{fontSize:10,color:"var(--color-text-secondary)"}}>Arrastrá candidatas acá.</span>}</div></div></Card>})}</div>
-    {modal&&<Modal title={modal==="new"?"Nueva búsqueda":"Editar búsqueda"} onClose={()=>setModal(null)} width={900}><div style={{padding:10,borderRadius:10,background:COLORS.pinkLight,marginBottom:12}}><label style={{fontSize:11,fontWeight:800,color:COLORS.pinkDark}}>Describí lo que necesitás</label><textarea value={texto} onChange={e=>setTexto(e.target.value)} rows={4} placeholder="Ej.: Necesito 2 manicuras para Saavedra, preferentemente turno PM..." style={{width:"100%",marginTop:6,border:"1px solid #dfc8cf",borderRadius:8,padding:9,resize:"vertical"}}/><div style={{display:"flex",justifyContent:"space-between",gap:8,alignItems:"center",marginTop:7}}><span style={{fontSize:9,color:"#777"}}>Interpretación local por reglas. Sin IA, tokens ni costo por uso.</span><Btn size="sm" variant="secondary" onClick={interpretar}>✨ Interpretar pedido</Btn></div></div><div style={{display:"grid",gridTemplateColumns:"2fr 1fr 1fr",gap:10}}><ModalInput label="Título" value={form.titulo} onChange={v=>setForm(f=>({...f,titulo:v}))}/><ModalSelect label="Puesto" value={form.puesto} onChange={v=>setForm(f=>({...f,puesto:v,servicios:[]}))}><option value="manicura">Manicura</option><option value="encargada">Encargada</option></ModalSelect><ModalInput label="Vacantes" type="number" value={form.cantidadVacantes} onChange={v=>setForm(f=>({...f,cantidadVacantes:v}))}/><ModalSelect label="Prioridad" value={form.prioridad} onChange={v=>setForm(f=>({...f,prioridad:v}))}><option value="baja">Baja</option><option value="media">Media</option><option value="alta">Alta</option></ModalSelect><ModalSelect label="Estado" value={form.estado} onChange={v=>setForm(f=>({...f,estado:v}))}><option value="abierta">Abierta</option><option value="en_proceso">En proceso</option><option value="pausada">Pausada</option><option value="cubierta">Cubierta</option><option value="cerrada">Cerrada</option></ModalSelect><ModalSelect label="Turno" value={form.turno} onChange={v=>setForm(f=>({...f,turno:v}))}><option value="indistinto">Indistinto</option><option value="am">AM</option><option value="pm">PM</option><option value="dia_completo">Día completo</option></ModalSelect><ModalSelect label="Sábados" value={form.sabados} onChange={v=>setForm(f=>({...f,sabados:v}))}><option value="indistinto">Indistinto</option><option value="todos">Todos</option><option value="alternados">Alternados</option><option value="no">No</option></ModalSelect><ModalInput label="Horario desde" type="time" value={form.horaDesde} onChange={v=>setForm(f=>({...f,horaDesde:v}))}/><ModalInput label="Horario hasta" type="time" value={form.horaHasta} onChange={v=>setForm(f=>({...f,horaHasta:v}))}/><ModalInput label="Fecha necesidad" type="date" value={form.fechaNecesidad} onChange={v=>setForm(f=>({...f,fechaNecesidad:v}))}/></div><div style={{display:"flex",gap:14,flexWrap:"wrap",marginTop:12,padding:"8px 10px",border:"1px solid #eee",borderRadius:9}}><label style={{display:"flex",gap:6,alignItems:"center",fontSize:10}}><input type="checkbox" checked={!!form.finSemanaCompleto} onChange={e=>setForm(f=>({...f,finSemanaCompleto:e.target.checked}))}/> Fin de semana completo</label><label style={{display:"flex",gap:6,alignItems:"center",fontSize:10}}><input type="checkbox" checked={form.trabajaFeriados===true} onChange={e=>setForm(f=>({...f,trabajaFeriados:e.target.checked?true:null}))}/> Debe trabajar feriados</label></div><div style={{marginTop:12}}><p style={{fontSize:11,fontWeight:800,margin:"0 0 6px"}}>Locales</p><div style={{display:"flex",gap:6,flexWrap:"wrap"}}>{(data.locales||[]).filter(localActivo).map(l=>{const on=(form.localIds||[]).includes(Number(l.id));return <button key={l.id} type="button" onClick={()=>setForm(f=>({...f,localIds:on?f.localIds.filter(x=>Number(x)!==Number(l.id)):[...f.localIds,Number(l.id)]}))} style={{border:`1px solid ${on?COLORS.pink:"#ddd"}`,background:on?COLORS.pinkLight:"#fff",borderRadius:999,padding:"5px 8px",fontSize:10,cursor:"pointer"}}>{on?"✓ ":""}{l.nombre}</button>})}</div></div>{form.puesto==="manicura"&&<div style={{marginTop:12}}><p style={{fontSize:11,fontWeight:800,margin:"0 0 6px"}}>Servicios requeridos</p><div style={{display:"flex",gap:6,flexWrap:"wrap",maxHeight:140,overflowY:"auto"}}>{(data.agendaServicios||[]).filter(x=>x.activo!==false).map(svc=>{const row=(form.servicios||[]).find(x=>Number(x.servicioId)===Number(svc.id));return <div key={svc.id} style={{display:"inline-flex",border:"1px solid #ddd",borderRadius:999,overflow:"hidden"}}><span style={{fontSize:9,padding:"5px 7px"}}>{svc.nombre}</span><button type="button" onClick={()=>setForm(f=>({...f,servicios:[...(f.servicios||[]).filter(x=>Number(x.servicioId)!==Number(svc.id)),{servicioId:Number(svc.id),nivel:"preferente"}]}))} style={{border:"none",borderLeft:"1px solid #ddd",background:row?.nivel==="preferente"?COLORS.pinkLight:"#fff",fontSize:9,cursor:"pointer"}}>Preferente</button><button type="button" onClick={()=>setForm(f=>({...f,servicios:[...(f.servicios||[]).filter(x=>Number(x.servicioId)!==Number(svc.id)),{servicioId:Number(svc.id),nivel:"excluyente"}]}))} style={{border:"none",borderLeft:"1px solid #ddd",background:row?.nivel==="excluyente"?COLORS.dangerLight:"#fff",color:row?.nivel==="excluyente"?COLORS.danger:"#555",fontSize:9,cursor:"pointer"}}>Excluyente</button>{row&&<button type="button" onClick={()=>setForm(f=>({...f,servicios:f.servicios.filter(x=>Number(x.servicioId)!==Number(svc.id))}))} style={{border:"none",borderLeft:"1px solid #ddd",background:"#fff",cursor:"pointer"}}>×</button>}</div>})}</div></div>}<div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10,marginTop:12}}><ModalInput label="Zona / residencia" value={form.zonaResidencia} onChange={v=>setForm(f=>({...f,zonaResidencia:v}))}/><ModalInput label="Experiencia mínima (meses)" type="number" value={form.experienciaMinMeses} onChange={v=>setForm(f=>({...f,experienciaMinMeses:v}))}/></div><div style={{marginTop:12}}><label style={{fontSize:11,fontWeight:800}}>Observaciones</label><textarea value={form.observaciones} onChange={e=>setForm(f=>({...f,observaciones:e.target.value}))} rows={3} style={{width:"100%",marginTop:5,border:"1px solid #ddd",borderRadius:8,padding:8}}/></div><div style={{display:"flex",gap:8,justifyContent:"flex-end",marginTop:14}}><Btn variant="secondary" onClick={()=>setModal(null)}>Cancelar</Btn><Btn onClick={save}>Guardar búsqueda</Btn></div></Modal>}
+    {modal&&<Modal title={modal==="new"?"Nueva búsqueda":"Editar búsqueda"} onClose={()=>setModal(null)} width={900}><div style={{padding:10,borderRadius:10,background:COLORS.pinkLight,marginBottom:12}}><label style={{fontSize:11,fontWeight:800,color:COLORS.pinkDark}}>Describí lo que necesitás</label><textarea value={texto} onChange={e=>setTexto(e.target.value)} rows={4} placeholder="Ej.: Necesito 2 manicuras para Saavedra, preferentemente turno PM..." style={{width:"100%",marginTop:6,border:"1px solid #dfc8cf",borderRadius:8,padding:9,resize:"vertical"}}/><div style={{display:"flex",justifyContent:"space-between",gap:8,alignItems:"center",marginTop:7}}><span style={{fontSize:9,color:"#777"}}>Interpretación local por reglas. Sin IA, tokens ni costo por uso.</span><Btn size="sm" variant="secondary" onClick={interpretar}>✨ Interpretar pedido</Btn></div></div><div style={{display:"grid",gridTemplateColumns:"2fr 1fr 1fr",gap:10}}><ModalInput label="Título" value={form.titulo} onChange={v=>setForm(f=>({...f,titulo:v}))}/><ModalSelect label="Puesto" value={form.puesto} onChange={v=>setForm(f=>({...f,puesto:v,servicios:[]}))}><option value="manicura">Manicura</option><option value="encargada">Encargada</option></ModalSelect><ModalInput label="Vacantes" type="number" value={form.cantidadVacantes} onChange={v=>setForm(f=>({...f,cantidadVacantes:v}))}/><ModalSelect label="Prioridad" value={form.prioridad} onChange={v=>setForm(f=>({...f,prioridad:v}))}><option value="baja">Baja</option><option value="media">Media</option><option value="alta">Alta</option></ModalSelect><ModalSelect label="Estado" value={form.estado} onChange={v=>setForm(f=>({...f,estado:v}))}><option value="abierta">Abierta</option><option value="en_proceso">En proceso</option><option value="pausada">Pausada</option><option value="cubierta">Cubierta</option><option value="cerrada">Cerrada</option></ModalSelect><ModalSelect label="Turno" value={form.turno} onChange={v=>setForm(f=>({...f,turno:v}))}><option value="indistinto">Indistinto</option><option value="am">AM</option><option value="pm">PM</option><option value="dia_completo">Día completo</option></ModalSelect><ModalSelect label="Sábados" value={form.sabados} onChange={v=>setForm(f=>({...f,sabados:v}))}><option value="indistinto">Indistinto</option><option value="todos">Todos</option><option value="alternados">Alternados</option><option value="no">No</option></ModalSelect><ModalInput label="Horario desde" type="time" value={form.horaDesde} onChange={v=>setForm(f=>({...f,horaDesde:v}))}/><ModalInput label="Horario hasta" type="time" value={form.horaHasta} onChange={v=>setForm(f=>({...f,horaHasta:v}))}/><ModalInput label="Fecha necesidad" type="date" value={form.fechaNecesidad} onChange={v=>setForm(f=>({...f,fechaNecesidad:v}))}/></div><div style={{display:"flex",gap:14,flexWrap:"wrap",marginTop:12,padding:"8px 10px",border:"1px solid #eee",borderRadius:9}}><label style={{display:"flex",gap:6,alignItems:"center",fontSize:10}}><input type="checkbox" checked={!!form.finSemanaCompleto} onChange={e=>setForm(f=>({...f,finSemanaCompleto:e.target.checked}))}/> Fin de semana completo</label><label style={{display:"flex",gap:6,alignItems:"center",fontSize:10}}><input type="checkbox" checked={form.trabajaFeriados===true} onChange={e=>setForm(f=>({...f,trabajaFeriados:e.target.checked?true:null}))}/> Debe trabajar feriados</label></div><div style={{marginTop:12}}><p style={{fontSize:11,fontWeight:800,margin:"0 0 6px"}}>Locales</p><div style={{display:"flex",gap:6,flexWrap:"wrap"}}>{recruitmentLocales.map(l=>{const on=(form.localIds||[]).includes(Number(l.id));return <button key={l.id} type="button" onClick={()=>setForm(f=>({...f,localIds:on?f.localIds.filter(x=>Number(x)!==Number(l.id)):[...f.localIds,Number(l.id)]}))} style={{border:`1px solid ${on?COLORS.pink:"#ddd"}`,background:on?COLORS.pinkLight:"#fff",borderRadius:999,padding:"5px 8px",fontSize:10,cursor:"pointer"}}>{on?"✓ ":""}{l.nombre}</button>})}</div></div>{form.puesto==="manicura"&&<div style={{marginTop:12}}><p style={{fontSize:11,fontWeight:800,margin:"0 0 6px"}}>Servicios requeridos</p><div style={{display:"flex",gap:6,flexWrap:"wrap",maxHeight:140,overflowY:"auto"}}>{(data.agendaServicios||[]).filter(x=>x.activo!==false).map(svc=>{const row=(form.servicios||[]).find(x=>Number(x.servicioId)===Number(svc.id));return <div key={svc.id} style={{display:"inline-flex",border:"1px solid #ddd",borderRadius:999,overflow:"hidden"}}><span style={{fontSize:9,padding:"5px 7px"}}>{svc.nombre}</span><button type="button" onClick={()=>setForm(f=>({...f,servicios:[...(f.servicios||[]).filter(x=>Number(x.servicioId)!==Number(svc.id)),{servicioId:Number(svc.id),nivel:"preferente"}]}))} style={{border:"none",borderLeft:"1px solid #ddd",background:row?.nivel==="preferente"?COLORS.pinkLight:"#fff",fontSize:9,cursor:"pointer"}}>Preferente</button><button type="button" onClick={()=>setForm(f=>({...f,servicios:[...(f.servicios||[]).filter(x=>Number(x.servicioId)!==Number(svc.id)),{servicioId:Number(svc.id),nivel:"excluyente"}]}))} style={{border:"none",borderLeft:"1px solid #ddd",background:row?.nivel==="excluyente"?COLORS.dangerLight:"#fff",color:row?.nivel==="excluyente"?COLORS.danger:"#555",fontSize:9,cursor:"pointer"}}>Excluyente</button>{row&&<button type="button" onClick={()=>setForm(f=>({...f,servicios:f.servicios.filter(x=>Number(x.servicioId)!==Number(svc.id))}))} style={{border:"none",borderLeft:"1px solid #ddd",background:"#fff",cursor:"pointer"}}>×</button>}</div>})}</div></div>}<div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10,marginTop:12}}><ModalInput label="Zona / residencia" value={form.zonaResidencia} onChange={v=>setForm(f=>({...f,zonaResidencia:v}))}/><ModalInput label="Experiencia mínima (meses)" type="number" value={form.experienciaMinMeses} onChange={v=>setForm(f=>({...f,experienciaMinMeses:v}))}/></div><div style={{marginTop:12}}><label style={{fontSize:11,fontWeight:800}}>Observaciones</label><textarea value={form.observaciones} onChange={e=>setForm(f=>({...f,observaciones:e.target.value}))} rows={3} style={{width:"100%",marginTop:5,border:"1px solid #ddd",borderRadius:8,padding:8}}/></div><div style={{display:"flex",gap:8,justifyContent:"flex-end",marginTop:14}}><Btn variant="secondary" onClick={()=>setModal(null)}>Cancelar</Btn><Btn onClick={save}>Guardar búsqueda</Btn></div></Modal>}
   </div>;
 }
 
@@ -14342,6 +14692,7 @@ function ReclutamientoPage({ data, setData, user, fixedView = "tablero" }) {
   const pedirConfirmacionConfig=useCallback((config)=>new Promise(resolve=>{configConfirmResolver.current=resolve;setConfigConfirm(config);}),[]);
   const cerrarConfirmacionConfig=useCallback((result)=>{const resolve=configConfirmResolver.current;configConfirmResolver.current=null;setConfigConfirm(null);resolve?.(result);},[]);
   const rrhhUsers=(data.users||[]).filter(u=>u.activo&&["admin","casa_matriz"].includes(u.rol)).sort((a,b)=>(a.nombre||"").localeCompare(b.nombre||""));
+  const recruitmentLocales=useMemo(()=>{const allowed=["admin","casa_matriz"].includes(user.rol)?null:new Set(getAssignedLocalIds(data,user).map(Number));return (data.locales||[]).filter(l=>localActivo(l)&&(!allowed||allowed.has(Number(l.id)))).sort((a,b)=>(a.nombre||"").localeCompare(b.nombre||""));},[data,user]);
   useEffect(()=>{ setVista(fixedView); },[fixedView]);
 
   const load=useCallback(async()=>{
@@ -14388,9 +14739,9 @@ function ReclutamientoPage({ data, setData, user, fixedView = "tablero" }) {
   const rechazadas=activeApprovals.filter(a=>a.decision==="rechazada").length;
   const puedeAutorizar=detail&&(user.rol==="admin"||db.autorizadores.some(a=>Number(a.user_id)===Number(user.id)&&a.puesto===detail.puesto&&a.activo));
 
-  const baseForm=(puestoValue="manicura")=>({nombre:"",email:"",telefono:"",puesto:puestoValue,origen:"",disponibilidadDesde:"",disponibilidadTipo:"full",disponibilidadTurno:"indistinto",trabajaFeriados:false,diasFranco:"",observaciones:"",localIds:[],servicios:[],busquedaIds:[],cvFile:null,fotoFile:null});
+  const baseForm=(puestoValue="manicura")=>({nombre:"",email:"",telefono:"",puesto:puestoValue,origen:"",disponibilidadDesde:"",disponibilidadTipo:"full",disponibilidadTurno:"indistinto",trabajaFeriados:false,diasFranco:"",observaciones:"",localIds:recruitmentLocales.length===1?[Number(recruitmentLocales[0].id)]:[],servicios:[],competencias:normalizarCompetenciasReclutamiento(RECLUTAMIENTO_COMPETENCIAS_VACIAS),busquedaIds:[],cvFile:null,fotoFile:null});
   const openNew=()=>{setCandidateForm(baseForm("manicura"));setCandidateErr("");setCandidateServiceSearch("");setCandidateModal("new");};
-  const openEdit=c=>{setCandidateForm({id:c.id,nombre:c.nombre||"",email:c.email||"",telefono:c.telefono||"",puesto:c.puesto||"manicura",origen:c.origen||"",disponibilidadDesde:c.disponibilidad_desde||"",disponibilidadTipo:c.disponibilidad_tipo||"full",disponibilidadTurno:c.disponibilidad_turno||"indistinto",trabajaFeriados:c.trabaja_feriados===true,diasFranco:c.dias_franco||"",observaciones:c.observaciones||"",localIds:db.locales.filter(x=>Number(x.candidata_id)===Number(c.id)).map(x=>Number(x.local_id)),servicios:db.servicios.filter(x=>Number(x.candidata_id)===Number(c.id)).map(x=>({servicioId:Number(x.servicio_id),realiza:!!x.realiza,observacion:x.observacion||""})),busquedaIds:(db.busquedaCandidatas||[]).filter(x=>Number(x.candidata_id)===Number(c.id)).map(x=>Number(x.busqueda_id)),cvFile:null,fotoFile:null});setCandidateErr("");setCandidateServiceSearch("");setCandidateModal("edit");};
+  const openEdit=c=>{setCandidateForm({id:c.id,nombre:c.nombre||"",email:c.email||"",telefono:c.telefono||"",puesto:c.puesto||"manicura",origen:c.origen||"",disponibilidadDesde:c.disponibilidad_desde||"",disponibilidadTipo:c.disponibilidad_tipo||"full",disponibilidadTurno:c.disponibilidad_turno||"indistinto",trabajaFeriados:c.trabaja_feriados===true,diasFranco:c.dias_franco||"",observaciones:c.observaciones||"",localIds:db.locales.filter(x=>Number(x.candidata_id)===Number(c.id)).map(x=>Number(x.local_id)),servicios:db.servicios.filter(x=>Number(x.candidata_id)===Number(c.id)).map(x=>({servicioId:Number(x.servicio_id),realiza:!!x.realiza,observacion:x.observacion||""})),competencias:normalizarCompetenciasReclutamiento(c.competencias),busquedaIds:(db.busquedaCandidatas||[]).filter(x=>Number(x.candidata_id)===Number(c.id)).map(x=>Number(x.busqueda_id)),cvFile:null,fotoFile:null});setCandidateErr("");setCandidateServiceSearch("");setCandidateModal("edit");};
   const toggleCandidateLocal=id=>setCandidateForm(f=>({...f,localIds:(f.localIds||[]).includes(id)?f.localIds.filter(x=>x!==id):[...(f.localIds||[]),id]}));
   const setCandidateServicio=(sid,realiza)=>setCandidateForm(f=>({...f,servicios:[...(f.servicios||[]).filter(x=>Number(x.servicioId)!==Number(sid)),{servicioId:Number(sid),realiza,observacion:""}]}));
   const removeCandidateServicio=sid=>setCandidateForm(f=>({...f,servicios:(f.servicios||[]).filter(x=>Number(x.servicioId)!==Number(sid))}));
@@ -14411,7 +14762,7 @@ function ReclutamientoPage({ data, setData, user, fixedView = "tablero" }) {
     setCandidateSaving(true);
     try{
       const circuito=db.circuitos.find(c=>c.puesto===candidateForm.puesto&&c.activo);
-      const payload={nombre:candidateForm.nombre.trim(),email:String(candidateForm.email||"").trim()||null,telefono:String(candidateForm.telefono||"").trim()||null,puesto:candidateForm.puesto,circuito_id:circuito?.id||null,origen:String(candidateForm.origen||"").trim()||null,disponibilidad_desde:candidateForm.disponibilidadDesde||null,disponibilidad_tipo:candidateForm.disponibilidadTipo||"full",disponibilidad_turno:candidateForm.disponibilidadTurno||"indistinto",trabaja_feriados:candidateForm.trabajaFeriados===true,dias_franco:String(candidateForm.diasFranco||"").trim()||null,observaciones:String(candidateForm.observaciones||"").trim()||null,actualizado_por_user_id:user.id};
+      const payload={nombre:candidateForm.nombre.trim(),email:String(candidateForm.email||"").trim()||null,telefono:String(candidateForm.telefono||"").trim()||null,puesto:candidateForm.puesto,circuito_id:circuito?.id||null,origen:String(candidateForm.origen||"").trim()||null,disponibilidad_desde:candidateForm.disponibilidadDesde||null,disponibilidad_tipo:candidateForm.disponibilidadTipo||"full",disponibilidad_turno:candidateForm.disponibilidadTurno||"indistinto",trabaja_feriados:candidateForm.trabajaFeriados===true,dias_franco:String(candidateForm.diasFranco||"").trim()||null,observaciones:String(candidateForm.observaciones||"").trim()||null,competencias:normalizarCompetenciasReclutamiento(candidateForm.competencias),actualizado_por_user_id:user.id};
       const saved=await api.saveReclutamientoCandidataCompleta({id:candidateForm.id||null,...payload},candidateForm.localIds||[],candidateForm.servicios||[],candidateForm.busquedaIds||[]);
       const id=saved.id;
       if(candidateForm.cvFile)await uploadArchivo({candidataId:id,tipo:"cv",file:candidateForm.cvFile});
@@ -14508,7 +14859,7 @@ function ReclutamientoPage({ data, setData, user, fixedView = "tablero" }) {
     <ConfirmDialog config={configConfirm} onCancel={()=>cerrarConfirmacionConfig(false)} onConfirm={()=>cerrarConfirmacionConfig(true)} />
     <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",gap:10,flexWrap:"wrap",marginBottom:14}}><div><h2 style={{margin:0,fontSize:18}}>{vista==="config"?"Configuración de reclutamiento":"Candidatas y procesos"}</h2><p style={{margin:"3px 0 0",fontSize:12,color:"var(--color-text-secondary)"}}>{vista==="config"?"Circuitos, etapas y autorizadores de RRHH.":"Seguimiento completo de candidatas, entrevistas, pruebas y estado del proceso."}</p></div>{vista==="tablero"&&<Btn size="sm" onClick={openNew}>+ Nueva candidata</Btn>}</div>
     {vista==="tablero"?<>
-      <Card style={{marginBottom:14,padding:12}}><div style={{display:"grid",gridTemplateColumns:"2fr 1fr 1fr",gap:9}}><Input value={search} onChange={setSearch} placeholder="Buscar por nombre, email o teléfono"/><Select value={puesto} onChange={setPuesto}><option value="todos">Todos los puestos</option><option value="manicura">Manicuras</option><option value="encargada">Encargadas</option></Select><Select value={estado} onChange={setEstado}><option value="activos">Procesos activos</option><option value="todos">Todos los estados</option>{Object.entries(RECLUTAMIENTO_ESTADOS).map(([k,v])=><option key={k} value={k}>{v[0]}</option>)}</Select></div><div style={{display:"flex",gap:6,alignItems:"center",flexWrap:"wrap",marginTop:10}}><span style={{fontSize:10,fontWeight:800,color:"var(--color-text-secondary)",textTransform:"uppercase"}}>Locales</span><button type="button" onClick={()=>setLocalFilterIds([])} style={{border:`1px solid ${!localFilterIds.length?COLORS.pink:"#ddd"}`,background:!localFilterIds.length?COLORS.pinkLight:"#fff",color:!localFilterIds.length?COLORS.pinkDark:"#555",borderRadius:999,padding:"5px 9px",fontSize:10,cursor:"pointer"}}>Todos</button>{(data.locales||[]).filter(localActivo).map((l,idx)=>{const on=localFilterIds.includes(Number(l.id));const sw=[COLORS.info,COLORS.success,COLORS.amber,COLORS.pinkDark,"#6f5aa7","#a55d3f"][idx%6];return <button type="button" key={l.id} onClick={()=>setLocalFilterIds(p=>on?p.filter(x=>Number(x)!==Number(l.id)):[...p,Number(l.id)])} style={{border:`1px solid ${on?sw:"#ddd"}`,background:on?`${sw}18`:"#fff",color:on?sw:"#555",borderRadius:999,padding:"5px 9px",fontSize:10,fontWeight:on?750:500,cursor:"pointer"}}>{on?"✓ ":""}{l.nombre}</button>})}</div></Card>
+      <Card style={{marginBottom:14,padding:12}}><div style={{display:"grid",gridTemplateColumns:"2fr 1fr 1fr",gap:9}}><Input value={search} onChange={setSearch} placeholder="Buscar por nombre, email o teléfono"/><Select value={puesto} onChange={setPuesto}><option value="todos">Todos los puestos</option><option value="manicura">Manicuras</option><option value="encargada">Encargadas</option></Select><Select value={estado} onChange={setEstado}><option value="activos">Procesos activos</option><option value="todos">Todos los estados</option>{Object.entries(RECLUTAMIENTO_ESTADOS).map(([k,v])=><option key={k} value={k}>{v[0]}</option>)}</Select></div><div style={{display:"flex",gap:6,alignItems:"center",flexWrap:"wrap",marginTop:10}}><span style={{fontSize:10,fontWeight:800,color:"var(--color-text-secondary)",textTransform:"uppercase"}}>Locales</span><button type="button" onClick={()=>setLocalFilterIds([])} style={{border:`1px solid ${!localFilterIds.length?COLORS.pink:"#ddd"}`,background:!localFilterIds.length?COLORS.pinkLight:"#fff",color:!localFilterIds.length?COLORS.pinkDark:"#555",borderRadius:999,padding:"5px 9px",fontSize:10,cursor:"pointer"}}>Todos</button>{recruitmentLocales.map((l,idx)=>{const on=localFilterIds.includes(Number(l.id));const sw=[COLORS.info,COLORS.success,COLORS.amber,COLORS.pinkDark,"#6f5aa7","#a55d3f"][idx%6];return <button type="button" key={l.id} onClick={()=>setLocalFilterIds(p=>on?p.filter(x=>Number(x)!==Number(l.id)):[...p,Number(l.id)])} style={{border:`1px solid ${on?sw:"#ddd"}`,background:on?`${sw}18`:"#fff",color:on?sw:"#555",borderRadius:999,padding:"5px 9px",fontSize:10,fontWeight:on?750:500,cursor:"pointer"}}>{on?"✓ ":""}{l.nombre}</button>})}</div></Card>
       <div style={{display:"flex",flexDirection:"column",gap:18}}>{candidatasAgrupadas.map(grupo=>{const meta=RECLUTAMIENTO_ESTADOS[grupo.estadoKey]||[grupo.estadoKey,"gray"];return <section key={grupo.estadoKey}><div style={{display:"flex",alignItems:"center",gap:8,margin:"0 0 8px 2px"}}><h3 style={{margin:0,fontSize:13,fontWeight:800,color:"var(--color-text-primary)"}}>{meta[0]}</h3><Badge color={meta[1]}>{grupo.items.length}</Badge><div style={{height:1,background:"rgba(120,120,120,.14)",flex:1}}/></div><div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(245px,1fr))",gap:12}}>{grupo.items.map(c=>{const inst=db.instancias.filter(i=>Number(i.candidata_id)===Number(c.id)),done=inst.filter(i=>["realizada","aprobada"].includes(i.estado)).length,total=inst.filter(i=>i.obligatoria).length,locs=localidadNames(c),referida=esCandidataReferida(c);return <Card key={c.id} style={{padding:12,border:referida?`1.5px solid ${COLORS.pink}`:undefined,boxShadow:referida?"0 0 0 3px rgba(225,198,204,.24)":"none",background:referida?"linear-gradient(180deg, rgba(247,237,240,.72) 0%, var(--color-background-primary) 46%)":"var(--color-background-primary)"}}><div style={{display:"flex",justifyContent:"space-between",gap:8,alignItems:"flex-start"}}><div style={{minWidth:0}}><div style={{display:"flex",alignItems:"center",gap:6,minWidth:0}}><p style={{margin:0,fontSize:14,fontWeight:700,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{c.nombre}</p>{referida&&<span title="Candidata referida / recomendada" style={{fontSize:15,lineHeight:1,filter:"saturate(.9)"}}>✨</span>}</div><div style={{display:"flex",alignItems:"center",gap:6,marginTop:2,flexWrap:"wrap"}}><p style={{margin:0,fontSize:10,color:"var(--color-text-secondary)",textTransform:"uppercase",fontWeight:700}}>{c.puesto}</p>{referida&&<span style={{fontSize:9,fontWeight:800,color:COLORS.pinkDark,background:COLORS.pinkLight,border:`1px solid ${COLORS.pink}`,padding:"2px 6px",borderRadius:999}}>★ Referida</span>}</div></div>{estadoBadge(c)}</div><p style={{margin:"9px 0 0",fontSize:11,color:"var(--color-text-secondary)"}}>{c.email||"Sin email"} · {c.telefono||"Sin teléfono"}</p><div style={{display:"flex",gap:5,flexWrap:"wrap",marginTop:7}}>{locs.length?locs.map((name,idx)=>{const sw=[COLORS.info,COLORS.success,COLORS.amber,COLORS.pinkDark,"#6f5aa7","#a55d3f"][idx%6];return <span key={name} style={{fontSize:9,fontWeight:750,padding:"3px 7px",borderRadius:999,background:`${sw}16`,color:sw,border:`1px solid ${sw}44`}}>🏠 {name}</span>}):<span style={{fontSize:10,color:"var(--color-text-secondary)"}}>Sin sucursales preferidas</span>}</div><div style={{marginTop:10,height:7,borderRadius:999,background:"#eee",overflow:"hidden"}}><div style={{height:"100%",width:`${total?Math.min(100,(done/total)*100):0}%`,background:COLORS.pink}}/></div><div style={{display:"flex",justifyContent:"space-between",fontSize:10,color:"var(--color-text-secondary)",marginTop:4}}><span>{done}/{total} etapas</span><span>{db.aprobaciones.filter(a=>Number(a.candidata_id)===Number(c.id)&&a.activa&&a.decision==="aprobada").length}/{db.circuitos.find(x=>Number(x.id)===Number(c.circuito_id))?.aprobaciones_requeridas||2} aprobaciones</span></div><div style={{display:"flex",gap:6,marginTop:11}}><Btn size="sm" onClick={()=>openDetail(c)} style={{flex:1,justifyContent:"center"}}>Abrir proceso</Btn><Btn size="sm" variant="ghost" onClick={()=>openEdit(c)}>Editar</Btn></div></Card>})}</div></section>})}</div>
       {candidatasFiltradas.length===0&&<Card><p style={{margin:0,fontSize:13,color:"var(--color-text-secondary)"}}>No hay candidatas con estos filtros.</p></Card>}
     </>:<div style={{display:"flex",flexDirection:"column",gap:14}}>{["manicura","encargada"].map(pst=>{const c=db.circuitos.find(x=>x.puesto===pst&&x.activo),etapas=c?db.plantillas.filter(x=>Number(x.circuito_id)===Number(c.id)&&x.activa!==false).sort((a,b)=>a.orden-b.orden):[];return <Card key={pst}><div style={{display:"flex",justifyContent:"space-between",gap:12,alignItems:"center",flexWrap:"wrap"}}><div><h3 style={{margin:0,fontSize:15}}>Circuito · {pst==="manicura"?"Manicura":"Encargada"}</h3><p style={{margin:"3px 0 0",fontSize:11,color:"var(--color-text-secondary)"}}>Las candidatas nuevas copian estas etapas al iniciar su proceso.</p></div>{c&&<div style={{display:"flex",alignItems:"center",gap:6}}><span style={{fontSize:11}}>Aprobaciones RRHH</span><select disabled={configSaving} value={c.aprobaciones_requeridas||2} onChange={e=>saveCircuitApprovals(c,e.target.value)} style={{padding:"5px 8px",border:"1px solid #ddd",borderRadius:7}}><option value="1">1</option><option value="2">2</option></select></div>}</div><div style={{marginTop:12,display:"flex",flexDirection:"column",gap:6}}>{etapas.map(e=><div key={e.id} style={{display:"flex",gap:8,alignItems:"center",padding:"7px 9px",background:"var(--color-background-secondary)",borderRadius:8}}><Badge color="gray">{e.orden}</Badge><span style={{flex:1,fontSize:12,fontWeight:600}}>{e.nombre}</span><Badge color="info">{e.tipo.replace("_"," ")}</Badge><button disabled={configSaving} onClick={()=>deleteStage(e)} style={{border:"none",background:COLORS.dangerLight,color:COLORS.danger,borderRadius:6,cursor:"pointer"}}>×</button></div>)}</div><div style={{display:"grid",gridTemplateColumns:"1fr 170px 100px",gap:7,marginTop:10}}><Input value={newStage[pst].nombre} onChange={v=>setNewStage(p=>({...p,[pst]:{...p[pst],nombre:v}}))} placeholder="Nueva etapa"/><Select value={newStage[pst].tipo} onChange={v=>setNewStage(p=>({...p,[pst]:{...p[pst],tipo:v}}))}><option value="entrevista">Entrevista</option><option value="prueba_tecnica">Prueba técnica</option><option value="evaluacion">Evaluación</option><option value="documentacion">Documentación</option></Select><Btn size="sm" disabled={configSaving} onClick={()=>addStage(pst)} style={{justifyContent:"center"}}>Agregar</Btn></div><div style={{marginTop:14,borderTop:"1px solid #eee",paddingTop:10}}><p style={{margin:"0 0 7px",fontSize:11,fontWeight:800,textTransform:"uppercase",color:"var(--color-text-secondary)"}}>Autorizadores RRHH</p><div style={{display:"flex",gap:7,flexWrap:"wrap"}}>{rrhhUsers.map(u=>{const on=user.rol==="admin"&&Number(u.id)===Number(user.id)?true:db.autorizadores.some(a=>Number(a.user_id)===Number(u.id)&&a.puesto===pst&&a.activo);return <button key={u.id} disabled={configSaving||(u.rol==="admin"&&Number(u.id)===Number(user.id))} onClick={()=>toggleAuthorizer(u.id,pst)} style={{border:`1px solid ${on?COLORS.pink:"#ddd"}`,background:on?COLORS.pinkLight:"#fff",borderRadius:999,padding:"6px 9px",fontSize:10,cursor:"pointer"}}>{on?"✓ ":""}{u.nombre}</button>})}</div></div></Card>})}</div>}
@@ -14535,11 +14886,11 @@ function ReclutamientoPage({ data, setData, user, fixedView = "tablero" }) {
 
       <div style={{marginTop:12}}><label style={{fontSize:13,fontWeight:500,color:"#555",display:"block",marginBottom:6}}>Observaciones</label><textarea value={candidateForm.observaciones||""} onChange={e=>setCandidateForm(f=>({...f,observaciones:e.target.value}))} rows={3} style={{width:"100%",border:"1.5px solid #e0e0e0",borderRadius:8,padding:10,resize:"vertical"}}/></div>
 
-      <div style={{marginTop:14,borderTop:"1px solid #eee",paddingTop:12}}><p style={{margin:"0 0 8px",fontSize:12,fontWeight:750}}>Sucursales posibles</p><div style={{display:"flex",gap:7,flexWrap:"wrap"}}>{(data.locales||[]).filter(localActivo).map(l=>{const on=(candidateForm.localIds||[]).includes(l.id);return <button type="button" key={l.id} onClick={()=>toggleCandidateLocal(l.id)} style={{border:`1px solid ${on?COLORS.pink:"#ddd"}`,background:on?COLORS.pinkLight:"#fff",borderRadius:999,padding:"6px 9px",fontSize:10,cursor:"pointer"}}>{on?"✓ ":""}{l.nombre}</button>})}</div></div>
+      <div style={{marginTop:14,borderTop:"1px solid #eee",paddingTop:12}}><p style={{margin:"0 0 8px",fontSize:12,fontWeight:750}}>Sucursales posibles</p><div style={{display:"flex",gap:7,flexWrap:"wrap"}}>{recruitmentLocales.map(l=>{const on=(candidateForm.localIds||[]).includes(Number(l.id));return <button type="button" key={l.id} onClick={()=>toggleCandidateLocal(l.id)} style={{border:`1px solid ${on?COLORS.pink:"#ddd"}`,background:on?COLORS.pinkLight:"#fff",borderRadius:999,padding:"6px 9px",fontSize:10,cursor:"pointer"}}>{on?"✓ ":""}{l.nombre}</button>})}</div></div>
 
       <div style={{marginTop:14,borderTop:"1px solid #eee",paddingTop:12}}><p style={{margin:"0 0 5px",fontSize:12,fontWeight:750}}>Búsquedas a las que aplica</p><p style={{margin:"0 0 8px",fontSize:10,color:"var(--color-text-secondary)"}}>Podés asociarla desde acá o arrastrarla a una búsqueda desde el tablero de Búsquedas.</p><div style={{display:"flex",gap:7,flexWrap:"wrap"}}>{(db.busquedas||[]).filter(b=>!["cerrada"].includes(String(b.estado||""))&&(b.puesto===candidateForm.puesto)).map(b=>{const on=(candidateForm.busquedaIds||[]).includes(Number(b.id));return <button type="button" key={b.id} onClick={()=>setCandidateForm(f=>({...f,busquedaIds:on?(f.busquedaIds||[]).filter(x=>Number(x)!==Number(b.id)):[...(f.busquedaIds||[]),Number(b.id)]}))} style={{border:`1px solid ${on?COLORS.pink:"#ddd"}`,background:on?COLORS.pinkLight:"#fff",color:on?COLORS.pinkDark:"#555",borderRadius:999,padding:"6px 9px",fontSize:10,cursor:"pointer"}}>{on?"✓ ":""}{b.titulo}</button>})}{!(db.busquedas||[]).some(b=>b.puesto===candidateForm.puesto&&b.estado!=="cerrada")&&<span style={{fontSize:10,color:"var(--color-text-secondary)"}}>No hay búsquedas abiertas para este puesto.</span>}</div></div>
 
-      {candidateForm.puesto==="manicura"&&<div style={{marginTop:14,borderTop:"1px solid #eee",paddingTop:12}}><p style={{margin:"0 0 6px",fontSize:12,fontWeight:750}}>Servicios que realiza / no realiza</p><Input value={candidateServiceSearch} onChange={setCandidateServiceSearch} placeholder="Buscar servicio..."/><div style={{display:"flex",gap:6,flexWrap:"wrap",marginTop:7,maxHeight:130,overflowY:"auto"}}>{(data.agendaServicios||[]).filter(s=>!candidateServiceSearch||String(s.nombre||"").toLowerCase().includes(candidateServiceSearch.toLowerCase())).slice(0,30).map(s=>{const row=(candidateForm.servicios||[]).find(x=>Number(x.servicioId)===Number(s.id));return <div key={s.id} style={{display:"inline-flex",alignItems:"center",border:"1px solid #ddd",borderRadius:999,overflow:"hidden"}}><span style={{fontSize:10,padding:"5px 7px"}}>{s.nombre}</span><button type="button" onClick={()=>setCandidateServicio(s.id,true)} style={{border:"none",borderLeft:"1px solid #ddd",padding:"5px 7px",background:row?.realiza===true?COLORS.successLight:"#fff",color:row?.realiza===true?COLORS.success:"#666",cursor:"pointer"}}>Sí</button><button type="button" onClick={()=>setCandidateServicio(s.id,false)} style={{border:"none",borderLeft:"1px solid #ddd",padding:"5px 7px",background:row?.realiza===false?COLORS.dangerLight:"#fff",color:row?.realiza===false?COLORS.danger:"#666",cursor:"pointer"}}>No</button>{row&&<button type="button" onClick={()=>removeCandidateServicio(s.id)} style={{border:"none",borderLeft:"1px solid #ddd",padding:"5px 6px",background:"#fff",cursor:"pointer"}}>×</button>}</div>})}</div></div>}
+      {candidateForm.puesto==="manicura"&&<ReclutamientoCompetenciasManicura value={candidateForm.competencias} onChange={competencias=>setCandidateForm(f=>({...f,competencias}))}/>}
 
       <div style={{marginTop:14,borderTop:"1px solid #eee",paddingTop:12,display:"grid",gridTemplateColumns:"1fr 1fr",gap:16}}>
         <div><p style={{margin:"0 0 6px",fontSize:12,fontWeight:750}}>Foto de perfil</p><div style={{display:"flex",alignItems:"center",gap:10}}>
@@ -14554,7 +14905,7 @@ function ReclutamientoPage({ data, setData, user, fixedView = "tablero" }) {
     </Modal>}
 
     {encIncorp&&<Modal title="Incorporar candidata como encargada" onClose={()=>setEncIncorp(null)} width={620}><div style={{display:"flex",flexDirection:"column",gap:11}}><div style={{padding:10,borderRadius:10,background:COLORS.successLight,fontSize:12}}><strong>{encIncorp.candidata.nombre}</strong> quedará dada de alta como encargada.</div><ModalInput label="Fecha de ingreso" type="date" value={encIncorp.fechaInicio} onChange={v=>setEncIncorp(x=>({...x,fechaInicio:v}))}/><div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10}}><div><ModalInput label="Usuario de acceso" value={encIncorp.usuario} onChange={v=>setEncIncorp(x=>({...x,usuario:v}))}/><p style={{margin:"4px 2px 0",fontSize:10.5,color:"var(--color-text-secondary)"}}>Se informará en el email de invitación.</p></div><ModalInput label="Email" value={encIncorp.email} onChange={v=>setEncIncorp(x=>({...x,email:v}))}/></div><div style={{background:COLORS.infoLight,color:COLORS.info,borderRadius:9,padding:"8px 10px",fontSize:11}}>No hace falta definir contraseña: recibirá un enlace para crear la suya.</div><ModalSelect label="Tipo de relación" value={encIncorp.tipoRelacion} onChange={v=>setEncIncorp(x=>({...x,tipoRelacion:v}))}><option value="a_resolver">A resolver</option><option value="monotributista">Monotributista</option><option value="dependencia">Relación de dependencia</option></ModalSelect><div><p style={{margin:"0 0 7px",fontSize:12,fontWeight:700}}>Locales asignados</p><div style={{display:"flex",gap:6,flexWrap:"wrap"}}>{(data.locales||[]).map(l=>{const on=(encIncorp.localIds||[]).includes(l.id);return <button key={l.id} type="button" onClick={()=>toggleEncIncorpLocal(l.id)} style={{border:`1px solid ${on?COLORS.pink:"#ddd"}`,background:on?COLORS.pinkLight:"#fff",borderRadius:999,padding:"6px 9px",fontSize:10,cursor:"pointer"}}>{on?"✓ ":""}{l.nombre}</button>})}</div></div><div style={{display:"flex",gap:8}}><Btn variant="success" onClick={confirmarEncargadaIncorp} disabled={encIncorpSaving} style={{flex:1,justifyContent:"center"}}>{encIncorpSaving?"Incorporando...":"Confirmar incorporación"}</Btn><Btn variant="secondary" onClick={()=>setEncIncorp(null)} style={{flex:1,justifyContent:"center"}}>Cancelar</Btn></div></div></Modal>}
-    {detail&&<Modal title={`Proceso · ${detail.nombre}`} onClose={()=>setDetailId(null)} width={940}><div style={{display:"flex",justifyContent:"space-between",gap:10,alignItems:"center",flexWrap:"wrap",marginBottom:12}}><div style={{display:"flex",gap:7,alignItems:"center"}}>{estadoBadge(detail)}<Badge color="gray">{detail.puesto}</Badge>{detail.disponibilidad_desde&&<span style={{fontSize:11,color:"var(--color-text-secondary)"}}>Disponible desde {detail.disponibilidad_desde.split("-").reverse().join("/")}</span>}</div><div style={{display:"flex",gap:6}}>{detail.estado==="disponible"&&detail.puesto==="encargada"&&<Btn size="sm" variant="success" onClick={()=>openEncargadaIncorp(detail)}>Incorporar encargada</Btn>}<Btn size="sm" variant="ghost" onClick={()=>openEdit(detail)}>Editar ficha</Btn>{!["incorporada","desistio"].includes(detail.estado)&&<Btn size="sm" variant="secondary" onClick={()=>changeStatus(detail,detail.estado==="en_pausa"?"en_proceso":"en_pausa")}>{detail.estado==="en_pausa"?"Reabrir":"Pausar"}</Btn>}<Btn size="sm" variant="danger" onClick={()=>changeStatus(detail,"desistio")}>Desistió</Btn></div></div><div style={{display:"flex",flexDirection:"column",gap:10}}>{detailInstancias.map(inst=>{const d=stageDraft[inst.id]||{},evals=d.evaluadorIds||[],testRows=db.pruebas.filter(x=>Number(x.instancia_id)===Number(inst.id));return <Card key={inst.id} style={{padding:12,background:inst.estado==="realizada"?COLORS.successLight:"#fff"}}><div style={{display:"flex",justifyContent:"space-between",gap:8,alignItems:"center",flexWrap:"wrap"}}><div style={{display:"flex",alignItems:"center",gap:7}}><Badge color="gray">{inst.orden}</Badge><strong style={{fontSize:13}}>{inst.nombre}</strong><Badge color={inst.tipo==="prueba_tecnica"?"amber":"info"}>{inst.tipo.replace("_"," ")}</Badge></div><Badge color={inst.estado==="realizada"?"success":inst.estado==="programada"?"info":inst.estado==="rechazada"?"danger":"gray"}>{inst.estado.replace("_"," ")}</Badge></div><div style={{display:"grid",gridTemplateColumns:"1.2fr 1fr 1fr",gap:8,marginTop:10}}><div><label style={{fontSize:10,fontWeight:700,color:"#777"}}>Fecha y hora</label><input type="datetime-local" value={d.fechaHora||""} onChange={e=>updateStageDraft(inst.id,"fechaHora",e.target.value)} style={{width:"100%",padding:7,border:"1px solid #ddd",borderRadius:7}}/></div><div><label style={{fontSize:10,fontWeight:700,color:"#777"}}>Local</label><select value={d.localId||""} onChange={e=>updateStageDraft(inst.id,"localId",e.target.value)} style={{width:"100%",padding:7,border:"1px solid #ddd",borderRadius:7}}><option value="">Sin local</option>{(data.locales||[]).map(l=><option key={l.id} value={l.id}>{l.nombre}</option>)}</select></div><div><label style={{fontSize:10,fontWeight:700,color:"#777"}}>Modalidad</label><Input value={d.modalidad||""} onChange={v=>updateStageDraft(inst.id,"modalidad",v)} placeholder="Presencial / Meet..." style={{padding:7,fontSize:12}}/></div></div><div style={{marginTop:8}}><p style={{margin:"0 0 5px",fontSize:10,fontWeight:700,color:"#777"}}>Evaluadores</p><div style={{display:"flex",gap:6,flexWrap:"wrap"}}>{rrhhUsers.map(u=><button key={u.id} type="button" onClick={()=>toggleEvaluator(inst.id,u.id)} style={{border:`1px solid ${evals.includes(u.id)?COLORS.pink:"#ddd"}`,background:evals.includes(u.id)?COLORS.pinkLight:"#fff",borderRadius:999,padding:"5px 8px",fontSize:9,cursor:"pointer"}}>{evals.includes(u.id)?"✓ ":""}{u.nombre}</button>)}</div></div><div style={{display:"grid",gridTemplateColumns:"1fr 180px",gap:8,marginTop:8}}><div><label style={{fontSize:10,fontWeight:700,color:"#777"}}>Comentarios / evaluación</label><textarea value={d.comentarios||""} onChange={e=>updateStageDraft(inst.id,"comentarios",e.target.value)} rows={3} style={{width:"100%",border:"1px solid #ddd",borderRadius:7,padding:8,resize:"vertical"}}/></div><div><label style={{fontSize:10,fontWeight:700,color:"#777"}}>Recomendación</label><select value={d.recomendacion||""} onChange={e=>updateStageDraft(inst.id,"recomendacion",e.target.value)} style={{width:"100%",padding:7,border:"1px solid #ddd",borderRadius:7}}>{RECLUTAMIENTO_RECOMENDACIONES.map(([v,l])=><option key={v} value={v}>{l}</option>)}</select><label style={{fontSize:10,fontWeight:700,color:"#777",display:"block",marginTop:8}}>Resultado / sugerencia</label><textarea value={d.resultado||""} onChange={e=>updateStageDraft(inst.id,"resultado",e.target.value)} rows={2} style={{width:"100%",border:"1px solid #ddd",borderRadius:7,padding:7,resize:"vertical"}}/></div></div>{inst.tipo==="prueba_tecnica"&&<div style={{marginTop:10,borderTop:"1px dashed #ddd",paddingTop:10}}><div style={{display:"flex",gap:7,alignItems:"center",marginBottom:8}}><Select value={testServiceId} onChange={setTestServiceId} style={{maxWidth:320}}><option value="">Seleccionar servicio evaluado</option>{(data.agendaServicios||[]).filter(s=>s.activo!==false).map(s=><option key={s.id} value={s.id}>{s.nombre}</option>)}</Select><Btn size="sm" onClick={()=>addTestService(inst)}>+ Servicio</Btn></div>{testRows.map(row=><div key={row.id} style={{border:"1px solid #eee",borderRadius:9,padding:9,marginBottom:7}}><div style={{display:"grid",gridTemplateColumns:"1fr 190px 2fr 34px",gap:7,alignItems:"center"}}><strong style={{fontSize:11}}>{row.servicio_nombre}</strong><select defaultValue={row.resultado||""} onChange={e=>saveTestService(row,{resultado:e.target.value||null})} style={{padding:6,border:"1px solid #ddd",borderRadius:7,fontSize:10}}><option value="">Resultado</option><option value="aprobado">Aprobado</option><option value="con_observaciones">Con observaciones</option><option value="no_aprobado">No aprobado</option></select><input defaultValue={row.comentario||""} onBlur={e=>{if(e.target.value!==(row.comentario||""))saveTestService(row,{comentario:e.target.value||null});}} placeholder="Comentario del servicio" style={{padding:6,border:"1px solid #ddd",borderRadius:7,fontSize:10}}/><button onClick={()=>deleteTestService(row)} style={{border:"none",background:COLORS.dangerLight,color:COLORS.danger,borderRadius:7,height:30,cursor:"pointer"}}>×</button></div><div style={{display:"flex",gap:6,alignItems:"center",marginTop:7,flexWrap:"wrap"}}><label style={{fontSize:10,fontWeight:650,background:COLORS.pinkLight,color:COLORS.pinkDark,padding:"5px 8px",borderRadius:7,cursor:"pointer"}}>📷 Subir foto<input type="file" accept="image/jpeg,image/png,image/webp" style={{display:"none"}} onChange={e=>{const f=e.target.files?.[0];if(f)uploadTestPhoto(inst,row,f);e.target.value="";}}/></label>{db.archivos.filter(a=>Number(a.prueba_servicio_id)===Number(row.id)&&a.tipo==="foto").map(a=><ReclutamientoArchivoLink key={a.id} actor={user} candidataId={detail.id} archivo={a} onDelete={deleteArchivo}/>)}</div></div>)}</div>}{bloqueoParaRealizar(inst)&&inst.estado!=="realizada"&&<div style={{marginTop:8,padding:"7px 9px",borderRadius:8,background:COLORS.amberLight,color:COLORS.amber,fontSize:10}}>🔒 {bloqueoParaRealizar(inst)} Podés agendar esta etapa, pero todavía no realizarla.</div>}<div style={{display:"flex",gap:7,marginTop:10,justifyContent:"flex-end"}}><Btn size="sm" variant="secondary" disabled={stageSaving===inst.id} onClick={()=>saveStage(inst,false)}>Guardar / programar</Btn><Btn size="sm" variant="success" disabled={stageSaving===inst.id||!!bloqueoParaRealizar(inst)} onClick={()=>saveStage(inst,true)}>✓ Marcar realizada</Btn></div></Card>})}</div><Card style={{marginTop:12,padding:12}}><div style={{display:"flex",justifyContent:"space-between",gap:8,alignItems:"center",flexWrap:"wrap"}}><div><h3 style={{margin:0,fontSize:14}}>Aprobación RRHH</h3><p style={{margin:"3px 0 0",fontSize:11,color:"var(--color-text-secondary)"}}>{aprobadas}/{detailCircuito?.aprobaciones_requeridas||2} aprobaciones activas{rechazadas?` · ${rechazadas} rechazo(s)`:""}. Si una evaluación se modifica, las aprobaciones vigentes se invalidan automáticamente.</p></div><div style={{display:"flex",gap:6}}>{puedeAutorizar&&<><Btn size="sm" variant="success" onClick={()=>decidir("aprobada")}>Aprobar</Btn><Btn size="sm" variant="danger" onClick={()=>decidir("rechazada")}>Rechazar</Btn><Btn size="sm" variant="ghost" onClick={quitarDecision}>Quitar mi decisión</Btn></>}</div></div><div style={{display:"flex",gap:7,flexWrap:"wrap",marginTop:9}}>{activeApprovals.map(a=>{const u=(data.users||[]).find(x=>Number(x.id)===Number(a.user_id));return <span key={a.id} style={{fontSize:10,padding:"5px 8px",borderRadius:999,background:a.decision==="aprobada"?COLORS.successLight:COLORS.dangerLight,color:a.decision==="aprobada"?COLORS.success:COLORS.danger,fontWeight:700}}>{a.decision==="aprobada"?"✓":"✕"} {u?.nombre||`Usuario ${a.user_id}`}</span>})}</div></Card><div style={{marginTop:12}}><p style={{margin:"0 0 7px",fontSize:11,fontWeight:800,textTransform:"uppercase",color:"var(--color-text-secondary)"}}>Archivos generales</p><div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(180px,1fr))",gap:6}}>{db.archivos.filter(a=>Number(a.candidata_id)===Number(detail.id)&&!a.instancia_id).map(a=><ReclutamientoArchivoLink key={a.id} actor={user} candidataId={detail.id} archivo={a} onDelete={deleteArchivo}/>)}</div></div></Modal>}
+    {detail&&<Modal title={`Proceso · ${detail.nombre}`} onClose={()=>setDetailId(null)} width={940}><div style={{display:"flex",justifyContent:"space-between",gap:10,alignItems:"center",flexWrap:"wrap",marginBottom:12}}><div style={{display:"flex",gap:7,alignItems:"center"}}>{estadoBadge(detail)}<Badge color="gray">{detail.puesto}</Badge>{detail.disponibilidad_desde&&<span style={{fontSize:11,color:"var(--color-text-secondary)"}}>Disponible desde {detail.disponibilidad_desde.split("-").reverse().join("/")}</span>}</div><div style={{display:"flex",gap:6}}>{["admin","casa_matriz"].includes(user.rol)&&detail.estado==="disponible"&&detail.puesto==="encargada"&&<Btn size="sm" variant="success" onClick={()=>openEncargadaIncorp(detail)}>Incorporar encargada</Btn>}<Btn size="sm" variant="ghost" onClick={()=>openEdit(detail)}>Editar ficha</Btn>{!["incorporada","desistio"].includes(detail.estado)&&<Btn size="sm" variant="secondary" onClick={()=>changeStatus(detail,detail.estado==="en_pausa"?"en_proceso":"en_pausa")}>{detail.estado==="en_pausa"?"Reabrir":"Pausar"}</Btn>}<Btn size="sm" variant="danger" onClick={()=>changeStatus(detail,"desistio")}>Desistió</Btn></div></div>{detail.puesto==="manicura"&&<ReclutamientoCompetenciasResumen value={detail.competencias}/>}<div style={{display:"flex",flexDirection:"column",gap:10}}>{detailInstancias.map(inst=>{const d=stageDraft[inst.id]||{},evals=d.evaluadorIds||[],testRows=db.pruebas.filter(x=>Number(x.instancia_id)===Number(inst.id));return <Card key={inst.id} style={{padding:12,background:inst.estado==="realizada"?COLORS.successLight:"#fff"}}><div style={{display:"flex",justifyContent:"space-between",gap:8,alignItems:"center",flexWrap:"wrap"}}><div style={{display:"flex",alignItems:"center",gap:7}}><Badge color="gray">{inst.orden}</Badge><strong style={{fontSize:13}}>{inst.nombre}</strong><Badge color={inst.tipo==="prueba_tecnica"?"amber":"info"}>{inst.tipo.replace("_"," ")}</Badge></div><Badge color={inst.estado==="realizada"?"success":inst.estado==="programada"?"info":inst.estado==="rechazada"?"danger":"gray"}>{inst.estado.replace("_"," ")}</Badge></div><div style={{display:"grid",gridTemplateColumns:"1.2fr 1fr 1fr",gap:8,marginTop:10}}><div><label style={{fontSize:10,fontWeight:700,color:"#777"}}>Fecha y hora</label><input type="datetime-local" value={d.fechaHora||""} onChange={e=>updateStageDraft(inst.id,"fechaHora",e.target.value)} style={{width:"100%",padding:7,border:"1px solid #ddd",borderRadius:7}}/></div><div><label style={{fontSize:10,fontWeight:700,color:"#777"}}>Local</label><select value={d.localId||""} onChange={e=>updateStageDraft(inst.id,"localId",e.target.value)} style={{width:"100%",padding:7,border:"1px solid #ddd",borderRadius:7}}><option value="">Sin local</option>{recruitmentLocales.map(l=><option key={l.id} value={l.id}>{l.nombre}</option>)}</select></div><div><label style={{fontSize:10,fontWeight:700,color:"#777"}}>Modalidad</label><Input value={d.modalidad||""} onChange={v=>updateStageDraft(inst.id,"modalidad",v)} placeholder="Presencial / Meet..." style={{padding:7,fontSize:12}}/></div></div><div style={{marginTop:8}}><p style={{margin:"0 0 5px",fontSize:10,fontWeight:700,color:"#777"}}>Evaluadores</p><div style={{display:"flex",gap:6,flexWrap:"wrap"}}>{rrhhUsers.map(u=><button key={u.id} type="button" onClick={()=>toggleEvaluator(inst.id,u.id)} style={{border:`1px solid ${evals.includes(u.id)?COLORS.pink:"#ddd"}`,background:evals.includes(u.id)?COLORS.pinkLight:"#fff",borderRadius:999,padding:"5px 8px",fontSize:9,cursor:"pointer"}}>{evals.includes(u.id)?"✓ ":""}{u.nombre}</button>)}</div></div><div style={{display:"grid",gridTemplateColumns:"1fr 180px",gap:8,marginTop:8}}><div><label style={{fontSize:10,fontWeight:700,color:"#777"}}>Comentarios / evaluación</label><textarea value={d.comentarios||""} onChange={e=>updateStageDraft(inst.id,"comentarios",e.target.value)} rows={3} style={{width:"100%",border:"1px solid #ddd",borderRadius:7,padding:8,resize:"vertical"}}/></div><div><label style={{fontSize:10,fontWeight:700,color:"#777"}}>Recomendación</label><select value={d.recomendacion||""} onChange={e=>updateStageDraft(inst.id,"recomendacion",e.target.value)} style={{width:"100%",padding:7,border:"1px solid #ddd",borderRadius:7}}>{RECLUTAMIENTO_RECOMENDACIONES.map(([v,l])=><option key={v} value={v}>{l}</option>)}</select><label style={{fontSize:10,fontWeight:700,color:"#777",display:"block",marginTop:8}}>Resultado / sugerencia</label><textarea value={d.resultado||""} onChange={e=>updateStageDraft(inst.id,"resultado",e.target.value)} rows={2} style={{width:"100%",border:"1px solid #ddd",borderRadius:7,padding:7,resize:"vertical"}}/></div></div>{inst.tipo==="prueba_tecnica"&&<div style={{marginTop:10,borderTop:"1px dashed #ddd",paddingTop:10}}><div style={{display:"flex",gap:7,alignItems:"center",marginBottom:8}}><Select value={testServiceId} onChange={setTestServiceId} style={{maxWidth:320}}><option value="">Seleccionar servicio evaluado</option>{(data.agendaServicios||[]).filter(s=>s.activo!==false).map(s=><option key={s.id} value={s.id}>{s.nombre}</option>)}</Select><Btn size="sm" onClick={()=>addTestService(inst)}>+ Servicio</Btn></div>{testRows.map(row=><div key={row.id} style={{border:"1px solid #eee",borderRadius:9,padding:9,marginBottom:7}}><div style={{display:"grid",gridTemplateColumns:"1fr 190px 2fr 34px",gap:7,alignItems:"center"}}><strong style={{fontSize:11}}>{row.servicio_nombre}</strong><select defaultValue={row.resultado||""} onChange={e=>saveTestService(row,{resultado:e.target.value||null})} style={{padding:6,border:"1px solid #ddd",borderRadius:7,fontSize:10}}><option value="">Resultado</option><option value="aprobado">Aprobado</option><option value="con_observaciones">Con observaciones</option><option value="no_aprobado">No aprobado</option></select><input defaultValue={row.comentario||""} onBlur={e=>{if(e.target.value!==(row.comentario||""))saveTestService(row,{comentario:e.target.value||null});}} placeholder="Comentario del servicio" style={{padding:6,border:"1px solid #ddd",borderRadius:7,fontSize:10}}/><button onClick={()=>deleteTestService(row)} style={{border:"none",background:COLORS.dangerLight,color:COLORS.danger,borderRadius:7,height:30,cursor:"pointer"}}>×</button></div><div style={{display:"flex",gap:6,alignItems:"center",marginTop:7,flexWrap:"wrap"}}><label style={{fontSize:10,fontWeight:650,background:COLORS.pinkLight,color:COLORS.pinkDark,padding:"5px 8px",borderRadius:7,cursor:"pointer"}}>📷 Subir foto<input type="file" accept="image/jpeg,image/png,image/webp" style={{display:"none"}} onChange={e=>{const f=e.target.files?.[0];if(f)uploadTestPhoto(inst,row,f);e.target.value="";}}/></label>{db.archivos.filter(a=>Number(a.prueba_servicio_id)===Number(row.id)&&a.tipo==="foto").map(a=><ReclutamientoArchivoLink key={a.id} actor={user} candidataId={detail.id} archivo={a} onDelete={deleteArchivo}/>)}</div></div>)}</div>}{bloqueoParaRealizar(inst)&&inst.estado!=="realizada"&&<div style={{marginTop:8,padding:"7px 9px",borderRadius:8,background:COLORS.amberLight,color:COLORS.amber,fontSize:10}}>🔒 {bloqueoParaRealizar(inst)} Podés agendar esta etapa, pero todavía no realizarla.</div>}<div style={{display:"flex",gap:7,marginTop:10,justifyContent:"flex-end"}}><Btn size="sm" variant="secondary" disabled={stageSaving===inst.id} onClick={()=>saveStage(inst,false)}>Guardar / programar</Btn><Btn size="sm" variant="success" disabled={stageSaving===inst.id||!!bloqueoParaRealizar(inst)} onClick={()=>saveStage(inst,true)}>✓ Marcar realizada</Btn></div></Card>})}</div><Card style={{marginTop:12,padding:12}}><div style={{display:"flex",justifyContent:"space-between",gap:8,alignItems:"center",flexWrap:"wrap"}}><div><h3 style={{margin:0,fontSize:14}}>Aprobación RRHH</h3><p style={{margin:"3px 0 0",fontSize:11,color:"var(--color-text-secondary)"}}>{aprobadas}/{detailCircuito?.aprobaciones_requeridas||2} aprobaciones activas{rechazadas?` · ${rechazadas} rechazo(s)`:""}. Si una evaluación se modifica, las aprobaciones vigentes se invalidan automáticamente.</p></div><div style={{display:"flex",gap:6}}>{puedeAutorizar&&<><Btn size="sm" variant="success" onClick={()=>decidir("aprobada")}>Aprobar</Btn><Btn size="sm" variant="danger" onClick={()=>decidir("rechazada")}>Rechazar</Btn><Btn size="sm" variant="ghost" onClick={quitarDecision}>Quitar mi decisión</Btn></>}</div></div><div style={{display:"flex",gap:7,flexWrap:"wrap",marginTop:9}}>{activeApprovals.map(a=>{const u=(data.users||[]).find(x=>Number(x.id)===Number(a.user_id));return <span key={a.id} style={{fontSize:10,padding:"5px 8px",borderRadius:999,background:a.decision==="aprobada"?COLORS.successLight:COLORS.dangerLight,color:a.decision==="aprobada"?COLORS.success:COLORS.danger,fontWeight:700}}>{a.decision==="aprobada"?"✓":"✕"} {u?.nombre||`Usuario ${a.user_id}`}</span>})}</div></Card><div style={{marginTop:12}}><p style={{margin:"0 0 7px",fontSize:11,fontWeight:800,textTransform:"uppercase",color:"var(--color-text-secondary)"}}>Archivos generales</p><div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(180px,1fr))",gap:6}}>{db.archivos.filter(a=>Number(a.candidata_id)===Number(detail.id)&&!a.instancia_id).map(a=><ReclutamientoArchivoLink key={a.id} actor={user} candidataId={detail.id} archivo={a} onDelete={deleteArchivo}/>)}</div></div></Modal>}
   </div>;
 }
 
@@ -14603,7 +14954,7 @@ function ReclutamientoProcesoResumen({ data, user, processData }) {
 function ReclutamientoCalendarioPage({ data, user, onOpenProcess }) {
   const now=new Date();
   const [vista,setVista]=useState("mes");
-  const [scope,setScope]=useState("mine");
+  const [scope,setScope]=useState(user.rol==="franquiciado"?"all":"mine");
   const [cursor,setCursor]=useState(new Date(now.getFullYear(),now.getMonth(),now.getDate(),12));
   const [loading,setLoading]=useState(true);
   const [eventos,setEventos]=useState([]);
@@ -14772,7 +15123,7 @@ await refreshSelected();
 
   return <div>
     <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",gap:10,flexWrap:"wrap",marginBottom:14}}>
-      <div><h2 style={{margin:0,fontSize:18}}>Calendario de entrevistas y pruebas</h2><p style={{margin:"3px 0 0",fontSize:12,color:"var(--color-text-secondary)"}}>{scope==="mine"?"Se muestran únicamente las citas donde estás asignado/a como evaluador/a.":"Se muestran todas las citas. Las que no tenés asignadas son de solo lectura."}</p></div>
+      <div><h2 style={{margin:0,fontSize:18}}>Calendario de entrevistas y pruebas</h2><p style={{margin:"3px 0 0",fontSize:12,color:"var(--color-text-secondary)"}}>{user.rol==="franquiciado"?(scope==="mine"?"Se muestran tus citas asignadas como evaluador.":"Se muestran las citas de candidatas vinculadas a tus sucursales."):(scope==="mine"?"Se muestran únicamente las citas donde estás asignado/a como evaluador/a.":"Se muestran todas las citas. Las que no tenés asignadas son de solo lectura.")}</p></div>
       <div style={{display:"flex",gap:6,flexWrap:"wrap"}}><Btn size="sm" variant={scope==="mine"?"primary":"secondary"} onClick={()=>setScope("mine")}>Mis citas</Btn><Btn size="sm" variant={scope==="all"?"primary":"secondary"} onClick={()=>setScope("all")}>Todas</Btn><span style={{width:1,background:"#ddd",margin:"0 2px"}}/><Btn size="sm" variant={vista==="semana"?"primary":"secondary"} onClick={()=>setVista("semana")}>Semana</Btn><Btn size="sm" variant={vista==="mes"?"primary":"secondary"} onClick={()=>setVista("mes")}>Mes</Btn></div>
     </div>
     <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",gap:8,marginBottom:10}}>
@@ -15174,6 +15525,73 @@ function HorariosEncargadasLocal({ data, user }) {
   </div>;
 }
 
+
+// ── PLANIFICACION DE DOTACION / CUPOS DE MANICURAS ─────────────────
+function DotacionCuposPage({ data, user }) {
+  const today=new Date();
+  const normalizeMondayKeyLocal=value=>{const d=parseDateLocal(value);if(!d)return"";return dateKey(getMon(d));};
+  const [tab,setTab]=useState("semana"),[localId,setLocalId]=useState(""),[weekStart,setWeekStart]=useState(dateKey(getMon(today))),[weekTypeEdit,setWeekTypeEdit]=useState("a");
+  const [setup,setSetup]=useState(null),[quotas,setQuotas]=useState([]),[scheduleRows,setScheduleRows]=useState([]),[vacationRows,setVacationRows]=useState([]),[vacationUsers,setVacationUsers]=useState([]),[loading,setLoading]=useState(false),[saving,setSaving]=useState(false),[assignModal,setAssignModal]=useState(null);
+  const canEditRealSchedule=user.rol==="admin";
+  const allowedIds=useMemo(()=>["admin","casa_matriz"].includes(user.rol)?(data.locales||[]).filter(localActivo).map(l=>Number(l.id)):getAssignedLocalIds(data,user).map(Number),[data,user]);
+  const locales=useMemo(()=>(data.locales||[]).filter(l=>localActivo(l)&&allowedIds.includes(Number(l.id))).sort((a,b)=>(a.nombre||"").localeCompare(b.nombre||"")),[data.locales,allowedIds.join("|")]);
+  useEffect(()=>{if(locales.length&&!locales.some(l=>String(l.id)===String(localId)))setLocalId(String(locales[0].id));},[locales,localId]);
+  const weekDays=useMemo(()=>{const m=parseDateLocal(weekStart)||getMon(today);return Array.from({length:6},(_,i)=>{const d=new Date(m);d.setDate(m.getDate()+i);return d;});},[weekStart]);
+  const fromKey=dateKey(weekDays[0]),toKey=dateKey(weekDays[5]);
+  const localNum=Number(localId)||0;
+  const loadSetup=useCallback(async()=>{if(!localNum)return;setLoading(true);try{const d=await planificacionPersonalEdge("staffing_get",{local_id:localNum});setSetup({...(d.config||{}),can_edit_quotas:d.can_edit_quotas!==false,can_edit_schedule:d.can_edit_schedule!==false});setQuotas(d.quotas||[]);}catch(e){notifyToast("No se pudieron cargar los cupos. "+edgeErrorMessage(e),"error");}finally{setLoading(false);}},[localNum]);
+  const loadSchedule=useCallback(async()=>{
+    if(!localNum)return;
+    setLoading(true);
+    try{
+      const raw=await api.getHorariosRango(fromKey,toKey);
+      setScheduleRows((raw||[]).map(normalizeHorario));
+      try{
+        const vac=await encargadasVacacionesEdge("calendar",{local_id:localNum,desde:fromKey,hasta:toKey});
+        setVacationRows(vac.rows||[]);
+        setVacationUsers(vac.users||[]);
+      }catch(vacError){
+        setVacationRows([]);
+        setVacationUsers([]);
+        notifyToast("Los horarios cargaron, pero no se pudieron consultar las vacaciones. "+edgeErrorMessage(vacError,"Revisá la configuración de vacaciones."),"warning");
+      }
+    }catch(e){
+      notifyToast(edgeErrorMessage(e,"No se pudieron cargar los horarios."),"error");
+    }finally{setLoading(false);}
+  },[localNum,fromKey,toKey]);
+  useEffect(()=>{void loadSetup();},[loadSetup]);
+  useEffect(()=>{void loadSchedule();},[loadSchedule]);
+  const refA=setup?.fecha_referencia_a?normalizeMondayKeyLocal(setup.fecha_referencia_a):normalizeMondayKeyLocal(weekStart);
+  const weekTypeForDate=d=>{const mon=getMon(d),ref=parseDateLocal(refA)||getMon(d),weeks=Math.round((mon-ref)/604800000);return ((weeks%2)+2)%2===0?"a":"b";};
+  const quotaMap=useMemo(()=>{const m=new Map();(quotas||[]).forEach(q=>m.set(`${q.tipo_semana}|${Number(q.dia_semana)}|${Number(q.hora)}`,Number(q.cupo||0)));return m;},[quotas]);
+  const quotaFor=(d,h,typeOverride=null)=>quotaMap.get(`${typeOverride||weekTypeForDate(d)}|${d.getDay()===0?7:d.getDay()}|${h}`)??0;
+  const setQuota=(type,day,h,value)=>setQuotas(prev=>{const key=`${type}|${day}|${h}`,next=Math.max(0,Math.min(30,Number(value)||0));let found=false;const rows=prev.map(r=>{if(`${r.tipo_semana}|${Number(r.dia_semana)}|${Number(r.hora)}`===key){found=true;return {...r,cupo:next};}return r;});if(!found)rows.push({local_id:localNum,perfil:"manicura",tipo_semana:type,dia_semana:day,hora:h,cupo:next,activo:true});return rows;});
+  const saveQuotas=async()=>{if(!localNum)return;setSaving(true);try{const all=[];for(const t of ["a","b"])for(let d=1;d<=6;d++)for(let h=9;h<=19;h++)all.push({tipo_semana:t,dia_semana:d,hora:h,cupo:quotaMap.get(`${t}|${d}|${h}`)??0});await planificacionPersonalEdge("staffing_save",{local_id:localNum,fecha_referencia_a:refA,quotas:all});await loadSetup();notifyToast("Cupos de dotación guardados.","success");}catch(e){notifyToast("No se pudieron guardar los cupos. "+edgeErrorMessage(e),"error");}finally{setSaving(false);}};
+  const manicuras=useMemo(()=>{if(!localNum)return[];return(data.users||[]).filter(u=>u.activo!==false&&(u.rol==="manicura"||(data.manicuraHistorialLocales||[]).some(x=>Number(x.userId)===Number(u.id)))&&weekDays.some(d=>getActiveManicuraLocalIds(data,u.id,dateKey(d)).includes(localNum))).sort((a,b)=>(a.nombre||"").localeCompare(b.nombre||""));},[data.users,data.manicuraHistorialLocales,localNum,fromKey,toKey]);
+  const fmtTime=v=>String(v||"").slice(0,5);
+  const min=t=>{const [h,m]=fmtTime(t).split(":").map(Number);return (h||0)*60+(m||0);};
+  const localSchedules=useMemo(()=>scheduleRows.filter(h=>Number(getHorarioEffectiveLocalId(data,h))===localNum&&h.fecha>=fromKey&&h.fecha<=toKey&&h.trabaja!==false),[scheduleRows,data,localNum,fromKey,toKey]);
+  const scheduledAt=(d,h)=>localSchedules.filter(r=>r.fecha===dateKey(d)&&min(r.entrada)<(h+1)*60&&min(r.salida)>h*60);
+  const goalFor=u=>{const row=(data.comisionesManicuraConfig||[]).find(x=>Number(x.userId)===Number(u.id)&&Number(x.localId||0)===localNum);if(row?.horasObjetivoSemanales)return Number(row.horasObjetivoSemanales);return Number((data.comisionesConfiguracion||[]).find(x=>x.activo)?.horasObjetivoDefault||36);};
+  const hoursFor=u=>localSchedules.filter(r=>Number(r.userId)===Number(u.id)).reduce((a,r)=>a+Math.max(0,(min(r.salida)-min(r.entrada))/60),0);
+  const moveWeek=n=>{const d=parseDateLocal(weekStart)||getMon(today);d.setDate(d.getDate()+n*7);setWeekStart(dateKey(d));setAssignModal(null);};
+  const openAssign=(d,h)=>{if(!canEditRealSchedule)return;setAssignModal({fecha:dateKey(d),userId:"",entrada:`${String(h).padStart(2,"0")}:00`,salida:`${String(Math.min(20,h+1)).padStart(2,"0")}:00`});};
+  const vacationOn=(uid,fecha)=>vacationRows.some(r=>Number(r.user_id)===Number(uid)&&String(fecha)>=String(r.fecha_inicio)&&String(fecha)<=String(r.fecha_fin));
+  const vacationNamesOn=fecha=>vacationRows.filter(r=>String(fecha)>=String(r.fecha_inicio)&&String(fecha)<=String(r.fecha_fin)).map(r=>vacationUsers.find(u=>Number(u.id)===Number(r.user_id))?.nombre).filter(Boolean);
+  const saveShift=async()=>{if(!canEditRealSchedule)return notifyToast("Durante la prueba, solo Admin puede modificar horarios desde Planificación de dotación.","warning");if(!assignModal?.userId||!assignModal.entrada||!assignModal.salida)return notifyToast("Seleccioná manicura y horario.","warning");if(vacationOn(assignModal.userId,assignModal.fecha))return notifyToast("La manicura tiene vacaciones aprobadas ese día.","warning");if(assignModal.entrada>=assignModal.salida)return notifyToast("La salida debe ser posterior al ingreso.","warning");const d=parseDateLocal(assignModal.fecha),start=Math.floor(min(assignModal.entrada)/60),end=Math.ceil(min(assignModal.salida)/60);for(let h=start;h<end;h++){if(h<9||h>19)continue;const q=quotaFor(d,h),current=scheduledAt(d,h).filter(x=>Number(x.userId)!==Number(assignModal.userId)).length;if(q<=0)return notifyToast(`La franja ${h}:00-${h+1}:00 no tiene cupo habilitado.`,"warning");if(current+1>q)return notifyToast(`La franja ${h}:00-${h+1}:00 ya alcanzó el cupo ${q}.`,"warning");}const conflict=scheduleRows.find(r=>Number(r.userId)===Number(assignModal.userId)&&r.fecha===assignModal.fecha&&r.trabaja!==false&&Number(getHorarioEffectiveLocalId(data,r))!==localNum&&assignModal.entrada<fmtTime(r.salida)&&assignModal.salida>fmtTime(r.entrada));if(conflict)return notifyToast("Ese horario se superpone con otra sucursal.","error");setSaving(true);try{await api.upsertHorario({user_id:Number(assignModal.userId),local_id:localNum,fecha:assignModal.fecha,entrada:assignModal.entrada,salida:assignModal.salida,trabaja:true});setAssignModal(null);await loadSchedule();notifyToast("Horario habilitado.","success");}catch(e){notifyToast(e.message||"No se pudo guardar el horario.","error");}finally{setSaving(false);}};
+  const removeShift=async r=>{if(!canEditRealSchedule)return notifyToast("Durante la prueba, solo Admin puede quitar horarios desde Planificación de dotación.","warning");setSaving(true);try{await api.deleteHorario(r.userId,localNum,r.fecha);await loadSchedule();notifyToast("Horario quitado.","success");}catch(e){notifyToast(e.message||"No se pudo quitar.","error");}finally{setSaving(false);}};
+  if(!locales.length)return <Card><h2 style={{marginTop:0}}>Planificación de dotación</h2><p style={{margin:0,color:"var(--color-text-secondary)"}}>No tenés sucursales disponibles.</p></Card>;
+  return <div style={{display:"grid",gap:14}}>
+    <div style={{display:"flex",justifyContent:"space-between",gap:12,alignItems:"flex-start",flexWrap:"wrap"}}><div><h2 style={{margin:0,fontSize:20}}>Planificación de dotación</h2><p style={{margin:"4px 0 0",fontSize:12,color:"var(--color-text-secondary)"}}>Casa Matriz o Franquiciado define cuántas manicuras necesita por franja. La encargada arma la semana sin superar esos cupos.</p></div><div style={{display:"flex",gap:8,flexWrap:"wrap"}}><Select value={localId} onChange={setLocalId} style={{minWidth:190}}>{locales.map(l=><option key={l.id} value={l.id}>{l.nombre}</option>)}</Select><Btn variant={tab==="semana"?"primary":"secondary"} onClick={()=>setTab("semana")}>Armar semana</Btn><Btn variant={tab==="cupos"?"primary":"secondary"} onClick={()=>setTab("cupos")}>Cupos objetivo</Btn></div></div>
+    {loading&&<div style={{fontSize:11,color:COLORS.info}}>Actualizando planificación...</div>}
+    {!canEditRealSchedule&&tab==="semana"&&<div style={{fontSize:10.5,color:COLORS.info,background:COLORS.infoLight,borderRadius:9,padding:"7px 10px"}}>Modo de prueba: los cupos y la cobertura son informativos. Solo Admin puede habilitar o quitar horarios desde esta pantalla; la carga habitual de horarios sigue funcionando sin bloqueo por cupos.</div>}
+    {tab==="cupos"?<Card style={{padding:0,overflow:"hidden"}}><div style={{padding:"12px 13px",borderBottom:"1px solid rgba(120,120,120,.12)",display:"flex",justifyContent:"space-between",gap:10,alignItems:"center",flexWrap:"wrap"}}><div><strong>Semana {weekTypeEdit.toUpperCase()}</strong><p style={{margin:"2px 0 0",fontSize:10,color:"var(--color-text-secondary)"}}>Cada número indica cuántas manicuras pueden estar sentadas simultáneamente en esa hora.</p></div><div style={{display:"flex",gap:7,alignItems:"end",flexWrap:"wrap"}}><div><label style={{fontSize:9.5,fontWeight:800,display:"block",marginBottom:3,color:"var(--color-text-secondary)"}}>Semana A de referencia</label><input type="date" disabled={setup?.can_edit_quotas===false} value={refA} onChange={e=>setSetup(v=>({...v,fecha_referencia_a:e.target.value}))} style={{border:"1px solid #ddd",borderRadius:7,padding:"5px 7px",fontSize:10.5}}/></div><Btn size="sm" variant={weekTypeEdit==="a"?"primary":"secondary"} onClick={()=>setWeekTypeEdit("a")}>Semana A</Btn><Btn size="sm" variant={weekTypeEdit==="b"?"primary":"secondary"} onClick={()=>setWeekTypeEdit("b")}>Semana B</Btn>{setup?.can_edit_quotas!==false&&<Btn size="sm" onClick={saveQuotas} disabled={saving}>{saving?"Guardando...":"Guardar cupos"}</Btn>}</div></div><div style={{overflowX:"auto",padding:12}}><div style={{display:"grid",gridTemplateColumns:"84px repeat(6,minmax(105px,1fr))",minWidth:760,gap:5}}><div/><>{["Lun","Mar","Mié","Jue","Vie","Sáb"].map(x=><div key={x} style={{textAlign:"center",fontSize:11,fontWeight:800,padding:5}}>{x}</div>)}</>{Array.from({length:11},(_,i)=>9+i).flatMap(h=>[<div key={`h-${h}`} style={{fontSize:10.5,fontWeight:800,padding:"8px 4px"}}>{String(h).padStart(2,"0")}-{String(h+1).padStart(2,"0")}</div>,...[1,2,3,4,5,6].map(d=><div key={`${weekTypeEdit}-${d}-${h}`} style={{padding:3}}><input type="number" min="0" max="30" disabled={setup?.can_edit_quotas===false} value={quotaMap.get(`${weekTypeEdit}|${d}|${h}`)??0} onChange={e=>setQuota(weekTypeEdit,d,h,e.target.value)} style={{width:"100%",boxSizing:"border-box",textAlign:"center",border:"1px solid #ddd",borderRadius:8,padding:"6px 4px",background:(quotaMap.get(`${weekTypeEdit}|${d}|${h}`)??0)>0?COLORS.pinkLight:"#fafafa",fontWeight:800,color:COLORS.pinkDark}}/></div>)])}</div></div></Card>:<>
+      <Card style={{padding:12}}><div style={{display:"flex",justifyContent:"space-between",gap:10,alignItems:"center",flexWrap:"wrap"}}><div style={{display:"flex",gap:7,alignItems:"center"}}><Btn size="sm" variant="secondary" onClick={()=>moveWeek(-1)}>‹</Btn><strong style={{fontSize:13}}>Semana {fmtFecha(weekDays[0])} - {fmtFecha(weekDays[5])}</strong><Btn size="sm" variant="secondary" onClick={()=>moveWeek(1)}>›</Btn></div><Badge color="info">Semana {weekTypeForDate(weekDays[0]).toUpperCase()}</Badge></div><div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(150px,1fr))",gap:7,marginTop:10}}>{manicuras.map(m=>{const h=hoursFor(m),goal=goalFor(m),ok=h>=goal;return <div key={m.id} style={{padding:"7px 9px",border:"1px solid rgba(120,120,120,.12)",borderRadius:9,background:ok?COLORS.successLight:"#fff"}}><div style={{display:"flex",justifyContent:"space-between",gap:6,fontSize:10.5}}><strong>{m.nombre}</strong><span style={{fontWeight:800,color:ok?COLORS.success:COLORS.pinkDark}}>{h.toFixed(1)}/{goal} h</span></div><div style={{height:5,background:"#eee",borderRadius:99,overflow:"hidden",marginTop:5}}><div style={{height:"100%",width:`${Math.min(100,goal?h/goal*100:0)}%`,background:ok?COLORS.success:COLORS.pink}}/></div></div>})}</div></Card>
+      <div style={{overflowX:"auto"}}><div style={{display:"grid",gridTemplateColumns:"repeat(6,minmax(190px,1fr))",gap:9,minWidth:1180}}>{weekDays.map(d=><Card key={dateKey(d)} style={{padding:0,overflow:"hidden"}}><div style={{padding:"9px 10px",background:"var(--color-background-secondary)",borderBottom:"1px solid rgba(120,120,120,.12)"}}><strong style={{fontSize:12}}>{["Dom","Lun","Mar","Mié","Jue","Vie","Sáb"][d.getDay()]} {fmtFecha(d)}</strong>{vacationNamesOn(dateKey(d)).length>0&&<div style={{fontSize:8.8,color:COLORS.amber,marginTop:3}}>🏖 {vacationNamesOn(dateKey(d)).join(", ")}</div>}</div><div style={{padding:8,display:"grid",gap:5}}>{Array.from({length:11},(_,i)=>9+i).map(h=>{const people=scheduledAt(d,h),q=quotaFor(d,h),full=q>0&&people.length>=q,over=q>=0&&people.length>q;return <div key={h} style={{border:`1px solid ${over?COLORS.danger:full?COLORS.success:"rgba(120,120,120,.13)"}`,borderRadius:8,padding:"6px 7px",background:over?COLORS.dangerLight:full?COLORS.successLight:q>0?"#fff":"#fafafa"}}><div style={{display:"flex",justifyContent:"space-between",gap:5,alignItems:"center"}}><strong style={{fontSize:10}}>{String(h).padStart(2,"0")}-{String(h+1).padStart(2,"0")}</strong><span style={{fontSize:9.5,fontWeight:800,color:q===0?"#999":over?COLORS.danger:full?COLORS.success:COLORS.pinkDark}}>{people.length}/{q}</span></div>{people.map(r=>{const m=manicuras.find(x=>Number(x.id)===Number(r.userId)),onVac=vacationOn(r.userId,r.fecha);return <div key={`${r.userId}-${r.fecha}`} style={{display:"flex",justifyContent:"space-between",gap:4,alignItems:"center",marginTop:4,fontSize:9.5,padding:onVac?"3px 4px":0,borderRadius:6,background:onVac?COLORS.amberLight:"transparent",color:onVac?COLORS.amber:"inherit"}}><span style={{overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap",fontWeight:onVac?800:400}}>{onVac?"⚠ 🏖 ":"✓ "}{m?.nombre||"Manicura"}{onVac?" · revisar horario":""}</span>{canEditRealSchedule&&min(r.entrada)===h*60&&<button type="button" onClick={()=>removeShift(r)} title="Quitar horario completo" style={{border:0,background:"transparent",color:COLORS.danger,cursor:"pointer",padding:0}}>×</button>}</div>})}{canEditRealSchedule&&q>people.length&&<button type="button" onClick={()=>openAssign(d,h)} style={{border:0,background:"transparent",color:COLORS.info,fontSize:9.5,fontWeight:800,cursor:"pointer",padding:"4px 0 0"}}>+ Habilitar</button>}</div>})}</div></Card>)}</div></div>
+    </>}
+    {assignModal&&canEditRealSchedule&&<Modal title={`Habilitar horario · ${String(assignModal.fecha||"").split("-").reverse().join("/")}`} onClose={()=>setAssignModal(null)} width={520}><div style={{display:"grid",gap:12}}><ModalSelect label="Manicura" value={assignModal.userId} onChange={v=>setAssignModal(m=>({...m,userId:v}))}><option value="">Seleccionar...</option>{manicuras.map(m=><option key={m.id} value={m.id} disabled={vacationOn(m.id,assignModal.fecha)}>{m.nombre}{vacationOn(m.id,assignModal.fecha)?" · Vacaciones":""}</option>)}</ModalSelect><div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10}}><ModalInput label="Desde" type="time" value={assignModal.entrada} onChange={v=>setAssignModal(m=>({...m,entrada:v}))}/><ModalInput label="Hasta" type="time" value={assignModal.salida} onChange={v=>setAssignModal(m=>({...m,salida:v}))}/></div><div style={{padding:"8px 9px",borderRadius:9,background:COLORS.infoLight,color:COLORS.info,fontSize:10.5}}>Se valida cada hora del turno contra el cupo definido. El horario queda grabado en el calendario normal de NIKI OS.</div><div style={{display:"flex",justifyContent:"flex-end",gap:8}}><Btn variant="secondary" onClick={()=>setAssignModal(null)}>Cancelar</Btn><Btn onClick={saveShift} disabled={saving}>{saving?"Guardando...":"Habilitar horario"}</Btn></div></div></Modal>}
+  </div>;
+}
 
 // ── PIZARRA SEMANAL DE HORARIOS ───────────────────────────────────
 function PizarraSemanal({ data, user }) {
@@ -16866,11 +17284,11 @@ function defaultSectionForRole(role) {
 
 function sectionAllowedForRole(section, role) {
   const reportesOperativos = ["reportes","reportes_horas","reportes_cobertura","reportes_comisiones","reporte_pago_comisiones"];
-  const admin = ["inicio","dashboard","dashboard_manicuras","clientes_crm","ayuda","roadmap","asistencia","horarios","pizarra_semanal","horarios_encargadas","vacaciones_encargadas","bloqueo_horarios",...reportesOperativos,"preliquidacion_encargadas","turnos","servicios","listas_precios","adelantos","garantias","gastos_vencimientos","reclamos","auditorias","informes","informes_mensajeria","manicuras","encargadas","reclutamiento_busquedas","reclutamiento_candidatas","reclutamiento_calendario","reclutamiento_aprobaciones","reclutamiento_antiguedad","reclutamiento_config","locales","cobertura_config","perfil"];
-  const casaMatriz = ["inicio","dashboard","dashboard_manicuras","clientes_crm","ayuda","roadmap","asistencia","horarios","pizarra_semanal","horarios_encargadas","vacaciones_encargadas","bloqueo_horarios",...reportesOperativos,"preliquidacion_encargadas","servicios","listas_precios","adelantos","garantias","gastos_vencimientos","reclamos","auditorias","informes","informes_mensajeria","manicuras","encargadas","reclutamiento_busquedas","reclutamiento_candidatas","reclutamiento_calendario","reclutamiento_aprobaciones","reclutamiento_antiguedad","reclutamiento_config","locales","cobertura_config","perfil"];
-  const franquiciado = ["inicio","dashboard","dashboard_manicuras","clientes_crm","ayuda","asistencia","horarios","pizarra_semanal","horarios_encargadas","bloqueo_horarios",...reportesOperativos,"preliquidacion_encargadas","adelantos","garantias","gastos_vencimientos","reclamos","informes","informes_mensajeria","manicuras","encargadas","cobertura_config","perfil"];
-  const encargada = ["inicio","dashboard","dashboard_manicuras","clientes_crm","ayuda","asistencia","horarios","pizarra_semanal","vacaciones_encargadas","bloqueo_horarios",...reportesOperativos,"preliquidacion_encargadas","adelantos","garantias","reclamos","informes","informes_mensajeria","manicuras","cobertura_config","perfil"];
-  const manicura = ["inicio","ayuda","horarios","pizarra_semanal","reportes","reportes_horas","reportes_comisiones","perfil"];
+  const admin = ["inicio","dashboard","dashboard_manicuras","clientes_crm","ayuda","roadmap","asistencia","horarios","pizarra_semanal","dotacion_cupos","horarios_encargadas","vacaciones_encargadas","bloqueo_horarios",...reportesOperativos,"preliquidacion_encargadas","turnos","servicios","listas_precios","adelantos","garantias","gastos_vencimientos","reclamos","auditorias","informes","informes_mensajeria","manicuras","encargadas","reclutamiento_busquedas","reclutamiento_candidatas","reclutamiento_calendario","reclutamiento_aprobaciones","reclutamiento_antiguedad","reclutamiento_config","locales","cobertura_config","perfil"];
+  const casaMatriz = ["inicio","dashboard","dashboard_manicuras","clientes_crm","ayuda","roadmap","asistencia","horarios","pizarra_semanal","dotacion_cupos","horarios_encargadas","vacaciones_encargadas","bloqueo_horarios",...reportesOperativos,"preliquidacion_encargadas","servicios","listas_precios","adelantos","garantias","gastos_vencimientos","reclamos","auditorias","informes","informes_mensajeria","manicuras","encargadas","reclutamiento_busquedas","reclutamiento_candidatas","reclutamiento_calendario","reclutamiento_aprobaciones","reclutamiento_antiguedad","reclutamiento_config","locales","cobertura_config","perfil"];
+  const franquiciado = ["inicio","dashboard","dashboard_manicuras","clientes_crm","ayuda","asistencia","horarios","pizarra_semanal","dotacion_cupos","horarios_encargadas","vacaciones_encargadas","bloqueo_horarios",...reportesOperativos,"preliquidacion_encargadas","adelantos","garantias","gastos_vencimientos","reclamos","informes","informes_mensajeria","manicuras","encargadas","reclutamiento_busquedas","reclutamiento_candidatas","reclutamiento_calendario","cobertura_config","perfil"];
+  const encargada = ["inicio","dashboard","dashboard_manicuras","clientes_crm","ayuda","asistencia","horarios","pizarra_semanal","dotacion_cupos","vacaciones_encargadas","bloqueo_horarios",...reportesOperativos,"preliquidacion_encargadas","adelantos","garantias","reclamos","informes","informes_mensajeria","manicuras","reclutamiento_carga","cobertura_config","perfil"];
+  const manicura = ["inicio","ayuda","horarios","pizarra_semanal","vacaciones_encargadas","reportes","reportes_horas","reportes_comisiones","perfil"];
   const allowed = role === "admin" ? admin : role === "casa_matriz" ? casaMatriz : role === "franquiciado" ? franquiciado : role === "encargada" ? encargada : manicura;
   return allowed.includes(section);
 }
@@ -17411,8 +17829,9 @@ const refreshTimer = window.setInterval(check, 10 * 60 * 1000);
         { id: "asistencia", label: "Registro de asistencia", icon: "📋" },
         { id: "horarios", label: "Horarios", icon: "🗓️" },
         { id: "pizarra_semanal", label: "Pizarra semanal", icon: "▦" },
+        { id: "dotacion_cupos", label: "Planificación de dotación", icon: "🎯" },
         { id: "horarios_encargadas", label: "Horarios de encargadas", icon: "🧭" },
-         { id: "vacaciones_encargadas", label: "Vacaciones encargadas", icon: "🏖️" },
+        { id: "vacaciones_encargadas", label: "Vacaciones", icon: "🏖️" },
         { id: "bloqueo_horarios", label: "Bloqueos", icon: "🔐" },
         { id: "reportes_horas", label: "Horas y asistencia", icon: "⏱️" },
         { id: "reportes_cobertura", label: "Cobertura", icon: "📈" },
@@ -17478,6 +17897,7 @@ const refreshTimer = window.setInterval(check, 10 * 60 * 1000);
       label: "Reclutamiento",
       icon: "🎯",
       items: [
+        { id: "reclutamiento_carga", label: "Cargar candidata", icon: "➕" },
         { id: "reclutamiento_busquedas", label: "Búsquedas", icon: "🔎" },
         { id: "reclutamiento_candidatas", label: "Candidatas y procesos", icon: "👤" },
         { id: "reclutamiento_calendario", label: "Calendario", icon: "🗓️" },
@@ -17840,8 +18260,9 @@ const refreshTimer = window.setInterval(check, 10 * 60 * 1000);
     if (seccion==="listas_precios") return ["admin","casa_matriz"].includes(effectiveRole) ? <AgendaTurnos data={data} reloadData={reloadData} user={appUser} forcedTab="precios"/> : null;
     if (seccion==="horarios") return <CalendarioHorarios data={data} setData={setData} reloadData={reloadData} user={appUser} agendaRequest={agendaRequest} savedState={screenState.horarios} onStateChange={(state)=>saveScreenState("horarios", state)} onBackToReport={()=>{ setSeccion("reportes_cobertura"); setMenuOpen(false); setMobileMenuGroup(null); }}/>;
     if (seccion==="pizarra_semanal") return <PizarraSemanal data={data} user={appUser}/>;
+    if (seccion==="dotacion_cupos") return ["admin","casa_matriz","franquiciado","encargada"].includes(effectiveRole) ? <DotacionCuposPage data={data} user={appUser}/> : null;
     if (seccion==="horarios_encargadas") return ["admin","casa_matriz","franquiciado"].includes(effectiveRole) ? <HorariosEncargadasLocal data={data} user={appUser}/> : null;
-    if (seccion==="vacaciones_encargadas") return ["admin","casa_matriz","encargada"].includes(effectiveRole) ? <VacacionesEncargadas data={data} user={appUser}/> : null;
+    if (seccion==="vacaciones_encargadas") return ["admin","casa_matriz","franquiciado","encargada","manicura"].includes(effectiveRole) ? <VacacionesEncargadas data={data} user={appUser}/> : null;
     if (seccion==="bloqueo_horarios") return <BloqueoHorarios data={data} setData={setData} reloadData={reloadData} user={appUser} savedState={screenState.bloqueoHorarios} onStateChange={(state)=>saveScreenState("bloqueoHorarios", state)}/>;
     if (seccion==="reportes_horas") return renderReportes("horas", "reportes_horas");
     if (seccion==="reportes_cobertura") return effectiveRole!=="manicura" ? renderReportes("cobertura", "reportes_cobertura") : null;
@@ -17859,9 +18280,10 @@ const refreshTimer = window.setInterval(check, 10 * 60 * 1000);
     if (seccion==="manicuras") return <ABMManicuras data={data} setData={setData} reloadData={reloadData} user={appUser}/>;
     if (seccion==="locales") return ["admin", "casa_matriz"].includes(effectiveRole) ? <ABMLocales data={data} setData={setData} reloadData={reloadData} user={appUser}/> : null;
     if (seccion==="encargadas") return ["admin", "casa_matriz", "franquiciado"].includes(effectiveRole) ? <ABMEncargadas data={data} reloadData={reloadData} user={appUser}/> : null;
-    if (seccion==="reclutamiento_busquedas") return ["admin", "casa_matriz"].includes(effectiveRole) ? <ReclutamientoBusquedasPage data={data} user={appUser}/> : null;
-    if (seccion==="reclutamiento_candidatas") return ["admin", "casa_matriz"].includes(effectiveRole) ? <ReclutamientoPage data={data} setData={setData} user={appUser} fixedView="tablero"/> : null;
-    if (seccion==="reclutamiento_calendario") return ["admin", "casa_matriz"].includes(effectiveRole) ? <ReclutamientoCalendarioPage data={data} user={appUser}/> : null;
+    if (seccion==="reclutamiento_carga") return effectiveRole==="encargada" ? <ReclutamientoCargaCandidataPage data={data} user={appUser}/> : null;
+    if (seccion==="reclutamiento_busquedas") return ["admin", "casa_matriz", "franquiciado"].includes(effectiveRole) ? <ReclutamientoBusquedasPage data={data} user={appUser}/> : null;
+    if (seccion==="reclutamiento_candidatas") return ["admin", "casa_matriz", "franquiciado"].includes(effectiveRole) ? <ReclutamientoPage data={data} setData={setData} user={appUser} fixedView="tablero"/> : null;
+    if (seccion==="reclutamiento_calendario") return ["admin", "casa_matriz", "franquiciado"].includes(effectiveRole) ? <ReclutamientoCalendarioPage data={data} user={appUser}/> : null;
     if (seccion==="reclutamiento_aprobaciones") return ["admin", "casa_matriz"].includes(effectiveRole) ? <ReclutamientoAprobacionesPage data={data} user={appUser}/> : null;
     if (seccion==="reclutamiento_antiguedad") return ["admin", "casa_matriz"].includes(effectiveRole) ? <ReporteAntiguedadPersonal data={data} setData={setData} user={appUser}/> : null;
     if (seccion==="reclutamiento_config") return ["admin", "casa_matriz"].includes(effectiveRole) ? <ReclutamientoPage data={data} setData={setData} user={appUser} fixedView="config"/> : null;
