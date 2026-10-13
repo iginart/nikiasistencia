@@ -7,6 +7,16 @@ function fromB64url(input:string){const n=input.replace(/-/g,"+").replace(/_/g,"
 async function hmacSha256(message:string,secret:string){const key=await crypto.subtle.importKey("raw",new TextEncoder().encode(secret),{name:"HMAC",hash:"SHA-256"},false,["sign"]);return b64url(await crypto.subtle.sign("HMAC",key,new TextEncoder().encode(message)));}
 async function verifySession(token:string,secret:string){const [body,sig]=String(token||"").split(".");if(!body||!sig||await hmacSha256(body,secret)!==sig)return null;try{const p=JSON.parse(fromB64url(body));if(!p?.uid||!p?.exp||Number(p.exp)<Math.floor(Date.now()/1000))return null;return p;}catch{return null;}}
 const uniq=(xs:any[])=>Array.from(new Set((xs||[]).map(Number).filter(Boolean)));
+const sanitizeCompetencias=(raw:any)=>{
+  const src=raw&&typeof raw==="object"?raw:{};
+  const tri=(v:any)=>v===true?true:v===false?false:null;
+  const manos=tri(src?.manos?.realiza),pies=tri(src?.pies?.realiza),cejas=tri(src?.cejas_pestanas?.realiza);
+  return {
+    manos:{realiza:manos,acrilico:manos===false?false:tri(src?.manos?.acrilico),softgel:manos===false?false:tri(src?.manos?.softgel)},
+    pies:{realiza:pies,pedicuria_bisturi:pies===false?false:tri(src?.pies?.pedicuria_bisturi)},
+    cejas_pestanas:{realiza:cejas,perfilado:cejas===false?false:tri(src?.cejas_pestanas?.perfilado),hilo:cejas===false?false:tri(src?.cejas_pestanas?.hilo)},
+  };
+};
 
 Deno.serve(async req=>{
   if(req.method==="OPTIONS")return new Response("ok",{headers:cors});
@@ -22,13 +32,16 @@ Deno.serve(async req=>{
     if(!actorId||!session||Number(session.uid)!==actorId)return json({ok:false,error:"Sesión inválida o vencida."},401);
     const {data:actor,error:ae}=await admin.from("users").select("id,rol,activo").eq("id",actorId).maybeSingle();
     if(ae||!actor||actor.activo===false)return json({ok:false,error:"Sesión inválida o vencida."},401);
-    if(!["franquiciado","encargada"].includes(actor.rol))return json({ok:false,error:"Este acceso está reservado a perfiles de sucursal."},403);
+    if(!["admin","casa_matriz","franquiciado","encargada"].includes(actor.rol))return json({ok:false,error:"No tenés permiso para cargar candidatas."},403);
 
-    const {data:localRows,error:le}=actor.rol==="franquiciado"
-      ? await admin.from("usuario_locales").select("local_id").eq("user_id",actor.id)
-      : await admin.from("encargado_locales").select("local_id").eq("user_id",actor.id);
+    const central=["admin","casa_matriz"].includes(actor.rol);
+    const {data:localRows,error:le}=central
+      ? await admin.from("locales").select("id")
+      : actor.rol==="franquiciado"
+        ? await admin.from("usuario_locales").select("local_id").eq("user_id",actor.id)
+        : await admin.from("encargado_locales").select("local_id").eq("user_id",actor.id);
     if(le)throw le;
-    const actorLocalIds=uniq((localRows||[]).map((x:any)=>x.local_id));
+    const actorLocalIds=uniq((localRows||[]).map((x:any)=>central?x.id:x.local_id));
     if(!actorLocalIds.length)return json({ok:false,error:"No tenés locales asignados para Reclutamiento."},403);
     const actorLocalSet=new Set(actorLocalIds);
     const intakeOnly=actor.rol==="encargada";
@@ -96,7 +109,7 @@ Deno.serve(async req=>{
     }
 
     if(action==="save_candidate"){
-      const p=body.candidate||{};if(!String(p.nombre||"").trim()||!["manicura","encargada"].includes(String(p.puesto||"")))throw new Error("Nombre y puesto son obligatorios.");let id=Number(p.id||0);if(intakeOnly&&id)return json({ok:false,error:"Las encargadas no pueden editar candidatas ya cargadas."},403);if(id)await assertCandidateScope(id);const selected=ensureSelectedLocals(body.local_ids,true);let circuitoId=Number(p.circuito_id||0)||null;if(!circuitoId){const {data:c}=await admin.from("reclutamiento_circuitos").select("id").eq("puesto",p.puesto).eq("activo",true).order("id").limit(1).maybeSingle();circuitoId=c?.id||null;}const payload={nombre:String(p.nombre).trim(),email:p.email||null,telefono:p.telefono||null,puesto:p.puesto,circuito_id:circuitoId,origen:p.origen||null,disponibilidad_desde:p.disponibilidad_desde||null,disponibilidad_tipo:p.disponibilidad_tipo||"full",disponibilidad_turno:p.disponibilidad_turno||null,trabaja_feriados:p.trabaja_feriados===true,dias_franco:p.dias_franco||null,observaciones:p.observaciones||null,actualizado_por_user_id:actor.id};if(id){const {error}=await admin.from("reclutamiento_candidatas").update(payload).eq("id",id);if(error)throw error;}else{const {data,error}=await admin.from("reclutamiento_candidatas").insert({...payload,creado_por_user_id:actor.id}).select("id").single();if(error)throw error;id=Number(data.id);}if(actor.rol==="franquiciado"&&p.id){await admin.from("reclutamiento_candidata_locales").delete().eq("candidata_id",id).in("local_id",actorLocalIds);}else{await admin.from("reclutamiento_candidata_locales").delete().eq("candidata_id",id);}const {error:locErr}=await admin.from("reclutamiento_candidata_locales").insert(selected.map(local_id=>({candidata_id:id,local_id})));if(locErr)throw locErr;await admin.from("reclutamiento_candidata_servicios").delete().eq("candidata_id",id);const svcs=Array.isArray(body.servicios)?body.servicios:[];if(svcs.length){const {error}=await admin.from("reclutamiento_candidata_servicios").insert(svcs.map((x:any)=>({candidata_id:id,servicio_id:Number(x.servicioId),realiza:!!x.realiza,observacion:x.observacion||null})));if(error)throw error;}if(actor.rol==="franquiciado"&&Array.isArray(body.busqueda_ids)){const scopedSearch=await scopedSearchIds();if(scopedSearch.length)await admin.from("reclutamiento_busqueda_candidatas").delete().eq("candidata_id",id).in("busqueda_id",scopedSearch);const ids=uniq(body.busqueda_ids).filter(x=>scopedSearch.includes(x));if(ids.length){const {error}=await admin.from("reclutamiento_busqueda_candidatas").insert(ids.map(busqueda_id=>({busqueda_id,candidata_id:id,creado_por_user_id:actor.id})));if(error)throw error;}}await audit(id,p.id?"CANDIDATA_EDITADA":"CANDIDATA_CREADA",payload.nombre,{puesto:p.puesto,rol:actor.rol});return json({ok:true,id});
+      const p=body.candidate||{};if(!String(p.nombre||"").trim()||!["manicura","encargada"].includes(String(p.puesto||"")))throw new Error("Nombre y puesto son obligatorios.");let id=Number(p.id||0);if(intakeOnly&&id)return json({ok:false,error:"Las encargadas no pueden editar candidatas ya cargadas."},403);if(id)await assertCandidateScope(id);const selected=ensureSelectedLocals(body.local_ids,true);let circuitoId=Number(p.circuito_id||0)||null;if(!circuitoId){const {data:c}=await admin.from("reclutamiento_circuitos").select("id").eq("puesto",p.puesto).eq("activo",true).order("id").limit(1).maybeSingle();circuitoId=c?.id||null;}const payload={nombre:String(p.nombre).trim(),email:p.email||null,telefono:p.telefono||null,puesto:p.puesto,circuito_id:circuitoId,origen:p.origen||null,disponibilidad_desde:p.disponibilidad_desde||null,disponibilidad_tipo:p.disponibilidad_tipo||"full",disponibilidad_turno:p.disponibilidad_turno||null,trabaja_feriados:p.trabaja_feriados===true,dias_franco:p.dias_franco||null,observaciones:p.observaciones||null,competencias:p.puesto==="manicura"?sanitizeCompetencias(p.competencias):{},actualizado_por_user_id:actor.id};if(id){const {error}=await admin.from("reclutamiento_candidatas").update(payload).eq("id",id);if(error)throw error;}else{const {data,error}=await admin.from("reclutamiento_candidatas").insert({...payload,creado_por_user_id:actor.id}).select("id").single();if(error)throw error;id=Number(data.id);}if(actor.rol==="franquiciado"&&p.id){await admin.from("reclutamiento_candidata_locales").delete().eq("candidata_id",id).in("local_id",actorLocalIds);}else{await admin.from("reclutamiento_candidata_locales").delete().eq("candidata_id",id);}const {error:locErr}=await admin.from("reclutamiento_candidata_locales").insert(selected.map(local_id=>({candidata_id:id,local_id})));if(locErr)throw locErr;await admin.from("reclutamiento_candidata_servicios").delete().eq("candidata_id",id);const svcs=Array.isArray(body.servicios)?body.servicios:[];if(svcs.length){const {error}=await admin.from("reclutamiento_candidata_servicios").insert(svcs.map((x:any)=>({candidata_id:id,servicio_id:Number(x.servicioId),realiza:!!x.realiza,observacion:x.observacion||null})));if(error)throw error;}if(Array.isArray(body.busqueda_ids)&&!intakeOnly){if(actor.rol==="franquiciado"){const scopedSearch=await scopedSearchIds();if(scopedSearch.length)await admin.from("reclutamiento_busqueda_candidatas").delete().eq("candidata_id",id).in("busqueda_id",scopedSearch);const ids=uniq(body.busqueda_ids).filter(x=>scopedSearch.includes(x));if(ids.length){const {error}=await admin.from("reclutamiento_busqueda_candidatas").insert(ids.map(busqueda_id=>({busqueda_id,candidata_id:id,creado_por_user_id:actor.id})));if(error)throw error;}}else{await admin.from("reclutamiento_busqueda_candidatas").delete().eq("candidata_id",id);const ids=uniq(body.busqueda_ids);if(ids.length){const {error}=await admin.from("reclutamiento_busqueda_candidatas").insert(ids.map(busqueda_id=>({busqueda_id,candidata_id:id,creado_por_user_id:actor.id})));if(error)throw error;}}}await audit(id,p.id?"CANDIDATA_EDITADA":"CANDIDATA_CREADA",payload.nombre,{puesto:p.puesto,rol:actor.rol});return json({ok:true,id});
     }
 
     if(action==="search_save"){
