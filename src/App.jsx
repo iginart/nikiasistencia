@@ -609,6 +609,21 @@ const recruitmentCandidateEdge = async (payload = {}) => {
   return data;
 };
 
+const recruitmentDeleteCandidateEdge = async (candidataId) => {
+  const actor = window.__nikiCurrentUser || null;
+  if (!actor?.id || !actor?.sessionToken) throw new Error("Sesión inválida para Reclutamiento.");
+  const res = await nikiProtectedFetch(`${SUPABASE_URL}/functions/v1/reclutamiento-candidata-delete-niki`, {
+    method:"POST",
+    headers:{ apikey:SUPABASE_KEY, Authorization:`Bearer ${SUPABASE_KEY}`, "Content-Type":"application/json" },
+    body:JSON.stringify({ actor_id:actor.id, session_token:actor.sessionToken, candidata_id:Number(candidataId) }),
+  });
+  const txt = await res.text();
+  let data = {};
+  try { data = txt ? JSON.parse(txt) : {}; } catch { data = {}; }
+  if (!res.ok || data?.ok === false) throw new Error(data?.error || txt || "No se pudo eliminar la candidata");
+  return data;
+};
+
 
 const encargadasSueldosEdge = async (action, payload = {}) => {
   const actor = window.__nikiCurrentUser || null;
@@ -1083,6 +1098,19 @@ const api = {
   updateAgendaListaPrecio: (id, d) => sb(`agenda_listas_precios?id=eq.${id}`, { method:"PATCH", body:JSON.stringify(d) }),
   deleteAgendaListaPrecio: (id) => sb(`agenda_listas_precios?id=eq.${id}`, { method:"DELETE", prefer:"" }),
   getAgendaLocalListas: () => sb("agenda_local_listas?select=*"),
+  getAgendaLocalListasHistorial: (localId) => sb(`agenda_local_listas_historial?select=*&local_id=eq.${parseInt(localId)}&order=vigencia_desde.desc,id.desc`),
+  guardarAgendaListaConVigencia: async (localId,listaId,fechaDesde,motivo="") => {
+    const actor = currentNikiActor();
+    if (!actor?.id || !actor?.sessionToken) throw new Error("Iniciá sesión nuevamente para modificar listas.");
+    const res = await nikiProtectedFetch(`${SUPABASE_URL}/functions/v1/niki-listas-vigencias`, {
+      method:"POST",headers:{ apikey:SUPABASE_KEY, Authorization:`Bearer ${SUPABASE_KEY}`, "Content-Type":"application/json" },
+      body:JSON.stringify({ actor_id:Number(actor.id), session_token:actor.sessionToken, local_id:Number(localId), lista_id:listaId?Number(listaId):null, fecha_desde:fechaDesde, motivo:motivo||null })
+    });
+    const txt=await res.text();let out={};try{out=txt?JSON.parse(txt):{};}catch{}
+    if(!res.ok||out?.ok!==true) throw new Error(out?.error||txt||"No se pudo guardar la vigencia.");
+    return out;
+  },
+
   setAgendaLocalListas: async (localId, listaIds) => {
     await sb(`agenda_local_listas?local_id=eq.${parseInt(localId)}`, { method:"DELETE", prefer:"" });
     const ids = Array.isArray(listaIds) ? listaIds.filter(Boolean) : (listaIds ? [listaIds] : []);
@@ -1162,6 +1190,8 @@ return data;
   upsertReclutamientoAprobacion: d => recruitmentEdge("approval",{candidata_id:d.candidata_id,decision:d.decision,comentario:d.comentario||null}),
   quitarReclutamientoAprobacion: candidataId => recruitmentEdge("approval_remove",{candidata_id:candidataId}),
   updateReclutamientoEstado: (candidataId,estado) => recruitmentEdge("candidate_status",{candidata_id:candidataId,estado}),
+  transitionReclutamiento: (instanciaId,operation,targetInstanciaId=null,estadoFinal="",motivo="") => recruitmentEdge("flow_transition",{instancia_id:instanciaId,operation,target_instancia_id:targetInstanciaId,estado_final:estadoFinal,motivo}),
+  deleteReclutamientoCandidata: candidataId => recruitmentDeleteCandidateEdge(candidataId),
   updateReclutamientoCircuito: (id,d) => recruitmentEdge("config_circuit",{id,aprobaciones_requeridas:d.aprobaciones_requeridas}),
   setReclutamientoAutorizador: d => recruitmentEdge("config_authorizer",d),
   createReclutamientoEtapaPlantilla: d => recruitmentEdge("config_stage_create",{stage:d}),
@@ -1173,6 +1203,31 @@ return data;
   moverManicuraLocal: (payload) => sb("rpc/mover_manicura_local", { method:"POST", body:JSON.stringify(payload), prefer:"" }),
   desactivarManicura: (payload) => sb("rpc/desactivar_manicura", { method:"POST", body:JSON.stringify(payload), prefer:"" }),
 };
+
+function NikiListaVigenciaEditor({ localId, listaId, onClose, onSaved, listas, locales }) {
+  const [fechaDesde,setFechaDesde]=useState(dateKey(new Date()));
+  const [selected,setSelected]=useState(String(listaId||""));
+  const [motivo,setMotivo]=useState("");
+  const [history,setHistory]=useState([]);
+  const [loading,setLoading]=useState(true);
+  const [saving,setSaving]=useState(false);
+  const [error,setError]=useState("");
+  const load=async()=>{setLoading(true);try{setHistory(await api.getAgendaLocalListasHistorial(localId)||[]);}catch(e){setError(`No se pudo consultar historial: ${e.message}`);}finally{setLoading(false);}};
+  useEffect(()=>{load();},[localId]);
+  const fechaCorta=x=>x?String(x).slice(0,10).split("-").reverse().join("/"):"Actual";
+  const nombreLista=id=>(listas||[]).find(l=>Number(l.id)===Number(id))?.nombre||"Sin lista";
+  return <Modal title="Vigencias de lista por sucursal" onClose={onClose} width={650}>
+    <div style={{display:"flex",flexDirection:"column",gap:12}}>
+      <p style={{margin:0,fontSize:12,color:"var(--color-text-secondary)"}}>Sucursal: <strong>{(locales||[]).find(l=>Number(l.id)===Number(localId))?.nombre||localId}</strong>. Un cambio fechado conserva la lista usada anteriormente. Las fechas históricas solo deben corregirse después de verificar las asignaciones reales.</p>
+      <ModalSelect label="Nueva lista" value={selected} onChange={setSelected}><option value="">Sin lista</option>{(listas||[]).filter(l=>l.activo).map(l=><option key={l.id} value={l.id}>{l.nombre}</option>)}</ModalSelect>
+      <label style={{fontSize:12,fontWeight:600}}>Vigente desde <input type="date" value={fechaDesde} onChange={e=>setFechaDesde(e.target.value)} style={{display:"block",marginTop:4,padding:8,border:"1px solid #ddd",borderRadius:8,width:"100%"}}/></label>
+      <ModalInput label="Motivo (opcional)" value={motivo} onChange={setMotivo}/>
+      {error&&<p style={{margin:0,color:COLORS.danger,fontSize:12}}>{error}</p>}
+      <div style={{display:"flex",justifyContent:"flex-end",gap:8}}><Btn variant="secondary" onClick={onClose}>Cancelar</Btn><Btn disabled={saving||loading||!fechaDesde} onClick={async()=>{setSaving(true);setError("");try{await api.guardarAgendaListaConVigencia(localId,selected,fechaDesde,motivo);await onSaved();onClose();}catch(e){setError(e.message||String(e));}finally{setSaving(false);}}}>{saving?"Guardando...":"Guardar cambio con vigencia"}</Btn></div>
+      <div style={{borderTop:"1px solid #eee",paddingTop:10}}><strong style={{fontSize:13}}>Historial registrado</strong>{loading?<p style={{fontSize:12}}>Cargando...</p>:history.length?<div style={{maxHeight:230,overflowY:"auto",marginTop:7}}>{history.map(h=><div key={h.id} style={{display:"grid",gridTemplateColumns:"1fr auto",gap:8,padding:"8px 0",borderBottom:"1px solid #f0f0f0",fontSize:12}}><strong>{nombreLista(h.lista_id)}</strong><span>{fechaCorta(h.vigencia_desde)} — {fechaCorta(h.vigencia_hasta)}</span></div>)}</div>:<p style={{fontSize:12,color:"var(--color-text-secondary)"}}>No hay historial cargado. Debés cargar la lista y la fecha histórica real antes de reprocesar comisiones.</p>}</div>
+    </div>
+  </Modal>;
+}
 
 function normalizeUser(u) { return { id:u.id,nombre:u.nombre,usuario:u.usuario,email:u.email||"",rol:u.rol,localId:u.local_id,activo:u.activo,codigoExterno:u.codigo_externo||"",telefono:u.telefono||"",telefonoCodigoArea:u.telefono_codigo_area||"",telefonoNumero:u.telefono_numero||"",datoBancario:u.dato_bancario||"",formaPagoComision:u.forma_pago_comision||"efectivo",soloFinDeSemana:u.solo_fin_de_semana===true,tipoRelacion:u.tipo_relacion||"a_resolver",fotoPerfilPath:u.foto_perfil_path||"",fotoPerfilUrl:u.foto_perfil_url||"",sessionToken:u.session_token||u.sessionToken||"" }; }
 function normalizeLocal(l) {
@@ -6296,19 +6351,7 @@ return;
           <div style={{display:"flex",gap:8,marginTop:8}}><Btn onClick={saveHorariosLocal} disabled={horariosLocalSaving} style={{flex:1,justifyContent:"center"}}>{horariosLocalSaving?"Guardando...":"Guardar horarios"}</Btn><Btn variant="secondary" onClick={()=>setHorariosLocalModal(null)} style={{flex:1,justifyContent:"center"}}>Cancelar</Btn></div>
         </div>
       </Modal>}
-      {listaLocalModal && <Modal title="Lista de precios del local" onClose={()=>setListaLocalModal(null)}>
-        <div style={{ display:"flex",flexDirection:"column",gap:14 }}>
-          <p style={{ margin:0,fontSize:13,color:"var(--color-text-secondary)" }}>Elegí la lista global que utilizará <strong>{data.locales.find(l=>l.id===parseInt(listaLocalModal.localId))?.nombre}</strong> para los turnos.</p>
-          <ModalSelect label="Lista asignada" value={listaLocalModal.listaId||""} onChange={v=>setListaLocalModal(d=>({...d,listaId:v}))}>
-            <option value="">Sin lista asignada</option>
-            {(data.agendaListasPrecios||[]).filter(l=>l.activo).map(l=><option key={l.id} value={l.id}>{l.nombre}</option>)}
-          </ModalSelect>
-          <div style={{ display:"flex",gap:8,marginTop:4 }}>
-            <Btn onClick={async()=>{ await api.setAgendaLocalListas(listaLocalModal.localId, listaLocalModal.listaId?[listaLocalModal.listaId]:[]); await reloadData(); setListaLocalModal(null); }} style={{ flex:1,justifyContent:"center" }}>Guardar</Btn>
-            <Btn onClick={()=>setListaLocalModal(null)} variant="secondary" style={{ flex:1,justifyContent:"center" }}>Cancelar</Btn>
-          </div>
-        </div>
-      </Modal>}
+      {listaLocalModal && <NikiListaVigenciaEditor localId={listaLocalModal.localId} listaId={listaLocalModal.listaId} listas={data.agendaListasPrecios} locales={data.locales} onClose={()=>setListaLocalModal(null)} onSaved={reloadData}/>}
     </div>
   );
 }
@@ -10646,9 +10689,9 @@ function ReclamosPage({ data, user }) {
 }
 
 async function createInformeDiarioPng(report, fileName = "informe-diario.png") {
-  const WIDTH = 840;
-  const SCALE = 1.5;
-  const PAD = 22;
+  const WIDTH = 900;
+  const SCALE = 2;
+  const PAD = 24;
   const GAP = 12;
   const CONTENT_W = WIDTH - PAD * 2;
   const FONT_FAMILY = 'Arial, sans-serif';
@@ -10656,7 +10699,7 @@ async function createInformeDiarioPng(report, fileName = "informe-diario.png") {
   const measureCtx = measureCanvas.getContext("2d");
 
   const setFont = (ctx, size, weight = 400) => { ctx.font = `${weight} ${size}px ${FONT_FAMILY}`; };
-  const wrapLines = (text, maxWidth, size = 12.5, weight = 400) => {
+  const wrapLines = (text, maxWidth, size = 18, weight = 500) => {
     const value = String(text ?? "-").replace(/\r/g, "");
     setFont(measureCtx, size, weight);
     const out = [];
@@ -10676,13 +10719,13 @@ async function createInformeDiarioPng(report, fileName = "informe-diario.png") {
     return out.length ? out : ["-"];
   };
   const boxHeight = (text, width, opts = {}) => {
-    const bodySize = opts.bodySize || 12.5;
-    const lineH = opts.lineH || 18;
-    const innerW = width - 26;
-    const lines = wrapLines(text || "-", innerW, bodySize, 400);
-    return 44 + lines.length * lineH + 12;
+    const bodySize = opts.bodySize || 20;
+    const lineH = opts.lineH || 29;
+    const innerW = width - 36;
+    const lines = wrapLines(text || "-", innerW, bodySize, opts.weight || 500);
+    return 58 + lines.length * lineH + 12;
   };
-  const twoColHeight = (a, b) => Math.max(boxHeight(a.text, (CONTENT_W - GAP) / 2), boxHeight(b.text, (CONTENT_W - GAP) / 2));
+  const twoColHeight = (a, b) => Math.max(boxHeight(a.text, (CONTENT_W - GAP) / 2, a), boxHeight(b.text, (CONTENT_W - GAP) / 2, b));
 
   const topLeft = report.topLeft;
   const topRight = report.topRight;
@@ -10690,11 +10733,22 @@ async function createInformeDiarioPng(report, fileName = "informe-diario.png") {
   const bottomLeft = report.bottomLeft;
   const bottomRight = report.bottomRight;
   const topH = twoColHeight(topLeft, topRight);
-  const sectionHeights = sections.map(x => boxHeight(x.text, CONTENT_W, { bodySize:x.bodySize || 12.2, lineH:x.lineH || 18 }));
+  // En la imagen compartida, los bloques cortos se colocan en dos columnas.
+  // El bloque de pagos ocupa el ancho completo para no truncar renglones largos.
+  const sectionRows = [
+    [sections[0], sections[1]].filter(Boolean),
+    [sections[2]].filter(Boolean),
+    [sections[3], sections[4]].filter(Boolean),
+    [sections[5], sections[6]].filter(Boolean),
+    ...sections.slice(7).map(x => [x]),
+  ].filter(row => row.length);
+  const sectionRowHeights = sectionRows.map(row => row.length === 2
+    ? twoColHeight(row[0], row[1])
+    : boxHeight(row[0].text, CONTENT_W, row[0]));
   const bottomH = twoColHeight(bottomLeft, bottomRight);
-  const HEADER_H = 130;
-  const FOOTER_H = 34;
-  const contentHeight = topH + GAP + sectionHeights.reduce((a,b)=>a+b,0) + GAP * Math.max(0, sections.length - 1) + GAP + bottomH;
+  const HEADER_H = 150;
+  const FOOTER_H = 46;
+  const contentHeight = topH + GAP + sectionRowHeights.reduce((a,b)=>a+b,0) + GAP * Math.max(0, sectionRows.length - 1) + GAP + bottomH;
   const HEIGHT = HEADER_H + PAD + contentHeight + PAD + FOOTER_H;
 
   const canvas = document.createElement("canvas");
@@ -10705,7 +10759,7 @@ async function createInformeDiarioPng(report, fileName = "informe-diario.png") {
   ctx.fillStyle = "#ffffff";
   ctx.fillRect(0, 0, WIDTH, HEIGHT);
 
-  const roundedPath = (x,y,w,h,r=12) => {
+  const roundedPath = (x,y,w,h,r=16) => {
     const rr=Math.min(r,w/2,h/2);
     ctx.beginPath();
     ctx.moveTo(x+rr,y); ctx.lineTo(x+w-rr,y); ctx.quadraticCurveTo(x+w,y,x+w,y+rr);
@@ -10714,43 +10768,51 @@ async function createInformeDiarioPng(report, fileName = "informe-diario.png") {
     ctx.lineTo(x,y+rr); ctx.quadraticCurveTo(x,y,x+rr,y); ctx.closePath();
   };
   const drawTextLines = (lines, x, y, opts={}) => {
-    const size=opts.size||12.5, weight=opts.weight||400, lineH=opts.lineH||18;
+    const size=opts.size||20, weight=opts.weight||500, lineH=opts.lineH||29;
     setFont(ctx,size,weight); ctx.fillStyle=opts.color||"#351821"; ctx.textBaseline="top";
     lines.forEach((line,i)=>ctx.fillText(line,x,y+i*lineH));
   };
   const drawBox = (box, x, y, w, h) => {
-    roundedPath(x,y,w,h,13);
+    roundedPath(x,y,w,h,16);
     ctx.fillStyle=box.background||"#ffffff"; ctx.fill();
     ctx.strokeStyle=box.border||"#eadde2"; ctx.lineWidth=1; ctx.stroke();
-    setFont(ctx,9.5,800); ctx.fillStyle=box.titleColor||"#8b3653"; ctx.textBaseline="top";
-    ctx.fillText(String(box.title||"").toUpperCase(),x+13,y+13);
-    const lines=wrapLines(box.text||"-",w-26,box.bodySize||12.5,400);
-    drawTextLines(lines,x+13,y+34,{size:box.bodySize||12.5,lineH:box.lineH||18,color:box.bodyColor||"#351821"});
+    setFont(ctx,14,800); ctx.fillStyle=box.titleColor||"#8b3653"; ctx.textBaseline="top";
+    ctx.fillText(String(box.title||"").toUpperCase(),x+18,y+16);
+    const lines=wrapLines(box.text||"-",w-36,box.bodySize||20,box.weight||500);
+    drawTextLines(lines,x+18,y+40,{size:box.bodySize||20,lineH:box.lineH||29,color:box.bodyColor||"#351821",weight:box.weight||500});
   };
 
-  // Encabezado suave, alineado con la estética de NikiOS.
   const grad = ctx.createLinearGradient(0,0,WIDTH,HEADER_H);
   grad.addColorStop(0,"#fbf5f7"); grad.addColorStop(.58,"#f1dfe5"); grad.addColorStop(1,"#f8edf1");
   ctx.fillStyle=grad; ctx.fillRect(0,0,WIDTH,HEADER_H);
-  setFont(ctx,10,800); ctx.fillStyle="#8b5366"; ctx.textBaseline="top"; ctx.fillText("NIKI BEAUTY BAR · OPERACIONES",PAD,24);
-  setFont(ctx,28,800); ctx.fillStyle="#72243e"; ctx.fillText("Informe diario",PAD,46);
-  setFont(ctx,18,700); ctx.fillStyle="#72243e"; ctx.fillText(report.localName||"Local",PAD,82);
-  const badgeW=166, badgeH=82, bx=WIDTH-PAD-badgeW, by=22;
-  roundedPath(bx,by,badgeW,badgeH,13); ctx.fillStyle="rgba(255,255,255,.66)";ctx.fill();ctx.strokeStyle="rgba(114,36,62,.16)";ctx.stroke();
-  setFont(ctx,15,800);ctx.fillStyle="#72243e";ctx.textAlign="center";ctx.fillText(report.dateLabel||"",bx+badgeW/2,by+14);
-  setFont(ctx,11,600);ctx.fillStyle="#8b5366";ctx.fillText(report.turnoLabel||"",bx+badgeW/2,by+40);
-  setFont(ctx,9.5,600);ctx.fillStyle="#9c7280";ctx.fillText(report.statusLabel||"",bx+badgeW/2,by+60);ctx.textAlign="left";
+  setFont(ctx,14,800); ctx.fillStyle="#8b5366"; ctx.textBaseline="top"; ctx.fillText("NIKI BEAUTY BAR · OPERACIONES  /  IMAGEN LEGIBLE",PAD,22);
+  setFont(ctx,42,800); ctx.fillStyle="#72243e"; ctx.fillText("Informe diario",PAD,46);
+  setFont(ctx,26,700); ctx.fillStyle="#72243e"; ctx.fillText(report.localName||"Local",PAD,98);
+  const badgeW=210, badgeH=102, bx=WIDTH-PAD-badgeW, by=20;
+  roundedPath(bx,by,badgeW,badgeH,16); ctx.fillStyle="rgba(255,255,255,.78)";ctx.fill();ctx.strokeStyle="rgba(114,36,62,.16)";ctx.stroke();
+  setFont(ctx,25,800);ctx.fillStyle="#72243e";ctx.textAlign="center";ctx.fillText(report.dateLabel||"",bx+badgeW/2,by+18);
+  setFont(ctx,17,700);ctx.fillStyle="#8b5366";ctx.fillText(report.turnoLabel||"",bx+badgeW/2,by+52);
+  setFont(ctx,14,700);ctx.fillStyle="#9c7280";ctx.fillText(report.statusLabel||"",bx+badgeW/2,by+76);ctx.textAlign="left";
 
   let y=HEADER_H+PAD;
   const colW=(CONTENT_W-GAP)/2;
   drawBox(topLeft,PAD,y,colW,topH); drawBox(topRight,PAD+colW+GAP,y,colW,topH); y+=topH+GAP;
-  sections.forEach((box,i)=>{const h=sectionHeights[i];drawBox(box,PAD,y,CONTENT_W,h);y+=h+(i===sections.length-1?0:GAP);});
+  sectionRows.forEach((row,i)=>{
+    const h=sectionRowHeights[i];
+    if (row.length===2) {
+      drawBox(row[0],PAD,y,colW,h);
+      drawBox(row[1],PAD+colW+GAP,y,colW,h);
+    } else {
+      drawBox(row[0],PAD,y,CONTENT_W,h);
+    }
+    y+=h+(i===sectionRows.length-1?0:GAP);
+  });
   y+=GAP;
   drawBox(bottomLeft,PAD,y,colW,bottomH); drawBox(bottomRight,PAD+colW+GAP,y,colW,bottomH); y+=bottomH;
 
-  ctx.strokeStyle="#eadde2";ctx.beginPath();ctx.moveTo(PAD,y+18);ctx.lineTo(WIDTH-PAD,y+18);ctx.stroke();
-  setFont(ctx,9.5,400);ctx.fillStyle="#8d7b82";ctx.textBaseline="top";ctx.fillText(`Responsable: ${report.responsable||"-"}`,PAD,y+29);
-  ctx.textAlign="right";ctx.fillText(`NIKI OS · ${report.dateLabel||""}`,WIDTH-PAD,y+29);ctx.textAlign="left";
+  ctx.strokeStyle="#eadde2";ctx.beginPath();ctx.moveTo(PAD,y+22);ctx.lineTo(WIDTH-PAD,y+22);ctx.stroke();
+  setFont(ctx,13,600);ctx.fillStyle="#8d7b82";ctx.textBaseline="top";ctx.fillText(`Responsable: ${report.responsable||"-"}`,PAD,y+32);
+  ctx.textAlign="right";ctx.fillText(`NIKI OS · ${report.dateLabel||""}`,WIDTH-PAD,y+32);ctx.textAlign="left";
 
   const blob = await new Promise((resolve,reject)=>canvas.toBlob(b=>b?resolve(b):reject(new Error("No se pudo crear el PNG.")),"image/png"));
   if (navigator.clipboard?.write && window.ClipboardItem) {
@@ -12069,20 +12131,20 @@ const prev = getPreviousInforme(f, lid, turno, excludeId);
         <div><p style={{ margin:0,fontSize:13,color:"var(--color-text-secondary)" }}>Vista optimizada para compartir por WhatsApp.</p><p style={{ margin:"2px 0 0",fontSize:10.5,color:"#999" }}>El botón “Copiar como imagen” genera una versión PNG con este mismo diseño, lista para pegar en WhatsApp.</p></div>
         <div style={{ display:"flex",gap:8,flexWrap:"wrap" }}><Btn size="sm" onClick={()=>copyReportImage(preview)} disabled={copyingReportImage}>{copyingReportImage?"Generando...":"Copiar como imagen"}</Btn><Btn size="sm" onClick={()=>copyReport(preview)} variant="secondary">Copiar texto</Btn></div>
       </div>
-      <div style={{overflowX:"auto",padding:"4px 2px 12px"}}>
-        <div ref={shareReportRef} style={{width:840,maxWidth:"100%",margin:"0 auto",background:"#fff",color:"#351821",border:"1px solid #eadde2",borderRadius:18,overflow:"hidden",boxShadow:"0 12px 34px rgba(75,35,49,.09)",fontFamily:"Montserrat,Arial,sans-serif"}}>
-          <div style={{padding:"22px 24px 20px",background:"linear-gradient(135deg,#fbf5f7 0%,#f1dfe5 58%,#f8edf1 100%)",color:COLORS.pinkDark}}>
-            <div style={{display:"flex",justifyContent:"space-between",gap:18,alignItems:"flex-start"}}><div><div style={{fontSize:10,fontWeight:800,letterSpacing:1.6,color:"#8b5366"}}>NIKI BEAUTY BAR · OPERACIONES</div><div style={{fontSize:26,fontWeight:800,marginTop:5,lineHeight:1.08}}>Informe diario</div><div style={{fontSize:17,fontWeight:650,marginTop:4}}>{data.locales.find(l=>Number(l.id)===Number(preview.localId))?.nombre||"Local"}</div></div><div style={{textAlign:"right",background:"rgba(255,255,255,.66)",border:"1px solid rgba(114,36,62,.16)",color:COLORS.pinkDark,borderRadius:12,padding:"10px 12px",minWidth:150}}><div style={{fontSize:15,fontWeight:800}}>{parseDateLabel(preview.fecha)}</div><div style={{fontSize:11,marginTop:3,opacity:.9}}>{preview.turno === "manana" ? "Turno mañana" : preview.turno === "tarde" ? "Turno tarde" : "Día completo"}</div><div style={{fontSize:9.5,marginTop:5,opacity:.78}}>{preview.estado==="enviado"?"Confirmado":"Borrador"}</div></div></div>
+      <div style={{overflowX:"auto",padding:"6px 2px 14px"}}>
+        <div ref={shareReportRef} style={{width:900,maxWidth:"100%",margin:"0 auto",background:"#fff",color:"#351821",border:"1px solid #eadde2",borderRadius:20,overflow:"hidden",boxShadow:"0 14px 36px rgba(75,35,49,.10)",fontFamily:"Montserrat,Arial,sans-serif"}}>
+          <div style={{padding:"28px 30px 24px",background:"linear-gradient(135deg,#fbf5f7 0%,#f1dfe5 58%,#f8edf1 100%)",color:COLORS.pinkDark}}>
+            <div style={{display:"flex",justifyContent:"space-between",gap:20,alignItems:"flex-start"}}><div><div style={{fontSize:13,fontWeight:800,letterSpacing:1.6,color:"#8b5366"}}>NIKI BEAUTY BAR · OPERACIONES</div><div style={{fontSize:40,fontWeight:800,marginTop:6,lineHeight:1.03}}>Informe diario</div><div style={{fontSize:25,fontWeight:700,marginTop:6}}>{data.locales.find(l=>Number(l.id)===Number(preview.localId))?.nombre||"Local"}</div></div><div style={{textAlign:"center",background:"rgba(255,255,255,.78)",border:"1px solid rgba(114,36,62,.16)",color:COLORS.pinkDark,borderRadius:16,padding:"14px 16px",minWidth:190}}><div style={{fontSize:24,fontWeight:800,lineHeight:1.1}}>{parseDateLabel(preview.fecha)}</div><div style={{fontSize:16,marginTop:6,fontWeight:650,opacity:.9}}>{preview.turno === "manana" ? "Turno mañana" : preview.turno === "tarde" ? "Turno tarde" : "Día completo"}</div><div style={{fontSize:13,marginTop:8,opacity:.8,fontWeight:700}}>{preview.estado==="enviado"?"Confirmado":"Borrador"}</div></div></div>
           </div>
-          <div style={{padding:"18px 20px 20px",display:"grid",gap:13}}>
-            <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10}}>
-              <div style={{border:"1px solid #eadde2",borderRadius:13,padding:"12px 13px",background:"#fff8fa"}}><div style={{fontSize:9.5,fontWeight:850,letterSpacing:.7,color:"#8b3653",textTransform:"uppercase"}}>Importante para mañana</div><div style={{marginTop:6,fontSize:12.5,lineHeight:1.5,whiteSpace:"pre-wrap"}}>{preview.importanteManana||"Sin novedades"}</div></div>
-              <div style={{border:"1px solid #f0d4d4",borderRadius:13,padding:"12px 13px",background:preview.urgentesGenerales?"#fff1f1":"#fafafa"}}><div style={{fontSize:9.5,fontWeight:850,letterSpacing:.7,color:preview.urgentesGenerales?"#b13b3b":"#777",textTransform:"uppercase"}}>Urgentes generales</div><div style={{marginTop:6,fontSize:12.5,lineHeight:1.5,whiteSpace:"pre-wrap"}}>{preview.urgentesGenerales||"Sin urgentes"}</div></div>
+          <div style={{padding:"22px 24px 24px",display:"grid",gap:16}}>
+            <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12}}>
+              <div style={{border:"1px solid #eadde2",borderRadius:16,padding:"16px 18px",background:"#fff8fa"}}><div style={{fontSize:13,fontWeight:850,letterSpacing:.7,color:"#8b3653",textTransform:"uppercase"}}>Importante para mañana</div><div style={{marginTop:8,fontSize:18,lineHeight:1.65,whiteSpace:"pre-wrap",fontWeight:500}}>{preview.importanteManana||"Sin novedades"}</div></div>
+              <div style={{border:"1px solid #f0d4d4",borderRadius:16,padding:"16px 18px",background:preview.urgentesGenerales?"#fff1f1":"#fafafa"}}><div style={{fontSize:13,fontWeight:850,letterSpacing:.7,color:preview.urgentesGenerales?"#b13b3b":"#777",textTransform:"uppercase"}}>Urgentes generales</div><div style={{marginTop:8,fontSize:18,lineHeight:1.65,whiteSpace:"pre-wrap",fontWeight:500}}>{preview.urgentesGenerales||"Sin urgentes"}</div></div>
             </div>
-            <div style={{border:"1px solid #eadde2",borderRadius:14,overflow:"hidden"}}><div style={{padding:"8px 12px",background:"#f5e8ec",fontSize:11,fontWeight:850,color:"#72243e"}}>CAJA Y PAGOS</div><div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:0}}><div style={{padding:"12px 13px",borderRight:"1px solid #eee"}}><div style={{fontSize:10,fontWeight:800,color:"#777"}}>Caja efectivo</div><div style={{fontSize:11.5,lineHeight:1.55,marginTop:5}}>Inicial: <strong>{fmtMoney(preview.saldoEfectivoAnterior)}</strong> · {preview.coincideEfectivoInicial?"Coincide":"Revisar"}<br/>Final: <strong>{fmtMoney(preview.efectivoCaja)}</strong> · {preview.coincideCaja?"Coincide":"Revisar"}</div><div style={{fontSize:10,fontWeight:800,color:"#777",marginTop:9}}>Mercado Pago / reservas</div><div style={{fontSize:11.5,lineHeight:1.5,whiteSpace:"pre-wrap",marginTop:4}}>{preview.mercadoPagoTotalReservas||"-"}</div></div><div style={{padding:"12px 13px"}}><div style={{fontSize:10,fontWeight:800,color:"#777"}}>Caja general</div><div style={{fontSize:11.5,lineHeight:1.55,marginTop:5}}>Saldo anterior: <strong>{fmtMoney(preview.saldoAnterior)}</strong><br/>+ Traspaso general: <strong>{fmtMoney(preview.traspasoCajaGeneral)}</strong><br/>- Traspaso efectivo: <strong>{fmtMoney(preview.traspasoCajaEfectivo)}</strong><br/><span style={{display:"inline-block",marginTop:5,padding:"4px 7px",borderRadius:7,background:"#f5e8ec",color:"#72243e",fontWeight:850}}>Saldo final {fmtMoney(calcTotalCaja(preview))}</span></div></div></div><div style={{borderTop:"1px solid #eee",padding:"11px 13px"}}><div style={{fontSize:10,fontWeight:800,color:"#777"}}>Pagos realizados</div><div style={{fontSize:11.5,lineHeight:1.55,whiteSpace:"pre-wrap",marginTop:4}}>{gastosText(preview)||"-"}</div></div></div>
-            {[ ["ASISTENCIA DE MANICURAS",buildAsistenciaText(preview)], ["HORARIOS ENCARGADAS",buildEncargadasRealText(preview)], ["GARANTÍAS DEL DÍA",buildGarantiasText(preview)], ["RECLAMOS",reclamosText(preview)] ].map(([title,value])=><div key={title} style={{border:"1px solid #ece6e8",borderRadius:13,padding:"11px 13px",background:"#fff"}}><div style={{fontSize:9.5,fontWeight:850,color:"#8b3653",letterSpacing:.55}}>{title}</div><div style={{fontSize:11.5,lineHeight:1.55,whiteSpace:"pre-wrap",marginTop:5}}>{value||"-"}</div></div>)}
-            <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10}}><div style={{border:"1px solid #ece6e8",borderRadius:13,padding:"11px 13px"}}><div style={{fontSize:9.5,fontWeight:850,color:"#8b3653"}}>NOVEDADES SALÓN / MANICURAS</div><div style={{fontSize:11.5,lineHeight:1.55,whiteSpace:"pre-wrap",marginTop:5}}>{preview.novedadesSalonManicuras||"-"}</div></div><div style={{border:"1px solid #ece6e8",borderRadius:13,padding:"11px 13px"}}><div style={{fontSize:9.5,fontWeight:850,color:"#8b3653"}}>OBSERVACIONES / EXTRAS</div><div style={{fontSize:11.5,lineHeight:1.55,whiteSpace:"pre-wrap",marginTop:5}}>{preview.observacionesExtras||"-"}</div></div></div>
-            <div style={{display:"flex",justifyContent:"space-between",gap:10,borderTop:"1px solid #eadde2",paddingTop:10,fontSize:9.5,color:"#8d7b82"}}><span>Responsable: {userLabel(preview.cerradoPor || preview.creadoPor)}</span><span>NIKI OS · {parseDateLabel(preview.fecha)}</span></div>
+            <div style={{border:"1px solid #eadde2",borderRadius:16,overflow:"hidden"}}><div style={{padding:"12px 16px",background:"#f5e8ec",fontSize:14,fontWeight:850,color:"#72243e",letterSpacing:.4}}>CAJA Y PAGOS</div><div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:0}}><div style={{padding:"16px 18px",borderRight:"1px solid #eee"}}><div style={{fontSize:13,fontWeight:800,color:"#777"}}>Caja efectivo</div><div style={{fontSize:17,lineHeight:1.72,marginTop:7,fontWeight:500}}>Inicial: <strong>{fmtMoney(preview.saldoEfectivoAnterior)}</strong> · {preview.coincideEfectivoInicial?"Coincide":"Revisar"}<br/>Final: <strong>{fmtMoney(preview.efectivoCaja)}</strong> · {preview.coincideCaja?"Coincide":"Revisar"}</div><div style={{fontSize:13,fontWeight:800,color:"#777",marginTop:12}}>Mercado Pago / reservas</div><div style={{fontSize:17,lineHeight:1.65,whiteSpace:"pre-wrap",marginTop:5,fontWeight:500}}>{preview.mercadoPagoTotalReservas||"-"}</div></div><div style={{padding:"16px 18px"}}><div style={{fontSize:13,fontWeight:800,color:"#777"}}>Caja general</div><div style={{fontSize:17,lineHeight:1.72,marginTop:7,fontWeight:500}}>Saldo anterior: <strong>{fmtMoney(preview.saldoAnterior)}</strong><br/>+ Traspaso general: <strong>{fmtMoney(preview.traspasoCajaGeneral)}</strong><br/>- Traspaso efectivo: <strong>{fmtMoney(preview.traspasoCajaEfectivo)}</strong><br/><span style={{display:"inline-block",marginTop:8,padding:"6px 10px",borderRadius:9,background:"#f5e8ec",color:"#72243e",fontWeight:850,fontSize:16}}>Saldo final {fmtMoney(calcTotalCaja(preview))}</span></div></div></div><div style={{borderTop:"1px solid #eee",padding:"14px 18px"}}><div style={{fontSize:13,fontWeight:800,color:"#777"}}>Pagos realizados</div><div style={{fontSize:17,lineHeight:1.65,whiteSpace:"pre-wrap",marginTop:5,fontWeight:500}}>{gastosText(preview)||"-"}</div></div></div>
+            {[ ["ASISTENCIA DE MANICURAS",buildAsistenciaText(preview)], ["HORARIOS ENCARGADAS",buildEncargadasRealText(preview)], ["GARANTÍAS DEL DÍA",buildGarantiasText(preview)], ["RECLAMOS",reclamosText(preview)] ].map(([title,value])=><div key={title} style={{border:"1px solid #ece6e8",borderRadius:16,padding:"15px 18px",background:"#fff"}}><div style={{fontSize:13,fontWeight:850,color:"#8b3653",letterSpacing:.55}}>{title}</div><div style={{fontSize:17,lineHeight:1.7,whiteSpace:"pre-wrap",marginTop:7,fontWeight:500}}>{value||"-"}</div></div>)}
+            <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12}}><div style={{border:"1px solid #ece6e8",borderRadius:16,padding:"15px 18px"}}><div style={{fontSize:13,fontWeight:850,color:"#8b3653",letterSpacing:.35}}>NOVEDADES SALÓN / MANICURAS</div><div style={{fontSize:17,lineHeight:1.7,whiteSpace:"pre-wrap",marginTop:7,fontWeight:500}}>{preview.novedadesSalonManicuras||"-"}</div></div><div style={{border:"1px solid #ece6e8",borderRadius:16,padding:"15px 18px"}}><div style={{fontSize:13,fontWeight:850,color:"#8b3653",letterSpacing:.35}}>OBSERVACIONES / EXTRAS</div><div style={{fontSize:17,lineHeight:1.7,whiteSpace:"pre-wrap",marginTop:7,fontWeight:500}}>{preview.observacionesExtras||"-"}</div></div></div>
+            <div style={{display:"flex",justifyContent:"space-between",gap:10,borderTop:"1px solid #eadde2",paddingTop:12,fontSize:12.5,color:"#8d7b82",fontWeight:600}}><span>Responsable: {userLabel(preview.cerradoPor || preview.creadoPor)}</span><span>NIKI OS · {parseDateLabel(preview.fecha)}</span></div>
           </div>
         </div>
       </div>
@@ -13100,16 +13162,8 @@ draft = { ...draft, inicio:agendaTime(originalStart), fin:agendaTime(end), userI
       setSaving(false);
     };
     const toggleLocalLista = async (local, checked) => {
-      setSaving(true);
-      try {
-        if(checked) await api.setAgendaLocalListas(local.id,[listaMaestroActual.id]);
-        else {
-          const rel=(data.agendaLocalListas||[]).find(x=>x.localId===local.id&&x.listaId===listaMaestroActual.id&&x.activo);
-          if(rel) await api.setAgendaLocalListas(local.id,[]);
-        }
-        await reloadData();
-      } catch(e) { notifyToast("No se pudo actualizar el local: " + (e.message||e), "error"); }
-      setSaving(false);
+      // No mutar una relación histórica desde un checkbox sin fecha explícita.
+      notifyToast("Para cambiar la lista, abrí la asignación del local e indicá la fecha de vigencia.","warning");
     };
     const ultimaVigencia = vigenciasMaestro[0] || null;
     const puedeEliminarVigenciaActual = !!(ultimaVigencia && vigenciaMaestroActual && String(ultimaVigencia.id)===String(vigenciaMaestroActual.id));
@@ -13452,7 +13506,7 @@ draft = { ...draft, inicio:agendaTime(originalStart), fin:agendaTime(end), userI
       }}>{saving?"Guardando...":"Guardar"}</Btn><Btn onClick={()=>setVigenciaModal(null)} variant="secondary">Cancelar</Btn></div>
     </div></Modal>}
     {listaModal&&<Modal title={listaModal.id?"Editar lista global":"Nueva lista global"} onClose={()=>setListaModal(null)}><div style={{ display:"flex",flexDirection:"column",gap:12 }}><ModalInput label="Nombre" value={listaModal.nombre} onChange={v=>setListaModal(d=>({...d,nombre:v}))}/><ModalInput label="Descripción" value={listaModal.descripcion} onChange={v=>setListaModal(d=>({...d,descripcion:v}))}/><label style={{ display:"flex",gap:8,alignItems:"center",fontSize:14 }}><input type="checkbox" checked={listaModal.activo} onChange={e=>setListaModal(d=>({...d,activo:e.target.checked}))}/>Activa</label><div style={{ background:COLORS.infoLight,color:COLORS.info,borderRadius:8,padding:"8px 10px",fontSize:13 }}>Esta lista es global. Para usarla en turnos, asignala luego a cada local.</div><div style={{ display:"flex",gap:8 }}><Btn onClick={async()=>{ const payload={nombre:listaModal.nombre,descripcion:listaModal.descripcion,activo:listaModal.activo}; if(listaModal.id) await api.updateAgendaListaPrecio(listaModal.id,payload); else await api.createAgendaListaPrecio(payload); await reloadData(); setListaModal(null); }}>Guardar</Btn><Btn onClick={()=>setListaModal(null)} variant="secondary">Cancelar</Btn></div></div></Modal>}
-    {listaAsignacionModal&&<Modal title="Lista de precios del local" onClose={()=>setListaAsignacionModal(null)} width={520}><div style={{ display:"flex",flexDirection:"column",gap:10 }}><p style={{ margin:0,fontSize:13,color:"var(--color-text-secondary)" }}>Elegí la única lista de precios que utilizará <strong>{data.locales.find(l=>l.id===parseInt(listaAsignacionModal.localId))?.nombre}</strong> para cargar turnos.</p><ModalSelect label="Lista asignada" value={listaAsignacionModal.listaId||""} onChange={v=>setListaAsignacionModal(d=>({...d,listaId:v}))}><option value="">Sin lista asignada</option>{(data.agendaListasPrecios||[]).filter(l=>l.activo).map(l=><option key={l.id} value={l.id}>{l.nombre}</option>)}</ModalSelect>{listaAsignacionModal.listaId&&<div style={{ background:"var(--color-background-secondary)",borderRadius:8,padding:"8px 10px",fontSize:13,color:"var(--color-text-secondary)" }}>{data.agendaListasPrecios.find(l=>String(l.id)===String(listaAsignacionModal.listaId))?.descripcion||"Sin descripción"}</div>}<div style={{ display:"flex",gap:8,justifyContent:"flex-end",marginTop:6 }}><Btn onClick={async()=>{ await api.setAgendaLocalListas(listaAsignacionModal.localId, listaAsignacionModal.listaId?[listaAsignacionModal.listaId]:[]); await reloadData(); setListaAsignacionModal(null); }}>Guardar</Btn><Btn onClick={()=>setListaAsignacionModal(null)} variant="secondary">Cancelar</Btn></div></div></Modal>}
+    {listaAsignacionModal&&<NikiListaVigenciaEditor localId={listaAsignacionModal.localId} listaId={listaAsignacionModal.listaId} listas={data.agendaListasPrecios} locales={data.locales} onClose={()=>setListaAsignacionModal(null)} onSaved={reloadData}/>}
     {asigModal&&<Modal title="Servicios de manicura" onClose={()=>setAsigModal(null)} width={620}><div style={{ display:"flex",flexDirection:"column",gap:8 }}>{serviciosActivos.map(s=>{ const asignado=asigModal.servicios.find(x=>parseInt(x.servicioId)===parseInt(s.id)); return <div key={s.id} style={{ display:"grid",gridTemplateColumns:"1fr 110px",gap:10,alignItems:"center",fontSize:14,padding:"7px 0",borderBottom:"0.5px solid var(--color-border-tertiary)" }}><label style={{ display:"flex",alignItems:"center",gap:8 }}><input type="checkbox" checked={!!asignado} onChange={e=>setAsigModal(d=>({ ...d, servicios:e.target.checked?[...d.servicios,{servicioId:s.id,duracionMinutos:s.duracionMinutos||60}]:d.servicios.filter(x=>parseInt(x.servicioId)!==parseInt(s.id)) }))}/><span><strong>{s.nombre}</strong><br/><span style={{ color:"var(--color-text-secondary)",fontSize:12 }}>Duración base: {s.duracionMinutos} min</span></span></label><input type="number" disabled={!asignado} value={asignado?.duracionMinutos ?? s.duracionMinutos ?? 60} onChange={e=>setAsigModal(d=>({ ...d, servicios:d.servicios.map(x=>parseInt(x.servicioId)===parseInt(s.id)?{...x,duracionMinutos:e.target.value}:x) }))} style={{ border:"0.5px solid var(--color-border-secondary)",borderRadius:8,padding:"7px 8px",fontSize:13,width:"100%" }} placeholder="Minutos"/></div>})}<div style={{ background:COLORS.infoLight,color:COLORS.info,borderRadius:10,padding:"9px 12px",fontSize:13 }}>La duración asignada a la manicura se usa para sugerir el horario de finalización al cargar turnos.</div><div style={{ display:"flex",gap:8,marginTop:8 }}><Btn onClick={async()=>{ await api.setAgendaManicuraServicios(asigModal.userId,asigModal.servicios); await reloadData(); setAsigModal(null); }}>Guardar</Btn><Btn onClick={()=>setAsigModal(null)} variant="secondary">Cancelar</Btn></div></div></Modal>}
   </div>;
 }
@@ -13771,6 +13825,400 @@ function DetalleComisionesPago({ rows = [], title = "Detalle" }) {
     </div>
     {rows.length > visibles.length && <p style={{ margin:0,padding:"10px 14px",fontSize:12,color:"var(--color-text-secondary)",borderTop:"1px solid rgba(120,120,120,0.10)" }}>Se muestran los primeros {visibles.length} movimientos.</p>}
   </Card>;
+}
+
+
+
+// Vista de prestaciones del piloto: agrupaciones anidadas, orden y subtotales.
+function NikiQuincenalGridServicios({ rows = [], compacto = false }) {
+  const columns = [
+    {id:'fecha',label:'Fecha'}, {id:'local',label:'Local'}, {id:'manicura',label:'Manicura'},
+    {id:'servicio',label:'Servicio'}, {id:'cliente',label:'Cliente'},
+    {id:'precio',label:'Precio',number:true}, {id:'comision',label:'Comisión',number:true}
+  ];
+  const fields = columns.filter(c=>!c.number);
+  const [groups,setGroups] = useState(compacto?[]:['manicura']);
+  const [sort,setSort] = useState({id:'fecha',asc:false});
+  const [closed,setClosed] = useState({});
+  const [dragged,setDragged] = useState('');
+  const [allClosed,setAllClosed] = useState(false);
+  const groupLabel=(col,row)=> col==='fecha' ? parseDateLabel(row.fecha) : String(row[col]||'Sin dato');
+  const totals=list=>list.reduce((a,r)=>({precio:a.precio+Number(r.precio||0),comision:a.comision+Number(r.comision||0)}),{precio:0,comision:0});
+  const sorted=useMemo(()=>[...rows].sort((a,b)=>{
+    const c=columns.find(x=>x.id===sort.id);
+    const cmp=c?.number ? Number(a[sort.id]||0)-Number(b[sort.id]||0)
+      :String(a[sort.id]||'').localeCompare(String(b[sort.id]||''),'es',{numeric:true});
+    return (sort.asc?1:-1)*cmp || String(a.fecha||'').localeCompare(String(b.fecha||''));
+  }),[rows,sort.id,sort.asc]);
+  const changeGroup=id=>{setGroups(prev=>prev.includes(id)?prev.filter(x=>x!==id):[...prev,id]);setClosed({});setAllClosed(false);};
+  const groupedRows=(list,depth=0,path='')=>{
+    if(depth>=groups.length) return list.map((r,i)=><tr key={r.key||`${path}-${i}`} style={{borderBottom:'1px solid #f1eaed'}}>
+      {columns.map(c=><td key={c.id} style={{padding:'7px 10px',textAlign:c.number?'right':'left',whiteSpace:c.id==='servicio'?'normal':'nowrap',maxWidth:c.id==='servicio'?350:undefined,color:c.id==='comision'?'#72243e':undefined,fontWeight:c.id==='comision'?700:400}} title={String(r[c.id]||'')}>
+        {c.number?fmtMoney(r[c.id]):c.id==='fecha'?parseDateLabel(r.fecha):r[c.id]}
+      </td>)}
+    </tr>);
+    const field=groups[depth],parts=new Map();
+    list.forEach(r=>{const key=groupLabel(field,r);if(!parts.has(key))parts.set(key,[]);parts.get(key).push(r);});
+    return Array.from(parts.entries()).flatMap(([value,members])=>{
+      const key=`${path}|${field}:${value}`;
+      const isClosed=allClosed||closed[key]===true;
+      const sum=totals(members);
+      return [<tr key={`group-${key}`} style={{background:depth%2?'#fbf7f9':'#f7edf1',borderBottom:'1px solid #ebdee3'}}>
+        <td colSpan={5} style={{padding:'9px 12px',paddingLeft:12+depth*20,fontWeight:750,color:'#72243e',cursor:'pointer'}} onClick={()=>{setAllClosed(false);setClosed(prev=>({...prev,[key]:allClosed?false:!prev[key]}));}}>
+          <span style={{display:'inline-block',width:20}}>{isClosed?'▸':'▾'}</span>{columns.find(c=>c.id===field)?.label}: {value} <span style={{fontWeight:400,fontSize:11,color:'#8e7982'}}>· {members.length} servicios</span>
+        </td>
+        <td style={{padding:'9px 10px',textAlign:'right',fontWeight:750}}>{fmtMoney(sum.precio)}</td>
+        <td style={{padding:'9px 10px',textAlign:'right',fontWeight:800,color:'#72243e'}}>{fmtMoney(sum.comision)}</td>
+      </tr>,...(isClosed?[]:groupedRows(members,depth+1,key))];
+    });
+  };
+  const grand=totals(rows);
+  return <div style={{border:'1px solid #eadde2',borderRadius:14,overflow:'hidden',background:'#fff'}}>
+    <div style={{padding:'11px 12px',display:'flex',alignItems:'center',justifyContent:'space-between',gap:10,flexWrap:'wrap',background:'#fcf9fa'}}>
+      <div><strong style={{fontSize:13,color:'#72243e'}}>Detalle de comisiones</strong><span style={{marginLeft:9,fontSize:11,color:'#9b7989'}}>{rows.length} registros</span></div>
+      <div style={{display:'flex',gap:6,alignItems:'center',flexWrap:'wrap'}}>
+        <button type='button' onClick={()=>{setAllClosed(true);setClosed({});}} style={{padding:'5px 8px',fontSize:11,borderRadius:8,border:'1px solid #eadde2',background:'#fff',cursor:'pointer'}}>Colapsar</button>
+        <button type='button' onClick={()=>{setAllClosed(false);setClosed({});}} style={{padding:'5px 8px',fontSize:11,borderRadius:8,border:'1px solid #eadde2',background:'#fff',cursor:'pointer'}}>Expandir</button>
+      </div>
+    </div>
+    <div style={{display:'flex',gap:7,alignItems:'center',padding:'9px 12px',flexWrap:'wrap',borderBottom:'1px solid #f1e5ea'}}>
+      <span style={{fontSize:11,color:'#816a75',fontWeight:600}}>Agrupar por (arrastrá para ordenar):</span>
+      {groups.map((id,i)=><span key={id} draggable onDragStart={()=>setDragged(id)} onDragOver={e=>e.preventDefault()} onDrop={e=>{e.preventDefault();if(dragged&&dragged!==id)setGroups(prev=>{const next=prev.filter(x=>x!==dragged);next.splice(next.indexOf(id),0,dragged);return next;});setDragged('');}} style={{fontSize:11,padding:'5px 7px',border:'1px solid #dcbecb',background:'#f7edf1',borderRadius:7,cursor:'grab',color:'#72243e'}}>{i+1}. {columns.find(c=>c.id===id)?.label} <button type='button' onClick={()=>changeGroup(id)} aria-label={`Quitar ${id}`} style={{marginLeft:5,border:0,background:'transparent',cursor:'pointer',color:'#72243e'}}>×</button></span>)}
+      <select aria-label='Agregar agrupación' value='' onChange={e=>e.target.value&&changeGroup(e.target.value)} style={{padding:'5px 7px',fontSize:11,borderRadius:7,border:'1px solid #e1cad3',background:'#fff',color:'#72243e'}}><option value=''>+ Agregar columna</option>{fields.filter(c=>!groups.includes(c.id)).map(c=><option key={c.id} value={c.id}>{c.label}</option>)}</select>
+      {!!groups.length&&<button type='button' onClick={()=>{setGroups([]);setClosed({});setAllClosed(false);}} style={{background:'transparent',border:0,fontSize:11,color:'#876577',cursor:'pointer'}}>Desagrupar</button>}
+    </div>
+    <div style={{overflow:'auto',maxHeight:compacto?'60vh':680}}><table style={{width:'100%',borderCollapse:'collapse',fontSize:12,minWidth:1000}}>
+      <thead><tr style={{position:'sticky',top:0,zIndex:1,background:'#fff'}}>{columns.map(c=><th key={c.id} onClick={()=>setSort(x=>({id:c.id,asc:x.id===c.id?!x.asc:true}))} style={{padding:'10px',borderBottom:'1px solid #eadce2',textAlign:c.number?'right':'left',cursor:'pointer',whiteSpace:'nowrap',color:groups.includes(c.id)?'#72243e':'#51454c'}}>{c.label} <span style={{color:'#aa95a1'}}>{sort.id===c.id?(sort.asc?'↑':'↓'):'↕'}</span></th>)}</tr></thead>
+      <tbody>{groups.length?groupedRows(sorted):groupedRows(sorted,0,'')}</tbody>
+      <tfoot><tr style={{position:'sticky',bottom:0,background:'#f2e5eb',fontWeight:800,color:'#72243e',borderTop:'2px solid #d7b8c5'}}><td colSpan={5} style={{padding:'10px 12px'}}>TOTAL · {rows.length} prestaciones</td><td style={{padding:10,textAlign:'right'}}>{fmtMoney(grand.precio)}</td><td style={{padding:10,textAlign:'right'}}>{fmtMoney(grand.comision)}</td></tr></tfoot>
+    </table></div>
+    {!rows.length&&<div style={{padding:16,fontSize:12,color:'#856f79'}}>No hay prestaciones para mostrar.</div>}
+  </div>;
+}
+
+// Aislamiento del informe experimental: una excepción no debe dejar en blanco NikiOS.
+class ComisionesPilotoErrorBoundary extends React.Component {
+  constructor(props) { super(props); this.state = { error:null }; }
+  static getDerivedStateFromError(error) { return { error }; }
+  componentDidCatch(error, info) {
+    console.error('[NikiOS] Error en piloto quincenal:', error, info?.componentStack);
+  }
+  render() {
+    if (this.state.error) return (
+      <Card>
+        <h2 style={{ marginTop:0 }}>Comisiones quincenales · Piloto</h2>
+        <p>No se pudo mostrar el informe experimental. Los reportes originales siguen disponibles.</p>
+        <pre style={{ whiteSpace:'pre-wrap', overflowWrap:'anywhere', padding:12, background:'rgba(150,50,50,.06)', borderRadius:8 }}>{String(this.state.error?.stack || this.state.error?.message || this.state.error)}</pre>
+        <Btn onClick={() => this.setState({ error:null })}>Reintentar</Btn>
+      </Card>
+    );
+    return this.props.children;
+  }
+}
+
+// PILOTO 2026: liquidacion quincenal independiente. No escribe sobre los informes originales.
+// Piloto quincenal 2026: totalmente independiente del circuito semanal productivo.
+function ReporteComisionesQuincenalPiloto({ data, user }) {
+  const hoy = new Date();
+  const [periodo,setPeriodo] = useState(fmtPeriodo(hoy));
+  const [quincena,setQuincena] = useState('1');
+  const [localId,setLocalId] = useState('todos');
+  const [manicuraFiltro,setManicuraFiltro] = useState('todas');
+  const [snapshot,setSnapshot] = useState(null);
+  const [loading,setLoading] = useState(false);
+  const [error,setError] = useState('');
+  const [detalle,setDetalle] = useState(null);
+  const [configOpen,setConfigOpen] = useState(false);
+  const [configDraft,setConfigDraft] = useState(null);
+  const [savedOverrides,setSavedOverrides] = useState([]);
+  const [modesOpen,setModesOpen] = useState(false);
+  const [modesDraft,setModesDraft] = useState([]);
+  const [overrideEdit,setOverrideEdit] = useState(null);
+  const [recoveryList,setRecoveryList] = useState(null);
+  const [pctEdit,setPctEdit] = useState(null);
+  const [pctOverrides,setPctOverrides] = useState([]);
+  const esManicura=user.rol==='manicura';
+  // Casa Matriz accede al mismo piloto de revision que Administrador.
+  // Conservamos los permisos existentes de encargadas y franquiciados.
+  const canManage=['admin','casa_matriz','franquiciado','encargada'].includes(user.rol);
+  const [saving,setSaving] = useState(false);
+  const [expanded,setExpanded] = useState({});
+  const [quincenalTab,setQuincenalTab] = useState('resumen');
+  const [ventasModal,setVentasModal] = useState(null);
+  const [ventasOrden,setVentasOrden] = useState({col:'fecha',asc:true});
+  const [ventasAgrupar,setVentasAgrupar] = useState('fecha');
+  // El alcance de Casa Matriz incluye todos los locales propios y solo las franquicias
+  // que tenga asignadas, conforme a getAssignedLocalIds.
+  const assigned = getAssignedLocalIds(data,user).map(Number);
+  const allowedLocals=(data.locales||[]).filter(l=>['admin'].includes(user.rol)||assigned.includes(Number(l.id)));
+  const end=dateKey(new Date(Number(periodo.slice(0,4)), Number(periodo.slice(5,7)), 0));
+  const desde=`${periodo}-${quincena==='1'?'01':'16'}`;
+  const hasta=quincena==='1'?`${periodo}-15`:end;
+  const keyCorte=`${periodo}-${quincena}`;
+  const fallback={minimo_estandar:0,minimo_premium:0,minimo_finde_estandar:0,minimo_finde_premium:0,horas_quincenales:72,horas_finde_dia:10,porcentaje_normal:40,porcentaje_reducido:35,tardanzas_penalizacion:2};
+  const [config,setConfig]=useState(fallback);
+  const [localModes,setLocalModes]=useState([]);
+  const [setupNeeded,setSetupNeeded]=useState(false);
+  const dayAdd=(s,n)=>{const d=parseDateLocal(s);d.setDate(d.getDate()+n);return dateKey(d);};
+  const dayCount=(a,b)=>a>b?0:Math.round((parseDateLocal(b)-parseDateLocal(a))/86400000)+1;
+  const timeMinutes=(v)=>{const x=String(v||'').slice(0,5).split(':').map(Number);return x.length===2&&x.every(Number.isFinite)?x[0]*60+x[1]:null;};
+  const hoursOf=(a,b)=>{const aa=timeMinutes(a),bb=timeMinutes(b);return aa===null||bb===null?0:Math.max(0,(bb-aa)/60);};
+  const load=useCallback(async()=>{
+    setLoading(true);setError('');
+    try {
+      const items=await Promise.all([
+        api.getComisionesAgendaProShadowRango(desde,hasta),api.getHorariosRango(desde,hasta),api.getAsistenciasRango(desde,hasta),
+        sb('comisiones_quincenales_config?select=*&id=eq.1'),sb('comisiones_quincenales_locales?select=*'),
+        sb(`comisiones_quincenales_recuperaciones?select=*&periodo=eq.${encodeURIComponent(keyCorte)}`),
+        sb(`comisiones_quincenales_porcentajes?select=*&periodo=eq.${encodeURIComponent(keyCorte)}`)
+      ]);
+      setSnapshot({ventas:(items[0]||[]).map(normalizeComision),horarios:(items[1]||[]).map(normalizeHorario),asistencias:(items[2]||[]).map(normalizeAsistencia)});
+      setConfig({...fallback,...(items[3]||[])[0]});setLocalModes(items[4]||[]);setSavedOverrides(items[5]||[]);setPctOverrides(items[6]||[]);setSetupNeeded(false);
+    } catch(e){setError(e.message||String(e));setSnapshot(null);if(/comisiones_quincenales_|42P01|404/i.test(String(e.message||e)))setSetupNeeded(true);}
+    finally{setLoading(false);}
+  },[desde,hasta,keyCorte]);
+  useEffect(()=>{void load();},[load]);
+  const fmtH=n=>`${Number(n||0).toFixed(1).replace('.',',')} h`;
+  const calculation=useMemo(()=>{
+    if(!snapshot)return [];
+    const uMap=new Map((data.users||[]).map(x=>[Number(x.id),x]));
+    const lMap=new Map((data.locales||[]).map(x=>[Number(x.id),x]));
+    const baseByUser=new Map();
+    (snapshot.ventas||[]).forEach(v=>{const uid=Number(v.userId);if(!uid||!uMap.has(uid))return;const obj=baseByUser.get(uid)||{ventas:[],localIds:new Set()};obj.ventas.push(v);obj.localIds.add(Number(v.localId||0));baseByUser.set(uid,obj);});
+    (snapshot.horarios||[]).forEach(h=>{const uid=Number(h.userId);if(!uid||!uMap.has(uid))return;if(!baseByUser.has(uid))baseByUser.set(uid,{ventas:[],localIds:new Set()});baseByUser.get(uid).localIds.add(Number(h.localId||0));});
+    const result=[];
+    for(const [uid,group] of baseByUser){
+      const persona=uMap.get(uid);
+      const matchedLocals=[...group.localIds].filter(Boolean);
+      const principal=Number(group.ventas[0]?.localId||matchedLocals[0]||persona.localId||0);
+      const mode=localModes.find(x=>Number(x.local_id)===principal&&(!x.fecha_desde||x.fecha_desde<=hasta));
+      // Sin activación explícita mantenemos esta simulación identificada como piloto.
+      const zona=String(lMap.get(principal)?.zona||'estandar').toLowerCase();const premium=['premium','exclusiva'].includes(zona);
+      const weekend=persona.soloFinDeSemana===true;
+      const hRows=(snapshot.horarios||[]).filter(h=>Number(h.userId)===uid&&h.fecha>=desde&&h.fecha<=hasta);
+      const aRows=(snapshot.asistencias||[]).filter(a=>Number(a.userId)===uid&&a.fecha>=desde&&a.fecha<=hasta);
+      const history=(data.usuarioHistorialLaboral||[]).filter(x=>Number(x.userId)===uid).map(x=>x.fechaInicio).filter(Boolean).sort();
+      const localHistory=(data.manicuraHistorialLocales||[]).filter(x=>Number(x.userId)===uid).map(x=>x.fechaInicio).filter(Boolean).sort();
+      const start=history[0]||localHistory[0]||'';
+      const ingresante=!!start&&start>desde&&start<=hasta;
+      const effectiveDesde=ingresante?start:desde;
+      const factor=ingresante?dayCount(effectiveDesde,hasta)/dayCount(desde,hasta):1;
+      const objetivo=weekend?Number(config.horas_finde_dia||10):Number(config.horas_quincenales||72)*factor;
+      const minimoFull=Number(weekend?(premium?config.minimo_finde_premium:config.minimo_finde_estandar):(premium?config.minimo_premium:config.minimo_estandar)||0);
+      // "Fin de semana" es una modalidad de la manicura (users.solo_fin_de_semana),
+      // no un filtro por dia de la semana. Se consideran TODAS sus jornadas
+      // programadas dentro del corte: viernes, sabados, feriados u otros dias.
+      const jornadasModalidad=hRows.filter(h=>weekend&&h.trabaja&&h.fecha>=effectiveDesde);
+      const finDates=[...new Set(jornadasModalidad.map(h=>h.fecha))];
+      const diasEsperados=weekend?finDates.length:0;
+      const minimoAplicable=weekend?minimoFull*diasEsperados:minimoFull*factor; // Referencia acumulada, no umbral de pago por jornada.
+      const diaMap=new Map();
+      hRows.forEach(h=>{if(h.fecha<effectiveDesde)return;const x=diaMap.get(h.fecha)||{horas:0,plan:0};if(h.trabaja){x.plan+=hoursOf(h.entrada,h.salida);}diaMap.set(h.fecha,x);});
+      aRows.forEach(a=>{
+        if(a.fecha<effectiveDesde)return;
+        const x=diaMap.get(a.fecha)||{horas:0,plan:0};
+        // Mismo criterio que el reporte de horas vigente: asistencia "presente" acredita
+        // las horas del horario planificado. Para "tarde", usamos la marcación real
+        // con las horas planificadas como alternativa si falta una de las dos marcas.
+        const planDia=hRows.find(h=>h.fecha===a.fecha&&Number(h.localId||0)===Number(a.localId||0)&&h.trabaja);
+        if(a.estado==='presente'){
+          x.horas+=planDia?hoursOf(planDia.entrada,planDia.salida):hoursOf(a.entradaReal,a.salidaReal);
+        }else if(a.estado==='tarde'){
+          x.horas+=hoursOf(a.entradaReal||planDia?.entrada,a.salidaReal||planDia?.salida);
+        }
+        diaMap.set(a.fecha,x);
+      });
+      // Una marcación completa define horas reales; la planificación no se cuenta automáticamente como trabajo efectivo.
+      let hours=0;for(const x of diaMap.values())hours+=x.horas;
+      const falls=aRows.filter(a=>a.estado==='ausente'&&a.fecha>=effectiveDesde).map(a=>({fecha:a.fecha,certificado:!!a.certificado,plan:diaMap.get(a.fecha)?.plan||0}));
+      const unexcused=falls.filter(a=>!a.certificado);
+      const late=aRows.filter(a=>a.fecha>=effectiveDesde&&a.estado==='tarde').length;
+      const overrides=savedOverrides.filter(x=>Number(x.user_id)===uid&&x.periodo===keyCorte);
+      const pending=unexcused.filter(a=>!overrides.some(o=>o.fecha_ausencia===a.fecha&&o.recuperada===true&&Number(o.horas_recuperadas||0)+0.01>=a.plan));
+      const countedMedical=falls.filter(x=>x.certificado).reduce((s,x)=>s+x.plan,0);
+      const recoveredHours=overrides.filter(x=>x.recuperada===true&&unexcused.some(a=>a.fecha===x.fecha_ausencia)).reduce((s,x)=>s+Number(x.horas_recuperadas||0),0);
+      // Para evitar doble conteo, la recuperación declarada se usa para justificar la ausencia,
+      // no se vuelve a sumar a las horas reales ya registradas.
+      const eligibleHours=hours+countedMedical;
+      const hoursOk=weekend?finDates.every(d=>(diaMap.get(d)?.horas||0)+(falls.some(f=>f.fecha===d&&f.certificado)?(diaMap.get(d)?.plan||0):0)>=Number(config.horas_finde_dia||10)):eligibleHours+1e-6>=objetivo;
+      const penalized=late>=Number(config.tardanzas_penalizacion||2)||pending.length>0;
+      const autoPct=penalized?Number(config.porcentaje_reducido||35):Number(config.porcentaje_normal||40);
+      const manualPctRow=pctOverrides.find(o=>Number(o.user_id)===uid&&o.periodo===keyCorte);
+      const pct=manualPctRow?Number(manualPctRow.porcentaje):autoPct;
+      const originalRate=40; // Comisión de origen AgendaPro, normalmente expresada al 40%.
+      const ventaComision40=group.ventas.reduce((s,v)=>s+Number(v.comision||0),0);
+      const ventaTotal=group.ventas.reduce((s,v)=>s+Number(v.precio||0),0);
+      const comision=ventaComision40*pct/originalRate;
+      const garantiaVigencia=getMinimumGuaranteeStatus(data.manicuraHistorialLocales||[],uid,principal,desde,hasta);
+      const garantiaHasta=garantiaVigencia?.endDateKey||'';
+      const beneficioVigente=!!garantiaVigencia?.activeInWeek&&!!garantiaHasta&&garantiaHasta>=desde;
+      const minimoHabilitado=beneficioVigente&&hoursOk&&!penalized&&pct>=Number(config.porcentaje_normal||40);
+      // Para trabajo solo de fines de semana, evaluar cada jornada por separado.
+      // El total de comisiones de la quincena nunca compensa una jornada por debajo de su minimo.
+      const detalleFinSemana=weekend?finDates.sort().map(fecha=>{
+        const info=diaMap.get(fecha)||{horas:0,plan:0};
+        const ausenciaCertificada=falls.some(f=>f.fecha===fecha&&f.certificado);
+        const horasComputables=Number(info.horas||0)+(ausenciaCertificada?Number(info.plan||0):0);
+        const horasObjetivo=Number(config.horas_finde_dia??10);
+        const cumpleHoras=horasComputables+1e-6>=horasObjetivo;
+        const ausenciaPendiente=pending.some(a=>a.fecha===fecha);
+        const comisionDia=group.ventas.filter(v=>String(v.fechaPago||'').slice(0,10)===fecha)
+          .reduce((sum,v)=>sum+Number(v.comision||0)*pct/originalRate,0);
+        // Se respeta la habilitacion por porcentaje y penalizaciones de la quincena.
+        // La vigencia del beneficio tambien se evalua POR FECHA: un beneficio
+        // vencido no puede generar complementos en dias posteriores.
+        const beneficioEnFecha=beneficioVigente&&fecha<=garantiaHasta;
+        const habilitado=beneficioEnFecha&&cumpleHoras&&!ausenciaPendiente&&!penalized&&pct>=Number(config.porcentaje_normal||40);
+        const complementoDia=habilitado?Math.max(0,minimoFull-comisionDia):0;
+        return {fecha,horas:info.horas||0,horasComputables,horasObjetivo,cumpleHoras,
+          beneficioEnFecha,ausenciaPendiente,comisionDia,minimoDiario:minimoFull,habilitado,complementoDia};
+      }):[];
+      const complemento=weekend
+        ?detalleFinSemana.reduce((sum,d)=>sum+d.complementoDia,0)
+        :(minimoHabilitado?Math.max(0,minimoAplicable-comision):0);
+      const ajustesGarantia=(data.garantias||[]).reduce((s,g)=>{
+        if(String(g.fechaReparacion||'').slice(0,10)<desde||String(g.fechaReparacion||'').slice(0,10)>hasta)return s;
+        return s+(Number(g.manicuraReparacionId)===uid?Math.abs(Number(g.importeComision||0)):0)-(Number(g.manicuraOriginalId)===uid?Math.abs(Number(g.importeComision||0)):0);
+      },0);
+      const adelantos=(data.adelantos||[]).filter(a=>Number(a.userId)===uid&&String(a.fechaDescuento||a.fecha||'').slice(0,10)>=desde&&String(a.fechaDescuento||a.fecha||'').slice(0,10)<=hasta).reduce((s,a)=>s+Math.abs(Number(a.importe||0)),0);
+      const fechasDetalle=[...new Set([...group.ventas.map(v=>String(v.fechaPago||'').slice(0,10)).filter(Boolean),...hRows.filter(h=>h.trabaja).map(h=>h.fecha)])].filter(f=>f>=desde&&f<=hasta).sort();
+      const todosLosDias=fechasDetalle.map(fecha=>({
+        fecha,
+        diaSemana:parseDateLocal(fecha)?.getDay(),
+        horas:Number(diaMap.get(fecha)?.horas||0),
+        comision:group.ventas.filter(v=>String(v.fechaPago||'').slice(0,10)===fecha).reduce((sum,v)=>sum+Number(v.comision||0)*pct/originalRate,0),
+        minimo:detalleFinSemana.find(d=>d.fecha===fecha)?.complementoDia||0,
+        esFinDeSemana:detalleFinSemana.some(d=>d.fecha===fecha),
+      }));
+      result.push({todosLosDias,garantiaHasta,beneficioVigente,uid,nombre:persona.nombre||'Manicura',principal,localNombre:lMap.get(principal)?.nombre||'Sin local',localIds:matchedLocals,mode:mode?.modalidad||'semanal',zona,weekend,ventas:group.ventas,ventaTotal,ventaComision40,horas:hours,horasMedicas:countedMedical,horasElegibles:eligibleHours,horasRecuperadas:recoveredHours,objetivo,horasOk:hoursOk,late,falls,unexcused,pending,overrides,pct,autoPct,manualPctRow,penalized,ingresante,start,factor,minimoAplicable,minimoDiario:minimoFull,detalleFinSemana,minimoHabilitado,comision,complemento,ajustesGarantia,adelantos,total:comision+complemento+ajustesGarantia-adelantos,finDates,diaMap});
+    }
+    return result.sort((a,b)=>a.nombre.localeCompare(b.nombre));
+  },[snapshot,data.users,data.locales,data.manicuraHistorialLocales,data.usuarioHistorialLaboral,data.garantias,data.adelantos,savedOverrides,pctOverrides,config,localModes,desde,hasta,keyCorte]);
+  const manicurasDisponibles=calculation.filter(r=>(!esManicura||Number(r.uid)===Number(user.id))&&(localId==='todos'||r.localIds.includes(Number(localId))||r.principal===Number(localId)));
+  const shown=manicurasDisponibles.filter(r=>manicuraFiltro==='todas'||Number(r.uid)===Number(manicuraFiltro));
+  const total=shown.reduce((s,r)=>s+r.total,0);
+  const detalleVentas=useMemo(()=>{
+    const rows=(ventasModal?.uid ? shown.filter(r=>Number(r.uid)===Number(ventasModal.uid)) : shown)
+      .flatMap(r=>(r.ventas||[]).map((v,i)=>({
+        key:`${r.uid}-${v.hashRegistro||v.id||i}`,fecha:String(v.fechaPago||'').slice(0,10),
+        manicura:r.nombre,local:r.localNombre,servicio:v.servicio||'—',cliente:v.cliente||'—',
+        precio:Number(v.precio||0),base:Number(v.comision||0),
+        comision:Number(v.comision||0)*Number(r.pct||0)/40
+      })));
+    const col=ventasOrden.col;
+    return rows.sort((x,y)=>{
+      const result=['precio','base','comision'].includes(col)?Number(x[col])-Number(y[col]):String(x[col]||'').localeCompare(String(y[col]||''),'es');
+      return (ventasOrden.asc?1:-1)*result||x.fecha.localeCompare(y.fecha);
+    });
+  },[shown,ventasModal,ventasOrden]);
+  const ordenVentas=col=>setVentasOrden(prev=>({col,asc:prev.col===col?!prev.asc:true}));
+  const tablaVentas=(rows,conManicura=true)=> <div style={{overflowX:'auto'}}><table style={{width:'100%',borderCollapse:'collapse',fontSize:12}}><thead><tr style={{background:'#fbf5f7'}}>{[
+    ['fecha','Fecha'],...(conManicura?[['manicura','Manicura'],['local','Local']]:[]),
+    ['servicio','Servicio'],['cliente','Cliente'],['precio','Precio base'],['base','Comisión 40%'],['comision','Comisión aplicada']
+  ].map(([col,t])=><th key={col} onClick={()=>ordenVentas(col)} title='Ordenar por esta columna' style={{textAlign:['precio','base','comision'].includes(col)?'right':'left',padding:10,whiteSpace:'nowrap',cursor:'pointer',borderBottom:'1px solid #e8d8de'}}>{t}{ventasOrden.col===col?(ventasOrden.asc?' ↑':' ↓'):''}</th>)}</tr></thead><tbody>{rows.map(v=><tr key={v.key} style={{borderBottom:'1px solid #eee'}}><td style={{padding:9,whiteSpace:'nowrap'}}>{parseDateLabel(v.fecha)}</td>{conManicura&&<><td style={{padding:9}}>{v.manicura}</td><td style={{padding:9}}>{v.local}</td></>}<td style={{padding:9}}>{v.servicio}</td><td style={{padding:9}}>{v.cliente}</td><td style={{padding:9,textAlign:'right'}}>{fmtMoney(v.precio)}</td><td style={{padding:9,textAlign:'right'}}>{fmtMoney(v.base)}</td><td style={{padding:9,textAlign:'right',fontWeight:700}}>{fmtMoney(v.comision)}</td></tr>)}</tbody></table>{!rows.length&&<div style={{padding:20,color:'#876577'}}>No hay prestaciones para mostrar.</div>}</div>;
+  const inputStyle={border:'1px solid #e7d5dc',borderRadius:9,padding:'9px 10px',fontSize:13,background:'#fff',width:'100%'};
+  const cardStyle={padding:16,borderRadius:16,border:'1px solid #eadce2',background:'#fff',boxShadow:'0 4px 18px rgba(90,40,60,.055)'};
+  const tag=(s,good)=> <span style={{fontSize:11,fontWeight:750,color:good?'#44782b':'#aa6126',background:good?'#eaf3de':'#fff0de',padding:'5px 9px',borderRadius:30}}>{s}</span>;
+  const saveConfig=async()=>{setSaving(true);try{await sb('comisiones_quincenales_config?id=eq.1',{method:'PATCH',body:JSON.stringify({...configDraft,actualizado_por_user_id:user.id,actualizado_en:new Date().toISOString()})});setConfigOpen(false);await load();notifyToast('Configuración quincenal guardada.','success');}catch(e){notifyToast(e.message||String(e),'error');}finally{setSaving(false);}};
+  const saveModes=async()=>{setSaving(true);try{for(const row of modesDraft){await sb('comisiones_quincenales_locales?on_conflict=local_id',{method:'POST',prefer:'resolution=merge-duplicates,return=representation',body:JSON.stringify({local_id:Number(row.local_id),modalidad:row.modalidad,fecha_desde:row.fecha_desde||null,actualizado_por_user_id:user.id,actualizado_en:new Date().toISOString()})});}setModesOpen(false);await load();notifyToast('Modalidad por sucursal guardada. Los reportes semanales siguen sin cambios.','success');}catch(e){notifyToast(e.message||String(e),'error');}finally{setSaving(false);}};
+  const savePct=async()=>{if(!pctEdit||!canManage)return;setSaving(true);try{
+    if(pctEdit.manual){if(![35,40].includes(Number(pctEdit.porcentaje)))throw new Error('Solo se admite 35% o 40%.');await sb('comisiones_quincenales_porcentajes?on_conflict=periodo,user_id',{method:'POST',prefer:'resolution=merge-duplicates,return=representation',body:JSON.stringify({periodo:keyCorte,user_id:pctEdit.uid,porcentaje:Number(pctEdit.porcentaje),motivo:String(pctEdit.motivo||'').trim(),actualizado_por_user_id:user.id,actualizado_en:new Date().toISOString()})});}
+    else{await sb(`comisiones_quincenales_porcentajes?periodo=eq.${encodeURIComponent(keyCorte)}&user_id=eq.${Number(pctEdit.uid)}`,{method:'DELETE',prefer:''});}
+    setPctEdit(null);await load();notifyToast('Porcentaje quincenal actualizado.','success');
+  }catch(e){notifyToast(e.message||String(e),'error');}finally{setSaving(false);}};
+  const guardarPorcentajeDirecto=async(r,valor)=>{
+    if(!canManage||saving)return;
+    setSaving(true);
+    try {
+      if(valor==='auto') await sb(`comisiones_quincenales_porcentajes?periodo=eq.${encodeURIComponent(keyCorte)}&user_id=eq.${Number(r.uid)}`,{method:'DELETE',prefer:''});
+      else {
+        const porcentaje=Number(valor);
+        if(![35,40].includes(porcentaje))throw new Error('Solo se admite 35% o 40%.');
+        await sb('comisiones_quincenales_porcentajes?on_conflict=periodo,user_id',{method:'POST',prefer:'resolution=merge-duplicates,return=representation',body:JSON.stringify({periodo:keyCorte,user_id:r.uid,porcentaje,motivo:'Selección manual en resumen quincenal',actualizado_por_user_id:user.id,actualizado_en:new Date().toISOString()})});
+      }
+      await load();notifyToast('Porcentaje actualizado.','success');
+    }catch(e){notifyToast(e.message||String(e),'error');}finally{setSaving(false);}
+  };
+  const selectorPorcentaje=r=><select aria-label={`Porcentaje de ${r.nombre}`} title="Cambiá entre automático, 35% o 40%" disabled={saving} value={r.manualPctRow?String(r.pct):'auto'} onChange={e=>void guardarPorcentajeDirecto(r,e.target.value)} style={{fontSize:11,padding:'4px 5px',background:'#fff',border:'1px solid #e6d6dc',borderRadius:7,color:'#72243e',maxWidth:115,cursor:'pointer'}}><option value="auto">Auto ({r.autoPct}%)</option><option value="35">35%</option><option value="40">40%</option></select>;
+  const editPct=r=>setPctEdit({uid:r.uid,nombre:r.nombre,manual:!!r.manualPctRow,porcentaje:r.pct,motivo:r.manualPctRow?.motivo||'',automatico:r.autoPct});
+  const saveRecovery=async()=>{setSaving(true);try{await sb('comisiones_quincenales_recuperaciones?on_conflict=periodo,user_id,fecha_ausencia',{method:'POST',prefer:'resolution=merge-duplicates,return=representation',body:JSON.stringify({periodo:keyCorte,user_id:overrideEdit.uid,fecha_ausencia:overrideEdit.fecha,recuperada:overrideEdit.recuperada,horas_recuperadas:Number(overrideEdit.horas||0),detalle:overrideEdit.detalle||'',confirmado_por_user_id:user.id,confirmado_en:new Date().toISOString()})});setOverrideEdit(null);await load();notifyToast('Recuperación registrada con trazabilidad.','success');}catch(e){notifyToast(e.message||String(e),'error');}finally{setSaving(false);}};
+  return <div style={{display:'grid',gap:14}}>
+    <Card><div style={{display:'flex',justifyContent:'space-between',alignItems:'start',gap:12,flexWrap:'wrap'}}><div><h2 style={{margin:'0 0 5px',fontSize:22,color:'#72243e'}}>Comisiones quincenales · Piloto</h2><p style={{margin:0,fontSize:12,color:'var(--color-text-secondary)'}}>Cálculo independiente del informe semanal vigente. Cada quincena cierra sin arrastres semanales.</p></div><div style={{display:'flex',gap:8,flexWrap:'wrap'}}>{canManage&&<Btn variant='secondary' onClick={()=>{setModesDraft(allowedLocals.map(l=>{const r=localModes.find(x=>Number(x.local_id)===Number(l.id));return {local_id:l.id,local_nombre:l.nombre,modalidad:r?.modalidad||'semanal',fecha_desde:r?.fecha_desde||''};}));setModesOpen(true);}}>🏬 Modalidad por local</Btn>}{canManage&&<Btn variant='secondary' onClick={()=>{setConfigDraft({...config});setConfigOpen(true);}}>⚙ Configuración quincenal</Btn>}</div></div>
+      <div style={{display:'grid',gridTemplateColumns:'repeat(auto-fit,minmax(170px,1fr))',gap:12,marginTop:16}}><label style={{fontSize:12,fontWeight:700}}>Mes<input type='month' value={periodo} onChange={e=>setPeriodo(e.target.value)} style={inputStyle}/></label><label style={{fontSize:12,fontWeight:700}}>Quincena<select value={quincena} onChange={e=>setQuincena(e.target.value)} style={inputStyle}><option value='1'>Del 1 al 15</option><option value='2'>Del 16 al último día</option></select></label><label style={{fontSize:12,fontWeight:700}}>Sucursal<select value={localId} onChange={e=>setLocalId(e.target.value)} style={inputStyle}><option value='todos'>Todas habilitadas</option>{allowedLocals.map(l=><option key={l.id} value={l.id}>{l.nombre}</option>)}</select></label>{canManage&&<label style={{fontSize:12,fontWeight:700}}>Manicura<select value={manicurasDisponibles.some(r=>String(r.uid)===manicuraFiltro)?manicuraFiltro:'todas'} onChange={e=>setManicuraFiltro(e.target.value)} style={inputStyle}><option value='todas'>Todas las manicuras</option>{manicurasDisponibles.map(r=><option key={r.uid} value={r.uid}>{r.nombre}</option>)}</select></label>}<div style={{alignSelf:'end'}}><Btn onClick={load} disabled={loading}>{loading?'Calculando…':'↻ Actualizar'}</Btn></div></div>
+    </Card>
+    {setupNeeded&&<Card style={{border:'1px solid #e8ae6b',background:'#fff9ef'}}><strong>Falta preparar Supabase</strong><p style={{fontSize:12}}>Ejecutá el SQL entregado junto con esta versión para crear configuración, modalidad por local e historial de recuperación. El circuito semanal existente no se modifica.</p></Card>}
+    {error&&<Card><p style={{color:'#aa3838',margin:0,fontSize:12}}>{error}</p></Card>}
+    {snapshot&&!loading&&<><div style={{display:'grid',gridTemplateColumns:'repeat(auto-fit,minmax(200px,1fr))',gap:12}}>{[["Total estimado",fmtMoney(total),'💰'],['Manicuras',shown.length,'👩'],['En 40%',shown.filter(r=>r.pct===40).length,'🌿'],['Recuperaciones pendientes',shown.reduce((n,r)=>n+r.pending.length,0),'🕘']].map(([title,value,ico])=><div key={title} style={{...cardStyle,background:'#faf5f7'}}><div style={{fontSize:12,color:'#876577'}}>{ico} {title}</div><div style={{fontSize:24,fontWeight:850,color:'#72243e',marginTop:8}}>{value}</div></div>)}</div>
+      {canManage&&<div style={{display:'flex',gap:7,flexWrap:'wrap',padding:'4px 0'}}>{[['resumen','Resumen de pago'],['control','Control semanal'],['movimientos','Movimientos y ajustes'],['servicios','Detalle de servicios']].map(([key,title])=><Btn key={key} size='sm' variant={quincenalTab===key?'primary':'secondary'} onClick={()=>setQuincenalTab(key)}>{title}</Btn>)}</div>}
+      {canManage&&quincenalTab==='resumen'&&<div style={{...cardStyle,padding:0,overflow:'hidden'}}>
+        <div style={{padding:'13px 16px',background:'#fbf5f7',display:'flex',justifyContent:'space-between',gap:8,flexWrap:'wrap'}}><strong style={{color:'#72243e'}}>Resumen de pago · {shown.length} manicuras</strong><span style={{fontSize:11,color:'#876577'}}>Seleccioná una manicura para ver su explicación, ventas o ausencias</span></div>
+        <div style={{overflowX:'auto'}}><table style={{width:'100%',borderCollapse:'collapse',fontSize:12}}>
+          <thead><tr style={{background:'#f8eff2'}}>{['Manicura','Comisión','Descuentos','Otros (+/-)','Total estimado','Detalle'].map((t,i)=><th key={t} style={{padding:'9px 8px',textAlign:i===0||i===5?'left':'right',whiteSpace:'nowrap'}}>{t}</th>)}</tr></thead>
+          <tbody>{shown.map((r,i)=>{const tieneMinimo=r.complemento>0;const revisar35=Number(r.pct)===35;return <tr key={r.uid} style={{background:revisar35?'#fff4e8':tieneMinimo?'#f5faf2':i%2?'#fdf9fb':'#fff',borderBottom:'1px solid #efe6e9',borderLeft:revisar35?'3px solid #c17a22':tieneMinimo?'3px solid #639922':'3px solid transparent'}}>
+            <td style={{padding:'7px 8px',fontWeight:700,minWidth:150}}>{r.nombre} {revisar35&&<span title='Comisión al 35%. Revisar asistencia y criterio aplicado.' style={{fontSize:10,padding:'3px 6px',borderRadius:6,color:'#99570c',background:'#ffe6c7',whiteSpace:'nowrap'}}>⚠ 35% · Revisar</span>} {tieneMinimo&&<span title={`Complemento por mínimo: ${fmtMoney(r.complemento)}${r.garantiaHasta?` · Hasta ${parseDateLabel(r.garantiaHasta)}`:''}`} style={{fontSize:11,color:'#46762b'}}>✓ Mín.</span>}<div style={{fontWeight:400,fontSize:10,color:'#877480'}}>{r.localNombre}</div></td>
+            <td style={{padding:'7px 8px',textAlign:'right',whiteSpace:'nowrap'}}><strong>{fmtMoney(r.comision)}</strong><div style={{marginTop:3}}>{canManage?selectorPorcentaje(r):<span style={{fontSize:10,color:'#876577'}}>{r.pct}%</span>}</div></td>
+            <td style={{padding:'7px 8px',textAlign:'right'}}>{fmtMoney(r.adelantos)}</td>
+            <td style={{padding:'7px 8px',textAlign:'right'}}>{fmtMoney(r.ajustesGarantia)}</td>
+            <td style={{padding:'7px 8px',textAlign:'right',fontWeight:850,color:'#72243e',whiteSpace:'nowrap'}}>{fmtMoney(r.total)}{tieneMinimo&&<div style={{fontSize:10,color:'#46762b',fontWeight:600}}>+{fmtMoney(r.complemento)} mín.</div>}</td>
+            <td style={{padding:'7px 8px'}}><div style={{display:'flex',gap:4,alignItems:'center',whiteSpace:'nowrap'}}><button type="button" title="Ver cálculo" onClick={()=>setDetalle(r)} style={{padding:'5px 7px',fontSize:11,border:'1px solid #eadde2',background:'#fbf5f7',borderRadius:7,cursor:'pointer',color:'#72243e'}}>Cálculo</button><button type="button" title="Servicios" onClick={()=>{setVentasModal({uid:r.uid,nombre:r.nombre});setVentasOrden({col:'fecha',asc:true});}} style={{padding:'5px 7px',fontSize:11,border:'1px solid #eadde2',background:'#fbf5f7',borderRadius:7,cursor:'pointer',color:'#72243e'}}>Servicios</button>{r.unexcused.length>0&&<button type="button" title="Editar recuperaciones" onClick={()=>setRecoveryList(r)} style={{padding:'5px 7px',fontSize:11,border:'1px solid #eadde2',background:'#fbf5f7',borderRadius:7,cursor:'pointer',color:'#72243e'}}>Aus. {r.pending.length}</button>}</div></td>
+          </tr>;})}</tbody></table><div style={{margin:'8px 12px 0',fontSize:11,color:'#46762b'}}>✓ Mín.: incluye complemento diario cuando corresponde. Vigencia del beneficio en «Cálculo»; los beneficios vencidos no se aplican.</div><p style={{margin:'8px 13px',fontSize:11,color:'#876577'}}>La comisión se muestra directamente al porcentaje aplicable. El total incluye, cuando corresponde, el complemento hasta el mínimo garantizado; la vigencia del beneficio se informa en la fila destacada. Los controles de asistencia y recuperación siguen disponibles en «Control semanal».</p></div>
+      </div>}
+      {canManage&&quincenalTab==='control'&&<div style={{...cardStyle,padding:0,overflow:'hidden'}}><div style={{padding:'13px 16px',background:'#fbf5f7'}}><strong style={{color:'#72243e'}}>Control de horas, asistencia y recuperaciones</strong></div><div style={{overflowX:'auto'}}><table style={{width:'100%',borderCollapse:'collapse',fontSize:12}}><thead><tr style={{background:'#f8eff2'}}>{['Manicura','Horas computables','Objetivo','Tardanzas','Ausencias pendientes','% aplicado','Acciones'].map(t=><th key={t} style={{padding:10,textAlign:'left'}}>{t}</th>)}</tr></thead><tbody>{shown.map(r=><tr key={r.uid} style={{borderBottom:'1px solid #eee'}}><td style={{padding:10,fontWeight:700}}>{r.nombre}</td><td style={{padding:10}}>{r.weekend?`${r.detalleFinSemana.filter(d=>d.cumpleHoras).length} de ${r.finDates.length} jornadas válidas`:fmtH(r.horasElegibles)}</td><td style={{padding:10}}>{r.weekend?`${fmtH(Number(config.horas_finde_dia??10))} por jornada`:fmtH(r.objetivo)}</td><td style={{padding:10}}>{r.late}</td><td style={{padding:10}}>{r.pending.length}</td><td style={{padding:10}}>{r.pct}%</td><td style={{padding:10}}><div style={{display:'flex',gap:5,flexWrap:'wrap'}}><Btn size='sm' variant='secondary' onClick={()=>setDetalle(r)}>Detalle</Btn><Btn size='sm' variant='secondary' onClick={()=>editPct(r)}>Editar %</Btn>{r.unexcused.length>0&&<Btn size='sm' variant='secondary' onClick={()=>setRecoveryList(r)}>Recuperaciones</Btn>}</div></td></tr>)}</tbody></table></div></div>}
+      {canManage&&quincenalTab==='movimientos'&&<div style={cardStyle}><h3 style={{marginTop:0,color:'#72243e'}}>Movimientos y ajustes</h3><p style={{fontSize:12,color:'#876577'}}>Garantías y adelantos aplicados al corte, con acceso a los servicios y explicaciones individuales.</p><div style={{overflowX:'auto'}}><table style={{width:'100%',borderCollapse:'collapse',fontSize:12}}><thead><tr>{['Manicura','Garantías (+/-)','Adelantos descontados','Complemento mínimo','Total estimado','Detalle'].map(t=><th key={t} style={{padding:10,textAlign:'left',borderBottom:'1px solid #eee'}}>{t}</th>)}</tr></thead><tbody>{shown.map(r=><tr key={r.uid} style={{borderBottom:'1px solid #eee'}}><td style={{padding:10,fontWeight:700}}>{r.nombre}</td><td style={{padding:10}}>{fmtMoney(r.ajustesGarantia)}</td><td style={{padding:10}}>{fmtMoney(r.adelantos)}</td><td style={{padding:10}}>{fmtMoney(r.complemento)}</td><td style={{padding:10,fontWeight:700}}>{fmtMoney(r.total)}</td><td style={{padding:10}}><Btn size='sm' variant='secondary' onClick={()=>setDetalle(r)}>Entender pago</Btn></td></tr>)}</tbody></table></div></div>}
+      {canManage&&quincenalTab==='servicios'&&<div style={cardStyle}><div style={{display:'flex',justifyContent:'space-between',gap:8,flexWrap:'wrap',alignItems:'center'}}><h3 style={{margin:0,color:'#72243e'}}>Servicios y comisiones · Todas las manicuras</h3><Btn size='sm' variant='secondary' onClick={()=>{setVentasModal({uid:null,nombre:'Todas las manicuras'});setVentasOrden({col:'fecha',asc:true});}}>Abrir tabla en popup</Btn></div><p style={{fontSize:12,color:'#876577'}}>{detalleVentas.length} prestaciones del corte. Agrupá por varias columnas, ordená y consultá subtotales por grupo.</p><NikiQuincenalGridServicios rows={detalleVentas} /></div>}
+      {esManicura&&<div style={{display:'grid',gap:12}}>{shown.map(r=><div key={r.uid} style={cardStyle}>
+        <div style={{display:'flex',justifyContent:'space-between',gap:12,flexWrap:'wrap',alignItems:'center'}}><div><div style={{fontSize:17,fontWeight:850,color:'#572c3d'}}>{r.nombre}</div><div style={{fontSize:12,color:'#947f87',marginTop:3}}>{r.localNombre} · {r.weekend?'Solo fines de semana':'Jornada habitual'} · {r.mode==='quincenal'?'Quincenal habilitada':'Solo simulación (local semanal)'}</div></div><div style={{textAlign:'right'}}><div style={{fontSize:11,color:'#836575'}}>TOTAL ESTIMADO</div><div style={{fontSize:25,fontWeight:850,color:'#72243e'}}>{fmtMoney(r.total)}</div></div></div>
+        <div style={{display:'flex',gap:8,flexWrap:'wrap',marginTop:12}}>{tag(`${r.pct}% de comisión`,!r.penalized)}{tag(r.weekend?`${r.detalleFinSemana.filter(d=>d.cumpleHoras).length}/${r.finDates.length} jornadas con horas cumplidas`:`${fmtH(r.horasElegibles)} / ${fmtH(r.objetivo)}`,r.horasOk)}{tag(`${r.late} tardanza(s)`,r.late<Number(config.tardanzas_penalizacion||2))}{tag(`${r.pending.length} ausencia(s) sin recuperar`,!r.pending.length)}{r.ingresante&&tag(`Ingreso ${r.start.slice(8,10)}/${r.start.slice(5,7)} · mínimo proporcional`,true)}</div>
+        <div style={{display:'grid',gridTemplateColumns:'repeat(auto-fit,minmax(140px,1fr))',gap:10,marginTop:14}}>{[['Comisión por ventas',r.comision],['Complemento mínimo',r.complemento],['Garantías',r.ajustesGarantia],['Adelantos',-r.adelantos]].map(([t,v])=><div key={t} style={{padding:'12px 13px',background:'#f9f5f7',borderRadius:12}}><div style={{fontSize:11,color:'#886c78'}}>{t}</div><div style={{fontSize:18,fontWeight:800,color:v<0?'#b54e43':'#6c354a',marginTop:5}}>{fmtMoney(v)}</div></div>)}</div>
+        <div style={{display:'flex',gap:8,flexWrap:'wrap',marginTop:14}}><Btn size='sm' onClick={()=>setDetalle(r)}>ⓘ Entender este pago</Btn><Btn size='sm' variant='secondary' onClick={()=>setExpanded(s=>({...s,[r.uid]:!s[r.uid]}))}>{expanded[r.uid]?'Ocultar ventas':'Ver ventas y movimientos'} ↗</Btn>{r.unexcused.map(a=><Btn key={a.fecha} size='sm' variant='secondary' onClick={()=>{const o=r.overrides.find(x=>x.fecha_ausencia===a.fecha);setOverrideEdit({uid:r.uid,nombre:r.nombre,fecha:a.fecha,recuperada:o?.recuperada||false,horas:o?.horas_recuperadas||0,detalle:o?.detalle||''});}}>✎ Recuperación {parseDateLabel(a.fecha)}</Btn>)}</div>
+        {expanded[r.uid]&&<div style={{overflowX:'auto',marginTop:12}}><table style={{width:'100%',borderCollapse:'collapse',fontSize:12}}><thead><tr>{['Fecha','Servicio','Cliente','Comisión origen 40%','Comisión aplicada'].map(t=><th key={t} style={{textAlign:'left',padding:8,borderBottom:'1px solid #ddd'}}>{t}</th>)}</tr></thead><tbody>{r.ventas.map((v,i)=><tr key={v.id||i}>{[v.fechaPago,v.servicio||'-',v.cliente||'-',fmtMoney(v.comision),fmtMoney(Number(v.comision||0)*r.pct/40)].map((v,j)=><td key={j} style={{padding:8,borderBottom:'1px solid #eee'}}>{v}</td>)}</tr>)}</tbody></table></div>}
+      </div>)}</div>}<div style={{fontSize:11,color:'#947d86'}}>Piloto de cálculo: no modifica ni aprueba liquidaciones semanales. Revisá asistencia y ventas faltantes antes de considerar un importe definitivo.</div></>}
+    {ventasModal&&<Modal title={`Detalle de servicios y comisiones · ${ventasModal.nombre}`} onClose={()=>setVentasModal(null)} width={1150}><div style={{display:'grid',gap:10}}><p style={{margin:0,fontSize:12,color:'#876577'}}>{desde} al {hasta} · {detalleVentas.length} prestaciones · Ordená tocando un encabezado.</p><div style={{maxHeight:'65vh',overflowY:'auto'}}><NikiQuincenalGridServicios key={String(ventasModal.uid||'all')} rows={detalleVentas} compacto /></div><div style={{display:'flex',justifyContent:'flex-end'}}><Btn variant='secondary' onClick={()=>setVentasModal(null)}>Cerrar</Btn></div></div></Modal>}
+    {detalle&&<Modal title={`Cómo se calculó · ${detalle.nombre}`} onClose={()=>setDetalle(null)} width={740}><div style={{display:'grid',gap:12,fontSize:13,lineHeight:1.6}}><div style={{background:'#f7edf1',padding:18,borderRadius:16}}><div style={{fontSize:12,color:'#826071'}}>PAGO ESTIMADO · {desde} al {hasta}</div><div style={{fontSize:30,color:'#72243e',fontWeight:850}}>{fmtMoney(detalle.total)}</div></div>
+      <div style={cardStyle}><strong>① Comisión sobre ventas</strong><p>Se tomaron {detalle.ventas.length} prestaciones. La comisión de origen equivale a {fmtMoney(detalle.ventaComision40)} al 40%. Se aplica el {detalle.pct}%{detalle.manualPctRow?" (ajuste manual autorizado)":""} y corresponde {fmtMoney(detalle.comision)}.</p>{detalle.manualPctRow&&<p style={{color:'#80516b'}}>Porcentaje modificado manualmente. Motivo: {detalle.manualPctRow.motivo||'Sin detalle'}.</p>}{detalle.penalized?<p style={{color:'#a24b30'}}>El criterio automático establece el 35% por {detalle.late>=Number(config.tardanzas_penalizacion||2)?`${detalle.late} llegadas tarde`:''}{detalle.late>=Number(config.tardanzas_penalizacion||2)&&detalle.pending.length?' y ':''}{detalle.pending.length?`${detalle.pending.length} ausencia(s) injustificada(s) sin recuperación confirmada`:''}.</p>:<p style={{color:'#47783b'}}>No registra penalizaciones pendientes. El porcentaje automático es 40%.</p>}</div>
+      {canManage&&detalle.unexcused.length>0&&<div><Btn size='sm' variant='secondary' onClick={()=>{setRecoveryList(detalle);setDetalle(null);}}>✎ Gestionar ausencias y recuperaciones ({detalle.unexcused.length})</Btn></div>}
+      <div style={cardStyle}>
+        <strong>Desglose diario de comisiones</strong>
+        <p style={{margin:'6px 0 10px',fontSize:12,color:'#715767'}}>Prestaciones de la quincena, agrupadas por fecha. Los mínimos y otros movimientos se explican por separado.</p>
+        <div style={{overflowX:'auto'}}>
+          <table style={{width:'100%',borderCollapse:'collapse',fontSize:12}}>
+            <thead><tr>{['Fecha','Horas registradas','Comisión del día'].map((x,i)=><th key={x} style={{padding:'8px 9px',textAlign:i===0?'left':'right',borderBottom:'1px solid #eadce2'}}>{x}</th>)}</tr></thead>
+            <tbody>{detalle.todosLosDias.map(d=><tr key={d.fecha} style={{borderBottom:'1px solid #f4e9ed'}}><td style={{padding:'8px 9px'}}>{parseDateLabel(d.fecha)}</td><td style={{padding:'8px 9px',textAlign:'right'}}>{fmtH(d.horas)}</td><td style={{padding:'8px 9px',textAlign:'right',fontWeight:600}}>{fmtMoney(d.comision)}</td></tr>)}</tbody>
+            <tfoot><tr style={{borderTop:'2px solid #eadce2',fontWeight:800}}><td style={{padding:'10px 9px'}}>Total comisión por ventas</td><td></td><td style={{padding:'10px 9px',textAlign:'right'}}>{fmtMoney(detalle.comision)}</td></tr></tfoot>
+          </table>
+        </div>
+      </div>
+      <div style={cardStyle}><strong>② Horas y ausencias</strong><p>Horas efectivamente registradas en la quincena: {fmtH(detalle.horas)}. Horas de ausencias certificadas computables: {fmtH(detalle.horasMedicas)}. {detalle.weekend?'El objetivo de fin de semana se comprueba por jornada en el detalle inferior; las horas totales no se comparan contra una exigencia diaria.':`Total evaluado: ${fmtH(detalle.horasElegibles)} sobre objetivo quincenal de ${fmtH(detalle.objetivo)}.`}</p><p>Ausencias sin certificado: {detalle.unexcused.length}. Recuperadas y confirmadas: {detalle.unexcused.length-detalle.pending.length}. Todavía pendientes: {detalle.pending.length}. Las horas recuperadas declaradas ({fmtH(detalle.horasRecuperadas)}) se registran como justificación y no se suman otra vez al registro horario.</p>{detalle.ingresante&&<p style={{color:'#725060'}}>Ingresó el {detalle.start}. La quincena se prorratea por {Math.round(detalle.factor*100)}% de los días: el objetivo horario y el mínimo se reducen solo por ingreso, no por inasistencias.</p>}</div>
+      <div style={{...cardStyle,background:'#fbf7f9'}}>
+        <strong>③ Mínimo garantizado, ajustes y descuentos</strong>
+        {detalle.weekend?<>
+          <p style={{margin:'8px 0',fontSize:12}}>Modalidad de fin de semana · Mínimo de referencia por jornada programada: <b>{fmtMoney(detalle.minimoDiario)}</b> · Jornadas evaluadas: <b>{detalle.finDates.length}</b>.</p>
+          <div style={{overflowX:'auto'}}><table style={{width:'100%',borderCollapse:'collapse',fontSize:12}}>
+            <thead><tr>{['Fecha','Horas / objetivo','Comisión del día','Mínimo','Complemento','Resultado'].map(x=><th key={x} style={{padding:'7px 5px',borderBottom:'1px solid #eadce2',textAlign:'left'}}>{x}</th>)}</tr></thead>
+            <tbody>{detalle.detalleFinSemana.map(d=><tr key={d.fecha} style={{borderBottom:'1px solid #f0e5e9'}}><td style={{padding:'7px 5px'}}>{parseDateLabel(d.fecha)}</td><td style={{padding:'7px 5px'}}>{fmtH(d.horasComputables)} / {fmtH(d.horasObjetivo)}</td><td style={{padding:'7px 5px'}}>{fmtMoney(d.comisionDia)}</td><td style={{padding:'7px 5px'}}>{fmtMoney(d.minimoDiario)}</td><td style={{padding:'7px 5px',fontWeight:d.complementoDia?800:400}}>{fmtMoney(d.complementoDia)}</td><td style={{padding:'7px 5px',color:d.habilitado?'#44782b':'#a15d26'}}>{d.habilitado?'Habilitado':!d.cumpleHoras?'Horas insuficientes':d.ausenciaPendiente?'Ausencia pendiente':!d.beneficioEnFecha?'Beneficio no vigente':'No habilitado'}</td></tr>)}</tbody>
+          </table></div>
+        </>:<p style={{margin:'8px 0',fontSize:12}}>Mínimo de zona {detalle.zona}: {fmtMoney(detalle.minimoAplicable)}. {detalle.minimoHabilitado?'Cumple las condiciones de horas y asistencia.':'No cumple las condiciones para aplicar el mínimo.'}</p>}
+        {detalle.garantiaHasta&&<p style={{margin:'8px 0',fontSize:11,color:'#876577'}}>Vigencia del beneficio hasta {parseDateLabel(detalle.garantiaHasta)}. {detalle.beneficioVigente?'Vigente para este corte.':'No vigente para este corte.'}</p>}
+        <div style={{borderTop:'1px solid #eadce2',marginTop:12,paddingTop:11,display:'grid',gridTemplateColumns:'1fr auto',gap:'6px 12px',fontSize:12}}>
+          <span>Comisión por ventas</span><strong style={{textAlign:'right'}}>{fmtMoney(detalle.comision)}</strong>
+          <span>Complemento por mínimo garantizado</span><strong style={{textAlign:'right',color:detalle.complemento?'#44782b':undefined}}>{fmtMoney(detalle.complemento)}</strong>
+          <span>Garantías y otros ajustes</span><strong style={{textAlign:'right'}}>{fmtMoney(detalle.ajustesGarantia)}</strong>
+          <span>Adelantos y descuentos</span><strong style={{textAlign:'right'}}>{detalle.adelantos?`− ${fmtMoney(detalle.adelantos)}`:fmtMoney(0)}</strong>
+          <strong style={{borderTop:'1px solid #eadce2',paddingTop:9,marginTop:4}}>Total estimado</strong><strong style={{borderTop:'1px solid #eadce2',paddingTop:9,marginTop:4,textAlign:'right',fontSize:16,color:'#72243e'}}>{fmtMoney(detalle.total)}</strong>
+        </div>
+      </div>
+      <Btn variant='secondary' onClick={()=>setDetalle(null)}>Cerrar explicación</Btn></div></Modal>}
+    {pctEdit&&canManage&&<Modal title={`Porcentaje quincenal · ${pctEdit.nombre}`} onClose={()=>setPctEdit(null)} width={520}><div style={{display:'grid',gap:12,fontSize:13}}><p style={{margin:0,color:'#715767'}}>Porcentaje automático: <b>{pctEdit.automatico}%</b>. La excepción afecta solamente esta manicura y esta quincena, no modifica criterios semanales.</p><label style={{display:'flex',gap:8,alignItems:'center'}}><input type='checkbox' checked={pctEdit.manual} onChange={e=>setPctEdit(p=>({...p,manual:e.target.checked}))}/> Aplicar porcentaje manual</label>{pctEdit.manual&&<><label>Porcentaje<input style={inputStyle} type='number' min='0' max='100' step='0.5' value={pctEdit.porcentaje} onChange={e=>setPctEdit(p=>({...p,porcentaje:e.target.value}))}/></label><label>Motivo obligatorio<textarea style={{...inputStyle,minHeight:75}} value={pctEdit.motivo} onChange={e=>setPctEdit(p=>({...p,motivo:e.target.value}))}/></label></>}<div style={{display:'flex',gap:8}}><Btn disabled={saving||(pctEdit.manual&&(!String(pctEdit.motivo).trim()||pctEdit.porcentaje===''||Number(pctEdit.porcentaje)<0||Number(pctEdit.porcentaje)>100))} onClick={savePct}>{saving?'Guardando…':'Guardar porcentaje'}</Btn><Btn variant='secondary' onClick={()=>setPctEdit(null)}>Cancelar</Btn></div></div></Modal>}
+    {recoveryList&&canManage&&<Modal title={`Ausencias y recuperaciones · ${recoveryList.nombre}`} onClose={()=>setRecoveryList(null)} width={600}>
+      <div style={{display:'grid',gap:10}}><p style={{fontSize:12,margin:0,color:'#846c77'}}>Revisá las ausencias de esta quincena. Seleccioná una fecha para registrar o modificar su recuperación; la confirmación queda guardada con usuario y fecha.</p>
+        {recoveryList.unexcused.map(a=>{const o=recoveryList.overrides.find(x=>x.fecha_ausencia===a.fecha);return <div key={a.fecha} style={{display:'flex',justifyContent:'space-between',alignItems:'center',gap:12,flexWrap:'wrap',border:'1px solid #eadde2',borderRadius:11,padding:'11px 13px'}}><div><strong style={{fontSize:13}}>{parseDateLabel(a.fecha)}</strong><div style={{fontSize:11,color:o?.recuperada?'#407530':'#a36524',marginTop:3}}>{o?.recuperada?'Recuperación registrada':'Pendiente de recuperar'}{o?.recuperada?` · ${fmtH(o.horas_recuperadas)}`:''}</div></div><Btn size='sm' variant='secondary' onClick={()=>{setRecoveryList(null);setOverrideEdit({uid:recoveryList.uid,nombre:recoveryList.nombre,fecha:a.fecha,recuperada:o?.recuperada||false,horas:o?.horas_recuperadas||0,detalle:o?.detalle||''});}}>✎ Editar</Btn></div>})}
+        <Btn variant='secondary' onClick={()=>setRecoveryList(null)}>Cerrar</Btn>
+      </div>
+    </Modal>}
+    {overrideEdit&&<Modal title={`Recuperación de ausencia · ${overrideEdit.nombre}`} onClose={()=>setOverrideEdit(null)} width={560}><div style={{display:'grid',gap:12}}><p style={{margin:0,fontSize:13}}>Ausencia injustificada del <b>{parseDateLabel(overrideEdit.fecha)}</b>. La encargada confirma aquí la recuperación realizada dentro de la misma quincena. Se guarda quién confirma, cuándo y cuántas horas. Para justificar una falta deben recuperarse las horas de la jornada ausente.</p><label style={{fontSize:13}}><input type='checkbox' checked={overrideEdit.recuperada} onChange={e=>setOverrideEdit(o=>({...o,recuperada:e.target.checked}))}/> Horas recuperadas y verificadas</label><label style={{fontSize:12}}>Horas recuperadas<input style={inputStyle} type='number' min='0' step='0.5' value={overrideEdit.horas} onChange={e=>setOverrideEdit(o=>({...o,horas:e.target.value}))}/></label><label style={{fontSize:12}}>Detalle / fecha de recuperación<textarea style={{...inputStyle,minHeight:76}} value={overrideEdit.detalle} onChange={e=>setOverrideEdit(o=>({...o,detalle:e.target.value}))}/></label><div style={{display:'flex',gap:8}}><Btn disabled={saving||overrideEdit.recuperada&&Number(overrideEdit.horas)<=0} onClick={saveRecovery}>{saving?'Guardando…':'Guardar confirmación'}</Btn><Btn variant='secondary' onClick={()=>setOverrideEdit(null)}>Cancelar</Btn></div></div></Modal>}
+    {modesOpen&&<Modal title='Modalidad de liquidación por local · Piloto' onClose={()=>setModesOpen(false)} width={780}><div style={{display:'grid',gap:10}}><p style={{fontSize:12,margin:0,color:'#765a68'}}>La modalidad configurada sirve para evaluar la migración. No cambia automáticamente las liquidaciones productivas ni modifica períodos anteriores.</p>{modesDraft.map((r,i)=><div key={r.local_id} style={{display:'grid',gridTemplateColumns:'minmax(130px,1fr) 145px 155px',gap:10,alignItems:'center',padding:10,background:'#faf5f7',borderRadius:10}}><strong style={{fontSize:12}}>{r.local_nombre}</strong><select style={inputStyle} value={r.modalidad} onChange={e=>setModesDraft(rows=>rows.map((x,j)=>i===j?{...x,modalidad:e.target.value}:x))}><option value='semanal'>Semanal</option><option value='quincenal'>Quincenal</option></select><input type='date' style={inputStyle} value={r.fecha_desde} onChange={e=>setModesDraft(rows=>rows.map((x,j)=>i===j?{...x,fecha_desde:e.target.value}:x))}/></div>)}<div style={{display:'flex',gap:8}}><Btn onClick={saveModes} disabled={saving}>{saving?'Guardando…':'Guardar modalidades'}</Btn><Btn variant='secondary' onClick={()=>setModesOpen(false)}>Cancelar</Btn></div></div></Modal>}
+    {configOpen&&configDraft&&<Modal title='Configuración · Liquidación quincenal (piloto)' onClose={()=>setConfigOpen(false)} width={760}><div style={{display:'grid',gap:14}}><p style={{fontSize:12,margin:0,color:'#745e69'}}>Esta configuración es <b>solo quincenal</b>. Los mínimos, horas y criterios del régimen semanal quedan intactos.</p><div style={{display:'grid',gridTemplateColumns:'repeat(auto-fit,minmax(200px,1fr))',gap:12}}>{[['minimo_estandar','Mínimo quincenal estándar'],['minimo_premium','Mínimo quincenal premium'],['minimo_finde_estandar','Mínimo por día · fin de semana estándar'],['minimo_finde_premium','Mínimo por día · fin de semana premium'],['horas_quincenales','Horas mínimas quincenales'],['horas_finde_dia','Horas mínimas por día de fin de semana'],['porcentaje_normal','Porcentaje normal'],['porcentaje_reducido','Porcentaje reducido'],['tardanzas_penalizacion','Cantidad de tardanzas que penaliza']].map(([k,label])=><label key={k} style={{fontSize:12,fontWeight:700}}>{label}<input style={inputStyle} type='number' min='0' value={configDraft[k]??0} onChange={e=>setConfigDraft(d=>({...d,[k]:Number(e.target.value)}))}/></label>)}</div><div style={{display:'flex',gap:8}}><Btn onClick={saveConfig} disabled={saving}>{saving?'Guardando…':'Guardar configuración quincenal'}</Btn><Btn variant='secondary' onClick={()=>setConfigOpen(false)}>Cancelar</Btn></div></div></Modal>}
+  </div>;
 }
 
 function ReportePagoComisiones({ data, setData, user }) {
@@ -14671,7 +15119,7 @@ function ReclutamientoBusquedasPage({ data, user }) {
   const setAssociation=async(busquedaId,candidataId,activo)=>{try{await api.setReclutamientoBusquedaCandidata(busquedaId,candidataId,activo);setDb(prev=>({...prev,busquedaCandidatas:activo?[...(prev.busquedaCandidatas||[]).filter(x=>!(Number(x.busqueda_id)===Number(busquedaId)&&Number(x.candidata_id)===Number(candidataId))),{busqueda_id:Number(busquedaId),candidata_id:Number(candidataId)}]:(prev.busquedaCandidatas||[]).filter(x=>!(Number(x.busqueda_id)===Number(busquedaId)&&Number(x.candidata_id)===Number(candidataId)))}));}catch(e){notifyToast("No se pudo actualizar la asociación.","error");}};
   const active=(db.busquedas||[]).filter(b=>!["cerrada"].includes(b.estado));
   const q=reclNormText(candidateSearch);
-  const pool=(db.candidatas||[]).filter(c=>!["incorporada","rechazada","desistio"].includes(c.estado)).filter(c=>!q||reclNormText(`${c.nombre} ${c.email||""}`).includes(q));
+  const pool=(db.candidatas||[]).filter(c=>!["incorporada","rechazada","desistio","disponible"].includes(c.estado)).filter(c=>!q||reclNormText(`${c.nombre} ${c.email||""}`).includes(q));
   if(loading)return <div style={{padding:20}}><NikiSplash text="Cargando búsquedas..."/></div>;
   return <div><div style={{display:"flex",justifyContent:"space-between",gap:10,alignItems:"center",marginBottom:14,flexWrap:"wrap"}}><div><h2 style={{margin:0,fontSize:18}}>Búsquedas</h2><p style={{margin:"3px 0 0",fontSize:12,color:"var(--color-text-secondary)"}}>Necesidades de incorporación, requisitos y candidatas asociadas.</p></div><Btn size="sm" onClick={openNew}>+ Nueva búsqueda</Btn></div>
     <Card style={{padding:12,marginBottom:14}}><Input value={candidateSearch} onChange={setCandidateSearch} placeholder="Buscar candidata para arrastrar..."/><div onDragOver={e=>e.preventDefault()} onDrop={e=>{const raw=e.dataTransfer.getData("text/niki-candidate-assoc");if(!raw)return;const x=JSON.parse(raw);if(x.busquedaId)setAssociation(x.busquedaId,x.candidataId,false);}} style={{display:"flex",gap:7,flexWrap:"wrap",marginTop:9,minHeight:44,padding:8,border:"1px dashed rgba(120,120,120,.28)",borderRadius:10,background:"var(--color-background-secondary)"}}>{pool.slice(0,80).map(c=><div key={c.id} draggable onDragStart={e=>e.dataTransfer.setData("text/niki-candidate",String(c.id))} style={{padding:"6px 9px",border:"1px solid #ddd",borderRadius:999,background:"#fff",fontSize:10,fontWeight:650,cursor:"grab"}}>⋮⋮ {c.nombre} <span style={{color:"#888"}}>· {c.puesto}</span></div>)}</div><p style={{margin:"6px 0 0",fontSize:9,color:"var(--color-text-secondary)"}}>Arrastrá una candidata sobre una búsqueda para asociarla. Arrastrala de vuelta a esta zona para quitarla.</p></Card>
@@ -14683,8 +15131,9 @@ function ReclutamientoBusquedasPage({ data, user }) {
 function ReclutamientoPage({ data, setData, user, fixedView = "tablero" }) {
   const [loading,setLoading]=useState(true),[vista,setVista]=useState(fixedView),[search,setSearch]=useState(""),[puesto,setPuesto]=useState("todos"),[estado,setEstado]=useState("activos"),[localFilterIds,setLocalFilterIds]=useState([]);
   const [db,setDb]=useState({circuitos:[],plantillas:[],candidatas:[],locales:[],servicios:[],instancias:[],evaluadores:[],pruebas:[],archivos:[],aprobaciones:[],autorizadores:[],busquedas:[],busquedaLocales:[],busquedaServicios:[],busquedaCandidatas:[]});
-  const [candidateModal,setCandidateModal]=useState(null),[candidateForm,setCandidateForm]=useState({}),[candidateErr,setCandidateErr]=useState(""),[candidateSaving,setCandidateSaving]=useState(false),[candidateServiceSearch,setCandidateServiceSearch]=useState("");
+  const [candidateModal,setCandidateModal]=useState(null),[candidateForm,setCandidateForm]=useState({}),[candidateErr,setCandidateErr]=useState(""),[candidateSaving,setCandidateSaving]=useState(false),[candidateDeleting,setCandidateDeleting]=useState(null),[candidateServiceSearch,setCandidateServiceSearch]=useState("");
   const [detailId,setDetailId]=useState(null),[stageDraft,setStageDraft]=useState({}),[stageSaving,setStageSaving]=useState(null),[testServiceId,setTestServiceId]=useState("");
+  const [stageOpenedId,setStageOpenedId]=useState(null),[stageDecisionId,setStageDecisionId]=useState(null),[flowTarget,setFlowTarget]=useState(""),[flowReason,setFlowReason]=useState("");
   const [encIncorp,setEncIncorp]=useState(null),[encIncorpSaving,setEncIncorpSaving]=useState(false);
   const [configSaving,setConfigSaving]=useState(false),[newStage,setNewStage]=useState({manicura:{nombre:"",tipo:"entrevista"},encargada:{nombre:"",tipo:"entrevista"}});
   const [configConfirm,setConfigConfirm]=useState(null);
@@ -14709,7 +15158,7 @@ function ReclutamientoPage({ data, setData, user, fixedView = "tablero" }) {
   const q=String(search||"").trim().toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g,"");
   const candidatasFiltradas=useMemo(()=>db.candidatas.filter(c=>{
     const texto=`${c.nombre||""} ${c.email||""} ${c.telefono||""}`.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g,"");
-    const okEstado=estado==="todos"||(estado==="activos"?!["incorporada","rechazada","desistio"].includes(c.estado):c.estado===estado);
+    const okEstado=estado==="todos"||(estado==="activos"?!["incorporada","rechazada","desistio","disponible"].includes(c.estado):c.estado===estado);
     const candidateLocalIds=(db.locales||[]).filter(x=>Number(x.candidata_id)===Number(c.id)).map(x=>Number(x.local_id));
     const okLocal=!localFilterIds.length||localFilterIds.some(id=>candidateLocalIds.includes(Number(id)));
     return (!q||texto.includes(q))&&(puesto==="todos"||c.puesto===puesto)&&okEstado&&okLocal;
@@ -14725,14 +15174,17 @@ function ReclutamientoPage({ data, setData, user, fixedView = "tablero" }) {
   const detailInstancias=detail?db.instancias.filter(i=>Number(i.candidata_id)===Number(detail.id)).sort((a,b)=>a.orden-b.orden):[];
   const bloqueoParaRealizar=inst=>{
     const anteriores=detailInstancias.filter(x=>x.obligatoria!==false&&Number(x.orden)<Number(inst.orden));
-    const pendiente=anteriores.find(x=>!["realizada","aprobada"].includes(String(x.estado||"")));
+    const pendiente=anteriores.find(x=>!["realizada","aprobada","omitida"].includes(String(x.estado||"")));
     if(pendiente)return `Primero debe completarse "${pendiente.nombre}".`;
-    const desfavorable=anteriores.find(x=>x.tipo!=="documentacion"&&!["si","con_reservas"].includes(String(x.recomendacion||"")));
+    const desfavorable=anteriores.find(x=>x.estado!=="omitida"&&x.tipo!=="documentacion"&&!["si","con_reservas"].includes(String(x.recomendacion||"")));
     if(desfavorable)return String(desfavorable.recomendacion||"")==="no"
       ? `El resultado de "${desfavorable.nombre}" fue No.`
       : `Falta definir una recomendación favorable en "${desfavorable.nombre}".`;
     return "";
   };
+  const instanciaActual=detailInstancias.find(i=>!["realizada","aprobada","omitida","cancelada"].includes(String(i.estado||"")))||null;
+  const instanciaDecision=detailInstancias.find(i=>Number(i.id)===Number(stageDecisionId))||null;
+  const proximaInstancia=instanciaDecision?detailInstancias.find(i=>Number(i.orden)>Number(instanciaDecision.orden)&&!["realizada","aprobada","omitida","cancelada"].includes(String(i.estado||""))):null;
   const detailCircuito=detail?db.circuitos.find(c=>Number(c.id)===Number(detail.circuito_id)):null;
   const activeApprovals=detail?db.aprobaciones.filter(a=>Number(a.candidata_id)===Number(detail.id)&&a.activa):[];
   const aprobadas=activeApprovals.filter(a=>a.decision==="aprobada").length;
@@ -14754,6 +15206,32 @@ function ReclutamientoPage({ data, setData, user, fixedView = "tablero" }) {
     return created?.file || {candidata_id:candidataId,instancia_id:instanciaId,prueba_servicio_id:pruebaServicioId,tipo,nombre_archivo:up.name||file.name,mime_type:up.mimeType||file.type,tamano_bytes:up.size||file.size,storage_path:up.path};
   };
   const deleteArchivo=async a=>{if(!window.confirm(`¿Eliminar ${a.nombre_archivo}?`))return;try{await api.reclutamientoStorageRequest({action:"delete",actor:user,candidataId:a.candidata_id,path:a.storage_path});await api.deleteReclutamientoArchivo(a.id);setDb(prev=>({...prev,archivos:(prev.archivos||[]).filter(x=>Number(x.id)!==Number(a.id))}));await audit(a.candidata_id,"ARCHIVO_ELIMINADO",a.nombre_archivo);}catch(e){notifyToast("No se pudo eliminar el archivo: "+(e.message||e),"error");}};
+
+  const deleteCandidate=async c=>{
+    if(!c?.id)return;
+    if(c.estado==="incorporada"||c.user_id){notifyToast("Una candidata ya incorporada no puede eliminarse desde Reclutamiento.","warning");return;}
+    const ok=window.confirm(`¿Eliminar definitivamente a ${c.nombre}?\n\nSe eliminarán también su proceso, evaluaciones, asociaciones, archivos y aprobaciones. Esta acción no se puede deshacer.`);
+    if(!ok)return;
+    setCandidateDeleting(Number(c.id));
+    try{
+      await api.deleteReclutamientoCandidata(c.id);
+      setDb(prev=>({
+        ...prev,
+        candidatas:(prev.candidatas||[]).filter(x=>Number(x.id)!==Number(c.id)),
+        locales:(prev.locales||[]).filter(x=>Number(x.candidata_id)!==Number(c.id)),
+        servicios:(prev.servicios||[]).filter(x=>Number(x.candidata_id)!==Number(c.id)),
+        instancias:(prev.instancias||[]).filter(x=>Number(x.candidata_id)!==Number(c.id)),
+        archivos:(prev.archivos||[]).filter(x=>Number(x.candidata_id)!==Number(c.id)),
+        aprobaciones:(prev.aprobaciones||[]).filter(x=>Number(x.candidata_id)!==Number(c.id)),
+        busquedaCandidatas:(prev.busquedaCandidatas||[]).filter(x=>Number(x.candidata_id)!==Number(c.id)),
+      }));
+      setData(prev=>prev?{...prev,reclutamientoCandidatas:(prev.reclutamientoCandidatas||[]).filter(x=>Number(x.id)!==Number(c.id))}:prev);
+      if(Number(detailId)===Number(c.id))setDetailId(null);
+      if(Number(candidateForm?.id)===Number(c.id))setCandidateModal(null);
+      notifyToast("Candidata eliminada.","success");
+    }catch(e){notifyToast("No se pudo eliminar la candidata: "+(e.message||e),"error");}
+    finally{setCandidateDeleting(null);}
+  };
 
   const saveCandidate=async()=>{
     setCandidateErr("");
@@ -14784,7 +15262,7 @@ function ReclutamientoPage({ data, setData, user, fixedView = "tablero" }) {
     setCandidateSaving(false);
   };
 
-  const openDetail=c=>{setDetailId(c.id);const d={};db.instancias.filter(i=>Number(i.candidata_id)===Number(c.id)).forEach(i=>{d[i.id]={fechaHora:reclutamientoDateTimeLocal(i.fecha_hora),localId:i.local_id||"",modalidad:i.modalidad||"",comentarios:i.comentarios||"",recomendacion:i.recomendacion||"",resultado:i.resultado||"",estado:i.estado||"pendiente",evaluadorIds:db.evaluadores.filter(x=>Number(x.instancia_id)===Number(i.id)).map(x=>Number(x.user_id))};});setStageDraft(d);setTestServiceId("");};
+  const openDetail=c=>{setDetailId(c.id);setStageOpenedId(null);setStageDecisionId(null);const d={};db.instancias.filter(i=>Number(i.candidata_id)===Number(c.id)).forEach(i=>{d[i.id]={fechaHora:reclutamientoDateTimeLocal(i.fecha_hora),localId:i.local_id||"",modalidad:i.modalidad||"",comentarios:i.comentarios||"",recomendacion:i.recomendacion||"",resultado:i.resultado||"",estado:i.estado||"pendiente",evaluadorIds:db.evaluadores.filter(x=>Number(x.instancia_id)===Number(i.id)).map(x=>Number(x.user_id))};});setStageDraft(d);setTestServiceId("");};
   useEffect(()=>{
     if(loading || vista!=="tablero") return;
     const pendingId=Number(sessionStorage.getItem("niki_reclutamiento_candidata")||0);
@@ -14828,8 +15306,22 @@ function ReclutamientoPage({ data, setData, user, fixedView = "tablero" }) {
         candidatas:(prev.candidatas||[]).map(c=>Number(c.id)===Number(inst.candidata_id)&&result?.candidata_estado?{...c,estado:result.candidata_estado}:c),
       }));
       setStageDraft(prev=>({...prev,[inst.id]:{...d,fechaHora:reclutamientoDateTimeLocal(saved.fecha_hora),localId:saved.local_id||"",modalidad:saved.modalidad||"",comentarios:saved.comentarios||"",recomendacion:saved.recomendacion||"",resultado:saved.resultado||"",estado:saved.estado||estadoNuevo,evaluadorIds:result?.evaluador_ids||d.evaluadorIds||[]}}));
+      if(markRealizada){setStageOpenedId(null);setStageDecisionId(Number(inst.id));}else{setStageOpenedId(null);setDetailId(null);}
       notifyToast(markRealizada?"Etapa marcada como realizada.":"Etapa guardada.","success");
     }catch(e){notifyToast("No se pudo guardar la etapa: "+(e.message||e),"error");}
+    setStageSaving(null);
+  };
+
+  const runFlow=async(operation,source,target=null,finalState="")=>{
+    if(!source)return;
+    if(operation==="cancel"&&!window.confirm("¿Anular esta actividad y volver a la anterior?"))return;
+    setStageSaving(source.id);
+    try{
+      await api.transitionReclutamiento(source.id,operation,target,finalState,flowReason);
+      setStageDecisionId(null);setStageOpenedId(null);setDetailId(null);setFlowTarget("");setFlowReason("");
+      await load();
+      notifyToast(operation==="advance"?"Actividad siguiente seleccionada.":operation==="cancel"?"Actividad anulada. Se volvió a la anterior.":"Proceso finalizado.","success");
+    }catch(e){notifyToast("No se pudo actualizar el circuito: "+(e.message||e),"error");}
     setStageSaving(null);
   };
 
@@ -14860,7 +15352,15 @@ function ReclutamientoPage({ data, setData, user, fixedView = "tablero" }) {
     <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",gap:10,flexWrap:"wrap",marginBottom:14}}><div><h2 style={{margin:0,fontSize:18}}>{vista==="config"?"Configuración de reclutamiento":"Candidatas y procesos"}</h2><p style={{margin:"3px 0 0",fontSize:12,color:"var(--color-text-secondary)"}}>{vista==="config"?"Circuitos, etapas y autorizadores de RRHH.":"Seguimiento completo de candidatas, entrevistas, pruebas y estado del proceso."}</p></div>{vista==="tablero"&&<Btn size="sm" onClick={openNew}>+ Nueva candidata</Btn>}</div>
     {vista==="tablero"?<>
       <Card style={{marginBottom:14,padding:12}}><div style={{display:"grid",gridTemplateColumns:"2fr 1fr 1fr",gap:9}}><Input value={search} onChange={setSearch} placeholder="Buscar por nombre, email o teléfono"/><Select value={puesto} onChange={setPuesto}><option value="todos">Todos los puestos</option><option value="manicura">Manicuras</option><option value="encargada">Encargadas</option></Select><Select value={estado} onChange={setEstado}><option value="activos">Procesos activos</option><option value="todos">Todos los estados</option>{Object.entries(RECLUTAMIENTO_ESTADOS).map(([k,v])=><option key={k} value={k}>{v[0]}</option>)}</Select></div><div style={{display:"flex",gap:6,alignItems:"center",flexWrap:"wrap",marginTop:10}}><span style={{fontSize:10,fontWeight:800,color:"var(--color-text-secondary)",textTransform:"uppercase"}}>Locales</span><button type="button" onClick={()=>setLocalFilterIds([])} style={{border:`1px solid ${!localFilterIds.length?COLORS.pink:"#ddd"}`,background:!localFilterIds.length?COLORS.pinkLight:"#fff",color:!localFilterIds.length?COLORS.pinkDark:"#555",borderRadius:999,padding:"5px 9px",fontSize:10,cursor:"pointer"}}>Todos</button>{recruitmentLocales.map((l,idx)=>{const on=localFilterIds.includes(Number(l.id));const sw=[COLORS.info,COLORS.success,COLORS.amber,COLORS.pinkDark,"#6f5aa7","#a55d3f"][idx%6];return <button type="button" key={l.id} onClick={()=>setLocalFilterIds(p=>on?p.filter(x=>Number(x)!==Number(l.id)):[...p,Number(l.id)])} style={{border:`1px solid ${on?sw:"#ddd"}`,background:on?`${sw}18`:"#fff",color:on?sw:"#555",borderRadius:999,padding:"5px 9px",fontSize:10,fontWeight:on?750:500,cursor:"pointer"}}>{on?"✓ ":""}{l.nombre}</button>})}</div></Card>
-      <div style={{display:"flex",flexDirection:"column",gap:18}}>{candidatasAgrupadas.map(grupo=>{const meta=RECLUTAMIENTO_ESTADOS[grupo.estadoKey]||[grupo.estadoKey,"gray"];return <section key={grupo.estadoKey}><div style={{display:"flex",alignItems:"center",gap:8,margin:"0 0 8px 2px"}}><h3 style={{margin:0,fontSize:13,fontWeight:800,color:"var(--color-text-primary)"}}>{meta[0]}</h3><Badge color={meta[1]}>{grupo.items.length}</Badge><div style={{height:1,background:"rgba(120,120,120,.14)",flex:1}}/></div><div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(245px,1fr))",gap:12}}>{grupo.items.map(c=>{const inst=db.instancias.filter(i=>Number(i.candidata_id)===Number(c.id)),done=inst.filter(i=>["realizada","aprobada"].includes(i.estado)).length,total=inst.filter(i=>i.obligatoria).length,locs=localidadNames(c),referida=esCandidataReferida(c);return <Card key={c.id} style={{padding:12,border:referida?`1.5px solid ${COLORS.pink}`:undefined,boxShadow:referida?"0 0 0 3px rgba(225,198,204,.24)":"none",background:referida?"linear-gradient(180deg, rgba(247,237,240,.72) 0%, var(--color-background-primary) 46%)":"var(--color-background-primary)"}}><div style={{display:"flex",justifyContent:"space-between",gap:8,alignItems:"flex-start"}}><div style={{minWidth:0}}><div style={{display:"flex",alignItems:"center",gap:6,minWidth:0}}><p style={{margin:0,fontSize:14,fontWeight:700,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{c.nombre}</p>{referida&&<span title="Candidata referida / recomendada" style={{fontSize:15,lineHeight:1,filter:"saturate(.9)"}}>✨</span>}</div><div style={{display:"flex",alignItems:"center",gap:6,marginTop:2,flexWrap:"wrap"}}><p style={{margin:0,fontSize:10,color:"var(--color-text-secondary)",textTransform:"uppercase",fontWeight:700}}>{c.puesto}</p>{referida&&<span style={{fontSize:9,fontWeight:800,color:COLORS.pinkDark,background:COLORS.pinkLight,border:`1px solid ${COLORS.pink}`,padding:"2px 6px",borderRadius:999}}>★ Referida</span>}</div></div>{estadoBadge(c)}</div><p style={{margin:"9px 0 0",fontSize:11,color:"var(--color-text-secondary)"}}>{c.email||"Sin email"} · {c.telefono||"Sin teléfono"}</p><div style={{display:"flex",gap:5,flexWrap:"wrap",marginTop:7}}>{locs.length?locs.map((name,idx)=>{const sw=[COLORS.info,COLORS.success,COLORS.amber,COLORS.pinkDark,"#6f5aa7","#a55d3f"][idx%6];return <span key={name} style={{fontSize:9,fontWeight:750,padding:"3px 7px",borderRadius:999,background:`${sw}16`,color:sw,border:`1px solid ${sw}44`}}>🏠 {name}</span>}):<span style={{fontSize:10,color:"var(--color-text-secondary)"}}>Sin sucursales preferidas</span>}</div><div style={{marginTop:10,height:7,borderRadius:999,background:"#eee",overflow:"hidden"}}><div style={{height:"100%",width:`${total?Math.min(100,(done/total)*100):0}%`,background:COLORS.pink}}/></div><div style={{display:"flex",justifyContent:"space-between",fontSize:10,color:"var(--color-text-secondary)",marginTop:4}}><span>{done}/{total} etapas</span><span>{db.aprobaciones.filter(a=>Number(a.candidata_id)===Number(c.id)&&a.activa&&a.decision==="aprobada").length}/{db.circuitos.find(x=>Number(x.id)===Number(c.circuito_id))?.aprobaciones_requeridas||2} aprobaciones</span></div><div style={{display:"flex",gap:6,marginTop:11}}><Btn size="sm" onClick={()=>openDetail(c)} style={{flex:1,justifyContent:"center"}}>Abrir proceso</Btn><Btn size="sm" variant="ghost" onClick={()=>openEdit(c)}>Editar</Btn></div></Card>})}</div></section>})}</div>
+      <div style={{display:"flex",flexDirection:"column",gap:18}}>{candidatasAgrupadas.map(grupo=>{const meta=RECLUTAMIENTO_ESTADOS[grupo.estadoKey]||[grupo.estadoKey,"gray"];return <section key={grupo.estadoKey}><div style={{display:"flex",alignItems:"center",gap:8,margin:"0 0 8px 2px"}}><h3 style={{margin:0,fontSize:13,fontWeight:800,color:"var(--color-text-primary)"}}>{meta[0]}</h3><Badge color={meta[1]}>{grupo.items.length}</Badge><div style={{height:1,background:"rgba(120,120,120,.14)",flex:1}}/></div><div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(245px,1fr))",gap:12}}>{grupo.items.map(c=>{const inst=db.instancias.filter(i=>Number(i.candidata_id)===Number(c.id)).sort((a,b)=>Number(a.orden)-Number(b.orden)),current=inst.find(i=>!["realizada","aprobada","omitida","cancelada"].includes(String(i.estado||""))),lastDone=[...inst].reverse().find(i=>["realizada","aprobada"].includes(String(i.estado||""))),isClosed=["incorporada","rechazada","desistio","disponible","aprobada"].includes(c.estado),done=inst.filter(i=>["realizada","aprobada"].includes(i.estado)).length,total=inst.filter(i=>i.obligatoria).length,locs=localidadNames(c),referida=esCandidataReferida(c);return <Card key={c.id} style={{padding:12,border:referida?`1.5px solid ${COLORS.pink}`:undefined,boxShadow:referida?"0 0 0 3px rgba(225,198,204,.24)":"none",background:referida?"linear-gradient(180deg, rgba(247,237,240,.72) 0%, var(--color-background-primary) 46%)":"var(--color-background-primary)"}}><div style={{display:"flex",justifyContent:"space-between",gap:8,alignItems:"flex-start"}}><div style={{minWidth:0}}><div style={{display:"flex",alignItems:"center",gap:6,minWidth:0}}><p style={{margin:0,fontSize:14,fontWeight:700,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{c.nombre}</p>{referida&&<span title="Candidata referida / recomendada" style={{fontSize:15,lineHeight:1,filter:"saturate(.9)"}}>✨</span>}</div><div style={{display:"flex",alignItems:"center",gap:6,marginTop:2,flexWrap:"wrap"}}><p style={{margin:0,fontSize:10,color:"var(--color-text-secondary)",textTransform:"uppercase",fontWeight:700}}>{c.puesto}</p>{referida&&<span style={{fontSize:9,fontWeight:800,color:COLORS.pinkDark,background:COLORS.pinkLight,border:`1px solid ${COLORS.pink}`,padding:"2px 6px",borderRadius:999}}>★ Referida</span>}</div></div>{estadoBadge(c)}</div><p style={{margin:"9px 0 0",fontSize:11,color:"var(--color-text-secondary)"}}>{c.email||"Sin email"} · {c.telefono||"Sin teléfono"}</p><div style={{display:"flex",gap:5,flexWrap:"wrap",marginTop:7}}>{locs.length?locs.map((name,idx)=>{const sw=[COLORS.info,COLORS.success,COLORS.amber,COLORS.pinkDark,"#6f5aa7","#a55d3f"][idx%6];return <span key={name} style={{fontSize:9,fontWeight:750,padding:"3px 7px",borderRadius:999,background:`${sw}16`,color:sw,border:`1px solid ${sw}44`}}>🏠 {name}</span>}):<span style={{fontSize:10,color:"var(--color-text-secondary)"}}>Sin sucursales preferidas</span>}</div><div style={{marginTop:12,padding:12,border:`1px solid ${COLORS.pink}`,borderRadius:11,background:COLORS.pinkLight,display:"flex",flexDirection:"column",gap:6}}>
+  <span style={{fontSize:10,fontWeight:800,color:COLORS.pinkDark,textTransform:"uppercase"}}>{isClosed?"Resultado del proceso":"Actividad actual"}</span>
+  <strong style={{fontSize:13}}>{isClosed?(RECLUTAMIENTO_ESTADOS[c.estado]?.[0]||c.estado):current?.nombre||(!inst.length?"Todavía no tiene actividades configuradas":lastDone?"Elegir próxima actividad":"Sin actividad pendiente")}</strong>
+  {!isClosed&&current&&<span style={{fontSize:11,color:"#655b60"}}>{current.estado==="programada"?`Agendada · ${current.fecha_hora?fmtDateTime(current.fecha_hora):"Sin fecha"}`:"Pendiente de programar o realizar"}</span>}
+  {!isClosed&&current&&<Btn size="sm" onClick={()=>{openDetail(c);setStageOpenedId(Number(current.id));}} style={{justifyContent:"center",marginTop:5}}>▶ {current.estado==="programada"?"Realizar actividad":"Gestionar actividad"}</Btn>}
+  {!isClosed&&!current&&lastDone&&<Btn size="sm" onClick={()=>{openDetail(c);setStageDecisionId(Number(lastDone.id));}} style={{justifyContent:"center",marginTop:5}}>▶ Decidir próximo paso</Btn>}
+  {!isClosed&&!inst.length&&<span style={{fontSize:10}}>Revisá el circuito asociado a esta candidata.</span>}
+</div>
+<div style={{marginTop:10,height:7,borderRadius:999,background:"#eee",overflow:"hidden"}}><div style={{height:"100%",width:`${total?Math.min(100,(done/total)*100):0}%`,background:COLORS.pink}}/></div><div style={{display:"flex",justifyContent:"space-between",fontSize:10,color:"var(--color-text-secondary)",marginTop:4}}><span>{done}/{total} etapas</span><span>{db.aprobaciones.filter(a=>Number(a.candidata_id)===Number(c.id)&&a.activa&&a.decision==="aprobada").length}/{db.circuitos.find(x=>Number(x.id)===Number(c.circuito_id))?.aprobaciones_requeridas||2} aprobaciones</span></div><div style={{display:"flex",gap:6,marginTop:11}}><Btn size="sm" onClick={()=>openDetail(c)} style={{flex:1,justifyContent:"center"}}>Ver historial y proceso</Btn><Btn size="sm" variant="ghost" onClick={()=>openEdit(c)}>Editar</Btn>{c.estado!=="incorporada"&&!c.user_id&&<Btn size="sm" variant="danger" disabled={Number(candidateDeleting)===Number(c.id)} onClick={()=>deleteCandidate(c)}>{Number(candidateDeleting)===Number(c.id)?"Eliminando...":"Eliminar"}</Btn>}</div></Card>})}</div></section>})}</div>
       {candidatasFiltradas.length===0&&<Card><p style={{margin:0,fontSize:13,color:"var(--color-text-secondary)"}}>No hay candidatas con estos filtros.</p></Card>}
     </>:<div style={{display:"flex",flexDirection:"column",gap:14}}>{["manicura","encargada"].map(pst=>{const c=db.circuitos.find(x=>x.puesto===pst&&x.activo),etapas=c?db.plantillas.filter(x=>Number(x.circuito_id)===Number(c.id)&&x.activa!==false).sort((a,b)=>a.orden-b.orden):[];return <Card key={pst}><div style={{display:"flex",justifyContent:"space-between",gap:12,alignItems:"center",flexWrap:"wrap"}}><div><h3 style={{margin:0,fontSize:15}}>Circuito · {pst==="manicura"?"Manicura":"Encargada"}</h3><p style={{margin:"3px 0 0",fontSize:11,color:"var(--color-text-secondary)"}}>Las candidatas nuevas copian estas etapas al iniciar su proceso.</p></div>{c&&<div style={{display:"flex",alignItems:"center",gap:6}}><span style={{fontSize:11}}>Aprobaciones RRHH</span><select disabled={configSaving} value={c.aprobaciones_requeridas||2} onChange={e=>saveCircuitApprovals(c,e.target.value)} style={{padding:"5px 8px",border:"1px solid #ddd",borderRadius:7}}><option value="1">1</option><option value="2">2</option></select></div>}</div><div style={{marginTop:12,display:"flex",flexDirection:"column",gap:6}}>{etapas.map(e=><div key={e.id} style={{display:"flex",gap:8,alignItems:"center",padding:"7px 9px",background:"var(--color-background-secondary)",borderRadius:8}}><Badge color="gray">{e.orden}</Badge><span style={{flex:1,fontSize:12,fontWeight:600}}>{e.nombre}</span><Badge color="info">{e.tipo.replace("_"," ")}</Badge><button disabled={configSaving} onClick={()=>deleteStage(e)} style={{border:"none",background:COLORS.dangerLight,color:COLORS.danger,borderRadius:6,cursor:"pointer"}}>×</button></div>)}</div><div style={{display:"grid",gridTemplateColumns:"1fr 170px 100px",gap:7,marginTop:10}}><Input value={newStage[pst].nombre} onChange={v=>setNewStage(p=>({...p,[pst]:{...p[pst],nombre:v}}))} placeholder="Nueva etapa"/><Select value={newStage[pst].tipo} onChange={v=>setNewStage(p=>({...p,[pst]:{...p[pst],tipo:v}}))}><option value="entrevista">Entrevista</option><option value="prueba_tecnica">Prueba técnica</option><option value="evaluacion">Evaluación</option><option value="documentacion">Documentación</option></Select><Btn size="sm" disabled={configSaving} onClick={()=>addStage(pst)} style={{justifyContent:"center"}}>Agregar</Btn></div><div style={{marginTop:14,borderTop:"1px solid #eee",paddingTop:10}}><p style={{margin:"0 0 7px",fontSize:11,fontWeight:800,textTransform:"uppercase",color:"var(--color-text-secondary)"}}>Autorizadores RRHH</p><div style={{display:"flex",gap:7,flexWrap:"wrap"}}>{rrhhUsers.map(u=>{const on=user.rol==="admin"&&Number(u.id)===Number(user.id)?true:db.autorizadores.some(a=>Number(a.user_id)===Number(u.id)&&a.puesto===pst&&a.activo);return <button key={u.id} disabled={configSaving||(u.rol==="admin"&&Number(u.id)===Number(user.id))} onClick={()=>toggleAuthorizer(u.id,pst)} style={{border:`1px solid ${on?COLORS.pink:"#ddd"}`,background:on?COLORS.pinkLight:"#fff",borderRadius:999,padding:"6px 9px",fontSize:10,cursor:"pointer"}}>{on?"✓ ":""}{u.nombre}</button>})}</div></div></Card>})}</div>}
 
@@ -14901,11 +15401,20 @@ function ReclutamientoPage({ data, setData, user, fixedView = "tablero" }) {
       </div>
 
       {candidateErr&&<p style={{color:COLORS.danger,background:COLORS.dangerLight,padding:8,borderRadius:8,fontSize:12}}>{candidateErr}</p>}
-      <div style={{display:"flex",gap:8,marginTop:16}}><Btn onClick={saveCandidate} disabled={candidateSaving} style={{flex:1,justifyContent:"center"}}>{candidateSaving?"Guardando...":"Guardar"}</Btn><Btn variant="secondary" onClick={()=>setCandidateModal(null)} style={{flex:1,justifyContent:"center"}}>Cancelar</Btn></div>
+      <div style={{display:"flex",gap:8,marginTop:16,flexWrap:"wrap"}}>{candidateModal==="edit"&&candidateForm?.id&&<Btn variant="danger" disabled={Number(candidateDeleting)===Number(candidateForm.id)} onClick={()=>{const c=db.candidatas.find(x=>Number(x.id)===Number(candidateForm.id));if(c)deleteCandidate(c);}} style={{justifyContent:"center"}}>{Number(candidateDeleting)===Number(candidateForm.id)?"Eliminando...":"Eliminar candidata"}</Btn>}<Btn onClick={saveCandidate} disabled={candidateSaving} style={{flex:1,justifyContent:"center"}}>{candidateSaving?"Guardando...":"Guardar"}</Btn><Btn variant="secondary" onClick={()=>setCandidateModal(null)} style={{flex:1,justifyContent:"center"}}>Cancelar</Btn></div>
     </Modal>}
 
     {encIncorp&&<Modal title="Incorporar candidata como encargada" onClose={()=>setEncIncorp(null)} width={620}><div style={{display:"flex",flexDirection:"column",gap:11}}><div style={{padding:10,borderRadius:10,background:COLORS.successLight,fontSize:12}}><strong>{encIncorp.candidata.nombre}</strong> quedará dada de alta como encargada.</div><ModalInput label="Fecha de ingreso" type="date" value={encIncorp.fechaInicio} onChange={v=>setEncIncorp(x=>({...x,fechaInicio:v}))}/><div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10}}><div><ModalInput label="Usuario de acceso" value={encIncorp.usuario} onChange={v=>setEncIncorp(x=>({...x,usuario:v}))}/><p style={{margin:"4px 2px 0",fontSize:10.5,color:"var(--color-text-secondary)"}}>Se informará en el email de invitación.</p></div><ModalInput label="Email" value={encIncorp.email} onChange={v=>setEncIncorp(x=>({...x,email:v}))}/></div><div style={{background:COLORS.infoLight,color:COLORS.info,borderRadius:9,padding:"8px 10px",fontSize:11}}>No hace falta definir contraseña: recibirá un enlace para crear la suya.</div><ModalSelect label="Tipo de relación" value={encIncorp.tipoRelacion} onChange={v=>setEncIncorp(x=>({...x,tipoRelacion:v}))}><option value="a_resolver">A resolver</option><option value="monotributista">Monotributista</option><option value="dependencia">Relación de dependencia</option></ModalSelect><div><p style={{margin:"0 0 7px",fontSize:12,fontWeight:700}}>Locales asignados</p><div style={{display:"flex",gap:6,flexWrap:"wrap"}}>{(data.locales||[]).map(l=>{const on=(encIncorp.localIds||[]).includes(l.id);return <button key={l.id} type="button" onClick={()=>toggleEncIncorpLocal(l.id)} style={{border:`1px solid ${on?COLORS.pink:"#ddd"}`,background:on?COLORS.pinkLight:"#fff",borderRadius:999,padding:"6px 9px",fontSize:10,cursor:"pointer"}}>{on?"✓ ":""}{l.nombre}</button>})}</div></div><div style={{display:"flex",gap:8}}><Btn variant="success" onClick={confirmarEncargadaIncorp} disabled={encIncorpSaving} style={{flex:1,justifyContent:"center"}}>{encIncorpSaving?"Incorporando...":"Confirmar incorporación"}</Btn><Btn variant="secondary" onClick={()=>setEncIncorp(null)} style={{flex:1,justifyContent:"center"}}>Cancelar</Btn></div></div></Modal>}
-    {detail&&<Modal title={`Proceso · ${detail.nombre}`} onClose={()=>setDetailId(null)} width={940}><div style={{display:"flex",justifyContent:"space-between",gap:10,alignItems:"center",flexWrap:"wrap",marginBottom:12}}><div style={{display:"flex",gap:7,alignItems:"center"}}>{estadoBadge(detail)}<Badge color="gray">{detail.puesto}</Badge>{detail.disponibilidad_desde&&<span style={{fontSize:11,color:"var(--color-text-secondary)"}}>Disponible desde {detail.disponibilidad_desde.split("-").reverse().join("/")}</span>}</div><div style={{display:"flex",gap:6}}>{["admin","casa_matriz"].includes(user.rol)&&detail.estado==="disponible"&&detail.puesto==="encargada"&&<Btn size="sm" variant="success" onClick={()=>openEncargadaIncorp(detail)}>Incorporar encargada</Btn>}<Btn size="sm" variant="ghost" onClick={()=>openEdit(detail)}>Editar ficha</Btn>{!["incorporada","desistio"].includes(detail.estado)&&<Btn size="sm" variant="secondary" onClick={()=>changeStatus(detail,detail.estado==="en_pausa"?"en_proceso":"en_pausa")}>{detail.estado==="en_pausa"?"Reabrir":"Pausar"}</Btn>}<Btn size="sm" variant="danger" onClick={()=>changeStatus(detail,"desistio")}>Desistió</Btn></div></div>{detail.puesto==="manicura"&&<ReclutamientoCompetenciasResumen value={detail.competencias}/>}<div style={{display:"flex",flexDirection:"column",gap:10}}>{detailInstancias.map(inst=>{const d=stageDraft[inst.id]||{},evals=d.evaluadorIds||[],testRows=db.pruebas.filter(x=>Number(x.instancia_id)===Number(inst.id));return <Card key={inst.id} style={{padding:12,background:inst.estado==="realizada"?COLORS.successLight:"#fff"}}><div style={{display:"flex",justifyContent:"space-between",gap:8,alignItems:"center",flexWrap:"wrap"}}><div style={{display:"flex",alignItems:"center",gap:7}}><Badge color="gray">{inst.orden}</Badge><strong style={{fontSize:13}}>{inst.nombre}</strong><Badge color={inst.tipo==="prueba_tecnica"?"amber":"info"}>{inst.tipo.replace("_"," ")}</Badge></div><Badge color={inst.estado==="realizada"?"success":inst.estado==="programada"?"info":inst.estado==="rechazada"?"danger":"gray"}>{inst.estado.replace("_"," ")}</Badge></div><div style={{display:"grid",gridTemplateColumns:"1.2fr 1fr 1fr",gap:8,marginTop:10}}><div><label style={{fontSize:10,fontWeight:700,color:"#777"}}>Fecha y hora</label><input type="datetime-local" value={d.fechaHora||""} onChange={e=>updateStageDraft(inst.id,"fechaHora",e.target.value)} style={{width:"100%",padding:7,border:"1px solid #ddd",borderRadius:7}}/></div><div><label style={{fontSize:10,fontWeight:700,color:"#777"}}>Local</label><select value={d.localId||""} onChange={e=>updateStageDraft(inst.id,"localId",e.target.value)} style={{width:"100%",padding:7,border:"1px solid #ddd",borderRadius:7}}><option value="">Sin local</option>{recruitmentLocales.map(l=><option key={l.id} value={l.id}>{l.nombre}</option>)}</select></div><div><label style={{fontSize:10,fontWeight:700,color:"#777"}}>Modalidad</label><Input value={d.modalidad||""} onChange={v=>updateStageDraft(inst.id,"modalidad",v)} placeholder="Presencial / Meet..." style={{padding:7,fontSize:12}}/></div></div><div style={{marginTop:8}}><p style={{margin:"0 0 5px",fontSize:10,fontWeight:700,color:"#777"}}>Evaluadores</p><div style={{display:"flex",gap:6,flexWrap:"wrap"}}>{rrhhUsers.map(u=><button key={u.id} type="button" onClick={()=>toggleEvaluator(inst.id,u.id)} style={{border:`1px solid ${evals.includes(u.id)?COLORS.pink:"#ddd"}`,background:evals.includes(u.id)?COLORS.pinkLight:"#fff",borderRadius:999,padding:"5px 8px",fontSize:9,cursor:"pointer"}}>{evals.includes(u.id)?"✓ ":""}{u.nombre}</button>)}</div></div><div style={{display:"grid",gridTemplateColumns:"1fr 180px",gap:8,marginTop:8}}><div><label style={{fontSize:10,fontWeight:700,color:"#777"}}>Comentarios / evaluación</label><textarea value={d.comentarios||""} onChange={e=>updateStageDraft(inst.id,"comentarios",e.target.value)} rows={3} style={{width:"100%",border:"1px solid #ddd",borderRadius:7,padding:8,resize:"vertical"}}/></div><div><label style={{fontSize:10,fontWeight:700,color:"#777"}}>Recomendación</label><select value={d.recomendacion||""} onChange={e=>updateStageDraft(inst.id,"recomendacion",e.target.value)} style={{width:"100%",padding:7,border:"1px solid #ddd",borderRadius:7}}>{RECLUTAMIENTO_RECOMENDACIONES.map(([v,l])=><option key={v} value={v}>{l}</option>)}</select><label style={{fontSize:10,fontWeight:700,color:"#777",display:"block",marginTop:8}}>Resultado / sugerencia</label><textarea value={d.resultado||""} onChange={e=>updateStageDraft(inst.id,"resultado",e.target.value)} rows={2} style={{width:"100%",border:"1px solid #ddd",borderRadius:7,padding:7,resize:"vertical"}}/></div></div>{inst.tipo==="prueba_tecnica"&&<div style={{marginTop:10,borderTop:"1px dashed #ddd",paddingTop:10}}><div style={{display:"flex",gap:7,alignItems:"center",marginBottom:8}}><Select value={testServiceId} onChange={setTestServiceId} style={{maxWidth:320}}><option value="">Seleccionar servicio evaluado</option>{(data.agendaServicios||[]).filter(s=>s.activo!==false).map(s=><option key={s.id} value={s.id}>{s.nombre}</option>)}</Select><Btn size="sm" onClick={()=>addTestService(inst)}>+ Servicio</Btn></div>{testRows.map(row=><div key={row.id} style={{border:"1px solid #eee",borderRadius:9,padding:9,marginBottom:7}}><div style={{display:"grid",gridTemplateColumns:"1fr 190px 2fr 34px",gap:7,alignItems:"center"}}><strong style={{fontSize:11}}>{row.servicio_nombre}</strong><select defaultValue={row.resultado||""} onChange={e=>saveTestService(row,{resultado:e.target.value||null})} style={{padding:6,border:"1px solid #ddd",borderRadius:7,fontSize:10}}><option value="">Resultado</option><option value="aprobado">Aprobado</option><option value="con_observaciones">Con observaciones</option><option value="no_aprobado">No aprobado</option></select><input defaultValue={row.comentario||""} onBlur={e=>{if(e.target.value!==(row.comentario||""))saveTestService(row,{comentario:e.target.value||null});}} placeholder="Comentario del servicio" style={{padding:6,border:"1px solid #ddd",borderRadius:7,fontSize:10}}/><button onClick={()=>deleteTestService(row)} style={{border:"none",background:COLORS.dangerLight,color:COLORS.danger,borderRadius:7,height:30,cursor:"pointer"}}>×</button></div><div style={{display:"flex",gap:6,alignItems:"center",marginTop:7,flexWrap:"wrap"}}><label style={{fontSize:10,fontWeight:650,background:COLORS.pinkLight,color:COLORS.pinkDark,padding:"5px 8px",borderRadius:7,cursor:"pointer"}}>📷 Subir foto<input type="file" accept="image/jpeg,image/png,image/webp" style={{display:"none"}} onChange={e=>{const f=e.target.files?.[0];if(f)uploadTestPhoto(inst,row,f);e.target.value="";}}/></label>{db.archivos.filter(a=>Number(a.prueba_servicio_id)===Number(row.id)&&a.tipo==="foto").map(a=><ReclutamientoArchivoLink key={a.id} actor={user} candidataId={detail.id} archivo={a} onDelete={deleteArchivo}/>)}</div></div>)}</div>}{bloqueoParaRealizar(inst)&&inst.estado!=="realizada"&&<div style={{marginTop:8,padding:"7px 9px",borderRadius:8,background:COLORS.amberLight,color:COLORS.amber,fontSize:10}}>🔒 {bloqueoParaRealizar(inst)} Podés agendar esta etapa, pero todavía no realizarla.</div>}<div style={{display:"flex",gap:7,marginTop:10,justifyContent:"flex-end"}}><Btn size="sm" variant="secondary" disabled={stageSaving===inst.id} onClick={()=>saveStage(inst,false)}>Guardar / programar</Btn><Btn size="sm" variant="success" disabled={stageSaving===inst.id||!!bloqueoParaRealizar(inst)} onClick={()=>saveStage(inst,true)}>✓ Marcar realizada</Btn></div></Card>})}</div><Card style={{marginTop:12,padding:12}}><div style={{display:"flex",justifyContent:"space-between",gap:8,alignItems:"center",flexWrap:"wrap"}}><div><h3 style={{margin:0,fontSize:14}}>Aprobación RRHH</h3><p style={{margin:"3px 0 0",fontSize:11,color:"var(--color-text-secondary)"}}>{aprobadas}/{detailCircuito?.aprobaciones_requeridas||2} aprobaciones activas{rechazadas?` · ${rechazadas} rechazo(s)`:""}. Si una evaluación se modifica, las aprobaciones vigentes se invalidan automáticamente.</p></div><div style={{display:"flex",gap:6}}>{puedeAutorizar&&<><Btn size="sm" variant="success" onClick={()=>decidir("aprobada")}>Aprobar</Btn><Btn size="sm" variant="danger" onClick={()=>decidir("rechazada")}>Rechazar</Btn><Btn size="sm" variant="ghost" onClick={quitarDecision}>Quitar mi decisión</Btn></>}</div></div><div style={{display:"flex",gap:7,flexWrap:"wrap",marginTop:9}}>{activeApprovals.map(a=>{const u=(data.users||[]).find(x=>Number(x.id)===Number(a.user_id));return <span key={a.id} style={{fontSize:10,padding:"5px 8px",borderRadius:999,background:a.decision==="aprobada"?COLORS.successLight:COLORS.dangerLight,color:a.decision==="aprobada"?COLORS.success:COLORS.danger,fontWeight:700}}>{a.decision==="aprobada"?"✓":"✕"} {u?.nombre||`Usuario ${a.user_id}`}</span>})}</div></Card><div style={{marginTop:12}}><p style={{margin:"0 0 7px",fontSize:11,fontWeight:800,textTransform:"uppercase",color:"var(--color-text-secondary)"}}>Archivos generales</p><div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(180px,1fr))",gap:6}}>{db.archivos.filter(a=>Number(a.candidata_id)===Number(detail.id)&&!a.instancia_id).map(a=><ReclutamientoArchivoLink key={a.id} actor={user} candidataId={detail.id} archivo={a} onDelete={deleteArchivo}/>)}</div></div></Modal>}
+    {detail&&<Modal title={`Proceso · ${detail.nombre}`} onClose={()=>setDetailId(null)} width={940}><div style={{display:"flex",justifyContent:"space-between",gap:10,alignItems:"center",flexWrap:"wrap",marginBottom:12}}><div style={{display:"flex",gap:7,alignItems:"center"}}>{estadoBadge(detail)}<Badge color="gray">{detail.puesto}</Badge>{detail.disponibilidad_desde&&<span style={{fontSize:11,color:"var(--color-text-secondary)"}}>Disponible desde {detail.disponibilidad_desde.split("-").reverse().join("/")}</span>}</div><div style={{display:"flex",gap:6}}>{["admin","casa_matriz"].includes(user.rol)&&detail.estado==="disponible"&&detail.puesto==="encargada"&&<Btn size="sm" variant="success" onClick={()=>openEncargadaIncorp(detail)}>Incorporar encargada</Btn>}<Btn size="sm" variant="ghost" onClick={()=>openEdit(detail)}>Editar ficha</Btn>{!["incorporada","desistio"].includes(detail.estado)&&<Btn size="sm" variant="secondary" onClick={()=>changeStatus(detail,detail.estado==="en_pausa"?"en_proceso":"en_pausa")}>{detail.estado==="en_pausa"?"Reabrir":"Pausar"}</Btn>}<Btn size="sm" variant="danger" onClick={()=>changeStatus(detail,"desistio")}>Desistió</Btn></div></div>{detail.puesto==="manicura"&&<ReclutamientoCompetenciasResumen value={detail.competencias}/>}<div style={{padding:"12px 13px",border:"1px solid #e4d8dc",borderRadius:12,background:"#faf6f7",marginBottom:12}}>
+      <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",gap:10,flexWrap:"wrap"}}>
+        <div><div style={{fontSize:10,fontWeight:750,color:COLORS.pinkDark,textTransform:"uppercase"}}>{instanciaDecision?"Actividad completada · decidir siguiente paso":"Actividad actual"}</div><strong style={{fontSize:15}}>{instanciaDecision?instanciaDecision.nombre:instanciaActual?instanciaActual.nombre:"Sin actividades pendientes"}</strong>{instanciaActual&&<p style={{margin:"4px 0 0",fontSize:11,color:"#777"}}>{instanciaActual.estado==="programada"?`Programada · ${instanciaActual.fecha_hora?fmtDateTime(instanciaActual.fecha_hora):"sin fecha"}`:"Pendiente de gestión"}</p>}</div>
+        {instanciaActual&&stageOpenedId==null&&stageDecisionId==null&&<Btn size="sm" onClick={()=>setStageOpenedId(Number(instanciaActual.id))}>▶ Gestionar actividad</Btn>}
+      </div>
+      <div style={{display:"flex",gap:6,flexWrap:"wrap",marginTop:10}}>{detailInstancias.filter(i=>["realizada","aprobada","omitida","cancelada"].includes(String(i.estado||""))).map(i=><span key={i.id} style={{fontSize:10,padding:"5px 8px",borderRadius:7,background:["realizada","aprobada"].includes(i.estado)?COLORS.successLight:"#fff",border:"1px solid #e8e2e4",color:["realizada","aprobada"].includes(i.estado)?COLORS.success:"#666"}}>{["realizada","aprobada"].includes(i.estado)?"✓ ":""}{i.nombre} · {i.estado}</span>)}</div>
+      </div>
+      {instanciaDecision&&<Card style={{padding:13,marginBottom:12,background:COLORS.successLight}}><strong style={{fontSize:13}}>✓ {instanciaDecision.nombre} realizada</strong><p style={{fontSize:11,margin:"6px 0 10px"}}>Elegí cómo continuar. Podés saltar pasos intermedios sin borrar lo evaluado.</p><div style={{display:"flex",gap:8,alignItems:"center",flexWrap:"wrap"}}><select value={flowTarget||String(proximaInstancia?.id||"")} onChange={e=>setFlowTarget(e.target.value)} style={{padding:8,border:"1px solid #ddd",borderRadius:7,fontSize:12}}><option value="">Seleccionar próxima actividad</option>{detailInstancias.filter(x=>Number(x.orden)>Number(instanciaDecision.orden)&&!["realizada","aprobada"].includes(x.estado)).map(x=><option key={x.id} value={String(x.id)}>{x.nombre}</option>)}</select><Btn size="sm" disabled={stageSaving!=null||!(flowTarget||proximaInstancia?.id)} onClick={()=>runFlow("advance",instanciaDecision,Number(flowTarget||proximaInstancia?.id))}>Avanzar y volver al tablero</Btn></div><p style={{fontSize:11,fontWeight:700,margin:"13px 0 6px"}}>O finalizar este proceso</p><textarea placeholder="Motivo / observaciones (obligatorio para futuras búsquedas)" value={flowReason} onChange={e=>setFlowReason(e.target.value)} rows={2} style={{width:"100%",border:"1px solid #ddd",borderRadius:7,padding:8,fontSize:12}}/><div style={{display:"flex",gap:7,flexWrap:"wrap",marginTop:8}}><Btn size="sm" disabled={stageSaving!=null||!flowReason.trim()} onClick={()=>runFlow("finish",instanciaDecision,null,"disponible")}>Apta · futuras búsquedas</Btn><Btn size="sm" variant="secondary" disabled={stageSaving!=null} onClick={()=>runFlow("finish",instanciaDecision,null,"pendiente_aprobacion")}>Solicitar aprobación</Btn><Btn size="sm" variant="danger" disabled={stageSaving!=null} onClick={()=>runFlow("finish",instanciaDecision,null,"rechazada")}>No apta / rechazada</Btn><Btn size="sm" variant="ghost" disabled={stageSaving!=null} onClick={()=>runFlow("finish",instanciaDecision,null,"desistio")}>Desistió</Btn><Btn size="sm" variant="ghost" onClick={()=>{setStageDecisionId(null);setDetailId(null);}}>Cerrar</Btn></div></Card>}
+      {instanciaActual&&instanciaActual.orden>1&&!["incorporada","rechazada","desistio","disponible","aprobada","pendiente_aprobacion"].includes(detail.estado)&&stageOpenedId==null&&!instanciaDecision&&<div style={{marginBottom:10}}><Btn size="sm" variant="ghost" disabled={stageSaving!=null} onClick={()=>runFlow("cancel",instanciaActual)}>↶ Anular actividad y volver a la anterior</Btn></div>}
+      <div style={{display:"flex",flexDirection:"column",gap:10}}>{detailInstancias.filter(inst=>Number(inst.id)===Number(stageOpenedId)).map(inst=>{const d=stageDraft[inst.id]||{},evals=d.evaluadorIds||[],testRows=db.pruebas.filter(x=>Number(x.instancia_id)===Number(inst.id));return <Card key={inst.id} style={{padding:12,background:inst.estado==="realizada"?COLORS.successLight:"#fff"}}><div style={{display:"flex",justifyContent:"space-between",gap:8,alignItems:"center",flexWrap:"wrap"}}><div style={{display:"flex",alignItems:"center",gap:7}}><Badge color="gray">{inst.orden}</Badge><strong style={{fontSize:13}}>{inst.nombre}</strong><Badge color={inst.tipo==="prueba_tecnica"?"amber":"info"}>{inst.tipo.replace("_"," ")}</Badge></div><Badge color={inst.estado==="realizada"?"success":inst.estado==="programada"?"info":inst.estado==="rechazada"?"danger":"gray"}>{inst.estado.replace("_"," ")}</Badge></div><div style={{display:"grid",gridTemplateColumns:"1.2fr 1fr 1fr",gap:8,marginTop:10}}><div><label style={{fontSize:10,fontWeight:700,color:"#777"}}>Fecha y hora</label><input type="datetime-local" value={d.fechaHora||""} onChange={e=>updateStageDraft(inst.id,"fechaHora",e.target.value)} style={{width:"100%",padding:7,border:"1px solid #ddd",borderRadius:7}}/></div><div><label style={{fontSize:10,fontWeight:700,color:"#777"}}>Local</label><select value={d.localId||""} onChange={e=>updateStageDraft(inst.id,"localId",e.target.value)} style={{width:"100%",padding:7,border:"1px solid #ddd",borderRadius:7}}><option value="">Sin local</option>{recruitmentLocales.map(l=><option key={l.id} value={l.id}>{l.nombre}</option>)}</select></div><div><label style={{fontSize:10,fontWeight:700,color:"#777"}}>Modalidad</label><Input value={d.modalidad||""} onChange={v=>updateStageDraft(inst.id,"modalidad",v)} placeholder="Presencial / Meet..." style={{padding:7,fontSize:12}}/></div></div><div style={{marginTop:8}}><p style={{margin:"0 0 5px",fontSize:10,fontWeight:700,color:"#777"}}>Evaluadores</p><div style={{display:"flex",gap:6,flexWrap:"wrap"}}>{rrhhUsers.map(u=><button key={u.id} type="button" onClick={()=>toggleEvaluator(inst.id,u.id)} style={{border:`1px solid ${evals.includes(u.id)?COLORS.pink:"#ddd"}`,background:evals.includes(u.id)?COLORS.pinkLight:"#fff",borderRadius:999,padding:"5px 8px",fontSize:9,cursor:"pointer"}}>{evals.includes(u.id)?"✓ ":""}{u.nombre}</button>)}</div></div><div style={{display:"grid",gridTemplateColumns:"1fr 180px",gap:8,marginTop:8}}><div><label style={{fontSize:10,fontWeight:700,color:"#777"}}>Comentarios / evaluación</label><textarea value={d.comentarios||""} onChange={e=>updateStageDraft(inst.id,"comentarios",e.target.value)} rows={3} style={{width:"100%",border:"1px solid #ddd",borderRadius:7,padding:8,resize:"vertical"}}/></div><div><label style={{fontSize:10,fontWeight:700,color:"#777"}}>Recomendación</label><select value={d.recomendacion||""} onChange={e=>updateStageDraft(inst.id,"recomendacion",e.target.value)} style={{width:"100%",padding:7,border:"1px solid #ddd",borderRadius:7}}>{RECLUTAMIENTO_RECOMENDACIONES.map(([v,l])=><option key={v} value={v}>{l}</option>)}</select><label style={{fontSize:10,fontWeight:700,color:"#777",display:"block",marginTop:8}}>Resultado / sugerencia</label><textarea value={d.resultado||""} onChange={e=>updateStageDraft(inst.id,"resultado",e.target.value)} rows={2} style={{width:"100%",border:"1px solid #ddd",borderRadius:7,padding:7,resize:"vertical"}}/></div></div>{inst.tipo==="prueba_tecnica"&&<div style={{marginTop:10,borderTop:"1px dashed #ddd",paddingTop:10}}><div style={{display:"flex",gap:7,alignItems:"center",marginBottom:8}}><Select value={testServiceId} onChange={setTestServiceId} style={{maxWidth:320}}><option value="">Seleccionar servicio evaluado</option>{(data.agendaServicios||[]).filter(s=>s.activo!==false).map(s=><option key={s.id} value={s.id}>{s.nombre}</option>)}</Select><Btn size="sm" onClick={()=>addTestService(inst)}>+ Servicio</Btn></div>{testRows.map(row=><div key={row.id} style={{border:"1px solid #eee",borderRadius:9,padding:9,marginBottom:7}}><div style={{display:"grid",gridTemplateColumns:"1fr 190px 2fr 34px",gap:7,alignItems:"center"}}><strong style={{fontSize:11}}>{row.servicio_nombre}</strong><select defaultValue={row.resultado||""} onChange={e=>saveTestService(row,{resultado:e.target.value||null})} style={{padding:6,border:"1px solid #ddd",borderRadius:7,fontSize:10}}><option value="">Resultado</option><option value="aprobado">Aprobado</option><option value="con_observaciones">Con observaciones</option><option value="no_aprobado">No aprobado</option></select><input defaultValue={row.comentario||""} onBlur={e=>{if(e.target.value!==(row.comentario||""))saveTestService(row,{comentario:e.target.value||null});}} placeholder="Comentario del servicio" style={{padding:6,border:"1px solid #ddd",borderRadius:7,fontSize:10}}/><button onClick={()=>deleteTestService(row)} style={{border:"none",background:COLORS.dangerLight,color:COLORS.danger,borderRadius:7,height:30,cursor:"pointer"}}>×</button></div><div style={{display:"flex",gap:6,alignItems:"center",marginTop:7,flexWrap:"wrap"}}><label style={{fontSize:10,fontWeight:650,background:COLORS.pinkLight,color:COLORS.pinkDark,padding:"5px 8px",borderRadius:7,cursor:"pointer"}}>📷 Subir foto<input type="file" accept="image/jpeg,image/png,image/webp" style={{display:"none"}} onChange={e=>{const f=e.target.files?.[0];if(f)uploadTestPhoto(inst,row,f);e.target.value="";}}/></label>{db.archivos.filter(a=>Number(a.prueba_servicio_id)===Number(row.id)&&a.tipo==="foto").map(a=><ReclutamientoArchivoLink key={a.id} actor={user} candidataId={detail.id} archivo={a} onDelete={deleteArchivo}/>)}</div></div>)}</div>}{bloqueoParaRealizar(inst)&&inst.estado!=="realizada"&&<div style={{marginTop:8,padding:"7px 9px",borderRadius:8,background:COLORS.amberLight,color:COLORS.amber,fontSize:10}}>🔒 {bloqueoParaRealizar(inst)} Podés agendar esta etapa, pero todavía no realizarla.</div>}<div style={{display:"flex",gap:7,marginTop:10,justifyContent:"flex-end"}}><Btn size="sm" variant="ghost" disabled={stageSaving===inst.id} onClick={()=>setStageOpenedId(null)}>Cerrar</Btn><Btn size="sm" variant="secondary" disabled={stageSaving===inst.id} onClick={()=>saveStage(inst,false)}>Guardar / programar</Btn><Btn size="sm" variant="success" disabled={stageSaving===inst.id||!!bloqueoParaRealizar(inst)} onClick={()=>saveStage(inst,true)}>✓ Marcar realizada</Btn></div></Card>})}</div>{["pendiente_aprobacion","aprobada","incorporada"].includes(detail.estado)&&<Card style={{marginTop:12,padding:12}}><div style={{display:"flex",justifyContent:"space-between",gap:8,alignItems:"center",flexWrap:"wrap"}}><div><h3 style={{margin:0,fontSize:14}}>Aprobación RRHH</h3><p style={{margin:"3px 0 0",fontSize:11,color:"var(--color-text-secondary)"}}>{aprobadas}/{detailCircuito?.aprobaciones_requeridas||2} aprobaciones activas{rechazadas?` · ${rechazadas} rechazo(s)`:""}. Si una evaluación se modifica, las aprobaciones vigentes se invalidan automáticamente.</p></div><div style={{display:"flex",gap:6}}>{puedeAutorizar&&<><Btn size="sm" variant="success" onClick={()=>decidir("aprobada")}>Aprobar</Btn><Btn size="sm" variant="danger" onClick={()=>decidir("rechazada")}>Rechazar</Btn><Btn size="sm" variant="ghost" onClick={quitarDecision}>Quitar mi decisión</Btn></>}</div></div><div style={{display:"flex",gap:7,flexWrap:"wrap",marginTop:9}}>{activeApprovals.map(a=>{const u=(data.users||[]).find(x=>Number(x.id)===Number(a.user_id));return <span key={a.id} style={{fontSize:10,padding:"5px 8px",borderRadius:999,background:a.decision==="aprobada"?COLORS.successLight:COLORS.dangerLight,color:a.decision==="aprobada"?COLORS.success:COLORS.danger,fontWeight:700}}>{a.decision==="aprobada"?"✓":"✕"} {u?.nombre||`Usuario ${a.user_id}`}</span>})}</div></Card>}<div style={{marginTop:12}}><p style={{margin:"0 0 7px",fontSize:11,fontWeight:800,textTransform:"uppercase",color:"var(--color-text-secondary)"}}>Archivos generales</p><div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(180px,1fr))",gap:6}}>{db.archivos.filter(a=>Number(a.candidata_id)===Number(detail.id)&&!a.instancia_id).map(a=><ReclutamientoArchivoLink key={a.id} actor={user} candidataId={detail.id} archivo={a} onDelete={deleteArchivo}/>)}</div></div></Modal>}
   </div>;
 }
 
@@ -17273,6 +17782,70 @@ function GastosVencimientosPage({ data, user }) {
 }
 
 
+
+// Consulta de precios: solo lectura, aislada de la agenda y las liquidaciones.
+function ConsultaPreciosVigentes({ data, user, soloComisiones=false }) {
+  const [listaElegida,setListaElegida]=useState("");
+  const [seleccion,setSeleccion]=useState([]);
+  const [buscar,setBuscar]=useState("");
+  const esCentral=["admin","casa_matriz"].includes(user?.rol);
+  const localesAutorizados=useMemo(()=>{
+    const ids=new Set();
+    if(esCentral) (data?.locales||[]).forEach(x=>ids.add(Number(x.id)));
+    else {
+      (data?.usuarioLocales||[]).filter(x=>Number(x.userId)===Number(user?.id)).forEach(x=>ids.add(Number(x.localId)));
+      (data?.encargadoLocales||[]).filter(x=>Number(x.userId)===Number(user?.id)).forEach(x=>ids.add(Number(x.localId)));
+      if(user?.localId) ids.add(Number(user.localId));
+    }
+    return ids;
+  },[data,user?.id,user?.localId,esCentral]);
+  const opciones=useMemo(()=>{
+    const ids=new Set();
+    (data?.agendaLocalListas||[]).filter(x=>x.activo && localesAutorizados.has(Number(x.localId))).forEach(x=>ids.add(Number(x.listaId)));
+    (data?.agendaListasPrecios||[]).filter(x=>x.activo && x.localId && localesAutorizados.has(Number(x.localId))).forEach(x=>ids.add(Number(x.id)));
+    return (data?.agendaListasPrecios||[]).filter(x=>x.activo && ids.has(Number(x.id))).map(x=>({ ...x,locales:(data?.agendaLocalListas||[]).filter(r=>r.activo && Number(r.listaId)===Number(x.id) && localesAutorizados.has(Number(r.localId))).map(r=>(data.locales||[]).find(l=>Number(l.id)===Number(r.localId))?.nombre).filter(Boolean) })).sort((a,b)=>a.nombre.localeCompare(b.nombre,'es'));
+  },[data,localesAutorizados]);
+  useEffect(()=>{setListaElegida(old=> opciones.some(x=>String(x.id)===old)?old:(opciones.length===1?String(opciones[0].id):""));},[opciones]);
+  useEffect(()=>{setSeleccion([]);},[listaElegida]);
+  const lista=opciones.find(x=>String(x.id)===listaElegida);
+  const hoy=(()=>{const d=new Date();return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;})();
+  const vigencias=(data?.agendaListaVigencias||[]).filter(x=>x.activo && Number(x.listaId)===Number(lista?.id) && String(x.fechaDesde)<=hoy && (!x.fechaHasta || String(x.fechaHasta)>=hoy)).sort((a,b)=>String(b.fechaDesde).localeCompare(String(a.fechaDesde))||Number(b.id)-Number(a.id));
+  const vigencia=vigencias[0];
+  const categorias=soloComisiones?["Manos","Pies","Cejas y Pestañas"]:["Manos","Pies","Cejas y Pestañas","Productos","Otros"];
+  const clasificar=(serv)=>{const x=`${serv.tipo||""} ${serv.nombre||""}`.toLocaleLowerCase('es').normalize('NFD').replace(/[\u0300-\u036f]/g,'');if(x.includes('producto'))return 'Productos';if(/ceja|pestana|lifting|laminado|perfilado/.test(x))return 'Cejas y Pestañas';if(/pie|pedicur/.test(x))return 'Pies';if(/mano|manicur|kapping|esculpid|semipermanente|soft gel|softgel|polygel|nail[ -]?art|tratamiento recuperador|recuperador/.test(x))return 'Manos';return 'Otros';};
+  const registros=useMemo(()=>{
+    if(!lista)return [];
+    const precios=vigencia?(data?.agendaPreciosVigencia||[]).filter(x=>Number(x.vigenciaId)===Number(vigencia.id)):(data?.agendaPreciosServicios||[]).filter(x=>Number(x.listaId)===Number(lista.id));
+    const servicios=new Map((data?.agendaServicios||[]).filter(x=>x.activo).map(x=>[Number(x.id),x]));
+    return precios.map(p=>{const servicio=servicios.get(Number(p.servicioId));return servicio?{...p,servicio,categoria:clasificar(servicio)}:null;}).filter(Boolean).filter(x=>!soloComisiones || !['Productos','Otros'].includes(x.categoria)).sort((a,b)=>a.servicio.nombre.localeCompare(b.servicio.nombre,'es'));
+  },[lista,vigencia,data,soloComisiones]);
+  const visibles=registros.filter(x=>x.servicio.nombre.toLocaleLowerCase('es').includes(buscar.trim().toLocaleLowerCase('es')));
+  const seleccionados=registros.filter(x=>seleccion.includes(Number(x.servicioId)));
+  const sumaLista=seleccionados.reduce((a,x)=>a+Number(x.precioLista||0),0);
+  const sumaEfectivo=seleccionados.reduce((a,x)=>a+Number(x.precioEfectivo||0),0);
+  const moneda=n=>Number(n||0).toLocaleString('es-AR',{style:'currency',currency:'ARS',maximumFractionDigits:2});
+  const card={border:'1px solid #eadfe3',borderRadius:13,padding:'15px 17px',background:'#fff'};
+  const heading={fontSize:14,fontWeight:800,color:'#743b50',margin:'0 0 10px'};
+  const th={padding:'9px 10px',textAlign:'left',borderBottom:'1px solid #e9dfe3',fontSize:12,color:'#704d5d'};
+  const td={padding:'11px 10px',borderBottom:'1px solid #f1ecee',fontSize:13};
+  return <div style={{display:'grid',gap:13,paddingBottom:!soloComisiones&&lista?115:0}}>
+    <div style={card}><h2 style={{fontSize:22,margin:'0 0 5px'}}>{soloComisiones?'Servicios y comisiones de referencia':'Consulta de precios vigentes'}</h2><p style={{margin:'0 0 13px',color:'#796b70',fontSize:12}}>Consulta de solo lectura · precios de la lista vigente</p>
+      <div style={{display:'flex',gap:12,alignItems:'end',flexWrap:'wrap'}}>
+        {opciones.length!==1&&<label style={{display:'grid',gap:5,fontSize:12,fontWeight:600}}>Lista de precios<select value={listaElegida} onChange={e=>setListaElegida(e.target.value)} style={{padding:'9px 10px',borderRadius:9,border:'1px solid #ddd',minWidth:220}}><option value=''>Seleccionar lista</option>{opciones.map(x=><option key={x.id} value={x.id}>{x.nombre}{x.locales.length?` · ${x.locales.join(', ')}`:''}</option>)}</select></label>}
+        {lista&&<div style={{fontSize:12,color:'#75515f',paddingBottom:9}}><b>{lista.nombre}</b>{lista.locales.length?` · ${lista.locales.join(', ')}`:''}{vigencia?` · Vigente desde ${vigencia.fechaDesde}`:''}</div>}
+        {lista&&<input value={buscar} onChange={e=>setBuscar(e.target.value)} placeholder='Buscar servicio o producto' style={{marginLeft:'auto',padding:'9px 11px',borderRadius:9,border:'1px solid #ddd',minWidth:210}}/>}
+      </div>
+      {!opciones.length&&<p style={{color:'#99613d'}}>No hay listas activas asignadas a tus sucursales. Revisá la asignación de listas.</p>}
+      {lista&&!vigencia&&<p style={{color:'#99613d'}}>La lista no tiene una vigencia activa hoy. {registros.length?'Se muestran los precios actuales de respaldo.':'No hay precios vigentes para mostrar.'}</p>}
+    </div>
+    {lista&&<>{!soloComisiones&&<div aria-label='Totalizador de precios seleccionados' style={{...card,position:'fixed',bottom:16,right:16,zIndex:1000,background:'rgba(251,244,246,0.97)',boxShadow:'0 8px 30px rgba(63,31,43,0.18)',border:'1px solid #d9bfc8',display:'flex',justifyContent:'space-between',gap:12,flexWrap:'wrap',alignItems:'center',width:'min(650px, calc(100vw - 32px))',maxHeight:'40vh',overflowY:'auto',padding:'12px 16px',backdropFilter:'blur(8px)'}}><div><b style={{fontSize:13}}>Selección: {seleccion.length} producto{seleccion.length===1?'':'s'}</b><div style={{fontSize:10,color:'#826a75'}}>Tocá una fila para sumar o quitar.</div></div><div style={{display:'flex',gap:16,flexWrap:'wrap',alignItems:'center'}}><div><small>Precio de lista</small><div style={{fontWeight:800,fontSize:19}}>{moneda(sumaLista)}</div></div><div><small>Precio en efectivo</small><div style={{fontWeight:800,fontSize:19,color:'#8d445e'}}>{moneda(sumaEfectivo)}</div></div>{seleccion.length>0&&<button type='button' onClick={()=>setSeleccion([])} style={{border:'1px solid #d9bfc8',borderRadius:9,background:'white',padding:'7px 12px',cursor:'pointer'}}>Limpiar</button>}</div></div>}
+      {categorias.map(cat=>{const rows=visibles.filter(x=>x.categoria===cat);if(!rows.length)return null;return <section key={cat} style={card}><h3 style={heading}>{cat} <span style={{fontWeight:500,color:'#a58390'}}>({rows.length})</span></h3><div style={{overflowX:'auto'}}><table style={{width:'100%',borderCollapse:'collapse'}}><thead><tr><th style={th}>Servicio / producto</th>{!soloComisiones&&<th style={{...th,textAlign:'right'}}>Precio de lista</th>}<th style={{...th,textAlign:'right'}}>Precio efectivo</th>{soloComisiones&&<><th style={{...th,textAlign:'right'}}>35%</th><th style={{...th,textAlign:'right'}}>40%</th></>}</tr></thead><tbody>{rows.map(r=>{const marcado=seleccion.includes(Number(r.servicioId));return <tr key={r.servicioId} role={soloComisiones?undefined:'button'} tabIndex={soloComisiones?undefined:0} aria-pressed={soloComisiones?undefined:marcado} onClick={soloComisiones?undefined:()=>setSeleccion(prev=>marcado?prev.filter(i=>i!==Number(r.servicioId)):[...prev,Number(r.servicioId)])} onKeyDown={soloComisiones?undefined:e=>{if(e.key==='Enter'||e.key===' '){e.preventDefault();setSeleccion(prev=>marcado?prev.filter(i=>i!==Number(r.servicioId)):[...prev,Number(r.servicioId)])}}} style={{background:marcado?'#f4e3e9':'transparent',cursor:soloComisiones?'default':'pointer'}}><td style={td}>{marcado?'✓  ':''}{r.servicio.nombre}</td>{!soloComisiones&&<td style={{...td,textAlign:'right'}}>{moneda(r.precioLista)}</td>}<td style={{...td,textAlign:'right',fontWeight:650}}>{moneda(r.precioEfectivo)}</td>{soloComisiones&&<><td style={{...td,textAlign:'right'}}>{moneda(r.precioEfectivo*.35)}</td><td style={{...td,textAlign:'right'}}>{moneda(r.precioEfectivo*.40)}</td></>}</tr>})}</tbody></table></div></section>})}
+      {visibles.length===0&&<div style={card}>No se encontraron servicios con precios para esta lista.</div>}
+      {soloComisiones&&<p style={{fontSize:11,color:'#806e75',margin:0}}>Comisión teórica por un servicio, calculada sobre precio efectivo. El porcentaje real de cada semana depende de las condiciones de asistencia y de las reglas de liquidación.</p>}
+    </>}
+  </div>;
+}
+
 // ── APP PRINCIPAL ──────────────────────────────────────────────────
 function readSectionHash() {
   const h = (window.location.hash || "").replace(/^#\/?/, "").trim();
@@ -17283,13 +17856,15 @@ function defaultSectionForRole(role) {
 }
 
 function sectionAllowedForRole(section, role) {
-  const reportesOperativos = ["reportes","reportes_horas","reportes_cobertura","reportes_comisiones","reporte_pago_comisiones"];
+  const reportesOperativos = ["reportes","reportes_horas","reportes_cobertura","reportes_comisiones","reporte_pago_comisiones","comisiones_quincenal_piloto","consulta_precios","consulta_comisiones_precios"];
   const admin = ["inicio","dashboard","dashboard_manicuras","clientes_crm","ayuda","roadmap","asistencia","horarios","pizarra_semanal","dotacion_cupos","horarios_encargadas","vacaciones_encargadas","bloqueo_horarios",...reportesOperativos,"preliquidacion_encargadas","turnos","servicios","listas_precios","adelantos","garantias","gastos_vencimientos","reclamos","auditorias","informes","informes_mensajeria","manicuras","encargadas","reclutamiento_busquedas","reclutamiento_candidatas","reclutamiento_calendario","reclutamiento_aprobaciones","reclutamiento_antiguedad","reclutamiento_config","locales","cobertura_config","perfil"];
   const casaMatriz = ["inicio","dashboard","dashboard_manicuras","clientes_crm","ayuda","roadmap","asistencia","horarios","pizarra_semanal","dotacion_cupos","horarios_encargadas","vacaciones_encargadas","bloqueo_horarios",...reportesOperativos,"preliquidacion_encargadas","servicios","listas_precios","adelantos","garantias","gastos_vencimientos","reclamos","auditorias","informes","informes_mensajeria","manicuras","encargadas","reclutamiento_busquedas","reclutamiento_candidatas","reclutamiento_calendario","reclutamiento_aprobaciones","reclutamiento_antiguedad","reclutamiento_config","locales","cobertura_config","perfil"];
   const franquiciado = ["inicio","dashboard","dashboard_manicuras","clientes_crm","ayuda","asistencia","horarios","pizarra_semanal","dotacion_cupos","horarios_encargadas","vacaciones_encargadas","bloqueo_horarios",...reportesOperativos,"preliquidacion_encargadas","adelantos","garantias","gastos_vencimientos","reclamos","informes","informes_mensajeria","manicuras","encargadas","reclutamiento_busquedas","reclutamiento_candidatas","reclutamiento_calendario","cobertura_config","perfil"];
   const encargada = ["inicio","dashboard","dashboard_manicuras","clientes_crm","ayuda","asistencia","horarios","pizarra_semanal","dotacion_cupos","vacaciones_encargadas","bloqueo_horarios",...reportesOperativos,"preliquidacion_encargadas","adelantos","garantias","reclamos","informes","informes_mensajeria","manicuras","reclutamiento_carga","cobertura_config","perfil"];
-  const manicura = ["inicio","ayuda","horarios","pizarra_semanal","vacaciones_encargadas","reportes","reportes_horas","reportes_comisiones","perfil"];
+  const manicura = ["consulta_comisiones_precios","inicio","ayuda","horarios","pizarra_semanal","vacaciones_encargadas","reportes","reportes_horas","reportes_comisiones","perfil"];
   const allowed = role === "admin" ? admin : role === "casa_matriz" ? casaMatriz : role === "franquiciado" ? franquiciado : role === "encargada" ? encargada : manicura;
+  // Piloto visible para Casa Matriz dentro del menu Comisiones, sin exigir perfil admin.
+  if (section === "comisiones_quincenal_piloto") return ["admin","casa_matriz","franquiciado","encargada","manicura"].includes(role);
   return allowed.includes(section);
 }
 
@@ -17852,6 +18427,8 @@ const refreshTimer = window.setInterval(check, 10 * 60 * 1000);
       items: [
         { id: "servicios", label: "Servicios", icon: "✦" },
         { id: "listas_precios", label: "Listas de precios", icon: "$" },
+        { id: "consulta_precios", label: "Consultar precios", icon: "🏷️" },
+        { id: "consulta_comisiones_precios", label: "Servicios y comisiones 35/40%", icon: "📋" },
       ],
     },
     {
@@ -17861,6 +18438,7 @@ const refreshTimer = window.setInterval(check, 10 * 60 * 1000);
       items: [
         { id: "reportes_comisiones", label: "Reporte de comisiones", icon: "📊" },
         { id: "reporte_pago_comisiones", label: "Pago de comisiones", icon: "💳" },
+        { id: "comisiones_quincenal_piloto", label: "Comisiones quincenales · Piloto", icon: "🧪" },
         { id: "garantias", label: "Garantías", icon: "🛠️" },
         { id: "adelantos", label: "Adelantos", icon: "💸" },
       ],
@@ -18268,6 +18846,9 @@ const refreshTimer = window.setInterval(check, 10 * 60 * 1000);
     if (seccion==="reportes_cobertura") return effectiveRole!=="manicura" ? renderReportes("cobertura", "reportes_cobertura") : null;
     if (seccion==="reportes_comisiones") return renderReportes("comisiones", "reportes_comisiones");
     if (seccion==="reporte_pago_comisiones") return <ReportePagoComisiones data={data} setData={setData} user={appUser}/>;
+    if (seccion==="consulta_precios") return effectiveRole!=="manicura" ? <ConsultaPreciosVigentes data={data} user={appUser}/> : null;
+    if (seccion==="consulta_comisiones_precios") return <ConsultaPreciosVigentes data={data} user={appUser} soloComisiones/>;
+    if (seccion==="comisiones_quincenal_piloto") return <ComisionesPilotoErrorBoundary><ReporteComisionesQuincenalPiloto data={data} user={appUser}/></ComisionesPilotoErrorBoundary>;
     if (seccion==="reportes") return renderReportes("horas", "reportes");
     if (seccion==="preliquidacion_encargadas") return ["admin","casa_matriz","franquiciado","encargada"].includes(effectiveRole) ? <PreliquidacionEncargadas data={data} user={appUser}/> : null;
     if (seccion==="adelantos") return effectiveRole!=="manicura" ? <AdelantosManicuras data={data} reloadData={reloadData} user={appUser}/> : null;
