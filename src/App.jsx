@@ -13982,7 +13982,19 @@ function ReporteComisionesQuincenalPiloto({ data, user }) {
   const [localModes,setLocalModes]=useState([]);
   const [setupNeeded,setSetupNeeded]=useState(false);
   const dayAdd=(s,n)=>{const d=parseDateLocal(s);d.setDate(d.getDate()+n);return dateKey(d);};
-  const dayCount=(a,b)=>a>b?0:Math.round((parseDateLocal(b)-parseDateLocal(a))/86400000)+1;
+  // Para el prorrateo por ingreso, Niki trabaja de lunes a sabado.
+  // Dias no laborables excluidos: 1 de enero, 1 de mayo y 25 de diciembre.
+  const laborableCount=(a,b)=>{
+    if(!a||!b||a>b)return 0;
+    let n=0;
+    const current=parseDateLocal(a),last=parseDateLocal(b);
+    while(current<=last){
+      const md=`${String(current.getMonth()+1).padStart(2,'0')}-${String(current.getDate()).padStart(2,'0')}`;
+      if(current.getDay()!==0&&!['01-01','05-01','12-25'].includes(md))n++;
+      current.setDate(current.getDate()+1);
+    }
+    return n;
+  };
   const timeMinutes=(v)=>{const x=String(v||'').slice(0,5).split(':').map(Number);return x.length===2&&x.every(Number.isFinite)?x[0]*60+x[1]:null;};
   const hoursOf=(a,b)=>{const aa=timeMinutes(a),bb=timeMinutes(b);return aa===null||bb===null?0:Math.max(0,(bb-aa)/60);};
   const load=useCallback(async()=>{
@@ -14033,7 +14045,7 @@ function ReporteComisionesQuincenalPiloto({ data, user }) {
       const start=history[0]||localHistory[0]||'';
       const ingresante=!!start&&start>desde&&start<=hasta;
       const effectiveDesde=ingresante?start:desde;
-      const factor=ingresante?dayCount(effectiveDesde,hasta)/dayCount(desde,hasta):1;
+      const factor=ingresante?laborableCount(effectiveDesde,hasta)/Math.max(1,laborableCount(desde,hasta)):1;
       const objetivo=weekend?Number(config.horas_finde_dia||10):Number(config.horas_quincenales||72)*factor;
       const minimoFull=Number(weekend?(premium?config.minimo_finde_premium:config.minimo_finde_estandar):(premium?config.minimo_premium:config.minimo_estandar)||0);
       // "Fin de semana" es una modalidad de la manicura (users.solo_fin_de_semana),
@@ -14273,7 +14285,7 @@ function ReporteComisionesQuincenalPiloto({ data, user }) {
           </table>
         </div>
       </div>
-      <div style={cardStyle}><strong>② Horas y ausencias</strong><p>Horas efectivamente registradas en la quincena: {fmtH(detalle.horas)}. Horas de ausencias certificadas computables: {fmtH(detalle.horasMedicas)}. {detalle.weekend?'El objetivo de fin de semana se comprueba por jornada en el detalle inferior; las horas totales no se comparan contra una exigencia diaria.':`Total evaluado: ${fmtH(detalle.horasElegibles)} sobre objetivo quincenal de ${fmtH(detalle.objetivo)}.`}</p><p>Ausencias sin certificado: {detalle.unexcused.length}. Recuperadas y confirmadas: {detalle.unexcused.length-detalle.pending.length}. Todavía pendientes: {detalle.pending.length}. Las horas recuperadas declaradas ({fmtH(detalle.horasRecuperadas)}) se registran como justificación y no se suman otra vez al registro horario.</p>{detalle.ingresante&&<p style={{color:'#725060'}}>Ingresó el {detalle.start}. La quincena se prorratea por {Math.round(detalle.factor*100)}% de los días: el objetivo horario y el mínimo se reducen solo por ingreso, no por inasistencias.</p>}</div>
+      <div style={cardStyle}><strong>② Horas y ausencias</strong><p>Horas efectivamente registradas en la quincena: {fmtH(detalle.horas)}. Horas de ausencias certificadas computables: {fmtH(detalle.horasMedicas)}. {detalle.weekend?'El objetivo de fin de semana se comprueba por jornada en el detalle inferior; las horas totales no se comparan contra una exigencia diaria.':`Total evaluado: ${fmtH(detalle.horasElegibles)} sobre objetivo quincenal de ${fmtH(detalle.objetivo)}.`}</p><p>Ausencias sin certificado: {detalle.unexcused.length}. Recuperadas y confirmadas: {detalle.unexcused.length-detalle.pending.length}. Todavía pendientes: {detalle.pending.length}. Las horas recuperadas declaradas ({fmtH(detalle.horasRecuperadas)}) se registran como justificación y no se suman otra vez al registro horario.</p>{detalle.ingresante&&<p style={{color:'#725060'}}>Ingresó el {detalle.start}. La quincena se prorratea por {Math.round(detalle.factor*100)}% de los días laborables (excluyendo domingos, Año Nuevo, 1 de mayo y Navidad): el objetivo horario y el mínimo se reducen solo por ingreso, no por inasistencias.</p>}</div>
       <div style={{...cardStyle,background:'#fbf7f9'}}>
         <strong>③ Mínimo garantizado, ajustes y descuentos</strong>
         {detalle.weekend?<>
