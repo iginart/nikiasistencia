@@ -677,6 +677,31 @@ const edgeErrorMessage = (value, fallback = "Error inesperado") => {
   return text && text !== "[object Object]" ? text : fallback;
 };
 
+const nikiLiquidacionesSemanalOperativoEdge = async (action, payload = {}) => {
+  const actor = currentNikiActor();
+  if (!actor?.id || !actor?.sessionToken) throw new Error('Iniciá sesión nuevamente para liquidaciones semanales.');
+  const res = await nikiProtectedFetch(`${SUPABASE_URL}/functions/v1/niki-liquidaciones-semanales`, {
+    method:'POST',headers:{apikey:SUPABASE_KEY,Authorization:`Bearer ${SUPABASE_KEY}`,'Content-Type':'application/json'},
+    body:JSON.stringify({action,actor_id:actor.id,session_token:actor.sessionToken,...payload})
+  });
+  const txt=await res.text();let out={};try{out=txt?JSON.parse(txt):{};}catch{}
+  if(!res.ok||out.ok!==true)throw new Error(out.error||txt||'No se pudo gestionar la liquidación semanal.');
+  return out;
+};
+
+
+const nikiMisComisionesEdge = async (action, payload = {}) => {
+  const actor = currentNikiActor();
+  if (!actor?.id || !actor?.sessionToken) throw new Error('Iniciá sesión nuevamente.');
+  const res = await nikiProtectedFetch(`${SUPABASE_URL}/functions/v1/niki-mis-comisiones`, {
+    method:'POST',headers:{ apikey:SUPABASE_KEY, Authorization:`Bearer ${SUPABASE_KEY}`, 'Content-Type':'application/json' },
+    body:JSON.stringify({ action, actor_id:actor.id, session_token:actor.sessionToken, ...payload })
+  });
+  const txt=await res.text();let out={};try{out=txt?JSON.parse(txt):{};}catch{}
+  if(!res.ok || out.ok!==true) throw new Error(out.error || txt || 'No se pudo consultar Mis comisiones.');
+  return out;
+};
+
 const nikiPagosQuincenalesEdge = async (action, payload = {}) => {
   const actor = currentNikiActor();
   if (!actor?.id || !actor?.sessionToken) throw new Error('Iniciá sesión nuevamente para gestionar liquidaciones.');
@@ -1621,6 +1646,33 @@ function saturdayForWeekDates(semanaDias) {
 }
 function fmtPeriodo(d) { return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}`; }
 function parseDateLocal(value) { return value ? new Date(String(value).slice(0,10) + "T12:00:00") : null; }
+
+// Fecha prevista de cobro: no modifica ni reemplaza la fecha efectiva del pago.
+function nikiFechaPrevistaCobro({modalidad,desde,hasta,userId,localId,horarios=[],asistencias=[]}) {
+  if (!hasta) return {fecha:'',motivo:''};
+  const dateAdd=(fecha,days)=>{const d=parseDateLocal(fecha); if(!d)return '';d.setDate(d.getDate()+days);return dateKey(d);};
+  const noLaborable=fecha=>{
+    const d=parseDateLocal(fecha);
+    return !d||d.getDay()===0||['01-01','05-01','12-25'].includes(fecha.slice(5));
+  };
+  if (String(modalidad).toLowerCase().startsWith('quinc')) {
+    const fecha=Number(String(hasta).slice(8))===15?dateAdd(hasta,1):dateAdd(hasta,1);
+    let efectiva=fecha;
+    for(let i=0;i<7&&noLaborable(efectiva);i++)efectiva=dateAdd(efectiva,1);
+    return {fecha:efectiva,motivo:efectiva!==fecha?'Día hábil siguiente':'Día 16 o 1 del mes siguiente'};
+  }
+  const last=parseDateLocal(hasta);
+  if(!last)return {fecha:'',motivo:''};
+  const sat=new Date(last);
+  sat.setDate(sat.getDate()-((sat.getDay()+1)%7));
+  const sabado=dateKey(sat);
+  const as=(asistencias||[]).find(x=>Number(x.userId??x.user_id)===Number(userId)&&Number(x.localId??x.local_id)===Number(localId)&&String(x.fecha).slice(0,10)===sabado);
+  const planned=(horarios||[]).some(x=>Number(x.userId??x.user_id)===Number(userId)&&Number(x.localId??x.local_id)===Number(localId)&&String(x.fecha).slice(0,10)===sabado&&x.trabaja!==false);
+  const estado=String(as?.estado||'').toLowerCase();
+  const trabajaSabado=as?(!estado.includes('ausen')&&estado!=='licencia'):planned;
+  return {fecha:dateAdd(sabado,trabajaSabado?2:3),motivo:trabajaSabado?'Trabaja sábado · cobra lunes':'Sin jornada de sábado · cobra martes',provisional:!as&&sabado>=dateKey(new Date())};
+}
+
 function parseDateLabel(value) {
   const d = parseDateLocal(value);
   return d ? `${String(d.getDate()).padStart(2,"0")}/${String(d.getMonth()+1).padStart(2,"0")}/${d.getFullYear()}` : (value || "");
@@ -2061,6 +2113,46 @@ function ToastStack({ toasts, onDismiss, onAction }) {
       })}
     </div>
   );
+}
+
+// Comunicados versionados. Al cambiar el ID de un anuncio se presenta de nuevo.
+const NIKI_RELEASE_NOTICES = [
+  { id:"navegacion-pestanas-20261021", audience:"todos", featured:true, icon:"🗂️", title:"¡Importante! Ahora podés trabajar con varias pestañas", message:"Abrí distintos reportes y pantallas desde el menú y alterná entre ellos sin cerrar lo que estabas haciendo. Al volver, conservás los filtros, las selecciones y el lugar donde estabas trabajando. Usá la × para cerrar una pestaña cuando ya no la necesites. Disponible en escritorio.", action:{kind:"openSection",section:"inicio"}, button:"Ir a Inicio" },
+  { id:"consulta-precios-20261021", audience:"gestion", icon:"🏷️", title:"Nuevo: consulta de precios y presupuestos", message:"Desde Consultar precios podés marcar varios servicios y conocer el total que deberá abonar la clienta. El reporte diferencia el valor en efectivo del correspondiente a otros medios de pago, para ayudarte a informar un presupuesto antes de cobrar.", action:{kind:"openSection",section:"consulta_precios"}, button:"Consultar precios" },
+  { id:"comisiones-servicios-20261021", audience:"manicura", icon:"💅", title:"Consultá la comisión de cada servicio", message:"En Servicios y comisiones 35/40 % podés consultar cuánto corresponde de comisión para cada servicio, comparar ambos porcentajes y entender el importe antes de realizar una atención.", action:{kind:"openSection",section:"consulta_comisiones_precios"}, button:"Ver comisiones por servicio" },
+  { id:"comisiones-personal-20261021", audience:"manicura", icon:"💗", title:"¡Conocé tu nuevo panel Mis comisiones!", message:"Ya tenés disponible Mis comisiones: consultá tus servicios y clientes, el estimado del período, horas y ausencias, liquidaciones validadas, pagos, saldos y fecha prevista de cobro. También podés actualizar tu alias o CBU.", action:{kind:"openSection",section:"mis_comisiones"}, button:"Abrir Mis comisiones" },
+  { id:"liquidaciones-20261021", audience:"gestion", icon:"🧾", title:"Nuevos reportes de liquidación", message:"Ya están disponibles Liquidaciones semanales y Liquidaciones quincenales, según la modalidad de cada sucursal. Incluyen validación de importes, detalle del cálculo y servicios, porcentajes, excepciones, preparación de pagos y seguimiento de saldos.", action:{kind:"openSection",section:"comisiones_semanal_nuevo"}, button:"Liquidaciones semanales", secondaryAction:{kind:"openSection",section:"comisiones_quincenal_piloto"},secondaryButton:"Liquidaciones quincenales" },
+  { id:"mis-comisiones-demo-20261021", audience:"gestion", icon:"✨", title:"Las manicuras ya tienen Mis comisiones", message:"Cada manicura cuenta con un tablero personal para controlar sus servicios, horas, liquidaciones y pagos. Conocé cómo se ve desde una demostración, sin consultar datos reales de ninguna empleada.", action:{kind:"openCommissionsDemo"}, button:"Ver ejemplo ficticio" },
+];
+function nikiNoticeStorageKey(userId) { return `niki_release_seen_v1_${userId}`; }
+function nikiReadNotices(userId) {
+  try { const x=JSON.parse(localStorage.getItem(nikiNoticeStorageKey(userId))||"[]"); return Array.isArray(x)?x:[]; }
+  catch { return []; }
+}
+function NikiReleaseModal({ notices, onDismiss, onAction }) {
+  if (!notices.length) return null;
+  return <div role="dialog" aria-modal="true" aria-label="Novedades de NikiOS" style={{position:"fixed",inset:0,background:"rgba(45,22,32,.55)",zIndex:15000,padding:18,display:"grid",placeItems:"center"}}>
+    <div style={{width:"min(630px,100%)",maxHeight:"90vh",overflowY:"auto",borderRadius:23,background:"#fff",boxShadow:"0 24px 70px rgba(45,22,32,.26)",padding:24}}>
+      <div style={{display:"flex",justifyContent:"space-between",alignItems:"start",gap:14,marginBottom:16}}>
+        <div><div style={{fontSize:11,textTransform:"uppercase",letterSpacing:".12em",fontWeight:800,color:COLORS.pinkDark}}>Novedades de NikiOS</div><h2 style={{fontSize:23,margin:"6px 0 3px",color:COLORS.pinkDark}}>¡Tenemos novedades para vos!</h2><div style={{fontSize:12,color:"#786b71"}}>Te mostramos estas novedades una sola vez. Siempre podés volver a verlas desde la campanita.</div></div>
+        <button type="button" onClick={onDismiss} aria-label="Cerrar novedades" style={{border:0,cursor:"pointer",background:"#f7edf0",color:COLORS.pinkDark,fontSize:19,borderRadius:10,width:34,height:34}}>×</button>
+      </div>
+      <div style={{display:"grid",gap:12}}>{notices.map(n=><div key={n.id} style={{border:n.featured?"2px solid #a94a70":"1px solid #eedde2",background:n.featured?"linear-gradient(125deg,#f8e8ee,#fff7fa)":"linear-gradient(125deg,#fff,#fff9fb)",borderRadius:17,padding:16,boxShadow:n.featured?"0 5px 20px rgba(114,36,62,.12)":"none"}}>
+        <div style={{display:"flex",gap:11,alignItems:"start"}}><div style={{fontSize:24,background:"#f8ebf0",padding:9,borderRadius:13}}>{n.icon}</div><div style={{flex:1}}>{n.featured&&<div style={{fontSize:10,fontWeight:850,letterSpacing:".09em",color:"#a03962",marginBottom:5}}>★ NOVEDAD DESTACADA</div>}<strong style={{fontSize:n.featured?17:15,color:COLORS.pinkDark}}>{n.title}</strong><p style={{fontSize:12.5,lineHeight:1.65,color:"#655c60",margin:"7px 0 13px"}}>{n.message}</p><button type="button" onClick={()=>onAction(n.action)} style={{border:0,cursor:"pointer",borderRadius:10,background:COLORS.pinkDark,color:"#fff",padding:"10px 13px",fontSize:12,fontWeight:700}}>{n.button} →</button>{n.secondaryAction&&<button type="button" onClick={()=>onAction(n.secondaryAction)} style={{marginLeft:8,border:"1px solid #e5cad3",cursor:"pointer",borderRadius:10,background:"#f9edf1",color:COLORS.pinkDark,padding:"9px 11px",fontSize:12,fontWeight:700}}>{n.secondaryButton} →</button>}</div></div>
+      </div>)}</div>
+      <div style={{display:"flex",justifyContent:"end",marginTop:18}}><button type="button" onClick={onDismiss} style={{border:"1px solid #e9cbd5",background:"#f8edf1",color:COLORS.pinkDark,padding:"10px 17px",fontWeight:800,borderRadius:10,cursor:"pointer"}}>Entendido, cerrar</button></div>
+    </div>
+  </div>;
+}
+function NikiCommissionsExample({ onClose }) {
+  const sample=[{label:"Comisión estimada",value:"$ 186.400"},{label:"Pendiente de cobro",value:"$ 82.000"},{label:"Cobrado este mes",value:"$ 314.000"},{label:"Servicio principal",value:"Kapping · 36 %"}];
+  return <div role="dialog" aria-modal="true" aria-label="Demostración de Mis comisiones" style={{position:"fixed",inset:0,zIndex:16000,background:"rgba(45,22,32,.6)",padding:16,display:"grid",placeItems:"center"}}><div style={{width:"min(860px,100%)",maxHeight:"90vh",overflowY:"auto",background:"#fff",borderRadius:23,padding:23,boxShadow:"0 24px 70px rgba(45,22,32,.28)"}}>
+    <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",gap:12}}><div><h2 style={{fontSize:23,margin:"0 0 5px",color:COLORS.pinkDark}}>Mis comisiones</h2><span style={{fontSize:12,color:"#867880"}}>Vista demostrativa · Ejemplo ficticio, sin datos de ninguna manicura real</span></div><button type="button" onClick={onClose} style={{background:"#f8eaf0",border:0,borderRadius:10,padding:"9px 13px",cursor:"pointer",color:COLORS.pinkDark,fontWeight:800}}>Cerrar ×</button></div>
+    <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(165px,1fr))",gap:10,marginTop:18}}>{sample.map(x=><div key={x.label} style={{border:"1px solid #f0e3e6",borderRadius:15,padding:13,background:"#fff9fb"}}><div style={{fontSize:11,color:"#81737a"}}>{x.label}</div><strong style={{display:"block",marginTop:7,fontSize:19,color:COLORS.pinkDark}}>{x.value}</strong></div>)}</div>
+    <div style={{marginTop:16,border:"1px solid #eddae0",borderRadius:16,padding:16}}><div style={{display:"flex",justifyContent:"space-between",flexWrap:"wrap",gap:8}}><div><strong style={{color:COLORS.pinkDark}}>Período en curso</strong><p style={{fontSize:12,color:"#776a70",margin:"4px 0"}}>Sucursal de ejemplo · Semanal</p></div><strong style={{color:COLORS.pinkDark,fontSize:23}}>$ 186.400</strong></div><div style={{display:"flex",gap:7,flexWrap:"wrap",marginTop:9}}>{["40 % estimado","32 h trabajadas","0 tardanzas","0 ausencias"].map(x=><span key={x} style={{background:"#eaf3de",color:"#426e25",padding:"5px 10px",borderRadius:999,fontSize:11}}>{x}</span>)}</div><p style={{fontSize:12,color:"#75686e",marginBottom:0}}>Incluye el detalle de servicios, la explicación del cálculo, horarios y ausencias. Los valores del período abierto son estimados.</p></div>
+    <div style={{marginTop:12,border:"1px solid #eddae0",borderRadius:16,padding:16}}><strong style={{color:COLORS.pinkDark}}>Períodos cerrados</strong><div style={{display:"flex",justifyContent:"space-between",alignItems:"center",flexWrap:"wrap",gap:8,marginTop:10}}><div><strong>01/10 al 15/10 · Quincenal</strong><div style={{fontSize:12,color:"#617c54",marginTop:4}}>Validada · Pagada</div></div><strong style={{fontSize:20}}>$ 314.000</strong></div><p style={{fontSize:12,color:"#75686e",margin:"12px 0 0"}}>Cada liquidación permite ver servicios, pagos, fechas y saldos. La confirmación digital de recepción se incorporará más adelante.</p></div>
+    <div style={{marginTop:14,padding:10,borderRadius:10,background:"#fff2dd",fontSize:11,color:"#80602d"}}>DEMO — No representa importes, fechas ni personas reales; no genera registros ni permite pagar.</div>
+  </div></div>;
 }
 
 function NotificationBell({ history, open, setOpen, onClear, onAction }) {
@@ -4732,7 +4824,7 @@ function RoadmapTimeline({ items, canEdit = false, onMoveItem = null }) {
         return <div key={month} onDragOver={ev=>{ if(canEdit){ ev.preventDefault(); ev.dataTransfer.dropEffect="move"; setDragOverMonth(month); } }} onDragLeave={()=>setDragOverMonth(m=>m===month?"":m)} onDrop={ev=>handleDrop(ev, month)} style={{ border:`1px solid ${isDropTarget ? COLORS.pink : "rgba(120,120,120,0.14)"}`,borderRadius:14,background:isDropTarget?COLORS.pinkLight:"#fff",padding:10,minHeight:150,transition:"background 0.15s ease, border 0.15s ease" }}>
           <p style={{ margin:"0 0 8px",fontSize:12,fontWeight:800,color:COLORS.pinkDark,textTransform:"uppercase" }}>{month === "Sin fecha" ? month : roadmapMonthLabel(month)}</p>
           <div style={{ display:"flex",flexDirection:"column",gap:7 }}>
-            {monthItems.length === 0 && canEdit && <div style={{ border:"1px dashed rgba(114,36,62,0.22)",borderRadius:10,padding:"12px 8px",fontSize:11,color:"var(--color-text-secondary)",textAlign:"center" }}>Soltar acá</div>}
+            {monthItems.length === 0 && canEdit && <div style={{ border:"1px solid rgba(114,36,62,0.16)",borderRadius:10,padding:"12px 8px",fontSize:11,color:"var(--color-text-secondary)",textAlign:"center" }}>Soltar acá</div>}
             {monthItems.map(item => <div key={item.id} draggable={canEdit} onDragStart={ev=>handleDragStart(ev,item)} title={`${item.nombre} · ${item.estado} · ${item.avance}%${canEdit ? " · Arrastrar para cambiar mes" : ""}`} style={{ border:`1px solid ${item.estado === "Implementado" ? COLORS.success : COLORS.pink}33`,background:item.estado === "Implementado" ? COLORS.successLight : COLORS.pinkLight,borderRadius:10,padding:"7px 8px",cursor:canEdit?"grab":"default",boxShadow:canEdit?"0 3px 10px rgba(0,0,0,0.04)":"none" }}>
               <p style={{ margin:"0 0 4px",fontSize:11,fontWeight:800,color:item.estado === "Implementado" ? COLORS.success : COLORS.pinkDark,lineHeight:1.25 }}>{item.nombre}</p>
               <div style={{ height:5,background:"rgba(255,255,255,0.75)",borderRadius:999,overflow:"hidden" }}><div style={{ width:`${Math.max(0, Math.min(100, Number(item.avance || 0)))}%`,height:"100%",background:item.estado === "Implementado" ? COLORS.success : COLORS.pink,borderRadius:999 }}/></div>
@@ -13872,7 +13964,7 @@ function NikiQuincenalGridServicios({ rows = [], compacto = false }) {
     </tr>);
     const field=groups[depth],parts=new Map();
     list.forEach(r=>{const key=groupLabel(field,r);if(!parts.has(key))parts.set(key,[]);parts.get(key).push(r);});
-    return Array.from(parts.entries()).flatMap(([value,members])=>{
+    return Array.from(parts.entries()).sort((a,b)=>field==='fecha'?String(a[1][0]?.fecha||'').localeCompare(String(b[1][0]?.fecha||'')):0).flatMap(([value,members])=>{
       const key=`${path}|${field}:${value}`;
       const isClosed=allClosed||closed[key]===true;
       const sum=totals(members);
@@ -13931,6 +14023,668 @@ class ComisionesPilotoErrorBoundary extends React.Component {
 
 // PILOTO 2026: liquidacion quincenal independiente. No escribe sobre los informes originales.
 // Piloto quincenal 2026: totalmente independiente del circuito semanal productivo.
+class ComisionesSemanalErrorBoundary extends React.Component {
+  constructor(props){super(props);this.state={error:null};}
+  static getDerivedStateFromError(error){return {error};}
+  componentDidCatch(error,info){console.error('[NikiOS] Error en liquidaciones semanales:',error,info?.componentStack);}
+  render(){if(this.state.error)return <Card><h2>Liquidaciones semanales</h2>
+    <p>No se pudo mostrar la liquidación semanal.</p>
+    <pre style={{whiteSpace:'pre-wrap',overflowWrap:'anywhere'}}>{String(this.state.error?.message||this.state.error)}</pre>
+    <Btn onClick={()=>this.setState({error:null})}>Reintentar</Btn></Card>;
+    return this.props.children;}
+}
+
+const NIKI_LIQUIDACIONES_SOLO_LECTURA = false;
+
+// Configuraciones independientes por modalidad. Solo Admin/Casa Matriz pueden guardar.
+async function nikiCommissionConfigEdge(action, modalidad, payload={}) {
+  const actor=currentNikiActor();
+  if(!actor?.id||!actor?.sessionToken)throw new Error('Sesión vencida. Volvé a ingresar.');
+  const res=await nikiProtectedFetch(`${SUPABASE_URL}/functions/v1/niki-config-comisiones`,{
+    method:'POST', headers:{apikey:SUPABASE_KEY,Authorization:`Bearer ${SUPABASE_KEY}`,'Content-Type':'application/json'},
+    body:JSON.stringify({action,modalidad,actor_id:actor.id,session_token:actor.sessionToken,...payload})
+  });
+  const txt=await res.text();let out={};try{out=txt?JSON.parse(txt):{};}catch{}
+  if(!res.ok||out?.ok!==true)throw new Error(out?.error||txt||'No se pudo guardar la configuración.');
+  return out;
+}
+function NikiCommissionConfigModal({modalidad,data,onClose,onSaved}) {
+  const [general,setGeneral]=useState(null);
+  const [original,setOriginal]=useState(null);
+  const [exceptionRows,setExceptionRows]=useState([]);
+  const [selection,setSelection]=useState({userId:'',localId:''});
+  const [personal,setPersonal]=useState({});
+  const [busy,setBusy]=useState(false);
+  const [loading,setLoading]=useState(true);
+  const [error,setError]=useState('');
+  const semanal=modalidad==='semanal';
+  const generales=semanal?[
+    ['porcentaje_base','% normal'],['porcentaje_reducido','% reducido'],
+    ['horas_objetivo_default','Horas objetivo semanal'],['horas_objetivo_fin_semana','Horas objetivo · fin de semana'],
+    ['max_llegadas_tarde','Tardanzas permitidas'],['max_faltas_no_justificadas','Ausencias sin justificar permitidas'],
+    ['minimo_semanal_estandar','Mínimo semanal estándar'],['minimo_semanal_premium_exclusiva','Mínimo semanal premium'],
+    ['minimo_semanal_estandar_fin_semana','Mínimo semanal fin de semana estándar'],
+    ['minimo_semanal_premium_exclusiva_fin_semana','Mínimo semanal fin de semana premium']
+  ]:[
+    ['porcentaje_normal','% normal'],['porcentaje_reducido','% reducido'],
+    ['horas_quincenales','Horas objetivo quincenal'],['horas_finde_dia','Horas objetivo por día · fin de semana'],
+    ['tardanzas_penalizacion','Tardanzas que disparan reducción'],
+    ['faltas_no_justificadas','Ausencias sin justificar permitidas'],
+    ['minimo_estandar','Mínimo quincenal estándar'],['minimo_premium','Mínimo quincenal premium'],
+    ['minimo_finde_estandar','Mínimo por día · fin de semana estándar'],['minimo_finde_premium','Mínimo por día · fin de semana premium']
+  ];
+  const personales=semanal?[
+    ['horas_objetivo_semanales','Horas objetivo'],['porcentaje_base','% normal'],
+    ['porcentaje_reducido','% reducido'],['max_llegadas_tarde','Tardanzas permitidas'],
+    ['max_faltas_no_justificadas','Faltas permitidas']
+  ]:[
+    ['horas_quincenales','Horas objetivo'],['horas_finde_dia','Horas por día · fin de semana'],
+    ['porcentaje_normal','% normal'],['porcentaje_reducido','% reducido'],
+    ['tardanzas_penalizacion','Tardanzas que reducen'],['faltas_no_justificadas','Faltas permitidas']
+  ];
+  const localNames=new Map((data.locales||[]).map(x=>[Number(x.id),x.nombre]));
+  const personas=(data.users||[]).filter(x=>x.rol==='manicura'||(data.manicuraHistorialLocales||[]).some(h=>Number(h.userId)===Number(x.id)));
+  const localidades=new Map();
+  personas.forEach(x=>{
+    const ids=new Set([x.localId,...(data.manicuraHistorialLocales||[]).filter(h=>Number(h.userId)===Number(x.id)).map(h=>h.localId),...(data.comisionesManicuraConfig||[]).filter(c=>Number(c.userId)===Number(x.id)).map(c=>c.localId)]);
+    exceptionRows.filter(z=>Number(z.user_id)===Number(x.id)).forEach(z=>ids.add(z.local_id));
+    localidades.set(Number(x.id),[...ids].map(Number).filter(k=>k>0&&localNames.has(k)));
+  });
+  const fetchCurrent=async()=>{
+    setLoading(true);setError('');
+    try{const out=await nikiCommissionConfigEdge('load',modalidad);
+      setGeneral(out.general||{});setOriginal(out.general||{});setExceptionRows(out.excepciones||[]);
+    }catch(e){setError(e.message||String(e));}finally{setLoading(false);}
+  };
+  useEffect(()=>{void fetchCurrent();},[modalidad]);
+  useEffect(()=>{
+    const prev=exceptionRows.find(x=>Number(x.user_id)===Number(selection.userId)&&Number(x.local_id)===Number(selection.localId));
+    setPersonal(Object.fromEntries(personales.map(([k])=>[k,prev?.[k]??''])));
+  },[selection.userId,selection.localId,exceptionRows]);
+  const saveGeneral=async()=>{setBusy(true);setError('');try{
+    await nikiCommissionConfigEdge('save_general',modalidad,{id:general?.id,valores:Object.fromEntries(generales.map(([k])=>[k,general[k]??null]))});
+    await fetchCurrent();await onSaved?.();notifyToast('Configuración '+modalidad+' actualizada.','success');
+  }catch(e){setError(e.message||String(e));}finally{setBusy(false);}};
+  const savePerson=async()=>{if(!selection.userId||!selection.localId)return;setBusy(true);setError('');try{
+    await nikiCommissionConfigEdge('save_person',modalidad,{user_id:Number(selection.userId),local_id:Number(selection.localId),valores:personal});
+    await fetchCurrent();await onSaved?.();notifyToast('Excepción por manicura y sucursal guardada.','success');
+  }catch(e){setError(e.message||String(e));}finally{setBusy(false);}};
+  const removePerson=async()=>{if(!selection.userId||!selection.localId)return;setBusy(true);setError('');try{
+    await nikiCommissionConfigEdge('delete_person',modalidad,{user_id:Number(selection.userId),local_id:Number(selection.localId)});
+    await fetchCurrent();await onSaved?.();notifyToast('La manicura vuelve a usar los parámetros generales.','success');
+  }catch(e){setError(e.message||String(e));}finally{setBusy(false);}};
+  const input={width:'100%',padding:'8px 9px',border:'1px solid #e7d5dc',borderRadius:8,background:'#fff',fontSize:12};
+  const selectedPerson=personas.find(x=>Number(x.id)===Number(selection.userId));
+  return <Modal title={`Configuración de liquidaciones · ${semanal?'Semanal':'Quincenal'}`} onClose={onClose} width={970}>
+    <div style={{display:'grid',gap:15,fontSize:12}}>
+      <p style={{margin:0,padding:10,borderRadius:9,background:'#f7edf0',color:'#72243e'}}>Las configuraciones semanales y quincenales son independientes. Las excepciones se aplican a cálculos nuevos o reabiertos; las liquidaciones validadas conservan su snapshot.</p>
+      {error&&<div role='alert' style={{padding:10,borderRadius:9,background:'#fff0e9',color:'#a23c31'}}>{error}</div>}
+      {loading?<p>Cargando configuración...</p>:<>
+        <section style={{background:'#fcf7f9',padding:14,border:'1px solid #eadce2',borderRadius:13}}>
+          <h3 style={{margin:'0 0 12px',color:'#72243e'}}>Parámetros generales</h3>
+          <div style={{display:'grid',gridTemplateColumns:'repeat(auto-fit,minmax(185px,1fr))',gap:10}}>{generales.map(([key,text])=><label key={key} style={{fontSize:11,color:'#765765',fontWeight:700}}>{text}<input style={{...input,marginTop:5}} type='number' min='0' value={general?.[key]??''} onChange={e=>setGeneral(g=>({...g,[key]:e.target.value===''?null:Number(e.target.value)}))}/></label>)}</div>
+          <div style={{display:'flex',justifyContent:'flex-end',marginTop:13}}><Btn disabled={busy} onClick={saveGeneral}>{busy?'Guardando...':'Guardar parámetros generales'}</Btn></div>
+        </section>
+        <section style={{padding:14,border:'1px solid #eadce2',borderRadius:13}}>
+          <h3 style={{margin:'0 0 7px',color:'#72243e'}}>Excepciones por manicura y sucursal</h3>
+          <p style={{margin:'0 0 12px',fontSize:11,color:'#826a74'}}>Dejá vacío cualquier valor que deba heredar la configuración general. Una excepción no modifica períodos ya validados.</p>
+          <div style={{display:'grid',gridTemplateColumns:'minmax(180px,1fr) minmax(180px,1fr)',gap:10,marginBottom:12}}>
+            <label>Manicura<select style={{...input,marginTop:4}} value={selection.userId} onChange={e=>setSelection({userId:e.target.value,localId:''})}><option value=''>Seleccionar...</option>{personas.sort((a,b)=>a.nombre.localeCompare(b.nombre)).map(x=><option key={x.id} value={x.id}>{x.nombre}</option>)}</select></label>
+            <label>Sucursal<select style={{...input,marginTop:4}} value={selection.localId} onChange={e=>setSelection(x=>({...x,localId:e.target.value}))} disabled={!selection.userId}><option value=''>Seleccionar...</option>{(localidades.get(Number(selection.userId))||[]).map(k=><option key={k} value={k}>{localNames.get(k)}</option>)}</select></label>
+          </div>
+          {selection.userId&&selection.localId&&<><div style={{fontSize:11,marginBottom:8,color:'#886674'}}>Configuración de <b>{selectedPerson?.nombre}</b> en <b>{localNames.get(Number(selection.localId))}</b></div><div style={{display:'grid',gridTemplateColumns:'repeat(auto-fit,minmax(135px,1fr))',gap:9}}>{personales.map(([key,text])=><label key={key} style={{fontSize:11,fontWeight:700,color:'#765765'}}>{text}<input type='number' min='0' placeholder='General' style={{...input,marginTop:5}} value={personal[key]??''} onChange={e=>setPersonal(p=>({...p,[key]:e.target.value===''?'':Number(e.target.value)}))}/></label>)}</div><div style={{display:'flex',gap:9,marginTop:12,flexWrap:'wrap'}}><Btn disabled={busy} onClick={savePerson}>{busy?'Guardando...':'Guardar excepción'}</Btn><Btn variant='secondary' disabled={busy} onClick={removePerson}>Usar valores generales</Btn></div></>}
+          <p style={{fontSize:11,color:'#886674',margin:'13px 0 0'}}>Excepciones registradas: {exceptionRows.length} · {semanal?'Semanal':'Quincenal'}</p>
+        </section>
+      </>}
+    </div>
+  </Modal>;
+}
+
+function ReporteComisionesSemanalOperativo({ data, user, modalidad='quincenal' }) {
+  const esSemanal=true;
+  const hoy = new Date();
+  const [periodo,setPeriodo] = useState(fmtPeriodo(hoy));
+  const [quincena,setQuincena] = useState('1');
+  const [semana,setSemana]=useState('1');
+  const [localId,setLocalId] = useState('todos');
+  const [manicuraFiltro,setManicuraFiltro] = useState('todas');
+  const [snapshot,setSnapshot] = useState(null);
+  const [loading,setLoading] = useState(false);
+  const [error,setError] = useState('');
+  const [detalle,setDetalle] = useState(null);
+  const [configOpen,setConfigOpen] = useState(false);
+  const [advancedSettingsOpen,setAdvancedSettingsOpen]=useState(false);
+  const [personalConfigRows,setPersonalConfigRows]=useState([]);
+  const [configDraft,setConfigDraft] = useState(null);
+  const [savedOverrides,setSavedOverrides] = useState([]);
+  const [modesOpen,setModesOpen] = useState(false);
+  const [modesDraft,setModesDraft] = useState([]);
+  const [overrideEdit,setOverrideEdit] = useState(null);
+  const [recoveryList,setRecoveryList] = useState(null);
+  const [pctEdit,setPctEdit] = useState(null);
+  const [pctOverrides,setPctOverrides] = useState([]);
+  const esManicura=user.rol==='manicura';
+  // Casa Matriz accede al mismo piloto de revision que Administrador.
+  // Conservamos los permisos existentes de encargadas y franquiciados.
+  const canManage=['admin','casa_matriz','franquiciado','encargada'].includes(user.rol);
+  const canConfigureGlobal=['admin','casa_matriz'].includes(user.rol);
+  const [saving,setSaving] = useState(false);
+  const [expanded,setExpanded] = useState({});
+  const [quincenalTab,setQuincenalTab] = useState('resumen');
+  const [liqRows,setLiqRows] = useState([]);
+  const [bankOverrides,setBankOverrides] = useState({});
+  const [pagoRows,setPagoRows] = useState([]);
+  const [pagosReady,setPagosReady] = useState(false);
+  const [pagosLoading,setPagosLoading] = useState(true);
+  const pagosRequestRef=useRef(0);
+  const [integrityError,setIntegrityError]=useState('');
+  const [pagosLoadedKey,setPagosLoadedKey]=useState('');
+  const [pagoEdit,setPagoEdit] = useState(null);
+  const [bancoEdit,setBancoEdit] = useState(null);
+  const [reabrirEdit,setReabrirEdit] = useState(null);
+  const [pagoBusy,setPagoBusy] = useState(false);
+  const [ventasModal,setVentasModal] = useState(null);
+  const [ventasOrden,setVentasOrden] = useState({col:'fecha',asc:true});
+  const [ventasAgrupar,setVentasAgrupar] = useState('fecha');
+  // El alcance de Casa Matriz incluye todos los locales propios y solo las franquicias
+  // que tenga asignadas, conforme a getAssignedLocalIds.
+  const assigned = getAssignedLocalIds(data,user).map(Number);
+  const allowedLocals=(data.locales||[]).filter(l=>['admin'].includes(user.rol)||assigned.includes(Number(l.id)));
+  const end=dateKey(new Date(Number(periodo.slice(0,4)), Number(periodo.slice(5,7)), 0));
+  const semanasDisponibles=useMemo(()=>getCommissionWeeksForMonth(Number(periodo.slice(0,4)),Number(periodo.slice(5,7))-1),[periodo]);
+  const semanaActual=semanasDisponibles.find(w=>String(w.numero)===String(semana))||semanasDisponibles[0];
+  // Las operaciones SEMANALES de prueba se guardan en tablas SEMANAL de Supabase,
+  // nunca en las liquidaciones operativas ni en el almacenamiento del navegador.
+  const [weeklySandboxRevision,setWeeklySandboxRevision]=useState(0);
+  const [weeklyPilotData,setWeeklyPilotData]=useState({liquidaciones:{},porcentajes:{},recuperaciones:[]});
+  const [weeklyPilotReady,setWeeklyPilotReady]=useState(false);
+  const [weeklyPilotError,setWeeklyPilotError]=useState('');
+  const weeklyPilotRequest=useRef(0);
+  const weeklyLoadedScope=useRef('');
+  const sandboxRead=()=>weeklyPilotData;
+  const refreshWeeklyPilot=useCallback(async()=>{
+    const request=++weeklyPilotRequest.current;
+    // Mantener los resultados visibles al revalidar el mismo corte.
+    // Si cambia el corte, bloquear la vista anterior hasta recibir los datos nuevos.
+    if(weeklyLoadedScope.current!==`${semanaActual?.desdeKey}|${semanaActual?.hastaKey}`)setWeeklyPilotReady(false);
+    setWeeklyPilotError('');
+    if(!esSemanal)return;
+    if(!['admin','casa_matriz'].includes(user.rol)){
+      setWeeklyPilotData({liquidaciones:{},porcentajes:{},recuperaciones:[]});
+      setWeeklyPilotReady(true);
+      return;
+    }
+    try{
+      const out=await nikiLiquidacionesSemanalOperativoEdge('list',{desde:semanaActual?.desdeKey,hasta:semanaActual?.hastaKey});
+      if(request!==weeklyPilotRequest.current)return;
+      const docs={liquidaciones:{},porcentajes:{},recuperaciones:out.recuperaciones||[]};
+      setPagoRows(out.pagos||[]);
+      (out.liquidaciones||[]).forEach(x=>{
+        const key=`${x.local_id}|${x.user_id}`;
+        if(!docs.liquidaciones[key]||Number(x.version)>Number(docs.liquidaciones[key].version)){
+          docs.liquidaciones[key]={estado:x.estado,version:x.version,snapshot:x.snapshot,id:x.id,medio_preparado:x.medio_preparado||'efectivo'};
+        }
+      });
+      (out.porcentajes||[]).forEach(x=>{docs.porcentajes[`${x.local_id}|${x.user_id}`]={porcentaje:x.porcentaje,motivo:x.motivo,actualizado_por_user_id:x.actor_id,actualizado_en:x.actualizado_en};});
+      weeklyLoadedScope.current=`${semanaActual?.desdeKey}|${semanaActual?.hastaKey}`;
+      setWeeklyPilotData(docs);setWeeklyPilotReady(true);setWeeklySandboxRevision(v=>v+1);
+    }catch(e){if(request!==weeklyPilotRequest.current)return;setWeeklyPilotError(e.message||String(e));setWeeklyPilotData({liquidaciones:{},porcentajes:{},recuperaciones:[]});}
+  },[esSemanal,semanaActual?.desdeKey,semanaActual?.hastaKey,user.rol]);
+  useEffect(()=>{void refreshWeeklyPilot();return()=>{weeklyPilotRequest.current++;};},[refreshWeeklyPilot]);
+  const desde=esSemanal?(semanaActual?.desdeKey||`${periodo}-01`):`${periodo}-${quincena==='1'?'01':'16'}`;
+  const hasta=esSemanal?(semanaActual?.hastaKey||end):(quincena==='1'?`${periodo}-15`:end);
+  const keyCorte=esSemanal?`${periodo}-S${semanaActual?.numero||1}`:`${periodo}-${quincena}`;
+  const fallback={minimo_estandar:0,minimo_premium:0,minimo_finde_estandar:0,minimo_finde_premium:0,horas_quincenales:72,horas_finde_dia:10,porcentaje_normal:40,porcentaje_reducido:35,tardanzas_penalizacion:2};
+  const semanalVigente=(data.comisionesConfiguracion||[]).find(x=>x.activo)||{};
+  const configSemanal={...fallback,minimo_estandar:Number(semanalVigente.minimoSemanalEstandar||0),minimo_premium:Number(semanalVigente.minimoSemanalPremiumExclusiva||0),minimo_finde_estandar:Number(semanalVigente.minimoSemanalEstandarFinSemana??semanalVigente.minimoSemanalEstandar??0),minimo_finde_premium:Number(semanalVigente.minimoSemanalPremiumExclusivaFinSemana??semanalVigente.minimoSemanalPremiumExclusiva??0),horas_quincenales:Number(semanalVigente.horasObjetivoDefault||36),horas_finde_dia:Number(semanalVigente.horasObjetivoFinSemana||10),porcentaje_normal:Number(semanalVigente.porcentajeBase||40),porcentaje_reducido:Number(semanalVigente.porcentajeReducido||35)};
+  const [config,setConfig]=useState(esSemanal?configSemanal:fallback);
+  const [localModes,setLocalModes]=useState([]);
+  const [setupNeeded,setSetupNeeded]=useState(false);
+  const dayAdd=(s,n)=>{const d=parseDateLocal(s);d.setDate(d.getDate()+n);return dateKey(d);};
+  // Para el prorrateo por ingreso, Niki trabaja de lunes a sabado.
+  // Dias no laborables excluidos: 1 de enero, 1 de mayo y 25 de diciembre.
+  const laborableCount=(a,b)=>{
+    if(!a||!b||a>b)return 0;
+    let n=0;
+    const current=parseDateLocal(a),last=parseDateLocal(b);
+    while(current<=last){
+      const md=`${String(current.getMonth()+1).padStart(2,'0')}-${String(current.getDate()).padStart(2,'0')}`;
+      if(current.getDay()!==0&&!['01-01','05-01','12-25'].includes(md))n++;
+      current.setDate(current.getDate()+1);
+    }
+    return n;
+  };
+  const timeMinutes=(v)=>{const x=String(v||'').slice(0,5).split(':').map(Number);return x.length===2&&x.every(Number.isFinite)?x[0]*60+x[1]:null;};
+  const hoursOf=(a,b)=>{const aa=timeMinutes(a),bb=timeMinutes(b);return aa===null||bb===null?0:Math.max(0,(bb-aa)/60);};
+  const load=useCallback(async()=>{
+    setLoading(true);setError('');
+    try {
+      const items=await Promise.all([
+        api.getComisionesAgendaProShadowRango(desde,hasta),api.getHorariosRango(desde,hasta),api.getAsistenciasRango(desde,hasta),
+        esSemanal?Promise.resolve([configSemanal]):sb('comisiones_quincenales_config?select=*&id=eq.1'),sb('comisiones_quincenales_locales?select=*'),
+        esSemanal?Promise.resolve([]):sb(`comisiones_quincenales_recuperaciones?select=*&periodo=eq.${encodeURIComponent(keyCorte)}`),
+        esSemanal?Promise.resolve([]):sb(`comisiones_quincenales_porcentajes?select=*&periodo=eq.${encodeURIComponent(keyCorte)}`),
+        canManage?nikiCommissionConfigEdge('load',esSemanal?'semanal':'quincenal'):Promise.resolve(null)
+      ]);
+      setSnapshot({ventas:(items[0]||[]).map(normalizeComision),horarios:(items[1]||[]).map(normalizeHorario),asistencias:(items[2]||[]).map(normalizeAsistencia)});
+      const remote=items[7]||null, g=remote?.general||null;
+      if(esSemanal&&g){setConfig({...fallback,minimo_estandar:Number(g.minimo_semanal_estandar||0),minimo_premium:Number(g.minimo_semanal_premium_exclusiva||0),minimo_finde_estandar:Number(g.minimo_semanal_estandar_fin_semana??g.minimo_semanal_estandar??0),minimo_finde_premium:Number(g.minimo_semanal_premium_exclusiva_fin_semana??g.minimo_semanal_premium_exclusiva??0),horas_quincenales:Number(g.horas_objetivo_default??36),horas_finde_dia:Number(g.horas_objetivo_fin_semana??10),porcentaje_normal:Number(g.porcentaje_base??40),porcentaje_reducido:Number(g.porcentaje_reducido??35),tardanzas_penalizacion:Number(g.max_llegadas_tarde??2)+1,faltas_no_justificadas:Number(g.max_faltas_no_justificadas??0)});}
+      else setConfig({...fallback,...(items[3]||[])[0],...(g||{})});
+      setPersonalConfigRows(remote?.excepciones||[]);
+      setLocalModes(items[4]||[]);setSavedOverrides(items[5]||[]);setPctOverrides(items[6]||[]);setSetupNeeded(false);
+    } catch(e){setError(e.message||String(e));setSnapshot(null);if(/comisiones_quincenales_|42P01|404/i.test(String(e.message||e)))setSetupNeeded(true);}
+    finally{setLoading(false);}
+  },[desde,hasta,keyCorte,esSemanal]);
+  useEffect(()=>{void load();},[load]);
+  // La quincena debe recuperar sus snapshots antes de mostrar cifras. Nunca se
+  // reemplazan silenciosamente por un cálculo vivo al fallar la consulta.
+  const refreshPagos=useCallback(async()=>{},[]);
+  useEffect(()=>{void refreshPagos();return()=>{pagosRequestRef.current++;};},[refreshPagos]);
+  const fmtH=n=>`${Number(n||0).toFixed(1).replace('.',',')} h`;
+  const calculation=useMemo(()=>{
+    if(!snapshot)return [];
+    const uMap=new Map((data.users||[]).map(x=>[Number(x.id),x]));
+    const lMap=new Map((data.locales||[]).map(x=>[Number(x.id),x]));
+    // Una liquidación se identifica por SEMANA + SUCURSAL + MANICURA.
+    // No se mezclan prestaciones, jornadas o descuentos de sucursales distintas.
+    const baseByUserLocal=new Map();
+    const ensureGroup=(uid,local)=>{
+      const k=`${uid}|${local}`;
+      if(!baseByUserLocal.has(k))baseByUserLocal.set(k,{uid,principal:local,ventas:[]});
+      return baseByUserLocal.get(k);
+    };
+    (snapshot.ventas||[]).forEach(v=>{const uid=Number(v.userId),loc=Number(v.localId);if(uid&&loc&&uMap.has(uid))ensureGroup(uid,loc).ventas.push(v);});
+    (snapshot.horarios||[]).forEach(h=>{const uid=Number(h.userId),loc=Number(h.localId);if(uid&&loc&&uMap.has(uid))ensureGroup(uid,loc);});
+    (snapshot.asistencias||[]).forEach(h=>{const uid=Number(h.userId),loc=Number(h.localId);if(uid&&loc&&uMap.has(uid))ensureGroup(uid,loc);});
+    const localSetByUser=new Map();
+    for(const g of baseByUserLocal.values()){
+      if(!localSetByUser.has(g.uid))localSetByUser.set(g.uid,new Set());
+      localSetByUser.get(g.uid).add(g.principal);
+    }
+    // Históricos sin local inequívoco se asignan solo cuando hay un local único.
+    // En caso contrario el cálculo se bloquea para impedir un pago incorrecto.
+    const result=[];
+    for(const group of baseByUserLocal.values()){
+      const uid=group.uid, principal=group.principal;
+      const persona=uMap.get(uid);
+      const userLocals=localSetByUser.get(uid)||new Set([principal]);
+      const multipleLocals=userLocals.size>1;
+      const unknownSale=(snapshot.ventas||[]).some(v=>Number(v.userId)===uid&&!Number(v.localId));
+      const unknownAttendance=[...(snapshot.horarios||[]),...(snapshot.asistencias||[])].some(v=>Number(v.userId)===uid&&!Number(v.localId));
+      const unknownAdjustment=(data.garantias||[]).some(g=>!Number(g.localId)&&String(g.fechaReparacion||'').slice(0,10)>=desde&&String(g.fechaReparacion||'').slice(0,10)<=hasta&&(Number(g.manicuraOriginalId)===uid||Number(g.manicuraReparacionId)===uid))||
+        (data.adelantos||[]).some(d=>Number(d.userId)===uid&&!Number(d.localId)&&String(d.fechaDescuento||d.fecha||'').slice(0,10)>=desde&&String(d.fechaDescuento||d.fecha||'').slice(0,10)<=hasta);
+      const conflictoLocales=unknownSale||(multipleLocals&&(unknownAttendance||unknownAdjustment));
+      const matchedLocals=[principal];
+      const mode=localModes.find(x=>Number(x.local_id)===principal&&(!x.fecha_desde||x.fecha_desde<=hasta));
+      // Se conserva la separación por sucursal; operaciones mezcladas quedan bloqueadas.
+      const zona=String(lMap.get(principal)?.zona||'estandar').toLowerCase();const premium=['premium','exclusiva'].includes(zona);
+      const weekend=persona.soloFinDeSemana===true;
+      const exception=personalConfigRows.find(x=>x.activo!==false&&Number(x.user_id)===uid&&Number(x.local_id)===principal)||null;
+      const configured=(key,fallbackValue)=>exception?.[key]==null?fallbackValue:Number(exception[key]);
+      const normalPct=configured(esSemanal?'porcentaje_base':'porcentaje_normal',Number(config.porcentaje_normal??40));
+      const reducedPct=configured(esSemanal?'porcentaje_reducido':'porcentaje_reducido',Number(config.porcentaje_reducido??35));
+      const lateThreshold=esSemanal?configured('max_llegadas_tarde',Math.max(0,Number(config.tardanzas_penalizacion??3)-1))+1:configured('tardanzas_penalizacion',Number(config.tardanzas_penalizacion??2));
+      const maxAbsences=configured(esSemanal?'max_faltas_no_justificadas':'faltas_no_justificadas',Number(config.faltas_no_justificadas??0));
+      const hRows=(snapshot.horarios||[]).filter(h=>Number(h.userId)===uid&&(Number(h.localId)===principal||(!Number(h.localId)&&!multipleLocals))&&h.fecha>=desde&&h.fecha<=hasta);
+      const aRows=(snapshot.asistencias||[]).filter(a=>Number(a.userId)===uid&&(Number(a.localId)===principal||(!Number(a.localId)&&!multipleLocals))&&a.fecha>=desde&&a.fecha<=hasta);
+      const history=(data.usuarioHistorialLaboral||[]).filter(x=>Number(x.userId)===uid).map(x=>x.fechaInicio).filter(Boolean).sort();
+      const localHistory=(data.manicuraHistorialLocales||[]).filter(x=>Number(x.userId)===uid).map(x=>x.fechaInicio).filter(Boolean).sort();
+      const start=history[0]||localHistory[0]||'';
+      const ingresante=!!start&&start>desde&&start<=hasta;
+      const effectiveDesde=ingresante?start:desde;
+      const factor=ingresante?laborableCount(effectiveDesde,hasta)/Math.max(1,laborableCount(desde,hasta)):1;
+      const objetivo=weekend?configured('horas_finde_dia',Number(config.horas_finde_dia??10)):configured(esSemanal?'horas_objetivo_semanales':'horas_quincenales',Number(config.horas_quincenales??72))*factor;
+      const minimoFull=Number(weekend?(premium?config.minimo_finde_premium:config.minimo_finde_estandar):(premium?config.minimo_premium:config.minimo_estandar)||0);
+      // "Fin de semana" es una modalidad de la manicura (users.solo_fin_de_semana),
+      // no un filtro por dia de la semana. Se consideran TODAS sus jornadas
+      // programadas dentro del corte: viernes, sabados, feriados u otros dias.
+      const jornadasModalidad=hRows.filter(h=>weekend&&h.trabaja&&h.fecha>=effectiveDesde);
+      const finDates=[...new Set(jornadasModalidad.map(h=>h.fecha))];
+      const diasEsperados=weekend?finDates.length:0;
+      const minimoAplicable=weekend?minimoFull*diasEsperados:minimoFull*factor; // Referencia acumulada, no umbral de pago por jornada.
+      const diaMap=new Map();
+      hRows.forEach(h=>{if(h.fecha<effectiveDesde)return;const x=diaMap.get(h.fecha)||{horas:0,plan:0};if(h.trabaja){x.plan+=hoursOf(h.entrada,h.salida);}diaMap.set(h.fecha,x);});
+      aRows.forEach(a=>{
+        if(a.fecha<effectiveDesde)return;
+        const x=diaMap.get(a.fecha)||{horas:0,plan:0};
+        // Mismo criterio que el reporte de horas vigente: asistencia "presente" acredita
+        // las horas del horario planificado. Para "tarde", usamos la marcación real
+        // con las horas planificadas como alternativa si falta una de las dos marcas.
+        const planDia=hRows.find(h=>h.fecha===a.fecha&&h.trabaja);
+        if(a.estado==='presente'){
+          x.horas+=planDia?hoursOf(planDia.entrada,planDia.salida):hoursOf(a.entradaReal,a.salidaReal);
+        }else if(a.estado==='tarde'){
+          x.horas+=hoursOf(a.entradaReal||planDia?.entrada,a.salidaReal||planDia?.salida);
+        }
+        diaMap.set(a.fecha,x);
+      });
+      // Una marcación completa define horas reales; la planificación no se cuenta automáticamente como trabajo efectivo.
+      let hours=0;for(const x of diaMap.values())hours+=x.horas;
+      const falls=aRows.filter(a=>a.estado==='ausente'&&a.fecha>=effectiveDesde).map(a=>({fecha:a.fecha,certificado:!!a.certificado,plan:diaMap.get(a.fecha)?.plan||0}));
+      const unexcused=falls.filter(a=>!a.certificado);
+      const late=aRows.filter(a=>a.fecha>=effectiveDesde&&a.estado==='tarde').length;
+      const overrides=esSemanal?sandboxRead().recuperaciones.filter(x=>Number(x.user_id)===uid&&Number(x.local_id)===principal):savedOverrides.filter(x=>Number(x.user_id)===uid&&x.periodo===keyCorte);
+      const pending=unexcused.filter(a=>!overrides.some(o=>o.fecha_ausencia===a.fecha&&o.recuperada===true&&Number(o.horas_recuperadas||0)+0.01>=a.plan));
+      const countedMedical=falls.filter(x=>x.certificado).reduce((s,x)=>s+x.plan,0);
+      const recoveredHours=overrides.filter(x=>x.recuperada===true&&unexcused.some(a=>a.fecha===x.fecha_ausencia)).reduce((s,x)=>s+Number(x.horas_recuperadas||0),0);
+      // Para evitar doble conteo, la recuperación declarada se usa para justificar la ausencia,
+      // no se vuelve a sumar a las horas reales ya registradas.
+      const eligibleHours=hours+countedMedical;
+      const hoursOk=weekend?finDates.every(d=>(diaMap.get(d)?.horas||0)+(falls.some(f=>f.fecha===d&&f.certificado)?(diaMap.get(d)?.plan||0):0)>=configured('horas_finde_dia',Number(config.horas_finde_dia??10))):eligibleHours+1e-6>=objetivo;
+      const penalized=late>=lateThreshold||pending.length>maxAbsences;
+      const autoPct=penalized?reducedPct:normalPct;
+      const manualPctRow=esSemanal ? (sandboxRead().porcentajes[`${principal}|${uid}`]||null) : pctOverrides.find(o=>Number(o.user_id)===uid&&o.periodo===keyCorte);
+      const pct=manualPctRow?Number(manualPctRow.porcentaje):autoPct;
+      const originalRate=40; // Comisión de origen AgendaPro, normalmente expresada al 40%.
+      const ventaComision40=group.ventas.reduce((s,v)=>s+Number(v.comision||0),0);
+      const ventaTotal=group.ventas.reduce((s,v)=>s+Number(v.precio||0),0);
+      const comision=ventaComision40*pct/originalRate;
+      const garantiaVigencia=getMinimumGuaranteeStatus(data.manicuraHistorialLocales||[],uid,principal,desde,hasta);
+      const garantiaHasta=garantiaVigencia?.endDateKey||'';
+      const beneficioVigente=!!garantiaVigencia?.activeInWeek&&!!garantiaHasta&&garantiaHasta>=desde;
+      const minimoHabilitado=beneficioVigente&&hoursOk&&!penalized&&pct>=normalPct;
+      // Para trabajo solo de fines de semana, evaluar cada jornada por separado.
+      // El total de comisiones de la quincena nunca compensa una jornada por debajo de su minimo.
+      const detalleFinSemana=weekend?finDates.sort().map(fecha=>{
+        const info=diaMap.get(fecha)||{horas:0,plan:0};
+        const ausenciaCertificada=falls.some(f=>f.fecha===fecha&&f.certificado);
+        const horasComputables=Number(info.horas||0)+(ausenciaCertificada?Number(info.plan||0):0);
+        const horasObjetivo=Number(config.horas_finde_dia??10);
+        const cumpleHoras=horasComputables+1e-6>=horasObjetivo;
+        const ausenciaPendiente=pending.some(a=>a.fecha===fecha);
+        const comisionDia=group.ventas.filter(v=>String(v.fechaPago||'').slice(0,10)===fecha)
+          .reduce((sum,v)=>sum+Number(v.comision||0)*pct/originalRate,0);
+        // Se respeta la habilitacion por porcentaje y penalizaciones de la quincena.
+        // La vigencia del beneficio tambien se evalua POR FECHA: un beneficio
+        // vencido no puede generar complementos en dias posteriores.
+        const beneficioEnFecha=beneficioVigente&&fecha<=garantiaHasta;
+        const habilitado=beneficioEnFecha&&cumpleHoras&&!ausenciaPendiente&&!penalized&&pct>=normalPct;
+        const complementoDia=habilitado?Math.max(0,minimoFull-comisionDia):0;
+        return {fecha,horas:info.horas||0,horasComputables,horasObjetivo,cumpleHoras,
+          beneficioEnFecha,ausenciaPendiente,comisionDia,minimoDiario:minimoFull,habilitado,complementoDia};
+      }):[];
+      const complemento=weekend
+        ?detalleFinSemana.reduce((sum,d)=>sum+d.complementoDia,0)
+        :(minimoHabilitado?Math.max(0,minimoAplicable-comision):0);
+      const ajustesGarantia=(data.garantias||[]).reduce((s,g)=>{
+        if(String(g.fechaReparacion||'').slice(0,10)<desde||String(g.fechaReparacion||'').slice(0,10)>hasta)return s;
+        if(Number(g.localId)!==principal&&!(Number(g.localId)===0&&!multipleLocals))return s;
+        return s+(Number(g.manicuraReparacionId)===uid?Math.abs(Number(g.importeComision||0)):0)-(Number(g.manicuraOriginalId)===uid?Math.abs(Number(g.importeComision||0)):0);
+      },0);
+      const adelantos=(data.adelantos||[]).filter(a=>Number(a.userId)===uid&&(Number(a.localId)===principal||(!Number(a.localId)&&!multipleLocals))&&String(a.fechaDescuento||a.fecha||'').slice(0,10)>=desde&&String(a.fechaDescuento||a.fecha||'').slice(0,10)<=hasta).reduce((s,a)=>s+Math.abs(Number(a.importe||0)),0);
+      const fechasDetalle=[...new Set([...group.ventas.map(v=>String(v.fechaPago||'').slice(0,10)).filter(Boolean),...hRows.filter(h=>h.trabaja).map(h=>h.fecha)])].filter(f=>f>=desde&&f<=hasta).sort();
+      const todosLosDias=fechasDetalle.map(fecha=>({
+        fecha,
+        diaSemana:parseDateLocal(fecha)?.getDay(),
+        horas:Number(diaMap.get(fecha)?.horas||0),
+        comision:group.ventas.filter(v=>String(v.fechaPago||'').slice(0,10)===fecha).reduce((sum,v)=>sum+Number(v.comision||0)*pct/originalRate,0),
+        minimo:detalleFinSemana.find(d=>d.fecha===fecha)?.complementoDia||0,
+        esFinDeSemana:detalleFinSemana.some(d=>d.fecha===fecha),
+      }));
+      result.push({conflictoLocales,todosLosDias,garantiaHasta,beneficioVigente,uid,nombre:persona.nombre||'Manicura',principal,localNombre:lMap.get(principal)?.nombre||'Sin local',localIds:matchedLocals,mode:mode?.modalidad||'semanal',zona,weekend,ventas:group.ventas,ventaTotal,ventaComision40,horas:hours,horasMedicas:countedMedical,horasElegibles:eligibleHours,horasRecuperadas:recoveredHours,objetivo,horasOk:hoursOk,late,falls,unexcused,pending,overrides,pct,autoPct,manualPctRow,penalized,ingresante,start,factor,minimoAplicable,minimoDiario:minimoFull,detalleFinSemana,minimoHabilitado,comision,complemento,ajustesGarantia,adelantos,total:comision+complemento+ajustesGarantia-adelantos,finDates,diaMap});
+    }
+    return result.sort((a,b)=>a.nombre.localeCompare(b.nombre)||a.principal-b.principal);
+  },[snapshot,data.users,data.locales,data.manicuraHistorialLocales,data.usuarioHistorialLaboral,data.garantias,data.adelantos,savedOverrides,pctOverrides,config,personalConfigRows,localModes,desde,hasta,keyCorte,weeklySandboxRevision]);
+  // Seguridad de visualización: el selector 'todas' nunca amplía el alcance del usuario.
+  // En este reporte cada liquidación se atribuye a r.principal.
+  const allowedLocalSet=new Set(allowedLocals.map(l=>Number(l.id)));
+  const manicurasDisponibles=calculation.filter(r=>(esSemanal?r.mode!=='quincenal':r.mode==='quincenal')&&allowedLocalSet.has(Number(r.principal))&&(!esManicura||Number(r.uid)===Number(user.id))&&(localId==='todos'||Number(r.principal)===Number(localId)));
+  const liveShown=manicurasDisponibles.filter(r=>manicuraFiltro==='todas'||Number(r.uid)===Number(manicuraFiltro));
+  const activeLiquidacion=r=>sandboxRead().liquidaciones[`${r.principal}|${r.uid}`];
+  const corteValidado=weeklyPilotReady;
+  const shown=!corteValidado?[]:liveShown.map(r=>{
+    if(esSemanal){const saved=sandboxRead().liquidaciones[`${r.principal}|${r.uid}`];
+      return saved?.estado==='revisada' ? {...saved.snapshot,congelada:true,version:saved.version,liquidacionId:saved.id,manualPctRow:(saved.snapshot.manualPctRow||((Number(saved.snapshot.pct)!==Number(saved.snapshot.autoPct))?{porcentaje:Number(saved.snapshot.pct),motivo:'Ajuste manual guardado en la validación'}:null))} : r;
+    }
+    const liq=activeLiquidacion(r);return liq?.snapshot ? {...liq.snapshot,congelada:true,liquidacionId:liq.id,version:liq.version,manualPctRow:null} : r;
+  });
+  const shownIds=new Set(shown.map(x=>Number(x.uid)));
+  liqRows.filter(x=>!esSemanal&&x.estado==='revisada'&&x.snapshot&&allowedLocalSet.has(Number(x.local_id))&&!shownIds.has(Number(x.user_id))&&(localId==='todos'||Number(x.local_id)===Number(localId))&&(manicuraFiltro==='todas'||Number(x.user_id)===Number(manicuraFiltro))).forEach(x=>{shown.push({...x.snapshot,congelada:true,liquidacionId:x.id,version:x.version});shownIds.add(Number(x.user_id));});
+  // Mantener visibles las liquidaciones históricas aunque la fuente haya cambiado
+  // o la manicura haya dejado de trabajar en la semana consultada.
+  const savedShownKeys=new Set(shown.map(r=>`${r.principal}|${r.uid}`));
+  for(const [k,liq] of Object.entries(sandboxRead().liquidaciones||{})){
+    if(liq?.estado!=='revisada'||!liq.snapshot||savedShownKeys.has(k))continue;
+    const [savedLocal,savedUser]=k.split('|').map(Number);
+    if(!allowedLocalSet.has(savedLocal)||
+       (localId!=='todos'&&Number(localId)!==savedLocal)||
+       (manicuraFiltro!=='todas'&&Number(manicuraFiltro)!==savedUser)||
+       (esManicura&&Number(user.id)!==savedUser))continue;
+    shown.push({...liq.snapshot,congelada:true,version:liq.version,liquidacionId:liq.id,
+      manualPctRow:liq.snapshot.manualPctRow||null});
+    savedShownKeys.add(k);
+  }
+  const pagosLiquidacion=id=>pagoRows.filter(p=>Number(p.liquidacion_id)===Number(id)&&!p.anulado_en);
+  const totalPagado=id=>pagosLiquidacion(id).reduce((s,p)=>s+Number(p.importe||0),0);
+  const estadoPago=r=>!r.liquidacionId?'Sin revisar':totalPagado(r.liquidacionId)>=Number(r.total)-0.01?'Pagada':totalPagado(r.liquidacionId)>0?'Parcial':'Pendiente';
+  const ejecutarSemanalLocal=async(action,r,extra={})=>{
+    if(!weeklyPilotReady||pagoBusy||!['admin','casa_matriz'].includes(user.rol))return;
+    if(r.conflictoLocales){notifyToast('Liquidación bloqueada: registró ventas u horarios en más de un local.','error');return;}
+    setPagoBusy(true);
+    try{
+      const payload={desde,hasta,local_id:Number(r.principal),user_id:Number(r.uid),
+        ...(action==='review'?{snapshot:{...r,total:Math.round(Number(r.total)*100)/100}}:{}),
+        ...(action==='reopen'?{liquidacion_id:Number(r.liquidacionId||sandboxRead().liquidaciones[`${r.principal}|${r.uid}`]?.id),motivo:String(extra.motivo||'')}:{}),};
+      await nikiLiquidacionesSemanalOperativoEdge(action,payload);
+      await refreshWeeklyPilot();setReabrirEdit(null);
+      notifyToast(action==='review'?'Liquidación semanal validada.':'Liquidación reabierta.','success');
+    }catch(e){notifyToast(e.message||String(e),'error');}
+    finally{setPagoBusy(false);}
+  };
+  const ejecutarPago=async(action,r,extra={})=>{
+    if(pagoBusy||!weeklyPilotReady||!['admin','casa_matriz'].includes(user.rol))return;
+    if(!r?.liquidacionId){notifyToast('Primero validá la liquidación.','error');return;}
+    setPagoBusy(true);
+    try{
+      await nikiLiquidacionesSemanalOperativoEdge(action,{desde,hasta,local_id:Number(r.principal),user_id:Number(r.uid),liquidacion_id:Number(r.liquidacionId),...extra});
+      if(action==='bank')setBankOverrides(x=>({...x,[r.uid]:extra.dato_bancario}));
+      await refreshWeeklyPilot();
+      setPagoEdit(null);setBancoEdit(null);setReabrirEdit(null);
+      notifyToast(action==='pay'?'Pago registrado.':action==='prepare'?'Preparación actualizada.':'Cambios guardados.','success');
+    }catch(e){notifyToast(e.message||String(e),'error');}
+    finally{setPagoBusy(false);}
+  };
+
+    const total=shown.reduce((s,r)=>s+r.total,0);
+  const detalleVentas=useMemo(()=>{
+    const rows=(ventasModal?.uid ? shown.filter(r=>Number(r.uid)===Number(ventasModal.uid)) : shown)
+      .flatMap(r=>(r.ventas||[]).map((v,i)=>({
+        key:`${r.uid}-${v.hashRegistro||v.id||i}`,fecha:String(v.fechaPago||'').slice(0,10),
+        manicura:r.nombre,local:r.localNombre,servicio:v.servicio||'—',cliente:v.cliente||'—',
+        precio:Number(v.precio||0),base:Number(v.comision||0),
+        comision:Number(v.comision||0)*Number(r.pct||0)/40
+      })));
+    const col=ventasOrden.col;
+    return rows.sort((x,y)=>{
+      const result=['precio','base','comision'].includes(col)?Number(x[col])-Number(y[col]):String(x[col]||'').localeCompare(String(y[col]||''),'es');
+      return (ventasOrden.asc?1:-1)*result||x.fecha.localeCompare(y.fecha);
+    });
+  },[shown,ventasModal,ventasOrden]);
+  const ordenVentas=col=>setVentasOrden(prev=>({col,asc:prev.col===col?!prev.asc:true}));
+  const tablaVentas=(rows,conManicura=true)=> <div style={{overflowX:'auto'}}><table style={{width:'100%',borderCollapse:'collapse',fontSize:12}}><thead><tr style={{background:'#fbf5f7'}}>{[
+    ['fecha','Fecha'],...(conManicura?[['manicura','Manicura'],['local','Local']]:[]),
+    ['servicio','Servicio'],['cliente','Cliente'],['precio','Precio base'],['base','Comisión 40%'],['comision','Comisión aplicada']
+  ].map(([col,t])=><th key={col} onClick={()=>ordenVentas(col)} title='Ordenar por esta columna' style={{textAlign:['precio','base','comision'].includes(col)?'right':'left',padding:10,whiteSpace:'nowrap',cursor:'pointer',borderBottom:'1px solid #e8d8de'}}>{t}{ventasOrden.col===col?(ventasOrden.asc?' ↑':' ↓'):''}</th>)}</tr></thead><tbody>{rows.map(v=><tr key={v.key} style={{borderBottom:'1px solid #eee'}}><td style={{padding:9,whiteSpace:'nowrap'}}>{parseDateLabel(v.fecha)}</td>{conManicura&&<><td style={{padding:9}}>{v.manicura}</td><td style={{padding:9}}>{v.local}</td></>}<td style={{padding:9}}>{v.servicio}</td><td style={{padding:9}}>{v.cliente}</td><td style={{padding:9,textAlign:'right'}}>{fmtMoney(v.precio)}</td><td style={{padding:9,textAlign:'right'}}>{fmtMoney(v.base)}</td><td style={{padding:9,textAlign:'right',fontWeight:700}}>{fmtMoney(v.comision)}</td></tr>)}</tbody></table>{!rows.length&&<div style={{padding:20,color:'#876577'}}>No hay prestaciones para mostrar.</div>}</div>;
+  const inputStyle={border:'1px solid #e7d5dc',borderRadius:9,padding:'9px 10px',fontSize:13,background:'#fff',width:'100%'};
+  const cardStyle={padding:16,borderRadius:16,border:'1px solid #eadce2',background:'#fff',boxShadow:'0 4px 18px rgba(90,40,60,.055)'};
+  const tag=(s,good)=> <span style={{fontSize:11,fontWeight:750,color:good?'#44782b':'#aa6126',background:good?'#eaf3de':'#fff0de',padding:'5px 9px',borderRadius:30}}>{s}</span>;
+  const saveConfig=async()=>{if(NIKI_LIQUIDACIONES_SOLO_LECTURA){notifyToast('Configuración bloqueada en prueba local.','error');return;}if(esSemanal)return;setSaving(true);try{await sb('comisiones_quincenales_config?id=eq.1',{method:'PATCH',body:JSON.stringify({...configDraft,actualizado_por_user_id:user.id,actualizado_en:new Date().toISOString()})});setConfigOpen(false);await load();notifyToast('Configuración quincenal guardada.','success');}catch(e){notifyToast(e.message||String(e),'error');}finally{setSaving(false);}};
+  const saveModes=async()=>{if(NIKI_LIQUIDACIONES_SOLO_LECTURA){notifyToast('Modalidad de sucursales bloqueada en prueba local.','error');return;}setSaving(true);try{for(const row of modesDraft){await sb('comisiones_quincenales_locales?on_conflict=local_id',{method:'POST',prefer:'resolution=merge-duplicates,return=representation',body:JSON.stringify({local_id:Number(row.local_id),modalidad:row.modalidad,fecha_desde:row.fecha_desde||null,actualizado_por_user_id:user.id,actualizado_en:new Date().toISOString()})});}setModesOpen(false);await load();notifyToast('Modalidad por sucursal guardada. Los reportes semanales siguen sin cambios.','success');}catch(e){notifyToast(e.message||String(e),'error');}finally{setSaving(false);}};
+  const savePct=async()=>{
+    if(!pctEdit||saving||!weeklyPilotReady||!['admin','casa_matriz'].includes(user.rol))return;
+    const row=shown.find(r=>Number(r.uid)===Number(pctEdit.uid)&&Number(r.principal)===Number(pctEdit.localId));
+    if(!row||row.congelada){notifyToast('La liquidación está validada. Reabrila para cambiar su porcentaje.','error');return;}
+    setSaving(true);
+    try{
+      if(pctEdit.manual&&![35,40].includes(Number(pctEdit.porcentaje)))throw new Error('Solo se admite 35% o 40%.');
+      await nikiLiquidacionesSemanalOperativoEdge('percentage',{
+        desde,hasta,local_id:Number(row.principal),user_id:Number(row.uid),
+        porcentaje:pctEdit.manual?Number(pctEdit.porcentaje):null,
+        motivo:pctEdit.manual?String(pctEdit.motivo||'').trim():'Volver al criterio automático'
+      });
+      await refreshWeeklyPilot();setPctEdit(null);
+      notifyToast('Porcentaje semanal actualizado con auditoría.','success');
+    }catch(e){notifyToast(e.message||String(e),'error');}
+    finally{setSaving(false);}
+  };
+  const guardarPorcentajeDirecto=async(r,valor)=>{
+    if(esSemanal){
+      if(!weeklyPilotReady||!['admin','casa_matriz'].includes(user.rol)||r.congelada||saving)return;
+      setSaving(true);
+      try{
+        await nikiLiquidacionesSemanalOperativoEdge('percentage',{desde,hasta,local_id:Number(r.principal),user_id:Number(r.uid),porcentaje:valor==='auto'?null:Number(valor),motivo:'Selección manual - semanal'});
+        await refreshWeeklyPilot();notifyToast('Porcentaje guardado con auditoría.','success');
+      }catch(e){notifyToast(e.message||String(e),'error');}
+      finally{setSaving(false);}return;
+    }
+    if(NIKI_LIQUIDACIONES_SOLO_LECTURA){notifyToast('Modo local de solo lectura.','error');return;}
+    if(!canManage||saving||r.congelada||(!esSemanal&&!pagosReady))return;
+    setSaving(true);
+    try {
+      if(valor==='auto') await sb(`comisiones_quincenales_porcentajes?periodo=eq.${encodeURIComponent(keyCorte)}&user_id=eq.${Number(r.uid)}`,{method:'DELETE',prefer:''});
+      else {
+        const porcentaje=Number(valor);
+        if(![35,40].includes(porcentaje))throw new Error('Solo se admite 35% o 40%.');
+        await sb('comisiones_quincenales_porcentajes?on_conflict=periodo,user_id',{method:'POST',prefer:'resolution=merge-duplicates,return=representation',body:JSON.stringify({periodo:keyCorte,user_id:r.uid,porcentaje,motivo:'Selección manual en resumen quincenal',actualizado_por_user_id:user.id,actualizado_en:new Date().toISOString()})});
+      }
+      await load();notifyToast('Porcentaje actualizado.','success');
+    }catch(e){notifyToast(e.message||String(e),'error');}finally{setSaving(false);}
+  };
+  const selectorPorcentaje=r=><select aria-label={`Porcentaje de ${r.nombre}`} title="Cambiá entre automático, 35% o 40%" disabled={(NIKI_LIQUIDACIONES_SOLO_LECTURA&&!esSemanal)||saving||r.congelada||(!esSemanal&&!pagosReady)||!['admin','casa_matriz'].includes(user.rol)} value={(r.manualPctRow||r.congelada&&Number(r.pct)!==Number(r.autoPct))?String(r.pct):'auto'} onChange={e=>void guardarPorcentajeDirecto(r,e.target.value)} style={{fontSize:11,padding:'4px 5px',background:'#fff',border:'1px solid #e6d6dc',borderRadius:7,color:'#72243e',maxWidth:115,cursor:'pointer'}}><option value="auto">Auto ({r.autoPct}%)</option><option value="35">35%</option><option value="40">40%</option></select>;
+  const editPct=r=>setPctEdit({uid:r.uid,localId:r.principal,nombre:r.nombre,manual:!!r.manualPctRow,porcentaje:r.pct,motivo:r.manualPctRow?.motivo||'',automatico:r.autoPct});
+  const saveRecovery=async()=>{
+    if(esSemanal){
+      if(!weeklyPilotReady||!['admin','casa_matriz'].includes(user.rol)||saving||!overrideEdit)return;
+      const row=shown.find(r=>Number(r.uid)===Number(overrideEdit.uid)&&Number(r.principal)===Number(overrideEdit.localId)&&r.unexcused?.some(a=>a.fecha===overrideEdit.fecha));
+      if(!row){notifyToast('No se encontró la ausencia en este corte.','error');return;}
+      if(row.congelada){notifyToast('Reabrí la liquidación antes de modificar recuperaciones.','error');return;}
+      if(overrideEdit.recuperada&&(!Number.isFinite(Number(overrideEdit.horas))||Number(overrideEdit.horas)<=0||Number(overrideEdit.horas)>24)){
+        notifyToast('Ingresá horas recuperadas válidas (mayores a 0 y hasta 24).','error');return;
+      }
+      setSaving(true);
+      try{
+        await nikiLiquidacionesSemanalOperativoEdge('recovery',{desde,hasta,local_id:Number(row.principal),user_id:Number(row.uid),fecha_ausencia:overrideEdit.fecha,recuperada:!!overrideEdit.recuperada,horas_recuperadas:overrideEdit.recuperada?Number(overrideEdit.horas):0,detalle:String(overrideEdit.detalle||'').trim()});
+        setOverrideEdit(null);await refreshWeeklyPilot();notifyToast('Recuperación guardada con auditoría.','success');
+      }catch(e){notifyToast(e.message||String(e),'error');}finally{setSaving(false);}
+      return;
+    }
+    if(NIKI_LIQUIDACIONES_SOLO_LECTURA){notifyToast('Modo local de solo lectura.','error');return;}if(!esSemanal&&!corteValidado)return;if(shown.some(r=>r.congelada&&Number(r.uid)===Number(overrideEdit?.uid))){notifyToast('Reabrí la liquidación antes de modificar recuperaciones.','error');return;}setSaving(true);try{await sb('comisiones_quincenales_recuperaciones?on_conflict=periodo,user_id,fecha_ausencia',{method:'POST',prefer:'resolution=merge-duplicates,return=representation',body:JSON.stringify({periodo:keyCorte,user_id:overrideEdit.uid,fecha_ausencia:overrideEdit.fecha,recuperada:overrideEdit.recuperada,horas_recuperadas:Number(overrideEdit.horas||0),detalle:overrideEdit.detalle||'',confirmado_por_user_id:user.id,confirmado_en:new Date().toISOString()})});setOverrideEdit(null);await load();notifyToast('Recuperación registrada con trazabilidad.','success');}catch(e){notifyToast(e.message||String(e),'error');}finally{setSaving(false);}};
+  return <div style={{display:'grid',gap:14}}>
+    {advancedSettingsOpen&&<NikiCommissionConfigModal modalidad={esSemanal?'semanal':'quincenal'} data={data} onClose={()=>setAdvancedSettingsOpen(false)} onSaved={load}/> }
+    <Card><div style={{display:'flex',justifyContent:'space-between',alignItems:'start',gap:12,flexWrap:'wrap'}}><div><h2 style={{margin:'0 0 5px',fontSize:22,color:'#72243e'}}>{esSemanal?'Liquidaciones semanales':'Liquidaciones quincenales'}</h2><p style={{margin:0,fontSize:12,color:'var(--color-text-secondary)'}}>{esSemanal?'Liquidaciones por semana, con revisión y registro de ajustes.':'Cálculo independiente del informe semanal vigente. Cada quincena cierra sin arrastres semanales.'}</p></div><div style={{display:'flex',gap:8,flexWrap:'wrap'}}>{canConfigureGlobal&&<Btn variant='secondary' onClick={()=>{setModesDraft(allowedLocals.map(l=>{const r=localModes.find(x=>Number(x.local_id)===Number(l.id));return {local_id:l.id,local_nombre:l.nombre,modalidad:r?.modalidad||'semanal',fecha_desde:r?.fecha_desde||''};}));setModesOpen(true);}}>🏬 Modalidad por local</Btn>}{canConfigureGlobal&&<Btn variant='secondary' onClick={()=>setAdvancedSettingsOpen(true)}>⚙ Configuración {esSemanal?'semanal':'quincenal'} y excepciones</Btn>}</div></div>
+      <div style={{display:'grid',gridTemplateColumns:'repeat(auto-fit,minmax(170px,1fr))',gap:12,marginTop:16}}><label style={{fontSize:12,fontWeight:700}}>Mes<input type='month' value={periodo} onChange={e=>setPeriodo(e.target.value)} style={inputStyle}/></label><label style={{fontSize:12,fontWeight:700}}>{esSemanal?'Semana':'Quincena'}{esSemanal?<select value={String(semanaActual?.numero||1)} onChange={e=>setSemana(e.target.value)} style={inputStyle}>{semanasDisponibles.map(w=><option key={w.numero} value={w.numero}>{w.label}</option>)}</select>:<select value={quincena} onChange={e=>setQuincena(e.target.value)} style={inputStyle}><option value='1'>Del 1 al 15</option><option value='2'>Del 16 al último día</option></select>}</label><label style={{fontSize:12,fontWeight:700}}>Sucursal<select value={localId} onChange={e=>setLocalId(e.target.value)} style={inputStyle}><option value='todos'>Todas habilitadas</option>{allowedLocals.map(l=><option key={l.id} value={l.id}>{l.nombre}</option>)}</select></label>{canManage&&<label style={{fontSize:12,fontWeight:700}}>Manicura<select value={manicurasDisponibles.some(r=>String(r.uid)===manicuraFiltro)?manicuraFiltro:'todas'} onChange={e=>setManicuraFiltro(e.target.value)} style={inputStyle}><option value='todas'>Todas las manicuras</option>{manicurasDisponibles.map(r=><option key={`${r.principal}-${r.uid}`} value={r.uid}>{r.nombre}</option>)}</select></label>}<div style={{alignSelf:'end'}}><Btn onClick={load} disabled={loading}>{loading?'Calculando…':'↻ Actualizar'}</Btn></div></div>
+    </Card>
+    {esSemanal&&!weeklyPilotReady&&<Card><strong style={{color:'#aa3838'}}>No se pudo cargar el circuito semanal</strong><p style={{fontSize:12}}>{weeklyPilotError||'Cargando liquidaciones desde Supabase...'}</p></Card>}
+    {!esSemanal&&!corteValidado&&<Card><strong style={{color:'#aa3838'}}>Liquidaciones quincenales bloqueadas</strong><p style={{fontSize:12}}>{pagosLoading||!integrityError?'Verificando liquidaciones revisadas...':integrityError}</p><p style={{fontSize:11}}>No se muestran importes recalculados mientras falte confirmar el historial persistido.</p></Card>}
+    {setupNeeded&&<Card style={{border:'1px solid #e8ae6b',background:'#fff9ef'}}><strong>Falta preparar Supabase</strong><p style={{fontSize:12}}>Ejecutá el SQL entregado junto con esta versión para crear configuración, modalidad por local e historial de recuperación. El circuito semanal existente no se modifica.</p></Card>}
+    {error&&<Card><p style={{color:'#aa3838',margin:0,fontSize:12}}>{error}</p></Card>}
+    {snapshot&&corteValidado&&<>{false&&<div style={{padding:'10px 14px',border:'1px solid #e5bc86',borderRadius:9,background:'#fff8ec',fontSize:12,color:'#8f591a'}}>{esSemanal?'Liquidaciones semanales: operaciones registradas en Supabase.':'Liquidaciones quincenales'}</div>}<div style={{display:'grid',gridTemplateColumns:'repeat(auto-fit,minmax(200px,1fr))',gap:12}}>{[["Total estimado",fmtMoney(total),'💰'],['Manicuras',shown.length,'👩'],['En 40%',shown.filter(r=>r.pct===40).length,'🌿'],['Recuperaciones pendientes',shown.reduce((n,r)=>n+r.pending.length,0),'🕘']].map(([title,value,ico])=><div key={title} style={{...cardStyle,background:'#faf5f7'}}><div style={{fontSize:12,color:'#876577'}}>{ico} {title}</div><div style={{fontSize:24,fontWeight:850,color:'#72243e',marginTop:8}}>{value}</div></div>)}</div>
+      {canManage&&<div style={{display:'flex',gap:7,flexWrap:'wrap',padding:'4px 0'}}>{[['resumen','Resumen de pago'],['control','Control semanal'],['movimientos','Movimientos y ajustes'],['servicios','Detalle de servicios'],...(['admin','casa_matriz'].includes(user.rol)?[['pagos','Preparación y pagos']]:[])].map(([key,title])=><Btn key={key} size='sm' variant={quincenalTab===key?'primary':'secondary'} onClick={()=>setQuincenalTab(key)}>{title}</Btn>)}</div>}
+      {canManage&&quincenalTab==='resumen'&&<div style={{...cardStyle,padding:0,overflow:'hidden'}}>
+        <div style={{padding:'13px 16px',background:'#fbf5f7',display:'flex',justifyContent:'space-between',gap:8,flexWrap:'wrap'}}><strong style={{color:'#72243e'}}>Resumen de pago · {shown.length} manicuras</strong><span style={{fontSize:11,color:'#876577'}}>Seleccioná una manicura para ver su explicación, ventas o ausencias</span></div>
+        <div style={{overflowX:'auto'}}><table style={{width:'100%',borderCollapse:'collapse',fontSize:12}}>
+          <thead><tr style={{background:'#f8eff2'}}>{['Manicura','Comisión','Descuentos','Otros (+/-)','Total estimado','Detalle'].map((t,i)=><th key={t} style={{padding:'9px 8px',textAlign:i===0||i===5?'left':'right',whiteSpace:'nowrap'}}>{t}</th>)}</tr></thead>
+          <tbody>{shown.map((r,i)=>{const tieneMinimo=r.complemento>0;const revisar35=Number(r.pct)===35;return <tr key={`${r.principal}-${r.uid}`} style={{background:revisar35?'#fff4e8':tieneMinimo?'#f5faf2':i%2?'#fdf9fb':'#fff',borderBottom:'1px solid #efe6e9',borderLeft:revisar35?'3px solid #c17a22':tieneMinimo?'3px solid #639922':'3px solid transparent'}}>
+            <td style={{padding:'7px 8px',fontWeight:700,minWidth:150}}>{r.nombre} {r.conflictoLocales&&<span title='Liquidación bloqueada: ventas/horarios de varios locales' style={{color:'#af3d24',fontSize:10,marginLeft:5}}>⚠ Varios locales · Bloqueada</span>} {r.congelada&&<span title='Cálculo congelado' style={{fontSize:10,color:'#44782b'}}>✓ Validada v{r.version}</span>} {esSemanal&&!r.congelada&&!r.conflictoLocales&&['admin','casa_matriz'].includes(user.rol)&&<button type='button' onClick={()=>ejecutarSemanalLocal('review',r)} style={{marginLeft:5,border:'1px solid #d7c3cb',borderRadius:6,padding:'3px 6px',background:'#fff',fontSize:10,color:'#72243e',cursor:'pointer'}}>Validar</button>} {!NIKI_LIQUIDACIONES_SOLO_LECTURA&&!esSemanal&&!r.congelada&&pagosReady&&['admin','casa_matriz'].includes(user.rol)&&<button type='button' disabled={pagoBusy} title='Guardar foto del cálculo' onClick={()=>void ejecutarPago('review',r,{snapshot:r})} style={{marginLeft:5,border:'1px solid #d7c3cb',borderRadius:6,padding:'3px 6px',background:'#fff',fontSize:10,color:'#72243e',cursor:'pointer'}}>Revisar</button>} {esSemanal&&r.congelada&&['admin','casa_matriz'].includes(user.rol)&&<button type='button' onClick={()=>setReabrirEdit({r,motivo:''})} style={{border:0,background:'none',fontSize:10,color:'#99606f',cursor:'pointer'}}>Reabrir</button>} {!NIKI_LIQUIDACIONES_SOLO_LECTURA&&!esSemanal&&r.congelada&&totalPagado(r.liquidacionId)===0&&<button type='button' onClick={()=>setReabrirEdit({r,motivo:''})} style={{border:0,background:'none',fontSize:10,color:'#99606f',cursor:'pointer'}}>Reabrir</button>} {revisar35&&<span title='Comisión al 35%. Revisar asistencia y criterio aplicado.' style={{fontSize:10,padding:'3px 6px',borderRadius:6,color:'#99570c',background:'#ffe6c7',whiteSpace:'nowrap'}}>⚠ 35% · Revisar</span>} {tieneMinimo&&<span title={`Complemento por mínimo: ${fmtMoney(r.complemento)}${r.garantiaHasta?` · Hasta ${parseDateLabel(r.garantiaHasta)}`:''}`} style={{fontSize:11,color:'#46762b'}}>✓ Mín.</span>}<div style={{fontWeight:400,fontSize:10,color:'#877480'}}>{r.localNombre}</div></td>
+            <td style={{padding:'7px 8px',textAlign:'right',whiteSpace:'nowrap'}}><strong>{fmtMoney(r.comision)}</strong><div style={{marginTop:3}}>{canManage?selectorPorcentaje(r):<span style={{fontSize:10,color:'#876577'}}>{r.pct}%</span>}</div></td>
+            <td style={{padding:'7px 8px',textAlign:'right'}}>{fmtMoney(r.adelantos)}</td>
+            <td style={{padding:'7px 8px',textAlign:'right'}}>{fmtMoney(r.ajustesGarantia)}</td>
+            <td style={{padding:'7px 8px',textAlign:'right',fontWeight:850,color:'#72243e',whiteSpace:'nowrap'}}>{fmtMoney(r.total)}{tieneMinimo&&<div style={{fontSize:10,color:'#46762b',fontWeight:600}}>+{fmtMoney(r.complemento)} mín.</div>}</td>
+            <td style={{padding:'7px 8px'}}><div style={{display:'flex',gap:4,alignItems:'center',whiteSpace:'nowrap'}}><button type="button" title="Ver cálculo" onClick={()=>setDetalle(r)} style={{padding:'5px 7px',fontSize:11,border:'1px solid #eadde2',background:'#fbf5f7',borderRadius:7,cursor:'pointer',color:'#72243e'}}>Cálculo</button><button type="button" title="Servicios" onClick={()=>{setVentasModal({uid:r.uid,nombre:r.nombre});setVentasOrden({col:'fecha',asc:true});}} style={{padding:'5px 7px',fontSize:11,border:'1px solid #eadde2',background:'#fbf5f7',borderRadius:7,cursor:'pointer',color:'#72243e'}}>Servicios</button>{r.unexcused.length>0&&<button type="button" title="Editar recuperaciones" onClick={()=>setRecoveryList(r)} style={{padding:'5px 7px',fontSize:11,border:'1px solid #eadde2',background:'#fbf5f7',borderRadius:7,cursor:'pointer',color:'#72243e'}}>Aus. {r.pending.length}</button>}</div></td>
+          </tr>;})}</tbody></table><div style={{margin:'8px 12px 0',fontSize:11,color:'#46762b'}}>✓ Mín.: incluye complemento diario cuando corresponde. Vigencia del beneficio en «Cálculo»; los beneficios vencidos no se aplican.</div><p style={{margin:'8px 13px',fontSize:11,color:'#876577'}}>La comisión se muestra directamente al porcentaje aplicable. El total incluye, cuando corresponde, el complemento hasta el mínimo garantizado; la vigencia del beneficio se informa en la fila destacada. Los controles de asistencia y recuperación siguen disponibles en «Control semanal».</p></div>
+      </div>}
+      {canManage&&quincenalTab==='control'&&<div style={{...cardStyle,padding:0,overflow:'hidden'}}><div style={{padding:'13px 16px',background:'#fbf5f7'}}><strong style={{color:'#72243e'}}>Control de horas, asistencia y recuperaciones</strong></div><div style={{overflowX:'auto'}}><table style={{width:'100%',borderCollapse:'collapse',fontSize:12}}><thead><tr style={{background:'#f8eff2'}}>{['Manicura','Horas computables','Objetivo','Tardanzas','Ausencias pendientes','% aplicado','Acciones'].map(t=><th key={t} style={{padding:10,textAlign:'left'}}>{t}</th>)}</tr></thead><tbody>{shown.map(r=><tr key={`${r.principal}-${r.uid}`} style={{borderBottom:'1px solid #eee'}}><td style={{padding:10,fontWeight:700}}>{r.nombre}</td><td style={{padding:10}}>{r.weekend?`${r.detalleFinSemana.filter(d=>d.cumpleHoras).length} de ${r.finDates.length} jornadas válidas`:fmtH(r.horasElegibles)}</td><td style={{padding:10}}>{r.weekend?`${fmtH(Number(config.horas_finde_dia??10))} por jornada`:fmtH(r.objetivo)}</td><td style={{padding:10}}>{r.late}</td><td style={{padding:10}}>{r.pending.length}</td><td style={{padding:10}}>{r.pct}%</td><td style={{padding:10}}><div style={{display:'flex',gap:5,flexWrap:'wrap'}}><Btn size='sm' variant='secondary' onClick={()=>setDetalle(r)}>Detalle</Btn><Btn size='sm' variant='secondary' onClick={()=>editPct(r)} disabled={r.congelada}>Editar %</Btn>{r.unexcused.length>0&&<Btn size='sm' variant='secondary' onClick={()=>setRecoveryList(r)}>Recuperaciones</Btn>}</div></td></tr>)}</tbody></table></div></div>}
+      {canManage&&quincenalTab==='movimientos'&&<div style={cardStyle}><h3 style={{marginTop:0,color:'#72243e'}}>Movimientos y ajustes</h3><p style={{fontSize:12,color:'#876577'}}>Garantías y adelantos aplicados al corte, con acceso a los servicios y explicaciones individuales.</p><div style={{overflowX:'auto'}}><table style={{width:'100%',borderCollapse:'collapse',fontSize:12}}><thead><tr>{['Manicura','Garantías (+/-)','Adelantos descontados','Complemento mínimo','Total estimado','Detalle'].map(t=><th key={t} style={{padding:10,textAlign:'left',borderBottom:'1px solid #eee'}}>{t}</th>)}</tr></thead><tbody>{shown.map(r=><tr key={`${r.principal}-${r.uid}`} style={{borderBottom:'1px solid #eee'}}><td style={{padding:10,fontWeight:700}}>{r.nombre}</td><td style={{padding:10}}>{fmtMoney(r.ajustesGarantia)}</td><td style={{padding:10}}>{fmtMoney(r.adelantos)}</td><td style={{padding:10}}>{fmtMoney(r.complemento)}</td><td style={{padding:10,fontWeight:700}}>{fmtMoney(r.total)}</td><td style={{padding:10}}><Btn size='sm' variant='secondary' onClick={()=>setDetalle(r)}>Entender pago</Btn></td></tr>)}</tbody></table></div></div>}
+      {['admin','casa_matriz'].includes(user.rol)&&['admin','casa_matriz'].includes(user.rol)&&quincenalTab==='pagos'&&<div style={cardStyle}>
+        <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',gap:10,flexWrap:'wrap'}}>
+          <div><h3 style={{margin:'0 0 4px',color:'#72243e'}}>Preparación y registro de pagos</h3><p style={{margin:0,fontSize:12,color:'#876577'}}>Primero validá cada liquidación para congelar el cálculo. Después arrastrá a Efectivo o Transferencia y registrá los pagos. Casa Matriz y Administración pueden operar todo el circuito.</p></div>
+          <Btn size='sm' variant='secondary' onClick={()=>void refreshWeeklyPilot()}>Actualizar estados</Btn>
+        </div>
+        {!weeklyPilotReady&&<p style={{fontSize:12,color:'#aa6126'}}>No se pudo cargar el registro de liquidaciones semanales.</p>}
+        <div style={{display:'grid',gridTemplateColumns:'repeat(auto-fit,minmax(225px,1fr))',gap:12,marginTop:14}}>
+          {[['efectivo','💵 Efectivo'],['transferencia','🏦 Transferencia']].map(([medio,titulo])=><div key={medio}
+            onDragOver={e=>e.preventDefault()}
+            onDrop={e=>{e.preventDefault();const uid=Number(e.dataTransfer.getData('text/plain'));const r=shown.find(x=>Number(x.uid)===uid);if(r?.liquidacionId&&estadoPago(r)!=='Pagada')void ejecutarPago('prepare',r,{medio});}}
+            style={{padding:12,border:'1px solid #e9d9df',borderRadius:14,background:'#fcf7f9',minHeight:120}}>
+            <strong style={{color:'#72243e',fontSize:13}}>{titulo}</strong>
+            <div style={{fontSize:11,color:'#876577',margin:'4px 0 10px'}}>Arrastrá las liquidaciones validadas entre ambas columnas.</div>
+            {shown.filter(r=>r.liquidacionId&&(activeLiquidacion(r)?.medio_preparado||'efectivo')===medio).sort((a,b)=>Number(estadoPago(a)==='Pagada')-Number(estadoPago(b)==='Pagada')).map(r=><div key={`${r.principal}-${r.uid}`} draggable={estadoPago(r)!=='Pagada'} onDragStart={e=>{if(estadoPago(r)!=='Pagada')e.dataTransfer.setData('text/plain',String(r.uid));}} style={{background:estadoPago(r)==='Pagada'?'#eef6eb':'#fff8ee',border:estadoPago(r)==='Pagada'?'1px solid #a4c799':'1px solid #e8bd82',borderLeft:estadoPago(r)==='Pagada'?'5px solid #639922':'5px solid #c88835',borderRadius:10,padding:'11px 12px',marginBottom:8,cursor:'grab',opacity:estadoPago(r)==='Pagada'?.83:1}}>
+              <div style={{display:'flex',justifyContent:'space-between',gap:6}}><strong style={{fontSize:12}}>{r.nombre}</strong><strong style={{fontSize:12}}>{fmtMoney(r.total)}</strong></div>
+              <div style={{marginTop:7,display:'flex',justifyContent:'space-between',gap:5,flexWrap:'wrap',alignItems:'center'}}><span style={{display:'inline-flex',alignItems:'center',fontSize:11,fontWeight:800,color:estadoPago(r)==='Pagada'?'#376d25':'#97601e',background:estadoPago(r)==='Pagada'?'#d9efce':'#fce9cd',padding:'5px 8px',borderRadius:50}}>{estadoPago(r)==='Pagada'?'✓ PAGADA':estadoPago(r)==='Pago parcial'?'◐ PAGO PARCIAL':'◷ PENDIENTE'}</span><strong style={{fontSize:11,color:estadoPago(r)==='Pagada'?'#376d25':'#8b4d16'}}>Saldo {fmtMoney(Math.max(0,r.total-totalPagado(r.liquidacionId)))}</strong></div><div style={{marginTop:7,fontSize:11,color:'#765668'}}>📅 Cobro previsto: <strong>{parseDateLabel(nikiFechaPrevistaCobro({modalidad:esSemanal?'semanal':'quincenal',desde,hasta,userId:r.uid,localId:r.principal,horarios:data.horarios,asistencias:data.asistencias}).fecha)}</strong></div>
+              {medio==='transferencia'&&<div style={{fontSize:11,marginTop:5}}>Alias/CBU: {bankOverrides[r.uid]??(data.users?.find(u=>Number(u.id)===Number(r.uid))?.datoBancario||'Sin cargar')} <button type='button' style={{border:0,color:'#72243e',background:'none',cursor:'pointer'}} onClick={()=>setBancoEdit({r,value:bankOverrides[r.uid]??(data.users?.find(u=>Number(u.id)===Number(r.uid))?.datoBancario||'')})}>Editar</button></div>}
+              <div style={{display:'flex',gap:5,marginTop:7}}><Btn size='sm' variant='secondary' onClick={()=>setPagoEdit({r,medio,importe:Math.max(0,r.total-totalPagado(r.liquidacionId)),fecha:dateKey(new Date()),referencia:'',idempotency_key:crypto.randomUUID()})} disabled={pagoBusy||estadoPago(r)==='Pagada'}>Registrar pago</Btn><Btn size='sm' variant='secondary' disabled={estadoPago(r)==='Pagada'||pagoBusy} onClick={()=>void ejecutarPago('prepare',r,{medio:medio==='efectivo'?'transferencia':'efectivo'})}>Mover</Btn></div>
+            </div>)}
+            <div style={{borderTop:'1px solid #e8dce0',paddingTop:9,fontSize:12,fontWeight:700}}>A preparar: {fmtMoney(shown.filter(r=>r.liquidacionId&&(activeLiquidacion(r)?.medio_preparado||'efectivo')===medio).reduce((sum,r)=>sum+Math.max(0,r.total-totalPagado(r.liquidacionId)),0))}</div>
+          </div>)}
+        </div>
+      </div>}
+      {canManage&&quincenalTab==='servicios'&&<div style={cardStyle}><div style={{display:'flex',justifyContent:'space-between',gap:8,flexWrap:'wrap',alignItems:'center'}}><h3 style={{margin:0,color:'#72243e'}}>Servicios y comisiones · Todas las manicuras</h3><Btn size='sm' variant='secondary' onClick={()=>{setVentasModal({uid:null,nombre:'Todas las manicuras'});setVentasOrden({col:'fecha',asc:true});}}>Abrir tabla en popup</Btn></div><p style={{fontSize:12,color:'#876577'}}>{detalleVentas.length} prestaciones del corte. Agrupá por varias columnas, ordená y consultá subtotales por grupo.</p><NikiQuincenalGridServicios rows={detalleVentas} /></div>}
+      {esManicura&&<div style={{display:'grid',gap:12}}>{shown.map(r=><div key={`${r.principal}-${r.uid}`} style={cardStyle}>
+        <div style={{display:'flex',justifyContent:'space-between',gap:12,flexWrap:'wrap',alignItems:'center'}}><div><div style={{fontSize:17,fontWeight:850,color:'#572c3d'}}>{r.nombre}</div><div style={{fontSize:12,color:'#947f87',marginTop:3}}>{r.localNombre} · {r.weekend?'Solo fines de semana':'Jornada habitual'} · {r.mode==='quincenal'?'Quincenal habilitada':'Liquidación semanal'}</div></div><div style={{textAlign:'right'}}><div style={{fontSize:11,color:'#836575'}}>TOTAL ESTIMADO</div><div style={{fontSize:25,fontWeight:850,color:'#72243e'}}>{fmtMoney(r.total)}</div></div></div>
+        <div style={{display:'flex',gap:8,flexWrap:'wrap',marginTop:12}}>{tag(`${r.pct}% de comisión`,!r.penalized)}{tag(r.weekend?`${r.detalleFinSemana.filter(d=>d.cumpleHoras).length}/${r.finDates.length} jornadas con horas cumplidas`:`${fmtH(r.horasElegibles)} / ${fmtH(r.objetivo)}`,r.horasOk)}{tag(`${r.late} tardanza(s)`,r.late<Number(config.tardanzas_penalizacion||2))}{tag(`${r.pending.length} ausencia(s) sin recuperar`,!r.pending.length)}{r.ingresante&&tag(`Ingreso ${r.start.slice(8,10)}/${r.start.slice(5,7)} · mínimo proporcional`,true)}</div>
+        <div style={{display:'grid',gridTemplateColumns:'repeat(auto-fit,minmax(140px,1fr))',gap:10,marginTop:14}}>{[['Comisión por ventas',r.comision],['Complemento mínimo',r.complemento],['Garantías',r.ajustesGarantia],['Adelantos',-r.adelantos]].map(([t,v])=><div key={t} style={{padding:'12px 13px',background:'#f9f5f7',borderRadius:12}}><div style={{fontSize:11,color:'#886c78'}}>{t}</div><div style={{fontSize:18,fontWeight:800,color:v<0?'#b54e43':'#6c354a',marginTop:5}}>{fmtMoney(v)}</div></div>)}</div>
+        <div style={{display:'flex',gap:8,flexWrap:'wrap',marginTop:14}}><Btn size='sm' onClick={()=>setDetalle(r)}>ⓘ Entender este pago</Btn><Btn size='sm' variant='secondary' onClick={()=>setExpanded(s=>({...s,[`${r.principal}|${r.uid}`]:!s[`${r.principal}|${r.uid}`]}))}>{expanded[`${r.principal}|${r.uid}`]?'Ocultar ventas':'Ver ventas y movimientos'} ↗</Btn>{r.unexcused.map(a=><Btn key={a.fecha} size='sm' variant='secondary' onClick={()=>{const o=r.overrides.find(x=>x.fecha_ausencia===a.fecha);setOverrideEdit({uid:r.uid,localId:r.principal,nombre:r.nombre,fecha:a.fecha,recuperada:o?.recuperada||false,horas:o?.horas_recuperadas||0,detalle:o?.detalle||''});}}>✎ Recuperación {parseDateLabel(a.fecha)}</Btn>)}</div>
+        {expanded[`${r.principal}|${r.uid}`]&&<div style={{overflowX:'auto',marginTop:12}}><table style={{width:'100%',borderCollapse:'collapse',fontSize:12}}><thead><tr>{['Fecha','Servicio','Cliente','Comisión origen 40%','Comisión aplicada'].map(t=><th key={t} style={{textAlign:'left',padding:8,borderBottom:'1px solid #ddd'}}>{t}</th>)}</tr></thead><tbody>{r.ventas.map((v,i)=><tr key={v.id||i}>{[v.fechaPago,v.servicio||'-',v.cliente||'-',fmtMoney(v.comision),fmtMoney(Number(v.comision||0)*r.pct/40)].map((v,j)=><td key={j} style={{padding:8,borderBottom:'1px solid #eee'}}>{v}</td>)}</tr>)}</tbody></table></div>}
+      </div>)}</div>}<div style={{fontSize:11,color:'#947d86'}}>La liquidación conserva los importes validados.</div></>}
+    {pagoEdit&&<Modal title={`Registrar pago · ${pagoEdit.r.nombre}`} onClose={()=>setPagoEdit(null)} width={520}><div style={{display:'grid',gap:12}}>
+      <p style={{fontSize:12,margin:0}}>Saldo pendiente: <strong>{fmtMoney(Math.max(0,pagoEdit.r.total-totalPagado(pagoEdit.r.liquidacionId)))}</strong>. Registrar un pago no implica confirmación de recepción por la manicura.</p>
+      <label>Medio<select style={inputStyle} value={pagoEdit.medio} onChange={e=>setPagoEdit(x=>({...x,medio:e.target.value}))}><option value='efectivo'>Efectivo</option><option value='transferencia'>Transferencia</option></select></label>
+      <label>Importe<input style={inputStyle} type='number' min='0.01' step='0.01' value={pagoEdit.importe} onChange={e=>setPagoEdit(x=>({...x,importe:e.target.value}))}/></label>
+      <label>Fecha<input style={inputStyle} type='date' value={pagoEdit.fecha} onChange={e=>setPagoEdit(x=>({...x,fecha:e.target.value}))}/></label>
+      <label>Referencia / comprobante<input style={inputStyle} value={pagoEdit.referencia} onChange={e=>setPagoEdit(x=>({...x,referencia:e.target.value}))}/></label>
+      <div style={{display:'flex',justifyContent:'flex-end',gap:8}}><Btn variant='secondary' onClick={()=>setPagoEdit(null)}>Cancelar</Btn><Btn disabled={pagoBusy} onClick={()=>void ejecutarPago('pay',pagoEdit.r,{medio:pagoEdit.medio,importe:Number(pagoEdit.importe),fecha_pago:pagoEdit.fecha,referencia:pagoEdit.referencia,idempotency_key:pagoEdit.idempotency_key,dato_bancario:bankOverrides[pagoEdit.r.uid]??(data.users?.find(u=>Number(u.id)===Number(pagoEdit.r.uid))?.datoBancario||'')})}>Confirmar registro de pago</Btn></div>
+    </div></Modal>}
+    {bancoEdit&&<Modal title={`Alias o CBU · ${bancoEdit.r.nombre}`} onClose={()=>setBancoEdit(null)} width={490}><div style={{display:'grid',gap:12}}><input style={inputStyle} value={bancoEdit.value} onChange={e=>setBancoEdit(x=>({...x,value:e.target.value}))} placeholder='Alias o CBU (22 dígitos)'/><div style={{display:'flex',justifyContent:'flex-end',gap:8}}><Btn variant='secondary' onClick={()=>setBancoEdit(null)}>Cancelar</Btn><Btn disabled={pagoBusy} onClick={()=>void ejecutarPago('bank',bancoEdit.r,{dato_bancario:bancoEdit.value})}>Guardar en legajo</Btn></div></div></Modal>}
+    {reabrirEdit&&<Modal title={`Reabrir · ${reabrirEdit.r.nombre}`} onClose={()=>setReabrirEdit(null)} width={480}><div style={{display:'grid',gap:12}}><p style={{fontSize:12,margin:0}}>La versión revisada permanece en el historial. Después de corregir el cálculo deberás crear una nueva revisión.</p><textarea style={inputStyle} value={reabrirEdit.motivo} onChange={e=>setReabrirEdit(x=>({...x,motivo:e.target.value}))} placeholder='Motivo de reapertura (obligatorio)'/><div style={{display:'flex',justifyContent:'flex-end',gap:8}}><Btn variant='secondary' onClick={()=>setReabrirEdit(null)}>Cancelar</Btn><Btn disabled={pagoBusy} onClick={()=>esSemanal?ejecutarSemanalLocal('reopen',reabrirEdit.r,{motivo:reabrirEdit.motivo}):void ejecutarPago('reopen',reabrirEdit.r,{motivo:reabrirEdit.motivo})}>Reabrir</Btn></div></div></Modal>}
+    {ventasModal&&<Modal title={`Detalle de servicios y comisiones · ${ventasModal.nombre}`} onClose={()=>setVentasModal(null)} width={1150}><div style={{display:'grid',gap:10}}><p style={{margin:0,fontSize:12,color:'#876577'}}>{desde} al {hasta} · {detalleVentas.length} prestaciones · Ordená tocando un encabezado.</p><div style={{maxHeight:'65vh',overflowY:'auto'}}><NikiQuincenalGridServicios key={String(ventasModal.uid||'all')} rows={detalleVentas} compacto /></div><div style={{display:'flex',justifyContent:'flex-end'}}><Btn variant='secondary' onClick={()=>setVentasModal(null)}>Cerrar</Btn></div></div></Modal>}
+    {detalle&&<Modal title={`Cómo se calculó · ${detalle.nombre}`} onClose={()=>setDetalle(null)} width={740}><div style={{display:'grid',gap:12,fontSize:13,lineHeight:1.6}}><div style={{background:'#f7edf1',padding:18,borderRadius:16}}><div style={{fontSize:12,color:'#826071'}}>PAGO ESTIMADO · {desde} al {hasta}</div><div style={{fontSize:12,color:'#75505f',marginTop:5}}>📅 Fecha prevista de cobro: <strong>{parseDateLabel(nikiFechaPrevistaCobro({modalidad:esSemanal?'semanal':'quincenal',desde,hasta,userId:detalle.uid,localId:detalle.principal,horarios:data.horarios,asistencias:data.asistencias}).fecha)}</strong></div><div style={{fontSize:30,color:'#72243e',fontWeight:850}}>{fmtMoney(detalle.total)}</div></div>
+      <div style={cardStyle}><strong>① Comisión sobre ventas</strong><p>Se tomaron {detalle.ventas.length} prestaciones. La comisión de origen equivale a {fmtMoney(detalle.ventaComision40)} al 40%. Se aplica el {detalle.pct}%{detalle.manualPctRow?" (ajuste manual autorizado)":""} y corresponde {fmtMoney(detalle.comision)}.</p>{detalle.manualPctRow&&<p style={{color:'#80516b'}}>Porcentaje modificado manualmente. Motivo: {detalle.manualPctRow.motivo||'Sin detalle'}.</p>}{detalle.penalized?<p style={{color:'#a24b30'}}>El criterio automático establece el 35% por {detalle.late>=Number(config.tardanzas_penalizacion||2)?`${detalle.late} llegadas tarde`:''}{detalle.late>=Number(config.tardanzas_penalizacion||2)&&detalle.pending.length?' y ':''}{detalle.pending.length?`${detalle.pending.length} ausencia(s) injustificada(s) sin recuperación confirmada`:''}.</p>:<p style={{color:'#47783b'}}>No registra penalizaciones pendientes. El porcentaje automático es 40%.</p>}</div>
+      {canManage&&!esSemanal&&detalle.unexcused.length>0&&<div><Btn size='sm' variant='secondary' onClick={()=>{setRecoveryList(detalle);setDetalle(null);}}>✎ Gestionar ausencias y recuperaciones ({detalle.unexcused.length})</Btn></div>}
+      <div style={cardStyle}>
+        <strong>Desglose diario de comisiones</strong>
+        <p style={{margin:'6px 0 10px',fontSize:12,color:'#715767'}}>Prestaciones de la quincena, agrupadas por fecha. Los mínimos y otros movimientos se explican por separado.</p>
+        <div style={{overflowX:'auto'}}>
+          <table style={{width:'100%',borderCollapse:'collapse',fontSize:12}}>
+            <thead><tr>{['Fecha','Horas registradas','Comisión del día'].map((x,i)=><th key={x} style={{padding:'8px 9px',textAlign:i===0?'left':'right',borderBottom:'1px solid #eadce2'}}>{x}</th>)}</tr></thead>
+            <tbody>{detalle.todosLosDias.map(d=><tr key={d.fecha} style={{borderBottom:'1px solid #f4e9ed'}}><td style={{padding:'8px 9px'}}>{parseDateLabel(d.fecha)}</td><td style={{padding:'8px 9px',textAlign:'right'}}>{fmtH(d.horas)}</td><td style={{padding:'8px 9px',textAlign:'right',fontWeight:600}}>{fmtMoney(d.comision)}</td></tr>)}</tbody>
+            <tfoot><tr style={{borderTop:'2px solid #eadce2',fontWeight:800}}><td style={{padding:'10px 9px'}}>Total comisión por ventas</td><td></td><td style={{padding:'10px 9px',textAlign:'right'}}>{fmtMoney(detalle.comision)}</td></tr></tfoot>
+          </table>
+        </div>
+      </div>
+      <div style={cardStyle}><strong>② Horas y ausencias</strong><p>Horas efectivamente registradas en la quincena: {fmtH(detalle.horas)}. Horas de ausencias certificadas computables: {fmtH(detalle.horasMedicas)}. {detalle.weekend?'El objetivo de fin de semana se comprueba por jornada en el detalle inferior; las horas totales no se comparan contra una exigencia diaria.':`Total evaluado: ${fmtH(detalle.horasElegibles)} sobre objetivo quincenal de ${fmtH(detalle.objetivo)}.`}</p><p>Ausencias sin certificado: {detalle.unexcused.length}. Recuperadas y confirmadas: {detalle.unexcused.length-detalle.pending.length}. Todavía pendientes: {detalle.pending.length}. Las horas recuperadas declaradas ({fmtH(detalle.horasRecuperadas)}) se registran como justificación y no se suman otra vez al registro horario.</p>{detalle.ingresante&&<p style={{color:'#725060'}}>Ingresó el {detalle.start}. La quincena se prorratea por {Math.round(detalle.factor*100)}% de los días laborables (excluyendo domingos, Año Nuevo, 1 de mayo y Navidad): el objetivo horario y el mínimo se reducen solo por ingreso, no por inasistencias.</p>}</div>
+      <div style={{...cardStyle,background:'#fbf7f9'}}>
+        <strong>③ Mínimo garantizado, ajustes y descuentos</strong>
+        {detalle.weekend?<>
+          <p style={{margin:'8px 0',fontSize:12}}>Modalidad de fin de semana · Mínimo de referencia por jornada programada: <b>{fmtMoney(detalle.minimoDiario)}</b> · Jornadas evaluadas: <b>{detalle.finDates.length}</b>.</p>
+          <div style={{overflowX:'auto'}}><table style={{width:'100%',borderCollapse:'collapse',fontSize:12}}>
+            <thead><tr>{['Fecha','Horas / objetivo','Comisión del día','Mínimo','Complemento','Resultado'].map(x=><th key={x} style={{padding:'7px 5px',borderBottom:'1px solid #eadce2',textAlign:'left'}}>{x}</th>)}</tr></thead>
+            <tbody>{detalle.detalleFinSemana.map(d=><tr key={d.fecha} style={{borderBottom:'1px solid #f0e5e9'}}><td style={{padding:'7px 5px'}}>{parseDateLabel(d.fecha)}</td><td style={{padding:'7px 5px'}}>{fmtH(d.horasComputables)} / {fmtH(d.horasObjetivo)}</td><td style={{padding:'7px 5px'}}>{fmtMoney(d.comisionDia)}</td><td style={{padding:'7px 5px'}}>{fmtMoney(d.minimoDiario)}</td><td style={{padding:'7px 5px',fontWeight:d.complementoDia?800:400}}>{fmtMoney(d.complementoDia)}</td><td style={{padding:'7px 5px',color:d.habilitado?'#44782b':'#a15d26'}}>{d.habilitado?'Habilitado':!d.cumpleHoras?'Horas insuficientes':d.ausenciaPendiente?'Ausencia pendiente':!d.beneficioEnFecha?'Beneficio no vigente':'No habilitado'}</td></tr>)}</tbody>
+          </table></div>
+        </>:<p style={{margin:'8px 0',fontSize:12}}>Mínimo de zona {detalle.zona}: {fmtMoney(detalle.minimoAplicable)}. {detalle.minimoHabilitado?'Cumple las condiciones de horas y asistencia.':'No cumple las condiciones para aplicar el mínimo.'}</p>}
+        {detalle.garantiaHasta&&<p style={{margin:'8px 0',fontSize:11,color:'#876577'}}>Vigencia del beneficio hasta {parseDateLabel(detalle.garantiaHasta)}. {detalle.beneficioVigente?'Vigente para este corte.':'No vigente para este corte.'}</p>}
+        <div style={{borderTop:'1px solid #eadce2',marginTop:12,paddingTop:11,display:'grid',gridTemplateColumns:'1fr auto',gap:'6px 12px',fontSize:12}}>
+          <span>Comisión por ventas</span><strong style={{textAlign:'right'}}>{fmtMoney(detalle.comision)}</strong>
+          <span>Complemento por mínimo garantizado</span><strong style={{textAlign:'right',color:detalle.complemento?'#44782b':undefined}}>{fmtMoney(detalle.complemento)}</strong>
+          <span>Garantías y otros ajustes</span><strong style={{textAlign:'right'}}>{fmtMoney(detalle.ajustesGarantia)}</strong>
+          <span>Adelantos y descuentos</span><strong style={{textAlign:'right'}}>{detalle.adelantos?`− ${fmtMoney(detalle.adelantos)}`:fmtMoney(0)}</strong>
+          <strong style={{borderTop:'1px solid #eadce2',paddingTop:9,marginTop:4}}>Total estimado</strong><strong style={{borderTop:'1px solid #eadce2',paddingTop:9,marginTop:4,textAlign:'right',fontSize:16,color:'#72243e'}}>{fmtMoney(detalle.total)}</strong>
+        </div>
+      </div>
+      <Btn variant='secondary' onClick={()=>setDetalle(null)}>Cerrar explicación</Btn></div></Modal>}
+    {pctEdit&&canManage&&<Modal title={`Porcentaje ${esSemanal?'semanal':'quincenal'} · ${pctEdit.nombre}`} onClose={()=>setPctEdit(null)} width={520}><div style={{display:'grid',gap:12,fontSize:13}}><p style={{margin:0,color:'#715767'}}>Porcentaje automático: <b>{pctEdit.automatico}%</b>. La excepción afecta solamente esta manicura y este corte seleccionado, sin modificar otros períodos.</p><label style={{display:'flex',gap:8,alignItems:'center'}}><input type='checkbox' checked={pctEdit.manual} onChange={e=>setPctEdit(p=>({...p,manual:e.target.checked}))}/> Aplicar porcentaje manual</label>{pctEdit.manual&&<><label>Porcentaje<input style={inputStyle} type='number' min='0' max='100' step='0.5' value={pctEdit.porcentaje} onChange={e=>setPctEdit(p=>({...p,porcentaje:e.target.value}))}/></label><label>Motivo obligatorio<textarea style={{...inputStyle,minHeight:75}} value={pctEdit.motivo} onChange={e=>setPctEdit(p=>({...p,motivo:e.target.value}))}/></label></>}<div style={{display:'flex',gap:8}}><Btn disabled={saving||(pctEdit.manual&&(!String(pctEdit.motivo).trim()||pctEdit.porcentaje===''||Number(pctEdit.porcentaje)<0||Number(pctEdit.porcentaje)>100))} onClick={savePct}>{saving?'Guardando…':'Guardar porcentaje'}</Btn><Btn variant='secondary' onClick={()=>setPctEdit(null)}>Cancelar</Btn></div></div></Modal>}
+    {recoveryList&&canManage&&<Modal title={`Ausencias y recuperaciones · ${recoveryList.nombre}`} onClose={()=>setRecoveryList(null)} width={600}>
+      <div style={{display:'grid',gap:10}}><p style={{fontSize:12,margin:0,color:'#846c77'}}>Revisá las ausencias de este corte. Seleccioná una fecha para registrar o modificar su recuperación; la confirmación queda guardada con usuario y fecha.</p>
+        {recoveryList.unexcused.map(a=>{const o=recoveryList.overrides.find(x=>x.fecha_ausencia===a.fecha);return <div key={a.fecha} style={{display:'flex',justifyContent:'space-between',alignItems:'center',gap:12,flexWrap:'wrap',border:'1px solid #eadde2',borderRadius:11,padding:'11px 13px'}}><div><strong style={{fontSize:13}}>{parseDateLabel(a.fecha)}</strong><div style={{fontSize:11,color:o?.recuperada?'#407530':'#a36524',marginTop:3}}>{o?.recuperada?'Recuperación registrada':'Pendiente de recuperar'}{o?.recuperada?` · ${fmtH(o.horas_recuperadas)}`:''}</div></div><Btn size='sm' variant='secondary' onClick={()=>{setRecoveryList(null);setOverrideEdit({uid:recoveryList.uid,localId:recoveryList.principal,nombre:recoveryList.nombre,fecha:a.fecha,recuperada:o?.recuperada||false,horas:o?.horas_recuperadas||0,detalle:o?.detalle||''});}}>✎ Editar</Btn></div>})}
+        <Btn variant='secondary' onClick={()=>setRecoveryList(null)}>Cerrar</Btn>
+      </div>
+    </Modal>}
+    {overrideEdit&&<Modal title={`Recuperación de ausencia · ${overrideEdit.nombre}`} onClose={()=>setOverrideEdit(null)} width={560}><div style={{display:'grid',gap:12}}><p style={{margin:0,fontSize:13}}>Ausencia injustificada del <b>{parseDateLabel(overrideEdit.fecha)}</b>. La encargada confirma aquí la recuperación realizada dentro del corte seleccionado. Se guarda quién confirma, cuándo y cuántas horas. Para justificar una falta deben recuperarse las horas de la jornada ausente.</p><label style={{fontSize:13}}><input type='checkbox' checked={overrideEdit.recuperada} onChange={e=>setOverrideEdit(o=>({...o,recuperada:e.target.checked}))}/> Horas recuperadas y verificadas</label><label style={{fontSize:12}}>Horas recuperadas<input style={inputStyle} type='number' min='0' step='0.5' value={overrideEdit.horas} onChange={e=>setOverrideEdit(o=>({...o,horas:e.target.value}))}/></label><label style={{fontSize:12}}>Detalle / fecha de recuperación<textarea style={{...inputStyle,minHeight:76}} value={overrideEdit.detalle} onChange={e=>setOverrideEdit(o=>({...o,detalle:e.target.value}))}/></label><div style={{display:'flex',gap:8}}><Btn disabled={saving||overrideEdit.recuperada&&Number(overrideEdit.horas)<=0||esSemanal&&!['admin','casa_matriz'].includes(user.rol)} onClick={saveRecovery}>{saving?'Guardando…':'Guardar confirmación'}</Btn><Btn variant='secondary' onClick={()=>setOverrideEdit(null)}>Cancelar</Btn></div></div></Modal>}
+    {modesOpen&&<Modal title='Modalidad de liquidación por local' onClose={()=>setModesOpen(false)} width={780}><div style={{display:'grid',gap:10}}><p style={{fontSize:12,margin:0,color:'#765a68'}}>La modalidad por sucursal rige qué cortes se pueden liquidar.</p>{modesDraft.map((r,i)=><div key={r.local_id} style={{display:'grid',gridTemplateColumns:'minmax(130px,1fr) 145px 155px',gap:10,alignItems:'center',padding:10,background:'#faf5f7',borderRadius:10}}><strong style={{fontSize:12}}>{r.local_nombre}</strong><select style={inputStyle} value={r.modalidad} onChange={e=>setModesDraft(rows=>rows.map((x,j)=>i===j?{...x,modalidad:e.target.value}:x))}><option value='semanal'>Semanal</option><option value='quincenal'>Quincenal</option></select><input type='date' style={inputStyle} value={r.fecha_desde} onChange={e=>setModesDraft(rows=>rows.map((x,j)=>i===j?{...x,fecha_desde:e.target.value}:x))}/></div>)}<div style={{display:'flex',gap:8}}><Btn onClick={saveModes} disabled={saving}>{saving?'Guardando…':'Guardar modalidades'}</Btn><Btn variant='secondary' onClick={()=>setModesOpen(false)}>Cancelar</Btn></div></div></Modal>}
+    {configOpen&&configDraft&&<Modal title={esSemanal?'Configuración · Liquidación semanal':'Configuración · Liquidación quincenal'} onClose={()=>setConfigOpen(false)} width={760}><div style={{display:'grid',gap:14}}><p style={{fontSize:12,margin:0,color:'#745e69'}}>{esSemanal?'Parámetros semanales actuales (consulta). La edición por manicura permanece en la configuración general existente.':'Esta configuración es solo quincenal. Los mínimos, horas y criterios del régimen semanal quedan intactos.'}</p><div style={{display:'grid',gridTemplateColumns:'repeat(auto-fit,minmax(200px,1fr))',gap:12}}>{[['minimo_estandar','Mínimo quincenal estándar'],['minimo_premium','Mínimo quincenal premium'],['minimo_finde_estandar','Mínimo por día · fin de semana estándar'],['minimo_finde_premium','Mínimo por día · fin de semana premium'],['horas_quincenales','Horas mínimas quincenales'],['horas_finde_dia','Horas mínimas por día de fin de semana'],['porcentaje_normal','Porcentaje normal'],['porcentaje_reducido','Porcentaje reducido'],['tardanzas_penalizacion','Cantidad de tardanzas que penaliza']].map(([k,label])=><label key={k} style={{fontSize:12,fontWeight:700}}>{label}<input style={inputStyle} disabled={esSemanal} type='number' min='0' value={configDraft[k]??0} onChange={e=>setConfigDraft(d=>({...d,[k]:Number(e.target.value)}))}/></label>)}</div><div style={{display:'flex',gap:8}}>{!esSemanal&&<Btn onClick={saveConfig} disabled={saving}>{saving?'Guardando…':'Guardar configuración quincenal'}</Btn>}<Btn variant='secondary' onClick={()=>setConfigOpen(false)}>Cancelar</Btn></div></div></Modal>}
+  </div>;
+}
+
+
 function ReporteComisionesQuincenalPiloto({ data, user, modalidad='quincenal' }) {
   const esSemanal=modalidad==='semanal';
   const hoy = new Date();
@@ -13944,6 +14698,8 @@ function ReporteComisionesQuincenalPiloto({ data, user, modalidad='quincenal' })
   const [error,setError] = useState('');
   const [detalle,setDetalle] = useState(null);
   const [configOpen,setConfigOpen] = useState(false);
+  const [advancedSettingsOpen,setAdvancedSettingsOpen]=useState(false);
+  const [personalConfigRows,setPersonalConfigRows]=useState([]);
   const [configDraft,setConfigDraft] = useState(null);
   const [savedOverrides,setSavedOverrides] = useState([]);
   const [modesOpen,setModesOpen] = useState(false);
@@ -14010,10 +14766,15 @@ function ReporteComisionesQuincenalPiloto({ data, user, modalidad='quincenal' })
         api.getComisionesAgendaProShadowRango(desde,hasta),api.getHorariosRango(desde,hasta),api.getAsistenciasRango(desde,hasta),
         esSemanal?Promise.resolve([configSemanal]):sb('comisiones_quincenales_config?select=*&id=eq.1'),sb('comisiones_quincenales_locales?select=*'),
         esSemanal?Promise.resolve([]):sb(`comisiones_quincenales_recuperaciones?select=*&periodo=eq.${encodeURIComponent(keyCorte)}`),
-        esSemanal?Promise.resolve([]):sb(`comisiones_quincenales_porcentajes?select=*&periodo=eq.${encodeURIComponent(keyCorte)}`)
+        esSemanal?Promise.resolve([]):sb(`comisiones_quincenales_porcentajes?select=*&periodo=eq.${encodeURIComponent(keyCorte)}`),
+        canManage?nikiCommissionConfigEdge('load',esSemanal?'semanal':'quincenal'):Promise.resolve(null)
       ]);
       setSnapshot({ventas:(items[0]||[]).map(normalizeComision),horarios:(items[1]||[]).map(normalizeHorario),asistencias:(items[2]||[]).map(normalizeAsistencia)});
-      setConfig({...fallback,...(items[3]||[])[0]});setLocalModes(items[4]||[]);setSavedOverrides(items[5]||[]);setPctOverrides(items[6]||[]);setSetupNeeded(false);
+      const remote=items[7]||null, g=remote?.general||null;
+      if(esSemanal&&g){setConfig({...fallback,minimo_estandar:Number(g.minimo_semanal_estandar||0),minimo_premium:Number(g.minimo_semanal_premium_exclusiva||0),minimo_finde_estandar:Number(g.minimo_semanal_estandar_fin_semana??g.minimo_semanal_estandar??0),minimo_finde_premium:Number(g.minimo_semanal_premium_exclusiva_fin_semana??g.minimo_semanal_premium_exclusiva??0),horas_quincenales:Number(g.horas_objetivo_default??36),horas_finde_dia:Number(g.horas_objetivo_fin_semana??10),porcentaje_normal:Number(g.porcentaje_base??40),porcentaje_reducido:Number(g.porcentaje_reducido??35),tardanzas_penalizacion:Number(g.max_llegadas_tarde??2)+1,faltas_no_justificadas:Number(g.max_faltas_no_justificadas??0)});}
+      else setConfig({...fallback,...(items[3]||[])[0],...(g||{})});
+      setPersonalConfigRows(remote?.excepciones||[]);
+      setLocalModes(items[4]||[]);setSavedOverrides(items[5]||[]);setPctOverrides(items[6]||[]);setSetupNeeded(false);
     } catch(e){setError(e.message||String(e));setSnapshot(null);if(/comisiones_quincenales_|42P01|404/i.test(String(e.message||e)))setSetupNeeded(true);}
     finally{setLoading(false);}
   },[desde,hasta,keyCorte,esSemanal]);
@@ -14044,6 +14805,12 @@ function ReporteComisionesQuincenalPiloto({ data, user, modalidad='quincenal' })
       // Sin activación explícita mantenemos esta simulación identificada como piloto.
       const zona=String(lMap.get(principal)?.zona||'estandar').toLowerCase();const premium=['premium','exclusiva'].includes(zona);
       const weekend=persona.soloFinDeSemana===true;
+      const exception=personalConfigRows.find(x=>x.activo!==false&&Number(x.user_id)===uid&&Number(x.local_id)===principal)||null;
+      const configured=(key,fallbackValue)=>exception?.[key]==null?fallbackValue:Number(exception[key]);
+      const normalPct=configured(esSemanal?'porcentaje_base':'porcentaje_normal',Number(config.porcentaje_normal??40));
+      const reducedPct=configured(esSemanal?'porcentaje_reducido':'porcentaje_reducido',Number(config.porcentaje_reducido??35));
+      const lateThreshold=esSemanal?configured('max_llegadas_tarde',Math.max(0,Number(config.tardanzas_penalizacion??3)-1))+1:configured('tardanzas_penalizacion',Number(config.tardanzas_penalizacion??2));
+      const maxAbsences=configured(esSemanal?'max_faltas_no_justificadas':'faltas_no_justificadas',Number(config.faltas_no_justificadas??0));
       const hRows=(snapshot.horarios||[]).filter(h=>Number(h.userId)===uid&&h.fecha>=desde&&h.fecha<=hasta);
       const aRows=(snapshot.asistencias||[]).filter(a=>Number(a.userId)===uid&&a.fecha>=desde&&a.fecha<=hasta);
       const history=(data.usuarioHistorialLaboral||[]).filter(x=>Number(x.userId)===uid).map(x=>x.fechaInicio).filter(Boolean).sort();
@@ -14052,7 +14819,7 @@ function ReporteComisionesQuincenalPiloto({ data, user, modalidad='quincenal' })
       const ingresante=!!start&&start>desde&&start<=hasta;
       const effectiveDesde=ingresante?start:desde;
       const factor=ingresante?laborableCount(effectiveDesde,hasta)/Math.max(1,laborableCount(desde,hasta)):1;
-      const objetivo=weekend?Number(config.horas_finde_dia||10):Number(config.horas_quincenales||72)*factor;
+      const objetivo=weekend?configured('horas_finde_dia',Number(config.horas_finde_dia??10)):configured(esSemanal?'horas_objetivo_semanales':'horas_quincenales',Number(config.horas_quincenales??72))*factor;
       const minimoFull=Number(weekend?(premium?config.minimo_finde_premium:config.minimo_finde_estandar):(premium?config.minimo_premium:config.minimo_estandar)||0);
       // "Fin de semana" es una modalidad de la manicura (users.solo_fin_de_semana),
       // no un filtro por dia de la semana. Se consideran TODAS sus jornadas
@@ -14089,9 +14856,9 @@ function ReporteComisionesQuincenalPiloto({ data, user, modalidad='quincenal' })
       // Para evitar doble conteo, la recuperación declarada se usa para justificar la ausencia,
       // no se vuelve a sumar a las horas reales ya registradas.
       const eligibleHours=hours+countedMedical;
-      const hoursOk=weekend?finDates.every(d=>(diaMap.get(d)?.horas||0)+(falls.some(f=>f.fecha===d&&f.certificado)?(diaMap.get(d)?.plan||0):0)>=Number(config.horas_finde_dia||10)):eligibleHours+1e-6>=objetivo;
-      const penalized=late>=Number(config.tardanzas_penalizacion||2)||pending.length>0;
-      const autoPct=penalized?Number(config.porcentaje_reducido||35):Number(config.porcentaje_normal||40);
+      const hoursOk=weekend?finDates.every(d=>(diaMap.get(d)?.horas||0)+(falls.some(f=>f.fecha===d&&f.certificado)?(diaMap.get(d)?.plan||0):0)>=configured('horas_finde_dia',Number(config.horas_finde_dia??10))):eligibleHours+1e-6>=objetivo;
+      const penalized=late>=lateThreshold||pending.length>maxAbsences;
+      const autoPct=penalized?reducedPct:normalPct;
       const manualPctRow=pctOverrides.find(o=>Number(o.user_id)===uid&&o.periodo===keyCorte);
       const pct=manualPctRow?Number(manualPctRow.porcentaje):autoPct;
       const originalRate=40; // Comisión de origen AgendaPro, normalmente expresada al 40%.
@@ -14101,7 +14868,7 @@ function ReporteComisionesQuincenalPiloto({ data, user, modalidad='quincenal' })
       const garantiaVigencia=getMinimumGuaranteeStatus(data.manicuraHistorialLocales||[],uid,principal,desde,hasta);
       const garantiaHasta=garantiaVigencia?.endDateKey||'';
       const beneficioVigente=!!garantiaVigencia?.activeInWeek&&!!garantiaHasta&&garantiaHasta>=desde;
-      const minimoHabilitado=beneficioVigente&&hoursOk&&!penalized&&pct>=Number(config.porcentaje_normal||40);
+      const minimoHabilitado=beneficioVigente&&hoursOk&&!penalized&&pct>=normalPct;
       // Para trabajo solo de fines de semana, evaluar cada jornada por separado.
       // El total de comisiones de la quincena nunca compensa una jornada por debajo de su minimo.
       const detalleFinSemana=weekend?finDates.sort().map(fecha=>{
@@ -14117,7 +14884,7 @@ function ReporteComisionesQuincenalPiloto({ data, user, modalidad='quincenal' })
         // La vigencia del beneficio tambien se evalua POR FECHA: un beneficio
         // vencido no puede generar complementos en dias posteriores.
         const beneficioEnFecha=beneficioVigente&&fecha<=garantiaHasta;
-        const habilitado=beneficioEnFecha&&cumpleHoras&&!ausenciaPendiente&&!penalized&&pct>=Number(config.porcentaje_normal||40);
+        const habilitado=beneficioEnFecha&&cumpleHoras&&!ausenciaPendiente&&!penalized&&pct>=normalPct;
         const complementoDia=habilitado?Math.max(0,minimoFull-comisionDia):0;
         return {fecha,horas:info.horas||0,horasComputables,horasObjetivo,cumpleHoras,
           beneficioEnFecha,ausenciaPendiente,comisionDia,minimoDiario:minimoFull,habilitado,complementoDia};
@@ -14142,7 +14909,7 @@ function ReporteComisionesQuincenalPiloto({ data, user, modalidad='quincenal' })
       result.push({todosLosDias,garantiaHasta,beneficioVigente,uid,nombre:persona.nombre||'Manicura',principal,localNombre:lMap.get(principal)?.nombre||'Sin local',localIds:matchedLocals,mode:mode?.modalidad||'semanal',zona,weekend,ventas:group.ventas,ventaTotal,ventaComision40,horas:hours,horasMedicas:countedMedical,horasElegibles:eligibleHours,horasRecuperadas:recoveredHours,objetivo,horasOk:hoursOk,late,falls,unexcused,pending,overrides,pct,autoPct,manualPctRow,penalized,ingresante,start,factor,minimoAplicable,minimoDiario:minimoFull,detalleFinSemana,minimoHabilitado,comision,complemento,ajustesGarantia,adelantos,total:comision+complemento+ajustesGarantia-adelantos,finDates,diaMap});
     }
     return result.sort((a,b)=>a.nombre.localeCompare(b.nombre));
-  },[snapshot,data.users,data.locales,data.manicuraHistorialLocales,data.usuarioHistorialLaboral,data.garantias,data.adelantos,savedOverrides,pctOverrides,config,localModes,desde,hasta,keyCorte]);
+  },[snapshot,data.users,data.locales,data.manicuraHistorialLocales,data.usuarioHistorialLaboral,data.garantias,data.adelantos,savedOverrides,pctOverrides,config,personalConfigRows,localModes,desde,hasta,keyCorte]);
   // Seguridad de visualización: el selector 'todas' nunca amplía el alcance del usuario.
   // En este reporte cada liquidación se atribuye a r.principal.
   const allowedLocalSet=new Set(allowedLocals.map(l=>Number(l.id)));
@@ -14213,7 +14980,8 @@ function ReporteComisionesQuincenalPiloto({ data, user, modalidad='quincenal' })
   const editPct=r=>setPctEdit({uid:r.uid,nombre:r.nombre,manual:!!r.manualPctRow,porcentaje:r.pct,motivo:r.manualPctRow?.motivo||'',automatico:r.autoPct});
   const saveRecovery=async()=>{if(esSemanal)return;setSaving(true);try{await sb('comisiones_quincenales_recuperaciones?on_conflict=periodo,user_id,fecha_ausencia',{method:'POST',prefer:'resolution=merge-duplicates,return=representation',body:JSON.stringify({periodo:keyCorte,user_id:overrideEdit.uid,fecha_ausencia:overrideEdit.fecha,recuperada:overrideEdit.recuperada,horas_recuperadas:Number(overrideEdit.horas||0),detalle:overrideEdit.detalle||'',confirmado_por_user_id:user.id,confirmado_en:new Date().toISOString()})});setOverrideEdit(null);await load();notifyToast('Recuperación registrada con trazabilidad.','success');}catch(e){notifyToast(e.message||String(e),'error');}finally{setSaving(false);}};
   return <div style={{display:'grid',gap:14}}>
-    <Card><div style={{display:'flex',justifyContent:'space-between',alignItems:'start',gap:12,flexWrap:'wrap'}}><div><h2 style={{margin:'0 0 5px',fontSize:22,color:'#72243e'}}>{esSemanal?'Liquidaciones semanales · Prueba':'Comisiones quincenales · Piloto'}</h2><p style={{margin:0,fontSize:12,color:'var(--color-text-secondary)'}}>{esSemanal?'Vista semanal de validación, sin edición ni registro de pagos.':'Cálculo independiente del informe semanal vigente. Cada quincena cierra sin arrastres semanales.'}</p></div><div style={{display:'flex',gap:8,flexWrap:'wrap'}}>{canConfigureGlobal&&!esSemanal&&<Btn variant='secondary' onClick={()=>{setModesDraft(allowedLocals.map(l=>{const r=localModes.find(x=>Number(x.local_id)===Number(l.id));return {local_id:l.id,local_nombre:l.nombre,modalidad:r?.modalidad||'semanal',fecha_desde:r?.fecha_desde||''};}));setModesOpen(true);}}>🏬 Modalidad por local</Btn>}{canConfigureGlobal&&!esSemanal&&<Btn variant='secondary' onClick={()=>{setConfigDraft({...config});setConfigOpen(true);}}>⚙ Configuración quincenal</Btn>}</div></div>
+    {advancedSettingsOpen&&<NikiCommissionConfigModal modalidad={esSemanal?'semanal':'quincenal'} data={data} onClose={()=>setAdvancedSettingsOpen(false)} onSaved={load}/> }
+    <Card><div style={{display:'flex',justifyContent:'space-between',alignItems:'start',gap:12,flexWrap:'wrap'}}><div><h2 style={{margin:'0 0 5px',fontSize:22,color:'#72243e'}}>{esSemanal?'Liquidaciones semanales':'Liquidaciones quincenales'}</h2><p style={{margin:0,fontSize:12,color:'var(--color-text-secondary)'}}>{esSemanal?'Vista semanal de validación, sin edición ni registro de pagos.':'Cálculo independiente del informe semanal vigente. Cada quincena cierra sin arrastres semanales.'}</p></div><div style={{display:'flex',gap:8,flexWrap:'wrap'}}>{canConfigureGlobal&&<Btn variant='secondary' onClick={()=>{setModesDraft(allowedLocals.map(l=>{const r=localModes.find(x=>Number(x.local_id)===Number(l.id));return {local_id:l.id,local_nombre:l.nombre,modalidad:r?.modalidad||'semanal',fecha_desde:r?.fecha_desde||''};}));setModesOpen(true);}}>🏬 Modalidad por local</Btn>}{canConfigureGlobal&&<Btn variant='secondary' onClick={()=>setAdvancedSettingsOpen(true)}>⚙ Configuración {esSemanal?'semanal':'quincenal'} y excepciones</Btn>}</div></div>
       <div style={{display:'grid',gridTemplateColumns:'repeat(auto-fit,minmax(170px,1fr))',gap:12,marginTop:16}}><label style={{fontSize:12,fontWeight:700}}>Mes<input type='month' value={periodo} onChange={e=>setPeriodo(e.target.value)} style={inputStyle}/></label><label style={{fontSize:12,fontWeight:700}}>{esSemanal?'Semana':'Quincena'}{esSemanal?<select value={String(semanaActual?.numero||1)} onChange={e=>setSemana(e.target.value)} style={inputStyle}>{semanasDisponibles.map(w=><option key={w.numero} value={w.numero}>{w.label}</option>)}</select>:<select value={quincena} onChange={e=>setQuincena(e.target.value)} style={inputStyle}><option value='1'>Del 1 al 15</option><option value='2'>Del 16 al último día</option></select>}</label><label style={{fontSize:12,fontWeight:700}}>Sucursal<select value={localId} onChange={e=>setLocalId(e.target.value)} style={inputStyle}><option value='todos'>Todas habilitadas</option>{allowedLocals.map(l=><option key={l.id} value={l.id}>{l.nombre}</option>)}</select></label>{canManage&&<label style={{fontSize:12,fontWeight:700}}>Manicura<select value={manicurasDisponibles.some(r=>String(r.uid)===manicuraFiltro)?manicuraFiltro:'todas'} onChange={e=>setManicuraFiltro(e.target.value)} style={inputStyle}><option value='todas'>Todas las manicuras</option>{manicurasDisponibles.map(r=><option key={r.uid} value={r.uid}>{r.nombre}</option>)}</select></label>}<div style={{alignSelf:'end'}}><Btn onClick={load} disabled={loading}>{loading?'Calculando…':'↻ Actualizar'}</Btn></div></div>
     </Card>
     {setupNeeded&&<Card style={{border:'1px solid #e8ae6b',background:'#fff9ef'}}><strong>Falta preparar Supabase</strong><p style={{fontSize:12}}>Ejecutá el SQL entregado junto con esta versión para crear configuración, modalidad por local e historial de recuperación. El circuito semanal existente no se modifica.</p></Card>}
@@ -14244,15 +15012,15 @@ function ReporteComisionesQuincenalPiloto({ data, user, modalidad='quincenal' })
         <div style={{display:'grid',gridTemplateColumns:'repeat(auto-fit,minmax(225px,1fr))',gap:12,marginTop:14}}>
           {[['efectivo','💵 Efectivo'],['transferencia','🏦 Transferencia']].map(([medio,titulo])=><div key={medio}
             onDragOver={e=>e.preventDefault()}
-            onDrop={e=>{e.preventDefault();const uid=Number(e.dataTransfer.getData('text/plain'));const r=shown.find(x=>Number(x.uid)===uid);if(r?.liquidacionId)void ejecutarPago('prepare',r,{medio});}}
+            onDrop={e=>{e.preventDefault();const uid=Number(e.dataTransfer.getData('text/plain'));const r=shown.find(x=>Number(x.uid)===uid);if(r?.liquidacionId&&estadoPago(r)!=='Pagada')void ejecutarPago('prepare',r,{medio});}}
             style={{padding:12,border:'1px solid #e9d9df',borderRadius:14,background:'#fcf7f9',minHeight:120}}>
             <strong style={{color:'#72243e',fontSize:13}}>{titulo}</strong>
             <div style={{fontSize:11,color:'#876577',margin:'4px 0 10px'}}>Arrastrá las liquidaciones revisadas entre ambas columnas.</div>
-            {shown.filter(r=>r.liquidacionId&&(activeLiquidacion(r)?.medio_preparado||'efectivo')===medio).map(r=><div key={r.uid} draggable onDragStart={e=>e.dataTransfer.setData('text/plain',String(r.uid))} style={{background:'#fff',border:'1px solid #eadde2',borderRadius:10,padding:'9px 10px',marginBottom:7,cursor:'grab'}}>
+            {shown.filter(r=>r.liquidacionId&&(activeLiquidacion(r)?.medio_preparado||'efectivo')===medio).sort((a,b)=>Number(estadoPago(a)==='Pagada')-Number(estadoPago(b)==='Pagada')).map(r=><div key={r.uid} draggable={estadoPago(r)!=='Pagada'} onDragStart={e=>{if(estadoPago(r)!=='Pagada')e.dataTransfer.setData('text/plain',String(r.uid));}} style={{background:estadoPago(r)==='Pagada'?'#eef6eb':'#fff8ee',border:estadoPago(r)==='Pagada'?'1px solid #a4c799':'1px solid #e8bd82',borderLeft:estadoPago(r)==='Pagada'?'5px solid #639922':'5px solid #c88835',borderRadius:10,padding:'11px 12px',marginBottom:8,cursor:'grab',opacity:estadoPago(r)==='Pagada'?.83:1}}>
               <div style={{display:'flex',justifyContent:'space-between',gap:6}}><strong style={{fontSize:12}}>{r.nombre}</strong><strong style={{fontSize:12}}>{fmtMoney(r.total)}</strong></div>
-              <div style={{fontSize:11,marginTop:5,color:estadoPago(r)==='Pagada'?'#44782b':'#916471'}}>{estadoPago(r)} · Saldo {fmtMoney(Math.max(0,r.total-totalPagado(r.liquidacionId)))}</div>
+              <div style={{marginTop:7,display:'flex',justifyContent:'space-between',gap:5,flexWrap:'wrap',alignItems:'center'}}><span style={{display:'inline-flex',alignItems:'center',fontSize:11,fontWeight:800,color:estadoPago(r)==='Pagada'?'#376d25':'#97601e',background:estadoPago(r)==='Pagada'?'#d9efce':'#fce9cd',padding:'5px 8px',borderRadius:50}}>{estadoPago(r)==='Pagada'?'✓ PAGADA':estadoPago(r)==='Pago parcial'?'◐ PAGO PARCIAL':'◷ PENDIENTE'}</span><strong style={{fontSize:11,color:estadoPago(r)==='Pagada'?'#376d25':'#8b4d16'}}>Saldo {fmtMoney(Math.max(0,r.total-totalPagado(r.liquidacionId)))}</strong></div><div style={{marginTop:7,fontSize:11,color:'#765668'}}>📅 Cobro previsto: <strong>{parseDateLabel(nikiFechaPrevistaCobro({modalidad:esSemanal?'semanal':'quincenal',desde,hasta,userId:r.uid,localId:r.principal,horarios:data.horarios,asistencias:data.asistencias}).fecha)}</strong></div>
               {medio==='transferencia'&&<div style={{fontSize:11,marginTop:5}}>Alias/CBU: {bankOverrides[r.uid]??(data.users?.find(u=>Number(u.id)===Number(r.uid))?.datoBancario||'Sin cargar')} <button type='button' style={{border:0,color:'#72243e',background:'none',cursor:'pointer'}} onClick={()=>setBancoEdit({r,value:bankOverrides[r.uid]??(data.users?.find(u=>Number(u.id)===Number(r.uid))?.datoBancario||'')})}>Editar</button></div>}
-              <div style={{display:'flex',gap:5,marginTop:7}}><Btn size='sm' variant='secondary' onClick={()=>setPagoEdit({r,medio,importe:Math.max(0,r.total-totalPagado(r.liquidacionId)),fecha:dateKey(new Date()),referencia:''})} disabled={pagoBusy||estadoPago(r)==='Pagada'}>Registrar pago</Btn><Btn size='sm' variant='secondary' onClick={()=>void ejecutarPago('prepare',r,{medio:medio==='efectivo'?'transferencia':'efectivo'})}>Mover</Btn></div>
+              <div style={{display:'flex',gap:5,marginTop:7}}><Btn size='sm' variant='secondary' onClick={()=>setPagoEdit({r,medio,importe:Math.max(0,r.total-totalPagado(r.liquidacionId)),fecha:dateKey(new Date()),referencia:''})} disabled={pagoBusy||estadoPago(r)==='Pagada'}>Registrar pago</Btn><Btn size='sm' variant='secondary' disabled={estadoPago(r)==='Pagada'||pagoBusy} onClick={()=>void ejecutarPago('prepare',r,{medio:medio==='efectivo'?'transferencia':'efectivo'})}>Mover</Btn></div>
             </div>)}
             <div style={{borderTop:'1px solid #e8dce0',paddingTop:9,fontSize:12,fontWeight:700}}>A preparar: {fmtMoney(shown.filter(r=>r.liquidacionId&&(activeLiquidacion(r)?.medio_preparado||'efectivo')===medio).reduce((sum,r)=>sum+Math.max(0,r.total-totalPagado(r.liquidacionId)),0))}</div>
           </div>)}
@@ -14277,7 +15045,7 @@ function ReporteComisionesQuincenalPiloto({ data, user, modalidad='quincenal' })
     {bancoEdit&&<Modal title={`Alias o CBU · ${bancoEdit.r.nombre}`} onClose={()=>setBancoEdit(null)} width={490}><div style={{display:'grid',gap:12}}><input style={inputStyle} value={bancoEdit.value} onChange={e=>setBancoEdit(x=>({...x,value:e.target.value}))} placeholder='Alias o CBU (22 dígitos)'/><div style={{display:'flex',justifyContent:'flex-end',gap:8}}><Btn variant='secondary' onClick={()=>setBancoEdit(null)}>Cancelar</Btn><Btn disabled={pagoBusy} onClick={()=>void ejecutarPago('bank',bancoEdit.r,{dato_bancario:bancoEdit.value})}>Guardar en legajo</Btn></div></div></Modal>}
     {reabrirEdit&&<Modal title={`Reabrir · ${reabrirEdit.r.nombre}`} onClose={()=>setReabrirEdit(null)} width={480}><div style={{display:'grid',gap:12}}><p style={{fontSize:12,margin:0}}>La versión revisada permanece en el historial. Después de corregir el cálculo deberás crear una nueva revisión.</p><textarea style={inputStyle} value={reabrirEdit.motivo} onChange={e=>setReabrirEdit(x=>({...x,motivo:e.target.value}))} placeholder='Motivo de reapertura (obligatorio)'/><div style={{display:'flex',justifyContent:'flex-end',gap:8}}><Btn variant='secondary' onClick={()=>setReabrirEdit(null)}>Cancelar</Btn><Btn disabled={pagoBusy} onClick={()=>void ejecutarPago('reopen',reabrirEdit.r,{motivo:reabrirEdit.motivo})}>Reabrir</Btn></div></div></Modal>}
     {ventasModal&&<Modal title={`Detalle de servicios y comisiones · ${ventasModal.nombre}`} onClose={()=>setVentasModal(null)} width={1150}><div style={{display:'grid',gap:10}}><p style={{margin:0,fontSize:12,color:'#876577'}}>{desde} al {hasta} · {detalleVentas.length} prestaciones · Ordená tocando un encabezado.</p><div style={{maxHeight:'65vh',overflowY:'auto'}}><NikiQuincenalGridServicios key={String(ventasModal.uid||'all')} rows={detalleVentas} compacto /></div><div style={{display:'flex',justifyContent:'flex-end'}}><Btn variant='secondary' onClick={()=>setVentasModal(null)}>Cerrar</Btn></div></div></Modal>}
-    {detalle&&<Modal title={`Cómo se calculó · ${detalle.nombre}`} onClose={()=>setDetalle(null)} width={740}><div style={{display:'grid',gap:12,fontSize:13,lineHeight:1.6}}><div style={{background:'#f7edf1',padding:18,borderRadius:16}}><div style={{fontSize:12,color:'#826071'}}>PAGO ESTIMADO · {desde} al {hasta}</div><div style={{fontSize:30,color:'#72243e',fontWeight:850}}>{fmtMoney(detalle.total)}</div></div>
+    {detalle&&<Modal title={`Cómo se calculó · ${detalle.nombre}`} onClose={()=>setDetalle(null)} width={740}><div style={{display:'grid',gap:12,fontSize:13,lineHeight:1.6}}><div style={{background:'#f7edf1',padding:18,borderRadius:16}}><div style={{fontSize:12,color:'#826071'}}>PAGO ESTIMADO · {desde} al {hasta}</div><div style={{fontSize:12,color:'#75505f',marginTop:5}}>📅 Fecha prevista de cobro: <strong>{parseDateLabel(nikiFechaPrevistaCobro({modalidad:esSemanal?'semanal':'quincenal',desde,hasta,userId:detalle.uid,localId:detalle.principal,horarios:data.horarios,asistencias:data.asistencias}).fecha)}</strong></div><div style={{fontSize:30,color:'#72243e',fontWeight:850}}>{fmtMoney(detalle.total)}</div></div>
       <div style={cardStyle}><strong>① Comisión sobre ventas</strong><p>Se tomaron {detalle.ventas.length} prestaciones. La comisión de origen equivale a {fmtMoney(detalle.ventaComision40)} al 40%. Se aplica el {detalle.pct}%{detalle.manualPctRow?" (ajuste manual autorizado)":""} y corresponde {fmtMoney(detalle.comision)}.</p>{detalle.manualPctRow&&<p style={{color:'#80516b'}}>Porcentaje modificado manualmente. Motivo: {detalle.manualPctRow.motivo||'Sin detalle'}.</p>}{detalle.penalized?<p style={{color:'#a24b30'}}>El criterio automático establece el 35% por {detalle.late>=Number(config.tardanzas_penalizacion||2)?`${detalle.late} llegadas tarde`:''}{detalle.late>=Number(config.tardanzas_penalizacion||2)&&detalle.pending.length?' y ':''}{detalle.pending.length?`${detalle.pending.length} ausencia(s) injustificada(s) sin recuperación confirmada`:''}.</p>:<p style={{color:'#47783b'}}>No registra penalizaciones pendientes. El porcentaje automático es 40%.</p>}</div>
       {canManage&&!esSemanal&&detalle.unexcused.length>0&&<div><Btn size='sm' variant='secondary' onClick={()=>{setRecoveryList(detalle);setDetalle(null);}}>✎ Gestionar ausencias y recuperaciones ({detalle.unexcused.length})</Btn></div>}
       <div style={cardStyle}>
@@ -14319,8 +15087,8 @@ function ReporteComisionesQuincenalPiloto({ data, user, modalidad='quincenal' })
       </div>
     </Modal>}
     {overrideEdit&&<Modal title={`Recuperación de ausencia · ${overrideEdit.nombre}`} onClose={()=>setOverrideEdit(null)} width={560}><div style={{display:'grid',gap:12}}><p style={{margin:0,fontSize:13}}>Ausencia injustificada del <b>{parseDateLabel(overrideEdit.fecha)}</b>. La encargada confirma aquí la recuperación realizada dentro de la misma quincena. Se guarda quién confirma, cuándo y cuántas horas. Para justificar una falta deben recuperarse las horas de la jornada ausente.</p><label style={{fontSize:13}}><input type='checkbox' checked={overrideEdit.recuperada} onChange={e=>setOverrideEdit(o=>({...o,recuperada:e.target.checked}))}/> Horas recuperadas y verificadas</label><label style={{fontSize:12}}>Horas recuperadas<input style={inputStyle} type='number' min='0' step='0.5' value={overrideEdit.horas} onChange={e=>setOverrideEdit(o=>({...o,horas:e.target.value}))}/></label><label style={{fontSize:12}}>Detalle / fecha de recuperación<textarea style={{...inputStyle,minHeight:76}} value={overrideEdit.detalle} onChange={e=>setOverrideEdit(o=>({...o,detalle:e.target.value}))}/></label><div style={{display:'flex',gap:8}}><Btn disabled={saving||overrideEdit.recuperada&&Number(overrideEdit.horas)<=0} onClick={saveRecovery}>{saving?'Guardando…':'Guardar confirmación'}</Btn><Btn variant='secondary' onClick={()=>setOverrideEdit(null)}>Cancelar</Btn></div></div></Modal>}
-    {modesOpen&&<Modal title='Modalidad de liquidación por local · Piloto' onClose={()=>setModesOpen(false)} width={780}><div style={{display:'grid',gap:10}}><p style={{fontSize:12,margin:0,color:'#765a68'}}>La modalidad configurada sirve para evaluar la migración. No cambia automáticamente las liquidaciones productivas ni modifica períodos anteriores.</p>{modesDraft.map((r,i)=><div key={r.local_id} style={{display:'grid',gridTemplateColumns:'minmax(130px,1fr) 145px 155px',gap:10,alignItems:'center',padding:10,background:'#faf5f7',borderRadius:10}}><strong style={{fontSize:12}}>{r.local_nombre}</strong><select style={inputStyle} value={r.modalidad} onChange={e=>setModesDraft(rows=>rows.map((x,j)=>i===j?{...x,modalidad:e.target.value}:x))}><option value='semanal'>Semanal</option><option value='quincenal'>Quincenal</option></select><input type='date' style={inputStyle} value={r.fecha_desde} onChange={e=>setModesDraft(rows=>rows.map((x,j)=>i===j?{...x,fecha_desde:e.target.value}:x))}/></div>)}<div style={{display:'flex',gap:8}}><Btn onClick={saveModes} disabled={saving}>{saving?'Guardando…':'Guardar modalidades'}</Btn><Btn variant='secondary' onClick={()=>setModesOpen(false)}>Cancelar</Btn></div></div></Modal>}
-    {configOpen&&configDraft&&<Modal title='Configuración · Liquidación quincenal (piloto)' onClose={()=>setConfigOpen(false)} width={760}><div style={{display:'grid',gap:14}}><p style={{fontSize:12,margin:0,color:'#745e69'}}>Esta configuración es <b>solo quincenal</b>. Los mínimos, horas y criterios del régimen semanal quedan intactos.</p><div style={{display:'grid',gridTemplateColumns:'repeat(auto-fit,minmax(200px,1fr))',gap:12}}>{[['minimo_estandar','Mínimo quincenal estándar'],['minimo_premium','Mínimo quincenal premium'],['minimo_finde_estandar','Mínimo por día · fin de semana estándar'],['minimo_finde_premium','Mínimo por día · fin de semana premium'],['horas_quincenales','Horas mínimas quincenales'],['horas_finde_dia','Horas mínimas por día de fin de semana'],['porcentaje_normal','Porcentaje normal'],['porcentaje_reducido','Porcentaje reducido'],['tardanzas_penalizacion','Cantidad de tardanzas que penaliza']].map(([k,label])=><label key={k} style={{fontSize:12,fontWeight:700}}>{label}<input style={inputStyle} type='number' min='0' value={configDraft[k]??0} onChange={e=>setConfigDraft(d=>({...d,[k]:Number(e.target.value)}))}/></label>)}</div><div style={{display:'flex',gap:8}}><Btn onClick={saveConfig} disabled={saving}>{saving?'Guardando…':'Guardar configuración quincenal'}</Btn><Btn variant='secondary' onClick={()=>setConfigOpen(false)}>Cancelar</Btn></div></div></Modal>}
+    {modesOpen&&<Modal title='Modalidad de liquidación por local' onClose={()=>setModesOpen(false)} width={780}><div style={{display:'grid',gap:10}}><p style={{fontSize:12,margin:0,color:'#765a68'}}>La modalidad configurada sirve para evaluar la migración. No cambia automáticamente las liquidaciones productivas ni modifica períodos anteriores.</p>{modesDraft.map((r,i)=><div key={r.local_id} style={{display:'grid',gridTemplateColumns:'minmax(130px,1fr) 145px 155px',gap:10,alignItems:'center',padding:10,background:'#faf5f7',borderRadius:10}}><strong style={{fontSize:12}}>{r.local_nombre}</strong><select style={inputStyle} value={r.modalidad} onChange={e=>setModesDraft(rows=>rows.map((x,j)=>i===j?{...x,modalidad:e.target.value}:x))}><option value='semanal'>Semanal</option><option value='quincenal'>Quincenal</option></select><input type='date' style={inputStyle} value={r.fecha_desde} onChange={e=>setModesDraft(rows=>rows.map((x,j)=>i===j?{...x,fecha_desde:e.target.value}:x))}/></div>)}<div style={{display:'flex',gap:8}}><Btn onClick={saveModes} disabled={saving}>{saving?'Guardando…':'Guardar modalidades'}</Btn><Btn variant='secondary' onClick={()=>setModesOpen(false)}>Cancelar</Btn></div></div></Modal>}
+    {configOpen&&configDraft&&<Modal title='Configuración · Liquidación quincenal' onClose={()=>setConfigOpen(false)} width={760}><div style={{display:'grid',gap:14}}><p style={{fontSize:12,margin:0,color:'#745e69'}}>Esta configuración es <b>solo quincenal</b>. Los mínimos, horas y criterios del régimen semanal quedan intactos.</p><div style={{display:'grid',gridTemplateColumns:'repeat(auto-fit,minmax(200px,1fr))',gap:12}}>{[['minimo_estandar','Mínimo quincenal estándar'],['minimo_premium','Mínimo quincenal premium'],['minimo_finde_estandar','Mínimo por día · fin de semana estándar'],['minimo_finde_premium','Mínimo por día · fin de semana premium'],['horas_quincenales','Horas mínimas quincenales'],['horas_finde_dia','Horas mínimas por día de fin de semana'],['porcentaje_normal','Porcentaje normal'],['porcentaje_reducido','Porcentaje reducido'],['tardanzas_penalizacion','Cantidad de tardanzas que penaliza']].map(([k,label])=><label key={k} style={{fontSize:12,fontWeight:700}}>{label}<input style={inputStyle} type='number' min='0' value={configDraft[k]??0} onChange={e=>setConfigDraft(d=>({...d,[k]:Number(e.target.value)}))}/></label>)}</div><div style={{display:'flex',gap:8}}><Btn onClick={saveConfig} disabled={saving}>{saving?'Guardando…':'Guardar configuración quincenal'}</Btn><Btn variant='secondary' onClick={()=>setConfigOpen(false)}>Cancelar</Btn></div></div></Modal>}
   </div>;
 }
 
@@ -17948,6 +18716,134 @@ function ConsultaPreciosVigentes({ data, user, soloComisiones=false }) {
 }
 
 // ── APP PRINCIPAL ──────────────────────────────────────────────────
+function NikiMisComisiones({ user, data, setData }) {
+  const inputStyle = {border:'1px solid #e7d5dc',borderRadius:9,padding:'9px 10px',fontSize:13,background:'#fff',width:'100%'};
+  const [periodo,setPeriodo]=useState(()=>fmtPeriodo(new Date()));
+  const [result,setResult]=useState(null);
+  const [busy,setBusy]=useState(false);
+  const [error,setError]=useState('');
+  const [bank,setBank]=useState('');
+  const [editBank,setEditBank]=useState(false);
+  const [savingBank,setSavingBank]=useState(false);
+  const [open,setOpen]=useState({});
+  const [localFiltro,setLocalFiltro]=useState('todos');
+  const fetchMine=useCallback(async()=>{
+    setBusy(true);setError('');
+    try {
+      const out=await nikiMisComisionesEdge('load',{periodo});
+      setResult(out);setBank(out.dato_bancario||'');
+    } catch(e){setError(e.message||String(e));} finally{setBusy(false);}
+  },[periodo]);
+  useEffect(()=>{void fetchMine();},[fetchMine]);
+  const rows=(result?.liquidaciones||[]).filter(x=>localFiltro==='todos'||String(x.local_id)===localFiltro);
+  const pagos=(result?.pagos||[]);
+  const servicios=(result?.servicios||[]).filter(x=>localFiltro==='todos'||String(x.local_id)===localFiltro);
+  const locales=result?.locales||[];
+  const totalMes=rows.filter(r=>r.estado==='revisada').reduce((sum,r)=>sum+Number(r.total||0),0);
+  const totalPagos=pagos.filter(p=>rows.some(r=>r.key===p.liquidacion_key)).reduce((sum,p)=>sum+Number(p.importe||0),0);
+  const porCobrar=rows.reduce((sum,r)=>sum+(r.estado==='revisada'?Math.max(0,Number(r.total||0)-pagos.filter(p=>p.liquidacion_key===r.key).reduce((a,p)=>a+Number(p.importe||0),0)):0),0);
+  const saveBank=async()=>{
+    const check=validarDatoBancario(bank);if(check){setError(check);return;}
+    setSavingBank(true);setError('');
+    try{await nikiMisComisionesEdge('bank',{dato_bancario:bank});setEditBank(false);setResult(x=>({...x,dato_bancario:bank}));setData(prev=>({...prev,users:(prev.users||[]).map(u=>Number(u.id)===Number(user.id)?{...u,datoBancario:bank}:u)}));notifyToast('Datos de transferencia actualizados.','success');}
+    catch(e){setError(e.message||String(e));}finally{setSavingBank(false);}
+  };
+  const chip=(v,bg='#f7edf0',color='#72243e')=><span style={{fontSize:10,fontWeight:750,background:bg,color,borderRadius:99,padding:'5px 9px'}}>{v}</span>;
+  const dateNow=dateKey(new Date());
+  const validServices=servicios.filter(x=>!/(retiro|retirad|reconstrucci[oó]n|nail[ -]?art|decoraci[oó]n)/i.test(String(x.servicio||'')));
+  const ranking=Object.entries(validServices.reduce((m,x)=>{const k=String(x.servicio||'').trim();if(k)m[k]=(m[k]||0)+1;return m;},{})).sort((x,y)=>y[1]-x[1]);
+  const principal=ranking[0];
+  const currentMonth=periodo===fmtPeriodo(new Date());
+  const currentToday=currentMonth?dateNow:`${periodo}-31`;
+  const localMap=new Map(locales.map(l=>[Number(l.id),l.nombre]));
+  const configModalidad=(result?.modalidades||[]);
+  const thisMonthRows=rows.filter(r=>r.estado==='revisada');
+  const currentByLocal=new Map();
+  for(const s of servicios){
+    const localId=Number(s.local_id);
+    const k=String(localId);
+    if(!currentByLocal.has(k))currentByLocal.set(k,[]);
+    currentByLocal.get(k).push(s);
+  }
+  const currentPeriodFor=(localId)=>{
+    const configs=configModalidad.filter(x=>Number(x.localId??x.local_id)===Number(localId)&&(!x.fechaDesde&&!x.fecha_desde||String(x.fechaDesde||x.fecha_desde)<=dateNow)).sort((x,y)=>String(y.fechaDesde||y.fecha_desde||'').localeCompare(String(x.fechaDesde||x.fecha_desde||'')));
+    const modal=String(configs[0]?.modalidad||'').toLowerCase();
+    const closed=rows.filter(r=>Number(r.local_id)===Number(localId)&&r.desde<=dateNow&&r.hasta>=dateNow);
+    const isQuincenal=modal==='quincenal'||(!modal&&closed.some(r=>r.modalidad==='quincenal')); 
+    if(isQuincenal){const day=Number(dateNow.slice(8));return {desde:`${periodo}-${day<=15?'01':'16'}`,hasta:day<=15?`${periodo}-15`:dateKey(new Date(Number(periodo.slice(0,4)),Number(periodo.slice(5,7)),0)),modalidad:'Quincenal'};}
+    const d=startOfCommissionWeek(dateNow);const w=getCommissionWeekRangeFromStart(d);
+    return {desde:w?.desdeKey||dateNow,hasta:w?.hastaKey||dateNow,modalidad:'Semanal'};
+  };
+  const localesRelevantes=Array.from(currentByLocal.keys()).map(Number).filter(id=>id>0);
+  const openPeriods=currentMonth?localesRelevantes.map(localId=>{const rango=currentPeriodFor(localId);const services=(currentByLocal.get(String(localId))||[]).filter(x=>String(x.fecha_pago)>=rango.desde&&String(x.fecha_pago)<=rango.hasta&&String(x.fecha_pago)<=dateNow);return {...rango,localId,nombre:localMap.get(localId)||`Local ${localId}`,services};}).filter(p=>p.services.length||rows.some(r=>Number(r.local_id)===p.localId&&r.desde===p.desde)):[];
+  const [expanded,setExpanded]=useState({});
+  const [serviceSort,setServiceSort]=useState('fecha_pago');
+  const [sortReverse,setSortReverse]=useState(true);
+  const [groupBy,setGroupBy]=useState('');
+  const [openBank,setOpenBank]=useState(false);
+  const [detailTab,setDetailTab]=useState({});
+  const ui={ink:'#72243e',muted:'#9b818b',border:'#eddce2',pale:'#fbf4f6',pink:'#f9e9ee',green:'#eaf3de',greenInk:'#477b27'};
+  const card={background:'#fff',border:`1px solid ${ui.border}`,borderRadius:18,padding:'17px 20px',boxShadow:'0 3px 17px rgba(114,36,62,.035)'};
+  const label={fontSize:11,color:ui.muted,fontWeight:600};
+  const strong={fontSize:22,fontWeight:800,color:ui.ink,letterSpacing:'-.02em'};
+  const pill=(txt,tone='neutral')=><span style={{fontSize:11,padding:'5px 9px',borderRadius:90,fontWeight:700,background:tone==='good'?ui.green:tone==='warn'?'#fff0dc':ui.pink,color:tone==='good'?ui.greenInk:tone==='warn'?'#9b641e':ui.ink}}>{txt}</span>;
+  const btn=(txt,onClick,primary=false,disabled=false)=><button type="button" disabled={disabled} onClick={onClick} style={{border:'none',borderRadius:9,padding:'9px 13px',fontSize:12,fontWeight:700,cursor:disabled?'not-allowed':'pointer',background:primary?ui.ink:ui.pink,color:primary?'#fff':ui.ink,opacity:disabled?.5:1}}>{txt}</button>;
+  const getDisplayedServices=(items)=>{
+    const list=[...items].sort((a,b)=>{
+      const va=String(a[serviceSort]??''),vb=String(b[serviceSort]??'');
+      return (sortReverse?-1:1)*va.localeCompare(vb,'es',{numeric:true});
+    });return list;
+  };
+  const serviceTable=(items,id)=>{const list=getDisplayedServices(items),groups=groupBy?Object.groupBy(list,s=>String(s[groupBy]||'Sin datos')):{'':list};const groupEntries=Object.entries(groups).sort((a,b)=>groupBy==='fecha_pago'?String(a[0]).localeCompare(String(b[0])):0);const commissionTotal=rows=>rows.reduce((sum,r)=>sum+Number(r.comision||0),0);const pendingCount=rows=>rows.filter(r=>r.comision==null).length;return <div style={{minWidth:0}}><div style={{display:'flex',justifyContent:'space-between',alignItems:'center',flexWrap:'wrap',gap:8,margin:'0 0 11px'}}><div style={{fontSize:12,color:ui.muted}}>{items.length} prestaciones · Detalle de ventas</div><div style={{display:'flex',alignItems:'center',gap:6,flexWrap:'wrap'}}><span style={label}>Agrupar</span><select aria-label="Agrupar servicios" value={groupBy} onChange={e=>setGroupBy(e.target.value)} style={{...inputStyle,width:128,padding:6,fontSize:11}}><option value="">Sin agrupar</option><option value="fecha_pago">Fecha</option><option value="servicio">Servicio</option><option value="cliente">Cliente</option></select><button onClick={()=>setSortReverse(x=>!x)} style={{border:0,background:ui.pink,color:ui.ink,borderRadius:8,padding:7,cursor:'pointer'}}>{sortReverse?'↓':'↑'} Orden</button></div></div><div style={{overflowX:'auto',border:`1px solid ${ui.border}`,borderRadius:12}}><table style={{width:'100%',borderCollapse:'collapse',fontSize:11,minWidth:560}}><thead><tr style={{background:ui.pale}}>{[['fecha_pago','Fecha'],['servicio','Servicio'],['cliente','Cliente'],['precio','Precio'],['comision','Comisión']].map(([key,title])=><th key={key} onClick={()=>{setServiceSort(key);setSortReverse(v=>key===serviceSort?!v:true);}} style={{padding:'10px 9px',textAlign:['precio','comision'].includes(key)?'right':'left',cursor:'pointer',color:ui.ink}}>{title}{serviceSort===key?(sortReverse?' ↓':' ↑'):''}</th>)}</tr></thead><tbody>{groupEntries.map(([k,vals])=><React.Fragment key={k}>{groupBy&&<tr><td colSpan={5} style={{background:'#fbf6f8',padding:'8px 9px',color:ui.ink,fontWeight:700}}>{k} · {vals.length} servicios · Comisión: {fmtMoney(commissionTotal(vals))}{pendingCount(vals)?` · ${pendingCount(vals)} pendiente(s)`:''}</td></tr>}{vals.map((s,i)=><tr key={`${s.item_type||''}-${s.source_item_id||i}`} style={{borderTop:`1px solid ${ui.border}`}}><td style={{padding:'8px 9px',whiteSpace:'nowrap'}}>{parseDateLabel(s.fecha_pago)}</td><td style={{padding:'8px 9px'}}>{s.servicio||'—'}</td><td style={{padding:'8px 9px'}}>{s.cliente||'—'}</td><td style={{padding:'8px 9px',textAlign:'right',whiteSpace:'nowrap'}}>{s.precio==null?'Pendiente':fmtMoney(s.precio)}</td><td style={{padding:'8px 9px',textAlign:'right',whiteSpace:'nowrap',fontWeight:700,color:ui.ink}}>{s.comision==null?'Pendiente':fmtMoney(s.comision)}</td></tr>)}</React.Fragment>)}{list.length>0&&<tr style={{background:ui.pink,borderTop:`2px solid ${ui.border}`,fontWeight:800,color:ui.ink}}><td colSpan={4} style={{padding:'10px 9px'}}>TOTAL · {list.length} servicios{pendingCount(list)?` · ${pendingCount(list)} comisión(es) pendiente(s)`:''}</td><td style={{padding:'10px 9px',textAlign:'right',whiteSpace:'nowrap'}}>{fmtMoney(commissionTotal(list))}</td></tr>}</tbody></table></div>{!list.length&&<p style={{fontSize:12,color:ui.muted}}>No hay prestaciones registradas para este período.</p>}</div>};
+  const formula=(x,confirmed=false)=>{const base=Number(x.comision||0),min=Number(x.complemento_minimo||0),gar=Number(x.ajustes_garantia||0),adv=Number(x.adelantos||0);const set=[["Comisión por servicios",base],["Complemento mínimo",min],["Ajustes de garantías",gar],["Adelantos",-adv]];return <div style={{display:'grid',gap:7}}>{set.map(([k,v])=><div key={k} style={{border:`1px solid ${ui.border}`,borderRadius:11,padding:'10px 12px',display:'flex',justifyContent:'space-between',fontSize:12,gap:8}}><span>{k}</span><b style={{color:ui.ink}}>{fmtMoney(v)}</b></div>)}<div style={{padding:'12px',borderRadius:11,display:'flex',justifyContent:'space-between',background:ui.pink,color:ui.ink,fontWeight:800,fontSize:14}}><span>{confirmed?'Total validado':'Comisión de referencia'}</span><span>{fmtMoney(confirmed?x.total:base+min+gar-adv)}</span></div><div style={{padding:11,background:'#eff6e8',borderRadius:10,fontSize:11,color:'#568039'}}>{confirmed?'Este importe corresponde a una liquidación validada. No se vuelve a calcular a partir de las ventas actuales.':'El porcentaje del 40 % es solo una referencia sobre los servicios visibles. El total definitivo depende de asistencia, porcentaje, garantías, adelantos y validación administrativa.'}</div></div>};
+  const controlDetalle=(p)=>{
+    const aids=(result?.asistencias||[]).filter(x=>Number(x.local_id)===Number(p.localId)&&String(x.fecha)>=p.desde&&String(x.fecha)<=p.hasta);
+    const hrs=(result?.horarios||[]).filter(x=>Number(x.local_id)===Number(p.localId)&&String(x.fecha)>=p.desde&&String(x.fecha)<=p.hasta&&x.trabaja!==false);
+    const duration=(a,b)=>{const t=x=>{const m=String(x||'').match(/^(\d{1,2}):(\d{2})/);return m?Number(m[1])*60+Number(m[2]):null;};const start=t(a),end=t(b);return start==null||end==null?0:Math.max(0,end-start)/60;};
+    const horas=hrs.reduce((v,x)=>v+duration(x.entrada,x.salida),0);
+    // Misma regla que el reporte operativo de asistencia:
+    // presente: cumple el horario programado; tarde: horario real con respaldo del programado.
+    const reales=aids.reduce((total,a)=>{
+      const h=hrs.find(x=>x.fecha===a.fecha);
+      const estado=String(a.estado||'').toLowerCase();
+      if(estado==='presente') return total+duration(h?.entrada||a.entrada_real,h?.salida||a.salida_real);
+      if(estado==='tarde') return total+duration(a.entrada_real||h?.entrada,a.salida_real||h?.salida);
+      return total;
+    },0);
+    const enCurso=aids.filter(x=>x.entrada_real&&!x.salida_real&&String(x.estado||'').toLowerCase()!=='ausente');
+    const ausencias=aids.filter(x=>/ausent/i.test(String(x.estado||'')));
+    const tardanzas=aids.filter(x=>{const h=hrs.find(y=>y.fecha===x.fecha);const tm=t=>{const m=String(t||'').match(/^(\d{1,2}):(\d{2})/);return m?Number(m[1])*60+Number(m[2]):null;};const real=tm(x.entrada_real),prev=tm(h?.entrada);return real!=null&&prev!=null&&real>prev;});
+    const serviceSum=p.services.reduce((v,x)=>v+(x.precio==null?0:Number(x.precio)),0);
+    const missing=p.services.filter(x=>x.precio==null||x.comision==null);
+    return <div style={{display:'grid',gap:9}}>
+      <div style={{background:ui.pale,padding:12,borderRadius:11,fontSize:12}}><strong>① Prestaciones y precios históricos</strong><p style={{margin:'6px 0 0'}}>Servicios: <b>{p.services.length}</b> · Venta computable: <b>{missing.length?'Datos pendientes':fmtMoney(serviceSum)}</b>. El valor proviene de la lista de precios vigente por fecha, no necesariamente de lo cobrado.</p>{missing.length>0&&<div style={{color:'#a45d24',marginTop:6}}>Faltan datos de {missing.length} prestación(es). No corresponde mostrar $0 como importe definitivo.</div>}</div>
+      <div style={{background:ui.pale,padding:12,borderRadius:11,fontSize:12}}><strong>② Porcentaje aplicable</strong><p style={{margin:'6px 0 0'}}>El 40 % es una referencia visual. La validación definitiva establece 35 % o 40 % según horarios, asistencia, recuperaciones y ajustes manuales autorizados.</p></div>
+      <div style={{background:ui.pale,padding:12,borderRadius:11,fontSize:12}}><strong>③ Horarios y asistencia</strong><p style={{margin:'6px 0 0'}}>Horas programadas registradas: <b>{horas.toFixed(1)} h</b> · Horas completadas: <b>{reales.toFixed(1)} h</b>{enCurso.length>0&&<> · Jornadas con entrada y sin salida: <b>{enCurso.length}</b> (en curso, horas pendientes de cierre)</>} · Tardanzas detectables: <b>{tardanzas.length}</b> · Ausencias registradas: <b>{ausencias.length}</b>.</p><p style={{fontSize:11,margin:'7px 0 0',color:ui.muted}}>Las recuperaciones y los motivos de ausencia se confirman en el cálculo administrativo, no se infieren automáticamente de estas marcaciones.</p></div>
+      <div style={{background:ui.pale,padding:12,borderRadius:11,fontSize:12}}><strong>④ Mínimo, garantías y adelantos</strong><p style={{margin:'6px 0 0'}}>Se computan al validar la liquidación. El importe estimado no incluye ajustes que todavía no hayan sido confirmados.</p></div>
+      {formula({comision:p.services.reduce((v,x)=>v+Number(x.comision||0),0),complemento_minimo:0,ajustes_garantia:0,adelantos:0},false)}
+    </div>;
+  };
+  const paidFor=(r)=>pagos.filter(p=>p.liquidacion_key===r.key);
+  const renderClosed=(r)=>{const own=paidFor(r),paid=own.reduce((t,p)=>t+Number(p.importe||0),0),total=Number(r.total||0),valid=r.estado==='revisada',done=valid&&paid>=total-.01;const serviceRows=servicios.filter(s=>Number(s.local_id)===Number(r.local_id)&&s.fecha_pago>=r.desde&&s.fecha_pago<=r.hasta);const expandedNow=expanded[r.key],tab=detailTab[r.key]||'services';return <div key={r.key} style={{border:`1px solid ${ui.border}`,borderRadius:13,marginTop:9,overflow:'hidden',background:'#fff'}}><div style={{display:'flex',gap:12,padding:13,alignItems:'center',flexWrap:'wrap'}}><div style={{flex:'1 1 190px'}}><div style={{fontWeight:800,color:ui.ink,fontSize:13}}>{parseDateLabel(r.desde)} – {parseDateLabel(r.hasta)}</div><div style={{...label,marginTop:3}}>{r.local_nombre} · {r.modalidad==='semanal'?'Semanal':'Quincenal'}</div><div style={{fontSize:11,color:ui.muted,marginTop:5}}>📅 Cobro previsto: <strong>{parseDateLabel(nikiFechaPrevistaCobro({modalidad:r.modalidad,desde:r.desde,hasta:r.hasta,userId:user.id,localId:r.local_id,horarios:result?.horarios,asistencias:result?.asistencias}).fecha)}</strong></div></div><div style={{minWidth:125}}><div style={{fontWeight:800,color:ui.ink,fontSize:18}}>{fmtMoney(total)}</div><div style={label}>Monto registrado</div></div><div style={{display:'flex',gap:5,flexWrap:'wrap'}}>{pill(valid?'Validada':'Reabierta',valid?'good':'warn')}{pill(done?'Pagada':paid>0?'Pago parcial':'Pendiente de pago',done?'good':'warn')}</div><div style={{fontSize:11,minWidth:120,color:ui.muted}}>Cobrado: <strong>{fmtMoney(paid)}</strong><div>Saldo: <strong>{fmtMoney(Math.max(0,total-paid))}</strong></div></div><div style={{display:'flex',gap:5,flexWrap:'wrap'}}>{btn(expandedNow?'Cerrar detalle':'Ver detalle',()=>setExpanded(v=>({...v,[r.key]:!v[r.key]})))}</div></div>{expandedNow&&<div style={{borderTop:`1px solid ${ui.border}`,padding:14,background:'#fffbfc'}}><div style={{display:'grid',gridTemplateColumns:'repeat(auto-fit,minmax(340px,1fr))',gap:14}}><div><h4 style={{color:ui.ink,margin:'0 0 9px'}}>Servicios del período</h4>{serviceTable(serviceRows,r.key)}</div><div><h4 style={{color:ui.ink,margin:'0 0 9px'}}>Cómo se calculó</h4>{formula(r,true)}</div></div><div style={{marginTop:12,padding:10,background:ui.pale,borderRadius:10,fontSize:11}}>Pagos: {own.length?own.map(p=>`${parseDateLabel(p.fecha_pago)} · ${p.medio} · ${fmtMoney(p.importe)}`).join(' | '):'Todavía no hay pagos registrados.'}<div style={{marginTop:5}}>Confirmación digital de recepción: próximamente. No se solicita ni registra conformidad todavía.</div></div></div>}</div>};
+  const monthServices=servicios.filter(s=>String(s.fecha_pago).startsWith(periodo));
+  const totalEstimated=openPeriods.reduce((sum,p)=>sum+p.services.reduce((a,s)=>a+Number(s.comision||0),0),0);
+  const closedRows=rows.filter(r=>r.hasta<dateNow || !currentMonth).sort((a,b)=>String(b.desde).localeCompare(String(a.desde)));
+  const periodPaid=pagos.filter(p=>rows.some(r=>r.key===p.liquidacion_key)).reduce((a,p)=>a+Number(p.importe||0),0);
+  const actualLabel=Number.isFinite(totalEstimated)?fmtMoney(totalEstimated):'—';
+  return <div style={{display:'flex',flexDirection:'column',gap:12,color:'#513341'}}>
+    <div style={{...card,display:'flex',justifyContent:'space-between',alignItems:'center',gap:12,flexWrap:'wrap'}}><div><h2 style={{margin:0,color:ui.ink,fontSize:27,letterSpacing:'-.025em'}}>Mis comisiones</h2><div style={{fontSize:12,color:ui.muted,marginTop:4}}>Tus ingresos, liquidaciones y pagos, en un solo lugar.</div></div><div style={{display:'flex',gap:8,flexWrap:'wrap'}}><input type="month" value={periodo} onChange={e=>setPeriodo(e.target.value)} style={{...inputStyle,width:160}}/><select value={localFiltro} onChange={e=>setLocalFiltro(e.target.value)} style={{...inputStyle,width:190}}><option value="todos">Todas las sucursales</option>{locales.map(l=><option key={l.id} value={l.id}>{l.nombre}</option>)}</select>{btn(busy?'Actualizando…':'↻ Actualizar',()=>void fetchMine(),true,busy)}</div></div>
+    {error&&<div style={{...card,color:COLORS.danger,background:'#fff3f3'}}>{error}</div>}
+    {!result&&busy?<div style={card}>Cargando tus comisiones…</div>:<>
+      <div style={{display:'grid',gridTemplateColumns:'repeat(auto-fit,minmax(205px,1fr))',gap:11}}>
+        {[["◉","Estimado en curso",actualLabel,'Referencia 40 % · Sin validar'],["◷","Pendiente de cobro",fmtMoney(porCobrar),`${rows.filter(r=>r.estado==='revisada'&&paidFor(r).reduce((a,p)=>a+Number(p.importe||0),0)<Number(r.total||0)).length} liquidación(es) pendiente(s)`],["✓","Cobrado este mes",fmtMoney(periodPaid),'Pagos registrados'],["☆","Servicio principal",principal?principal[0]:'Sin datos',principal?`${Math.round(principal[1]/Math.max(1,validServices.length)*100)} % de los servicios principales`:'Sin prestaciones']].map(([ic,t,val,sub])=><div key={t} style={{...card,padding:15,display:'flex',gap:11,alignItems:'start'}}><div style={{background:ui.pink,borderRadius:13,padding:10,fontSize:19,color:ui.ink}}>{ic}</div><div style={{minWidth:0}}><div style={label}>{t}</div><div style={{...strong,fontSize:t==='Servicio principal'?15:23,margin:'5px 0',overflowWrap:'anywhere'}}>{val}</div><div style={{fontSize:10,color:ui.muted}}>{sub}</div></div></div>)}
+      </div>
+      {currentMonth&&<section style={{...card,borderColor:'#e8ccd5',background:'linear-gradient(140deg,#fff 76%,#fff7f9)'}}><div style={{display:'flex',justifyContent:'space-between',flexWrap:'wrap',gap:8,alignItems:'center'}}><div><h3 style={{fontSize:20,color:ui.ink,margin:'0 0 5px'}}>▦ Período en curso</h3><div style={label}>Tu desempeño actual. Los montos son estimados hasta su validación.</div></div>{pill('En curso','warn')}</div>{openPeriods.length===0?<div style={{padding:'19px 0',fontSize:12,color:ui.muted}}>Todavía no hay servicios vinculados para el período en curso.</div>:openPeriods.map(p=>{const id=`open-${p.localId}-${p.desde}`,reference=p.services.reduce((v,s)=>v+Number(s.comision||0),0),price=p.services.reduce((v,s)=>v+Number(s.precio||0),0),missingPrices=p.services.some(s=>s.precio==null||s.comision==null),shown=!!expanded[id];const attendance=(result?.asistencias||[]).filter(a=>Number(a.local_id)===p.localId&&a.fecha>=p.desde&&a.fecha<=p.hasta);const abs=attendance.filter(a=>String(a.estado||'').toLowerCase().includes('ausen')).length;const confirmed=rows.find(r=>Number(r.local_id)===p.localId&&r.desde===p.desde&&r.hasta===p.hasta&&r.estado==='revisada');return <div key={id} style={{marginTop:13,padding:'15px 14px',border:`1px solid ${ui.border}`,borderRadius:14,background:'#fff'}}><div style={{display:'flex',justifyContent:'space-between',alignItems:'center',gap:10,flexWrap:'wrap'}}><div><div style={{fontWeight:800,color:ui.ink,fontSize:16}}>{user?.nombre||'Mis servicios'}</div><div style={{fontSize:11,color:ui.muted,marginTop:4}}>{p.nombre} · {p.modalidad} · {parseDateLabel(p.desde)} al {parseDateLabel(p.hasta)} · Cobro previsto: {parseDateLabel(nikiFechaPrevistaCobro({modalidad:p.modalidad,desde:p.desde,hasta:p.hasta,userId:user.id,localId:p.localId,horarios:result?.horarios,asistencias:result?.asistencias}).fecha)}</div></div><div style={{textAlign:'right'}}><div style={label}>REFERENCIA DE COMISIÓN</div><div style={{...strong,fontSize:26}}>{fmtMoney(reference)}</div></div></div><div style={{display:'flex',gap:7,flexWrap:'wrap',margin:'12px 0'}}>{pill(`${p.services.length} servicios`,'good')}{pill(`${abs} ausencias registradas`,abs?'warn':'good')}{pill('40 % de referencia')}{pill(confirmed?'Ya validada':'Pendiente de validar',confirmed?'good':'warn')}</div><div style={{display:'grid',gridTemplateColumns:'repeat(auto-fit,minmax(145px,1fr))',gap:9,marginBottom:11}}>{[['Venta de servicios',missingPrices?'Datos pendientes':fmtMoney(price)],['Comisión de referencia',missingPrices?'Datos pendientes':fmtMoney(reference)],['Complemento mínimo','Al validar'],['Garantías y adelantos','Al validar']].map(([l,v])=><div key={l} style={{background:ui.pale,borderRadius:12,padding:12}}><div style={label}>{l}</div><div style={{fontSize:16,fontWeight:800,color:ui.ink,marginTop:6}}>{v}</div></div>)}</div><div style={{display:'flex',gap:8,flexWrap:'wrap'}}>{btn(shown?'Ocultar detalle':'▤ Ver detalle y cálculo',()=>setExpanded(v=>({...v,[id]:!v[id]})),true)}</div><div style={{background:ui.pink,color:ui.ink,borderRadius:9,padding:'9px 11px',fontSize:11,marginTop:11}}>ⓘ Las ventas visibles son reales. La comisión mostrada utiliza el 40 % de referencia; el porcentaje final, horas, tardanzas, ausencias, recuperaciones y ajustes se determinan al validar.</div>{shown&&<div style={{display:'grid',gridTemplateColumns:'repeat(auto-fit,minmax(340px,1fr))',gap:12,marginTop:13}}><div style={{minWidth:0}}><h4 style={{margin:'4px 0 12px',color:ui.ink}}>Detalle de servicios</h4>{serviceTable(p.services,id)}</div><div><h4 style={{margin:'4px 0 12px',color:ui.ink}}>Cómo se calcula</h4>{controlDetalle(p)}</div></div>}</div>})}</section>}
+      <section style={card}><h3 style={{margin:'0 0 3px',fontSize:20,color:ui.ink}}>▦ Períodos cerrados</h3><div style={label}>Tus liquidaciones anteriores · Semanales y quincenales</div>{closedRows.length?closedRows.map(renderClosed):<div style={{padding:'18px 0',color:ui.muted,fontSize:12}}>No hay liquidaciones cerradas en el mes seleccionado.</div>}</section>
+      <section style={{...card,padding:15,display:'flex',justifyContent:'space-between',gap:11,alignItems:'center',flexWrap:'wrap'}}><div><div style={{fontSize:15,fontWeight:800,color:ui.ink}}>▣ Mis datos para transferencias</div><div style={{fontSize:11,color:ui.muted,marginTop:4}}>Alias o CBU donde recibís tus pagos</div>{!editBank&&<div style={{fontSize:12,marginTop:7,fontWeight:700}}>{result?.dato_bancario||'Sin datos cargados'}</div>}</div>{editBank?<div style={{display:'flex',gap:7,flexWrap:'wrap',flex:1,justifyContent:'end'}}><input style={{...inputStyle,maxWidth:250}} value={bank} onChange={e=>setBank(e.target.value)}/>{btn(savingBank?'Guardando…':'Guardar',()=>void saveBank(),true,savingBank)}{btn('Cancelar',()=>{setEditBank(false);setBank(result?.dato_bancario||'')})}</div>:btn('✎ Editar',()=>setEditBank(true))}</section>
+    </>}
+  </div>;
+}
+
 function readSectionHash() {
   const h = (window.location.hash || "").replace(/^#\/?/, "").trim();
   return h || null;
@@ -17962,10 +18858,10 @@ function sectionAllowedForRole(section, role) {
   const casaMatriz = ["inicio","dashboard","dashboard_manicuras","clientes_crm","ayuda","roadmap","asistencia","horarios","pizarra_semanal","dotacion_cupos","horarios_encargadas","vacaciones_encargadas","bloqueo_horarios",...reportesOperativos,"preliquidacion_encargadas","servicios","listas_precios","adelantos","garantias","gastos_vencimientos","reclamos","auditorias","informes","informes_mensajeria","manicuras","encargadas","reclutamiento_busquedas","reclutamiento_candidatas","reclutamiento_calendario","reclutamiento_aprobaciones","reclutamiento_antiguedad","reclutamiento_config","locales","cobertura_config","perfil"];
   const franquiciado = ["inicio","dashboard","dashboard_manicuras","clientes_crm","ayuda","asistencia","horarios","pizarra_semanal","dotacion_cupos","horarios_encargadas","vacaciones_encargadas","bloqueo_horarios",...reportesOperativos,"preliquidacion_encargadas","adelantos","garantias","gastos_vencimientos","reclamos","informes","informes_mensajeria","manicuras","encargadas","reclutamiento_busquedas","reclutamiento_candidatas","reclutamiento_calendario","cobertura_config","perfil"];
   const encargada = ["inicio","dashboard","dashboard_manicuras","clientes_crm","ayuda","asistencia","horarios","pizarra_semanal","dotacion_cupos","vacaciones_encargadas","bloqueo_horarios",...reportesOperativos,"preliquidacion_encargadas","adelantos","garantias","reclamos","informes","informes_mensajeria","manicuras","reclutamiento_carga","cobertura_config","perfil"];
-  const manicura = ["consulta_comisiones_precios","inicio","ayuda","horarios","pizarra_semanal","vacaciones_encargadas","reportes","reportes_horas","reportes_comisiones","perfil"];
+  const manicura = ["consulta_comisiones_precios","mis_comisiones","inicio","ayuda","horarios","pizarra_semanal","vacaciones_encargadas","reportes","reportes_horas","perfil"];
   const allowed = role === "admin" ? admin : role === "casa_matriz" ? casaMatriz : role === "franquiciado" ? franquiciado : role === "encargada" ? encargada : manicura;
   // Piloto visible para Casa Matriz dentro del menu Comisiones, sin exigir perfil admin.
-  if (section === "comisiones_quincenal_piloto" || section === "comisiones_semanal_nuevo") return ["admin","casa_matriz","franquiciado","encargada","manicura"].includes(role);
+  if (section === "comisiones_quincenal_piloto" || section === "comisiones_semanal_nuevo") return ["admin","casa_matriz","franquiciado","encargada"].includes(role);
   return allowed.includes(section);
 }
 
@@ -18058,6 +18954,34 @@ const refreshTimer = window.setInterval(check, 10 * 60 * 1000);
   }, [user?.id]);
 
   const [seccion, setSeccion] = useState(null);
+  // Pestañas internas: cada vista abierta conserva su instancia React.
+  const [openWorkTabs, setOpenWorkTabs] = useState([]);
+  const workTabScroll = useRef({});
+  const lastWorkTab = useRef(null);
+  useEffect(() => {
+    if (!user?.id) { setOpenWorkTabs([]); workTabScroll.current = {}; return; }
+    if (!seccion) return;
+    setOpenWorkTabs(prev => {
+      if (prev.includes(seccion)) return prev;
+      // Máximo ocho vistas simultáneas: descartar la más antigua que no esté activa.
+      const next = [...prev, seccion];
+      if (next.length > 8) {
+        const old = next.find(x => x !== seccion && x !== 'inicio');
+        return next.filter(x => x !== old);
+      }
+      return next;
+    });
+  }, [seccion, user?.id]);
+  useLayoutEffect(() => {
+    if (!seccion) return;
+    if (lastWorkTab.current && lastWorkTab.current !== seccion) {
+      workTabScroll.current[lastWorkTab.current] = window.scrollY;
+    }
+    lastWorkTab.current = seccion;
+    const target = Number(workTabScroll.current[seccion] || 0);
+    window.requestAnimationFrame(() => window.scrollTo({top:target,behavior:'instant'}));
+  }, [seccion]);
+
   const [publicHash, setPublicHash] = useState(() => readSectionHash());
   const [menuOpen, setMenuOpen] = useState(false);
   const [mobileMenuGroup, setMobileMenuGroup] = useState(null);
@@ -18070,6 +18994,9 @@ const refreshTimer = window.setInterval(check, 10 * 60 * 1000);
   const [toasts, setToasts] = useState([]);
   const [notificationHistory, setNotificationHistory] = useState([]);
   const [notificationOpen, setNotificationOpen] = useState(false);
+  const [releasePopupIds,setReleasePopupIds]=useState([]);
+  const [commissionsDemoOpen,setCommissionsDemoOpen]=useState(false);
+  const releaseSessionShown=useRef("");
   const [screenTransition, setScreenTransition] = useState(false);
   const previousSectionRef = useRef(null);
   const [screenState, setScreenState] = useState({
@@ -18077,6 +19004,7 @@ const refreshTimer = window.setInterval(check, 10 * 60 * 1000);
     bloqueoHorarios: null,
     reportes: {},
   });
+  const [homeMisInfoOpen, setHomeMisInfoOpen] = useState(false);
   const [homeKpis, setHomeKpis] = useState({ loading:false, error:"", ventas:0, ventasAnt:0, visitas:0, visitasAnt:0, ticket:0, ticketAnt:0, fechaHasta:"" });
   const [homeReclamosPendientes, setHomeReclamosPendientes] = useState({ loading:false, error:"", rows:[] });
   const gastosAlertLoadedRef = useRef("");
@@ -18084,6 +19012,30 @@ const refreshTimer = window.setInterval(check, 10 * 60 * 1000);
   const dualOperationalProfile = !!user && user.rol === "manicura" && !!data && isEncargadaOperativa(data,user.id);
   const effectiveRole = dualOperationalProfile ? (operatingMode === "encargada" ? "encargada" : "manicura") : user?.rol;
   const effectiveUser = user ? (dualOperationalProfile ? {...user,rol:effectiveRole,baseRol:user.rol,operatingMode:effectiveRole} : user) : null;
+
+  const applicableReleaseNotices=useMemo(()=>NIKI_RELEASE_NOTICES.filter(n=>n.audience==="todos" || n.audience===(effectiveRole==="manicura"?"manicura":"gestion")),[effectiveRole]);
+  useEffect(()=>{
+    if(!user?.id || !data || !effectiveRole) { setReleasePopupIds([]); return; }
+    const key=`${user.id}:${effectiveRole}`;
+    if(releaseSessionShown.current===key)return;
+    releaseSessionShown.current=key;
+    const seen=nikiReadNotices(user.id);
+    const notices=applicableReleaseNotices;
+    setNotificationHistory(prev=>{
+      const other=prev.filter(x=>!x.isRelease);
+      return [...notices.map(n=>({id:n.id,isRelease:true,type:"info",title:n.title,message:n.message,time:"Novedad · octubre 2026",read:seen.includes(n.id),action:n.action})),...other].slice(0,30);
+    });
+    setReleasePopupIds(notices.filter(n=>!seen.includes(n.id)).map(n=>n.id));
+  },[user?.id,data,effectiveRole,applicableReleaseNotices]);
+  const dismissReleasePopup=useCallback(()=>{
+    if(!user?.id)return;
+    const ids=releasePopupIds;
+    const seen=new Set([...nikiReadNotices(user.id),...ids]);
+    localStorage.setItem(nikiNoticeStorageKey(user.id),JSON.stringify([...seen]));
+    setNotificationHistory(prev=>prev.map(n=>ids.includes(n.id)?{...n,read:true}:n));
+    setReleasePopupIds([]);
+  },[user?.id,releasePopupIds]);
+
 
   useEffect(()=>{
     if(!user?.id){setOperatingMode("manicura");return;}
@@ -18179,6 +19131,12 @@ const refreshTimer = window.setInterval(check, 10 * 60 * 1000);
     if (!action) return;
     if (notificationId) dismissToast(notificationId);
     setNotificationOpen(false);
+    if(action.kind==="openCommissionsDemo") { setCommissionsDemoOpen(true); return; }
+    if(action.kind==="openSection" && sectionAllowedForRole(action.section,effectiveRole)) {
+      window.history.replaceState(null,"",`#${action.section}`);
+      setSeccion(action.section);setMenuOpen(false);setMobileMenuGroup(null);
+      return;
+    }
     if (action.kind === "openTurno" && sectionAllowedForRole("turnos", effectiveRole)) {
       window.history.replaceState(null, "", "#turnos");
       setAgendaOpenRequest({ ...action, nonce:Date.now() });
@@ -18537,10 +19495,11 @@ const refreshTimer = window.setInterval(check, 10 * 60 * 1000);
       label: "Comisiones",
       icon: "💰",
       items: [
-        { id: "reportes_comisiones", label: "Reporte de comisiones", icon: "📊" },
-        { id: "reporte_pago_comisiones", label: "Pago de comisiones", icon: "💳" },
-        { id: "comisiones_semanal_nuevo", label: "Liquidaciones semanales · Prueba", icon: "📅" },
-        { id: "comisiones_quincenal_piloto", label: "Comisiones quincenales · Piloto", icon: "🧪" },
+        { id: "reportes_comisiones", label: "Análisis de comisiones", icon: "📊" },
+        { id: "mis_comisiones", label: "Mis comisiones", icon: "💰" },
+        { id: "reporte_pago_comisiones", label: "Pagos de comisiones", icon: "💳" },
+        { id: "comisiones_semanal_nuevo", label: "Liquidaciones semanales", icon: "📅" },
+        { id: "comisiones_quincenal_piloto", label: "Liquidaciones quincenales", icon: "📅" },
         { id: "garantias", label: "Garantías", icon: "🛠️" },
         { id: "adelantos", label: "Adelantos", icon: "💸" },
       ],
@@ -18620,6 +19579,18 @@ const refreshTimer = window.setInterval(check, 10 * 60 * 1000);
   const currentGroup = menuGroups.find(group => group.items.some(item => item.id === seccion));
   const desktopOpenGroupId = Object.keys(desktopMenuGroupsOpen || {}).find(groupId => desktopMenuGroupsOpen[groupId]);
 
+  const closeWorkTab = (id) => {
+    if (id === 'inicio') return;
+    setOpenWorkTabs(prev => prev.filter(tab => tab !== id));
+    delete workTabScroll.current[id];
+    if (seccion === id) {
+      const other = openWorkTabs.filter(tab => tab !== id);
+      const target = other[other.length - 1] || 'inicio';
+      window.history.replaceState(null, '', `#${target}`);
+      setSeccion(target);
+    }
+  };
+
   const goToSection = (id) => {
     if (!id) return;
     if (id === "mas") {
@@ -18645,7 +19616,7 @@ const refreshTimer = window.setInterval(check, 10 * 60 * 1000);
     { id: "inicio", label: "Inicio", icon: "⌂" },
     { id: "turnos", label: "Turnos", icon: "📅" },
     { id: "horarios", label: "Horarios", icon: "🗓️" },
-    { id: "reportes_comisiones", label: "Comisiones", icon: "💰" },
+    { id: effectiveRole === "manicura" ? "mis_comisiones" : "reportes_comisiones", label: "Comisiones", icon: "💰" },
     { id: "mas", label: "Más", icon: "☰" },
   ].filter(item => item.id === "mas" || sectionAllowedForRole(item.id, effectiveRole));
 
@@ -18699,7 +19670,7 @@ const refreshTimer = window.setInterval(check, 10 * 60 * 1000);
       ? [
           [{ id: "horarios", label: "Mis horarios", icon: "🗓️" }, "Cargar y revisar horarios"],
           [{ id: "reportes_horas", label: "Mis horas", icon: "⏱️" }, "Horas y asistencia"],
-          [{ id: "reportes_comisiones", label: "Mis comisiones", icon: "💰" }, "Resumen de comisiones"],
+          [{ id: "mis_comisiones", label: "Mis comisiones", icon: "💰" }, "Liquidaciones, pagos y servicios"],
           [{ id: "perfil", label: "Mi perfil", icon: "👤" }, "Datos y contraseña"],
           [{ id: "ayuda", label: "Ayuda", icon: "❔" }, "Manual de uso"],
         ]
@@ -18708,7 +19679,7 @@ const refreshTimer = window.setInterval(check, 10 * 60 * 1000);
           [{ id: "clientes_crm", label: "Clientes", icon: "♡" }, "Cartera y recuperación"],
           [{ id: "horarios", label: "Horarios", icon: "🗓️" }, "Carga del equipo"],
           [{ id: "bloqueo_horarios", label: "Bloqueos", icon: "🔐" }, "Habilitar edición mensual"],
-          [{ id: "reportes_comisiones", label: "Comisiones", icon: "💰" }, "Reporte y cálculo"],
+          [{ id: effectiveRole === "manicura" ? "mis_comisiones" : "reportes_comisiones", label: "Comisiones", icon: "💰" }, "Reporte y cálculo"],
           [{ id: "informes", label: "Informe diario", icon: "📝" }, "Cierre operativo"],
           [{ id: "ayuda", label: "Ayuda", icon: "❔" }, "Manual de uso"],
           [{ id: "roadmap", label: "Roadmap", icon: "🗺️" }, "Evolución de producto"],
@@ -18718,10 +19689,13 @@ const refreshTimer = window.setInterval(check, 10 * 60 * 1000);
     const quick = quickBase.filter(([item]) => item.id === "mas" || sectionAllowedForRole(item.id, effectiveRole));
     const userName = String(user?.nombre || user?.usuario || "").trim().split(" ")[0] || "NIKI";
     const todayText = new Intl.DateTimeFormat("es-AR", { weekday:"long", day:"numeric", month:"long" }).format(new Date());
-    const novedades = [
-      { icon:"✨", title:"Novedades", text:"Próximamente este muro va a mostrar comunicados, publicaciones y avisos importantes para la red." },
-      { icon:"📌", title:"Publicaciones", text:"Acá vamos a poder destacar lanzamientos, recordatorios operativos, capacitaciones y mensajes de Casa Matriz." },
-      { icon:"💬", title:"Comunidad NIKI", text:"La idea es que este sea el punto de entrada al día de trabajo, no una pantalla técnica." },
+    // Comunicados del lanzamiento: se segmentan por perfil y enlazan a pantallas existentes.
+    const novedades = effectiveRole === "manicura" ? [
+      { icon:"💗", title:"¡Nuevo! Mis comisiones", text:"Consultá tu período en curso, servicios realizados, horas, ausencias y el cálculo estimado. Revisá tus liquidaciones semanales o quincenales, verificá si ya se validaron o pagaron y actualizá tu alias/CBU.", target:"mis_comisiones", action:"Abrir Mis comisiones" },
+    ] : [
+      { icon:"📅", title:"Nuevas liquidaciones semanales", text:"Validá importes por semana, revisá porcentajes, asistencia, recuperaciones y ajustes. Prepará pagos en efectivo o transferencia y consultá fechas previstas de cobro. Incluye configuración y excepciones por manicura.", target:"comisiones_semanal_nuevo", action:"Ver liquidaciones semanales" },
+      { icon:"🧾", title:"Liquidaciones quincenales", text:"Consultá y validá cada quincena, con detalle de servicios y cálculo, configuración independiente, excepciones y seguimiento de pagos. Las liquidaciones ya cerradas conservan sus importes.", target:"comisiones_quincenal_piloto", action:"Ver liquidaciones quincenales" },
+      { icon:"✨", title:"Nuevo espacio para manicuras", text:"Las manicuras ya tienen Mis comisiones: una pantalla personal para consultar servicios, liquidaciones validadas, pagos y saldos, sin tener que elegir entre semanal o quincenal.", target:"mis_comisiones", action:"Conocer Mis comisiones" },
     ];
 
     return (
@@ -18735,7 +19709,7 @@ const refreshTimer = window.setInterval(check, 10 * 60 * 1000);
             </div>
             <p style={{ margin:"0 0 6px", fontSize:11.5, letterSpacing:"0.12em", textTransform:"uppercase", color:COLORS.pinkDark, fontWeight:800 }}>{todayText}</p>
             <h1 style={{ margin:"0 0 7px", fontSize:isDesktopMenu?29:26, lineHeight:1.08, fontWeight:700, color:COLORS.pinkDark }}>¡Hola, {userName}!</h1>
-            <p style={{ margin:0, fontSize:isDesktopMenu?14:14, lineHeight:1.48, color:"#65424f", maxWidth:680 }}>Este es el inicio de NIKI OS. Pronto vas a ver acá novedades, comunicados y publicaciones importantes para empezar el día con toda la información a mano.</p>
+            <p style={{ margin:0, fontSize:isDesktopMenu?14:14, lineHeight:1.48, color:"#65424f", maxWidth:680 }}>Este es el inicio de NIKI OS. En este espacio vas a encontrar novedades y accesos a las funciones más importantes de NikiOS.</p>
           </div>
         </section>
 
@@ -18773,14 +19747,23 @@ const refreshTimer = window.setInterval(check, 10 * 60 * 1000);
                 <p style={{ margin:"0 0 4px", color:COLORS.pinkDark, fontSize:12, fontWeight:800, letterSpacing:"0.08em", textTransform:"uppercase" }}>Muro NIKI</p>
                 <h2 style={{ margin:0, fontSize:19, fontWeight:700, color:"var(--color-text-primary)" }}>Espacio de novedades</h2>
               </div>
-              <Badge color="pink">Próximamente</Badge>
+              <Badge color="pink">Novedades de octubre</Badge>
             </div>
-            <div style={{ display:"grid", gridTemplateColumns:isDesktopMenu?"repeat(3,1fr)":"1fr", gap:10 }}>
+            <div style={{ display:"grid", gridTemplateColumns:isDesktopMenu&&novedades.length>1?"repeat(3,minmax(0,1fr))":"1fr", gap:10 }}>
               {novedades.map(n => (
                 <div key={n.title} style={{ border:"1px dashed rgba(114,36,62,0.22)", borderRadius:18, padding:13, background:"linear-gradient(180deg,#fff,#fff9fb)", minHeight:116 }}>
                   <div style={{ width:34, height:34, borderRadius:12, background:COLORS.pinkLight, display:"grid", placeItems:"center", fontSize:17, marginBottom:7 }}>{n.icon}</div>
                   <strong style={{ display:"block", fontSize:13.5, marginBottom:4, color:"var(--color-text-primary)" }}>{n.title}</strong>
-                  <p style={{ margin:0, fontSize:11.5, lineHeight:1.38, color:"var(--color-text-secondary)" }}>{n.text}</p>
+                  <p style={{ margin:0, fontSize:11.5, lineHeight:1.38, color:"var(--color-text-secondary)" }}>{n.text}</p><button type="button" onClick={()=>n.target==="mis_comisiones" && effectiveRole!=="manicura" ? setHomeMisInfoOpen(open=>!open) : goToSection(n.target)} aria-expanded={n.target==="mis_comisiones" && effectiveRole!=="manicura" ? homeMisInfoOpen : undefined} style={{marginTop:10,padding:"7px 10px",borderRadius:9,border:"1px solid rgba(114,36,62,.14)",background:COLORS.pinkLight,color:COLORS.pinkDark,cursor:"pointer",fontSize:11,fontWeight:750}}>{n.target==="mis_comisiones" && effectiveRole!=="manicura" && homeMisInfoOpen ? "Ocultar información" : n.action} →</button>
+                  {n.target==="mis_comisiones" && effectiveRole!=="manicura" && homeMisInfoOpen && <div style={{marginTop:10,padding:11,background:"#fff",border:"1px solid rgba(114,36,62,.15)",borderRadius:12,fontSize:11.5,lineHeight:1.5,color:"var(--color-text-secondary)"}}>
+                    <strong style={{display:"block",marginBottom:5,color:COLORS.pinkDark}}>¿Qué ve la manicura?</strong>
+                    Un único tablero personal con comisiones en curso, servicios y clientes, horas y ausencias, explicación del cálculo, liquidaciones validadas, pagos y saldos. También puede mantener su alias/CBU de cobro.
+                    <p style={{margin:"8px 0",fontSize:11}}>La pantalla es personal: cada manicura ve únicamente su información. Administración consulta las liquidaciones desde los reportes siguientes.</p>
+                    <div style={{display:"flex",flexWrap:"wrap",gap:6}}>
+                      {sectionAllowedForRole("comisiones_semanal_nuevo",effectiveRole)&&<button type="button" onClick={()=>goToSection("comisiones_semanal_nuevo")} style={{border:"1px solid rgba(114,36,62,.16)",background:COLORS.pinkLight,borderRadius:8,padding:"6px 8px",color:COLORS.pinkDark,cursor:"pointer",fontSize:11}}>Liquidaciones semanales →</button>}
+                      {sectionAllowedForRole("comisiones_quincenal_piloto",effectiveRole)&&<button type="button" onClick={()=>goToSection("comisiones_quincenal_piloto")} style={{border:"1px solid rgba(114,36,62,.16)",background:COLORS.pinkLight,borderRadius:8,padding:"6px 8px",color:COLORS.pinkDark,cursor:"pointer",fontSize:11}}>Liquidaciones quincenales →</button>}
+                    </div>
+                  </div>}
                 </div>
               ))}
             </div>
@@ -18928,59 +19911,63 @@ const refreshTimer = window.setInterval(check, 10 * 60 * 1000);
     />
   );
 
-  const renderSeccion = () => {
+  const renderSeccion = (tabSection) => {
     const appUser=effectiveUser || user;
-    if (seccion==="inicio") return renderMobileHome();
-    if (seccion==="dashboard") return effectiveRole!=="manicura" ? <DashboardComercial data={data} user={appUser}/> : null;
-    if (seccion==="dashboard_manicuras") return effectiveRole!=="manicura" ? <DashboardManicuras data={data} user={appUser}/> : null;
-    if (seccion==="clientes_crm") return effectiveRole!=="manicura" ? <ClientesCrm data={data} user={appUser}/> : null;
-    if (seccion==="asistencia") return <AsistenciaDiaria data={data} setData={setData} reloadData={reloadData} user={appUser}/>;
-    if (seccion==="turnos") return effectiveRole==="admin" ? <AgendaTurnos data={data} reloadData={reloadData} user={appUser} agendaOpenRequest={agendaOpenRequest} onAgendaOpenRequestDone={() => setAgendaOpenRequest(null)}/> : null;
-    if (seccion==="servicios") return ["admin","casa_matriz"].includes(effectiveRole) ? <AgendaTurnos data={data} reloadData={reloadData} user={appUser} forcedTab="servicios"/> : null;
-    if (seccion==="listas_precios") return ["admin","casa_matriz"].includes(effectiveRole) ? <AgendaTurnos data={data} reloadData={reloadData} user={appUser} forcedTab="precios"/> : null;
-    if (seccion==="horarios") return <CalendarioHorarios data={data} setData={setData} reloadData={reloadData} user={appUser} agendaRequest={agendaRequest} savedState={screenState.horarios} onStateChange={(state)=>saveScreenState("horarios", state)} onBackToReport={()=>{ setSeccion("reportes_cobertura"); setMenuOpen(false); setMobileMenuGroup(null); }}/>;
-    if (seccion==="pizarra_semanal") return <PizarraSemanal data={data} user={appUser}/>;
-    if (seccion==="dotacion_cupos") return ["admin","casa_matriz","franquiciado","encargada"].includes(effectiveRole) ? <DotacionCuposPage data={data} user={appUser}/> : null;
-    if (seccion==="horarios_encargadas") return ["admin","casa_matriz","franquiciado"].includes(effectiveRole) ? <HorariosEncargadasLocal data={data} user={appUser}/> : null;
-    if (seccion==="vacaciones_encargadas") return ["admin","casa_matriz","franquiciado","encargada","manicura"].includes(effectiveRole) ? <VacacionesEncargadas data={data} user={appUser}/> : null;
-    if (seccion==="bloqueo_horarios") return <BloqueoHorarios data={data} setData={setData} reloadData={reloadData} user={appUser} savedState={screenState.bloqueoHorarios} onStateChange={(state)=>saveScreenState("bloqueoHorarios", state)}/>;
-    if (seccion==="reportes_horas") return renderReportes("horas", "reportes_horas");
-    if (seccion==="reportes_cobertura") return effectiveRole!=="manicura" ? renderReportes("cobertura", "reportes_cobertura") : null;
-    if (seccion==="reportes_comisiones") return renderReportes("comisiones", "reportes_comisiones");
-    if (seccion==="reporte_pago_comisiones") return <ReportePagoComisiones data={data} setData={setData} user={appUser}/>;
-    if (seccion==="consulta_precios") return effectiveRole!=="manicura" ? <ConsultaPreciosVigentes data={data} user={appUser}/> : null;
-    if (seccion==="consulta_comisiones_precios") return <ConsultaPreciosVigentes data={data} user={appUser} soloComisiones/>;
-    if (seccion==="comisiones_semanal_nuevo") return <ComisionesPilotoErrorBoundary><ReporteComisionesQuincenalPiloto data={data} user={appUser} modalidad="semanal"/></ComisionesPilotoErrorBoundary>;
-    if (seccion==="comisiones_quincenal_piloto") return <ComisionesPilotoErrorBoundary><ReporteComisionesQuincenalPiloto data={data} user={appUser}/></ComisionesPilotoErrorBoundary>;
-    if (seccion==="reportes") return renderReportes("horas", "reportes");
-    if (seccion==="preliquidacion_encargadas") return ["admin","casa_matriz","franquiciado","encargada"].includes(effectiveRole) ? <PreliquidacionEncargadas data={data} user={appUser}/> : null;
-    if (seccion==="adelantos") return effectiveRole!=="manicura" ? <AdelantosManicuras data={data} reloadData={reloadData} user={appUser}/> : null;
-    if (seccion==="garantias") return effectiveRole!=="manicura" ? <GarantiasServicios data={data} reloadData={reloadData} user={appUser}/> : null;
-    if (seccion==="gastos_vencimientos") return ["admin","casa_matriz","franquiciado"].includes(effectiveRole) ? <GastosVencimientosPage data={data} user={appUser}/> : null;
-    if (seccion==="informes_mensajeria") return effectiveRole!=="manicura" ? <InformesMensajeriaPage data={data} user={appUser}/> : null;
-    if (seccion==="reclamos") return effectiveRole!=="manicura" ? <ReclamosPage data={data} user={appUser}/> : null;
-    if (seccion==="auditorias") return ["admin","casa_matriz"].includes(effectiveRole) ? <AuditoriasPage data={data} user={appUser}/> : null;
-    if (seccion==="informes") return effectiveRole!=="manicura" ? <InformeDiario data={data} reloadData={reloadData} user={appUser}/> : null;
-    if (seccion==="manicuras") return <ABMManicuras data={data} setData={setData} reloadData={reloadData} user={appUser}/>;
-    if (seccion==="locales") return ["admin", "casa_matriz"].includes(effectiveRole) ? <ABMLocales data={data} setData={setData} reloadData={reloadData} user={appUser}/> : null;
-    if (seccion==="encargadas") return ["admin", "casa_matriz", "franquiciado"].includes(effectiveRole) ? <ABMEncargadas data={data} reloadData={reloadData} user={appUser}/> : null;
-    if (seccion==="reclutamiento_carga") return effectiveRole==="encargada" ? <ReclutamientoCargaCandidataPage data={data} user={appUser}/> : null;
-    if (seccion==="reclutamiento_busquedas") return ["admin", "casa_matriz", "franquiciado"].includes(effectiveRole) ? <ReclutamientoBusquedasPage data={data} user={appUser}/> : null;
-    if (seccion==="reclutamiento_candidatas") return ["admin", "casa_matriz", "franquiciado"].includes(effectiveRole) ? <ReclutamientoPage data={data} setData={setData} user={appUser} fixedView="tablero"/> : null;
-    if (seccion==="reclutamiento_calendario") return ["admin", "casa_matriz", "franquiciado"].includes(effectiveRole) ? <ReclutamientoCalendarioPage data={data} user={appUser}/> : null;
-    if (seccion==="reclutamiento_aprobaciones") return ["admin", "casa_matriz"].includes(effectiveRole) ? <ReclutamientoAprobacionesPage data={data} user={appUser}/> : null;
-    if (seccion==="reclutamiento_antiguedad") return ["admin", "casa_matriz"].includes(effectiveRole) ? <ReporteAntiguedadPersonal data={data} setData={setData} user={appUser}/> : null;
-    if (seccion==="reclutamiento_config") return ["admin", "casa_matriz"].includes(effectiveRole) ? <ReclutamientoPage data={data} setData={setData} user={appUser} fixedView="config"/> : null;
-    if (seccion==="cobertura_config") return <ConfiguracionCobertura data={data} reloadData={reloadData} user={appUser}/>;
-    if (seccion==="perfil") return <MiPerfil data={data} reloadData={reloadData} user={user} setUser={setUser}/>;
-    if (seccion==="ayuda") return <CentroAyuda user={appUser} onBack={() => goToSection("inicio")}/>;
-    if (seccion==="roadmap") return ["admin", "casa_matriz"].includes(effectiveRole) ? <RoadmapPage user={appUser} onBack={() => goToSection("ayuda")}/> : null;
+    if (tabSection==="inicio") return renderMobileHome();
+    if (tabSection==="dashboard") return effectiveRole!=="manicura" ? <DashboardComercial data={data} user={appUser}/> : null;
+    if (tabSection==="dashboard_manicuras") return effectiveRole!=="manicura" ? <DashboardManicuras data={data} user={appUser}/> : null;
+    if (tabSection==="clientes_crm") return effectiveRole!=="manicura" ? <ClientesCrm data={data} user={appUser}/> : null;
+    if (tabSection==="asistencia") return <AsistenciaDiaria data={data} setData={setData} reloadData={reloadData} user={appUser}/>;
+    if (tabSection==="turnos") return effectiveRole==="admin" ? <AgendaTurnos data={data} reloadData={reloadData} user={appUser} agendaOpenRequest={agendaOpenRequest} onAgendaOpenRequestDone={() => setAgendaOpenRequest(null)}/> : null;
+    if (tabSection==="servicios") return ["admin","casa_matriz"].includes(effectiveRole) ? <AgendaTurnos data={data} reloadData={reloadData} user={appUser} forcedTab="servicios"/> : null;
+    if (tabSection==="listas_precios") return ["admin","casa_matriz"].includes(effectiveRole) ? <AgendaTurnos data={data} reloadData={reloadData} user={appUser} forcedTab="precios"/> : null;
+    if (tabSection==="horarios") return <CalendarioHorarios data={data} setData={setData} reloadData={reloadData} user={appUser} agendaRequest={agendaRequest} savedState={screenState.horarios} onStateChange={(state)=>saveScreenState("horarios", state)} onBackToReport={()=>{ setSeccion("reportes_cobertura"); setMenuOpen(false); setMobileMenuGroup(null); }}/>;
+    if (tabSection==="pizarra_semanal") return <PizarraSemanal data={data} user={appUser}/>;
+    if (tabSection==="dotacion_cupos") return ["admin","casa_matriz","franquiciado","encargada"].includes(effectiveRole) ? <DotacionCuposPage data={data} user={appUser}/> : null;
+    if (tabSection==="horarios_encargadas") return ["admin","casa_matriz","franquiciado"].includes(effectiveRole) ? <HorariosEncargadasLocal data={data} user={appUser}/> : null;
+    if (tabSection==="vacaciones_encargadas") return ["admin","casa_matriz","franquiciado","encargada","manicura"].includes(effectiveRole) ? <VacacionesEncargadas data={data} user={appUser}/> : null;
+    if (tabSection==="bloqueo_horarios") return <BloqueoHorarios data={data} setData={setData} reloadData={reloadData} user={appUser} savedState={screenState.bloqueoHorarios} onStateChange={(state)=>saveScreenState("bloqueoHorarios", state)}/>;
+    if (tabSection==="reportes_horas") return renderReportes("horas", "reportes_horas");
+    if (tabSection==="reportes_cobertura") return effectiveRole!=="manicura" ? renderReportes("cobertura", "reportes_cobertura") : null;
+    if (tabSection==="mis_comisiones") return <NikiMisComisiones data={data} setData={setData} user={appUser}/>;
+    if (tabSection==="reportes_comisiones") return effectiveRole==="manicura" ? <NikiMisComisiones data={data} setData={setData} user={appUser}/> : renderReportes("comisiones", "reportes_comisiones");
+    if (tabSection==="reporte_pago_comisiones") return <ReportePagoComisiones data={data} setData={setData} user={appUser}/>;
+    if (tabSection==="consulta_precios") return effectiveRole!=="manicura" ? <ConsultaPreciosVigentes data={data} user={appUser}/> : null;
+    if (tabSection==="consulta_comisiones_precios") return <ConsultaPreciosVigentes data={data} user={appUser} soloComisiones/>;
+    if (tabSection==="comisiones_semanal_nuevo") return <ComisionesSemanalErrorBoundary><ReporteComisionesSemanalOperativo data={data} user={appUser}/></ComisionesSemanalErrorBoundary>;
+    if (tabSection==="comisiones_quincenal_piloto") return <ComisionesPilotoErrorBoundary><ReporteComisionesQuincenalPiloto data={data} user={appUser}/></ComisionesPilotoErrorBoundary>;
+    if (tabSection==="reportes") return renderReportes("horas", "reportes");
+    if (tabSection==="preliquidacion_encargadas") return ["admin","casa_matriz","franquiciado","encargada"].includes(effectiveRole) ? <PreliquidacionEncargadas data={data} user={appUser}/> : null;
+    if (tabSection==="adelantos") return effectiveRole!=="manicura" ? <AdelantosManicuras data={data} reloadData={reloadData} user={appUser}/> : null;
+    if (tabSection==="garantias") return effectiveRole!=="manicura" ? <GarantiasServicios data={data} reloadData={reloadData} user={appUser}/> : null;
+    if (tabSection==="gastos_vencimientos") return ["admin","casa_matriz","franquiciado"].includes(effectiveRole) ? <GastosVencimientosPage data={data} user={appUser}/> : null;
+    if (tabSection==="informes_mensajeria") return effectiveRole!=="manicura" ? <InformesMensajeriaPage data={data} user={appUser}/> : null;
+    if (tabSection==="reclamos") return effectiveRole!=="manicura" ? <ReclamosPage data={data} user={appUser}/> : null;
+    if (tabSection==="auditorias") return ["admin","casa_matriz"].includes(effectiveRole) ? <AuditoriasPage data={data} user={appUser}/> : null;
+    if (tabSection==="informes") return effectiveRole!=="manicura" ? <InformeDiario data={data} reloadData={reloadData} user={appUser}/> : null;
+    if (tabSection==="manicuras") return <ABMManicuras data={data} setData={setData} reloadData={reloadData} user={appUser}/>;
+    if (tabSection==="locales") return ["admin", "casa_matriz"].includes(effectiveRole) ? <ABMLocales data={data} setData={setData} reloadData={reloadData} user={appUser}/> : null;
+    if (tabSection==="encargadas") return ["admin", "casa_matriz", "franquiciado"].includes(effectiveRole) ? <ABMEncargadas data={data} reloadData={reloadData} user={appUser}/> : null;
+    if (tabSection==="reclutamiento_carga") return effectiveRole==="encargada" ? <ReclutamientoCargaCandidataPage data={data} user={appUser}/> : null;
+    if (tabSection==="reclutamiento_busquedas") return ["admin", "casa_matriz", "franquiciado"].includes(effectiveRole) ? <ReclutamientoBusquedasPage data={data} user={appUser}/> : null;
+    if (tabSection==="reclutamiento_candidatas") return ["admin", "casa_matriz", "franquiciado"].includes(effectiveRole) ? <ReclutamientoPage data={data} setData={setData} user={appUser} fixedView="tablero"/> : null;
+    if (tabSection==="reclutamiento_calendario") return ["admin", "casa_matriz", "franquiciado"].includes(effectiveRole) ? <ReclutamientoCalendarioPage data={data} user={appUser}/> : null;
+    if (tabSection==="reclutamiento_aprobaciones") return ["admin", "casa_matriz"].includes(effectiveRole) ? <ReclutamientoAprobacionesPage data={data} user={appUser}/> : null;
+    if (tabSection==="reclutamiento_antiguedad") return ["admin", "casa_matriz"].includes(effectiveRole) ? <ReporteAntiguedadPersonal data={data} setData={setData} user={appUser}/> : null;
+    if (tabSection==="reclutamiento_config") return ["admin", "casa_matriz"].includes(effectiveRole) ? <ReclutamientoPage data={data} setData={setData} user={appUser} fixedView="config"/> : null;
+    if (tabSection==="cobertura_config") return <ConfiguracionCobertura data={data} reloadData={reloadData} user={appUser}/>;
+    if (tabSection==="perfil") return <MiPerfil data={data} reloadData={reloadData} user={user} setUser={setUser}/>;
+    if (tabSection==="ayuda") return <CentroAyuda user={appUser} onBack={() => goToSection("inicio")}/>;
+    if (tabSection==="roadmap") return ["admin", "casa_matriz"].includes(effectiveRole) ? <RoadmapPage user={appUser} onBack={() => goToSection("ayuda")}/> : null;
     return null;
   };
 
   return (
     <div style={{ minHeight:"100vh",background:"var(--color-background-tertiary)",display:"flex",flexDirection:"column",maxWidth:"100vw",overflowX:"hidden" }}>
       <ToastStack toasts={toasts} onDismiss={dismissToast} onAction={handleNotificationAction}/>
+      <NikiReleaseModal notices={applicableReleaseNotices.filter(n=>releasePopupIds.includes(n.id))} onDismiss={dismissReleasePopup} onAction={action=>{ dismissReleasePopup();handleNotificationAction(action); }}/>
+      {commissionsDemoOpen && <NikiCommissionsExample onClose={()=>setCommissionsDemoOpen(false)}/>}
+
       {updateAvailable && (
         <div style={{ position:"fixed",top:isDesktopMenu?76:74,right:isDesktopMenu?20:12,left:isDesktopMenu?"auto":12,zIndex:5000,width:isDesktopMenu?390:"auto",background:"#fff",border:`1px solid ${COLORS.pinkSoft || "#e8c6d1"}`,borderRadius:16,boxShadow:"0 14px 34px rgba(79,31,49,0.18)",padding:"14px 15px",display:"flex",alignItems:"center",gap:12 }}>
           <div style={{ width:38,height:38,borderRadius:12,background:"#f8e9ee",display:"grid",placeItems:"center",fontSize:19,flexShrink:0 }}>✨</div>
@@ -19006,15 +19993,15 @@ const refreshTimer = window.setInterval(check, 10 * 60 * 1000);
         <div style={{ display:"flex",alignItems:"center",gap:8,flexShrink:0 }}>
           {isDesktopMenu && <><Avatar nombre={user.nombre} userId={user.id} photoUrl={(data.users||[]).find(u=>u.id===user.id)?.fotoPerfilUrl||user.fotoPerfilUrl} size={34}/><span style={{ fontSize:13,opacity:0.9 }}>{user.nombre}</span></>}
           {dualOperationalProfile&&<select value={operatingMode} onChange={e=>switchOperatingMode(e.target.value)} title="Cambiar función de trabajo" aria-label="Cambiar función de trabajo" style={{border:"1px solid rgba(114,36,62,.18)",background:"rgba(255,255,255,.66)",color:COLORS.pinkDark,borderRadius:9,padding:"6px 8px",fontSize:11.5,fontWeight:700,cursor:"pointer",maxWidth:isDesktopMenu?150:118}}><option value="manicura">💅 Manicura</option><option value="encargada">👥 Encargada</option></select>}
-          <NotificationBell history={notificationHistory} open={notificationOpen} setOpen={setNotificationOpen} onClear={() => setNotificationHistory([])} onAction={handleNotificationAction}/>
+          <NotificationBell history={notificationHistory} open={notificationOpen} setOpen={setNotificationOpen} onClear={() => setNotificationHistory(prev => prev.filter(n=>n.isRelease))} onAction={handleNotificationAction}/>
           <button onClick={()=>{ localStorage.removeItem("niki_user"); if(user?.id)localStorage.removeItem(`niki_operating_mode_${user.id}`); clearNikiSessionClock(); setUser(null); setMenuOpen(false); setMobileMenuGroup(null); }} style={{ background:"rgba(114,36,62,0.12)",border:"none",color:COLORS.pinkDark,borderRadius:6,padding:"4px 10px",fontSize:12,cursor:"pointer" }}>Salir</button>
         </div>
       </header>
 
-      <div style={{ display:"flex",flex:1,position:"relative",minWidth:0,maxWidth:"100vw",overflowX:"hidden",marginTop:isDesktopMenu?66:0,paddingLeft:isDesktopMenu?244:0,boxSizing:"border-box" }}>
+      <div style={{ display:"flex",flex:1,position:"relative",minWidth:0,maxWidth:"100vw",overflowX:"hidden",marginTop:isDesktopMenu?66:0,paddingLeft:isDesktopMenu?285:0,boxSizing:"border-box" }}>
         {isDesktopMenu && (
           <nav style={{
-            width:244,
+            width:285,
             background:"#fff",
             borderRight:"0.5px solid rgba(120,120,120,0.18)",
             overflowX:"hidden",
@@ -19028,7 +20015,7 @@ const refreshTimer = window.setInterval(check, 10 * 60 * 1000);
             overflowY:"auto",
             boxShadow:"6px 0 18px rgba(0,0,0,0.03)",
           }}>
-            <div style={{ padding:"14px 10px 18px",display:"flex",flexDirection:"column",gap:14,minWidth:220 }}>
+            <div style={{ padding:"14px 10px 18px",display:"flex",flexDirection:"column",gap:14,minWidth:0 }}>
               {menuGroups.map(group => {
                 if (group.id === "inicio") {
                   const activeInicio = seccion === "inicio";
@@ -19121,7 +20108,7 @@ justifyContent:"space-between",
                             }}
                           >
                             <span style={{ width:18,textAlign:"center",flexShrink:0,fontSize:13,opacity:0.9 }}>{item.icon}</span>
-                            <span style={{ whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis" }}>{item.label}</span>
+                            <span style={{ whiteSpace:"normal",overflowWrap:"anywhere",lineHeight:1.35 }}>{item.label}</span>
                           </a>
                         ))}
                       </div>
@@ -19143,7 +20130,28 @@ justifyContent:"space-between",
               {currentMenuItem && <><span>›</span><strong style={{ color:"var(--color-text-primary)" }}>{currentMenuItem.label}</strong></>}
             </div>
           )}
-          {renderSeccion()}
+          {isDesktopMenu && openWorkTabs.length > 0 && (
+            <div role="tablist" aria-label="Pantallas abiertas" style={{display:'flex',gap:5,alignItems:'stretch',overflowX:'auto',padding:'3px 1px 9px',marginBottom:14,borderBottom:'1px solid #eadde1',scrollbarWidth:'thin'}}>
+              {openWorkTabs.filter(id => sectionAllowedForRole(id,effectiveRole)).map(id => {
+                const active = id === seccion;
+                const label = allMenuItems.find(item=>item.id===id)?.label || (id==='inicio'?'Inicio':id.replaceAll('_',' '));
+                return <div key={id} role="tab" aria-selected={active} style={{display:'flex',alignItems:'center',flexShrink:0,borderRadius:'11px 11px 5px 5px',background:active?'#f8eaf0':'#fff',border:active?'1px solid #d5a8b7':'1px solid #e8dfe2',boxShadow:active?'inset 0 -2px 0 #72243e':'none'}}>
+                  <button onClick={()=>goToSection(id)} title={label} style={{background:'transparent',border:0,padding:'9px 10px',fontSize:12,fontWeight:active?750:500,color:active?COLORS.pinkDark:'#72656c',cursor:'pointer',whiteSpace:'nowrap',maxWidth:215,overflow:'hidden',textOverflow:'ellipsis'}}>{label}</button>
+                  {id!=='inicio'&&<button onClick={()=>closeWorkTab(id)} aria-label={`Cerrar ${label}`} title={`Cerrar ${label}`} style={{background:'transparent',border:0,color:'#9a8089',cursor:'pointer',padding:'7px 9px 7px 2px',fontSize:17,lineHeight:1}}>×</button>}
+                </div>;
+              })}
+              <span style={{fontSize:10,color:'#9a8b90',whiteSpace:'nowrap',alignSelf:'center',marginLeft:6}}>{openWorkTabs.length}/8</span>
+            </div>
+          )}
+          {isDesktopMenu ? (
+            <>
+              {Array.from(new Set([...openWorkTabs,seccion].filter(Boolean))).filter(id => sectionAllowedForRole(id,effectiveRole)).map(id => (
+                <div key={id} role="tabpanel" aria-hidden={id!==seccion} style={{display:id===seccion?'block':'none'}}>
+                  {renderSeccion(id)}
+                </div>
+              ))}
+            </>
+          ) : renderSeccion(seccion)}
         </main>
       </div>
 
