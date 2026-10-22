@@ -7,6 +7,17 @@ const hmac=async(body:string,secret:string)=>{const key=await crypto.subtle.impo
 async function validSession(token:string,secret:string){const [b,s]=String(token||'').split('.');if(!b||!s||await hmac(b,secret)!==s)return null;try{const n=b.replace(/-/g,'+').replace(/_/g,'/');const p=JSON.parse(atob(n+'='.repeat((4-n.length%4)%4)));return p.uid&&Number(p.exp)>Date.now()/1000?p:null;}catch{return null;}}
 const money=(x:unknown)=>{const v=Number(x);if(!Number.isFinite(v)||Math.abs(v)>100000000)return NaN;return Math.round(v*100)/100;};
 const integer=(x:unknown)=>Number.isSafeInteger(Number(x))?Number(x):0;
+
+async function allowedLocales(admin:any,actor:any){
+ const {data:all,error:le}=await admin.from('locales').select('id,tipo_local');if(le)throw le;
+ if(actor.rol==='admin')return (all||[]).map((l:any)=>Number(l.id));
+ const tables=actor.rol==='encargada'?['encargado_locales']:['usuario_locales'];
+ const query=await admin.from(tables[0]).select('local_id').eq('user_id',Number(actor.id));if(query.error)throw query.error;
+ const assigned=new Set((query.data||[]).map((r:any)=>Number(r.local_id)));
+ if(actor.rol==='casa_matriz')return (all||[]).filter((l:any)=>String(l.tipo_local||'propio')==='propio'||assigned.has(Number(l.id))).map((l:any)=>Number(l.id));
+ return (all||[]).filter((l:any)=>assigned.has(Number(l.id))).map((l:any)=>Number(l.id));
+}
+
 Deno.serve(async(req)=>{
  if(req.method==='OPTIONS')return new Response('ok',{headers});
  if(req.method!=='POST')return json({ok:false,error:'Método no permitido'},405);
@@ -20,11 +31,13 @@ Deno.serve(async(req)=>{
   if(!session||actorId!==integer(session.uid))return json({ok:false,error:'Sesión inválida'},401);
   const {data:actor,error:actorError}=await admin.from('users').select('id,rol,activo').eq('id',actorId).maybeSingle();
   if(actorError)throw actorError;
-  if(!actor||actor.activo===false||!['admin','casa_matriz'].includes(actor.rol))return json({ok:false,error:'Solo Administración y Casa Matriz pueden gestionar estos pagos'},403);
+  if(!actor||actor.activo===false||!['admin','casa_matriz','franquiciado','encargada'].includes(actor.rol))return json({ok:false,error:'Solo Administración y Casa Matriz pueden gestionar estos pagos'},403);
+  const allowed=new Set(await allowedLocales(admin,actor));
   const periodo=String(body.periodo||'');const quincena=integer(body.quincena);
   if(!/^\d{4}-(0[1-9]|1[0-2])$/.test(periodo)||![1,2].includes(quincena))return json({ok:false,error:'Período incorrecto'},400);
   const localId=integer(body.local_id);const userId=integer(body.user_id);
   const scoped=async()=>{
+    if(!allowed.has(localId))return Promise.reject(new Error('No tenés permisos para este local'));
     if(!localId||!userId)throw new Error('Falta local o manicura');
     const [l,u]=await Promise.all([admin.from('locales').select('id').eq('id',localId).maybeSingle(),admin.from('users').select('id,rol').eq('id',userId).maybeSingle()]);
     if(l.error||u.error||!l.data||!u.data)throw new Error('Local o manicura inexistente');
@@ -32,8 +45,9 @@ Deno.serve(async(req)=>{
   const base=()=>admin.from('niki_liquidaciones_quincenales').select('*').eq('periodo',periodo).eq('quincena',quincena);
   if(action==='list'){
     const localIds=Array.isArray(body.local_ids)?body.local_ids.map(integer).filter(Boolean).slice(0,150):[];
-    if(!localIds.length)return json({ok:true,liquidaciones:[],pagos:[]});
-    const {data:liquidaciones,error}=await base().in('local_id',localIds).order('version',{ascending:false});if(error)throw error;
+    const requested=localIds.filter(id=>allowed.has(id));
+    if(!requested.length)return json({ok:true,liquidaciones:[],pagos:[]});
+    const {data:liquidaciones,error}=await base().in('local_id',requested).order('version',{ascending:false});if(error)throw error;
     const ids=(liquidaciones||[]).map((x:any)=>x.id);
     let pagos:any[]=[];
     if(ids.length){const out=await admin.from('niki_pagos_comisiones').select('*').in('liquidacion_id',ids);if(out.error)throw out.error;pagos=out.data||[];}
@@ -42,6 +56,18 @@ Deno.serve(async(req)=>{
   await scoped();
   const {data:revisiones,error:readError}=await base().eq('local_id',localId).eq('user_id',userId).order('version',{ascending:false});if(readError)throw readError;
   const actual=(revisiones||[]).find((x:any)=>x.estado==='revisada');
+  if(action==='percentage'){
+    if(actual)throw new Error('Reabrí la liquidación para modificar el porcentaje');
+    const value=body.porcentaje;
+    const corte=`${periodo}-${quincena}`;
+    if(value==null){const out=await admin.from('comisiones_quincenales_porcentajes').delete().eq('periodo',corte).eq('user_id',userId);if(out.error)throw out.error;}
+    else{
+      if(![35,40].includes(Number(value)))throw new Error('Solo se permite 35% o 40%');
+      const motivo=String(body.motivo||'').trim();if(motivo.length<5)throw new Error('Indicá un motivo');
+      const out=await admin.from('comisiones_quincenales_porcentajes').upsert({periodo:corte,user_id:userId,porcentaje:Number(value),motivo,actualizado_por_user_id:actorId,actualizado_en:new Date().toISOString()},{onConflict:'periodo,user_id'});if(out.error)throw out.error;
+    }
+    return json({ok:true});
+  }
   if(action==='review'){
     if(actual)return json({ok:false,error:'Esta liquidación ya está revisada. Reabrila antes de crear otra versión.'},409);
     const row=body.snapshot;
