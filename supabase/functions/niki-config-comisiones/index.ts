@@ -36,7 +36,40 @@ Deno.serve(async req=>{
   const mode=String(body.modalidad||'');if(!['semanal','quincenal'].includes(mode))throw new Error('Modalidad inválida');
   const action=String(body.action||'load');
   const canWrite=['admin','casa_matriz'].includes(user.rol);
+
   const allowed=new Set(await allowedLocales(admin,user));
+  // La jornada es GLOBAL por manicura, no una excepción local ni semanal/quincenal.
+  // Nunca escribirla con el cliente anon: un UPDATE afectando 0 filas puede parecer exitoso.
+  if(action==='save_jornada'){
+    const uid=Number(body.user_id);
+    const weekend=body.solo_fin_de_semana;
+    if(!Number.isSafeInteger(uid)||uid<=0||typeof weekend!=='boolean')
+      return json({ok:false,error:'Manicura o tipo de jornada inválido'},400);
+    const {data:target,error:te}=await admin.from('users')
+      .select('id,rol,local_id,activo,solo_fin_de_semana').eq('id',uid).maybeSingle();
+    if(te)throw te;
+    if(!target)return json({ok:false,error:'Manicura inexistente'},404);
+    const {data:history,error:he}=await admin.from('manicura_historial_locales')
+      .select('local_id,fecha_inicio,fecha_fin').eq('user_id',uid);
+    if(he)throw he;
+    if(!['manicura','encargada'].includes(String(target.rol))||(target.rol==='encargada'&&!(history||[]).length))
+      return json({ok:false,error:'La jornada solo se puede cambiar para manicuras'},400);
+    // Se verifica el alcance de TODAS las asignaciones vigentes o futuras:
+    // cambiar la jornada de un usuario multilocal impacta a ambos regímenes.
+    const today=new Date().toISOString().slice(0,10);
+    const relevant=(history||[]).filter((h:any)=>!h.fecha_fin||String(h.fecha_fin).slice(0,10)>=today);
+    const assignedIds=[...new Set(relevant.map((h:any)=>Number(h.local_id)).filter((id:number)=>Number.isSafeInteger(id)&&id>0))];
+    if(!assignedIds.length&&Number(target.local_id)>0)assignedIds.push(Number(target.local_id));
+    if(user.rol!=='admin'&&(!assignedIds.length||assignedIds.some((id:number)=>!allowed.has(id))))
+      return json({ok:false,error:'No tenés permiso para todas las sucursales vigentes de esta manicura'},403);
+    const {data:updated,error:ue}=await admin.from('users')
+      .update({solo_fin_de_semana:weekend}).eq('id',uid)
+      .select('id,solo_fin_de_semana').maybeSingle();
+    if(ue)throw ue;
+    if(!updated||updated.solo_fin_de_semana!==weekend)
+      return json({ok:false,error:'Supabase no confirmó el cambio de jornada'},409);
+    return json({ok:true,user_id:uid,solo_fin_de_semana:updated.solo_fin_de_semana});
+  }
   if(action==='save_general'&&!canWrite)return json({ok:false,error:'Solo Administración y Casa Matriz pueden modificar la configuración general'},403);
   const generalTable=mode==='semanal'?'comisiones_configuracion':'comisiones_quincenales_config';
   const personalTable=mode==='semanal'?'comisiones_manicura_config':'comisiones_quincenales_manicura_config';
