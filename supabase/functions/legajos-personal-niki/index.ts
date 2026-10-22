@@ -19,7 +19,12 @@ Deno.serve(async (req) => {
     const path = String(form.get("path") || "");
     const expiresIn = Math.min(3600, Math.max(60, Number(form.get("expires_in") || 600)));
 
-    if (!actorId || !sessionToken || !targetUserId) throw new Error("Sesión o persona inválida.");
+    if (!Number.isSafeInteger(actorId) || actorId <= 0 || !sessionToken) {
+      throw new Error("Sesión o persona inválida.");
+    }
+    if (action !== "sign_many" && (!Number.isSafeInteger(targetUserId) || targetUserId <= 0)) {
+      throw new Error("Sesión o persona inválida.");
+    }
 
     const { data: actor, error: actorError } = await admin
       .from("users")
@@ -28,6 +33,48 @@ Deno.serve(async (req) => {
       .maybeSingle();
     if (actorError || !actor || !actor.activo || actor.session_token !== sessionToken) {
       return json({ ok:false, error:"Sesión inválida o vencida." }, 401);
+    }
+
+    if (action === "sign_many") {
+      const rawItems = JSON.parse(String(form.get("items") || "[]"));
+      if (!Array.isArray(rawItems) || rawItems.length === 0 || rawItems.length > 100) {
+        return json({ ok:false, error:"El lote debe incluir entre 1 y 100 fotos." }, 400);
+      }
+      const items: { user_id:number; path:string }[] = [];
+      const seen = new Set<string>();
+      for (const raw of rawItems) {
+        const userId = Number(raw?.user_id);
+        const photoPath = typeof raw?.path === "string" ? raw.path : "";
+        // Este circuito sólo firma fotos de perfil; los documentos siguen
+        // usando la acción individual y sus permisos existentes.
+        if (!Number.isSafeInteger(userId) || userId <= 0
+            || !photoPath.startsWith(`${userId}/perfil/`)
+            || photoPath.endsWith("/")
+            || photoPath.includes("\\")
+            || photoPath.split("/").some(part => part === "." || part === ".." || !part)) {
+          return json({ ok:false, error:"Ruta de foto inválida." }, 400);
+        }
+        if (!seen.has(photoPath)) {
+          seen.add(photoPath);
+          items.push({ user_id:userId, path:photoPath });
+        }
+      }
+
+      // Mismo permiso de lectura de fotos que la acción sign: cualquier
+      // usuario activo con sesión válida. Se valida en cada lote.
+      const { data, error } = await admin.storage.from("legajos-personal")
+        .createSignedUrls(items.map(item => item.path), expiresIn);
+      if (error) throw error;
+      const signedByPath = new Map((data || []).map(item => [item.path, item]));
+      return json({ ok:true, items:items.map(item => {
+        const signed = signedByPath.get(item.path);
+        return {
+          user_id:item.user_id,
+          path:item.path,
+          url:signed?.signedUrl || "",
+          error:signed?.error || (signed?.signedUrl ? null : "No se pudo firmar la foto."),
+        };
+      }) });
     }
 
     const profileRead = action === "sign" && path.includes("/perfil/");

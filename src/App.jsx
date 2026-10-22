@@ -302,6 +302,30 @@ export const SUPABASE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdX
 
 const supabaseRealtime = createClient(SUPABASE_URL, SUPABASE_KEY);
 
+// Cachés sólo en memoria: no persisten documentos ni datos CRM en el navegador.
+const nikiSignedFiles = new Map();
+const nikiSignedFilesPending = new Map();
+const nikiPhotoRetryAt = new Map();
+const nikiCrmScopes = new Map();
+const nikiCrmScopesPending = new Map();
+
+function nikiTrimMemoryCache(cache, limit) {
+  while (cache.size > limit) cache.delete(cache.keys().next().value);
+}
+
+function nikiMemoryActorKey() {
+  const actor = currentNikiActor();
+  return JSON.stringify([actor?.id || null, actor?.sessionToken || ""]);
+}
+
+function clearNikiDownloadCaches() {
+  nikiSignedFiles.clear();
+  nikiSignedFilesPending.clear();
+  nikiPhotoRetryAt.clear();
+  nikiCrmScopes.clear();
+  nikiCrmScopesPending.clear();
+}
+
 const sb = async (path, opts = {}) => {
   const prefer = opts.prefer ?? "return=representation";
   const headers = { apikey: SUPABASE_KEY, Authorization: `Bearer ${SUPABASE_KEY}`, "Content-Type": "application/json" };
@@ -834,7 +858,7 @@ const api = {
   getPersonaDocumentos: () => sb("persona_documentos?select=*&order=user_id,creado_en.desc,id.desc"),
   createPersonaDocumento: (d) => sb("persona_documentos", { method:"POST", body:JSON.stringify(d) }),
   deletePersonaDocumento: (id) => sb(`persona_documentos?id=eq.${id}`, { method:"DELETE", prefer:"" }),
-  personaStorageRequest: async ({ action, actor, targetUserId, file = null, path = "", expiresIn = 600 }) => {
+  personaStorageRequest: async ({ action, actor, targetUserId, file = null, path = "", expiresIn = 600, items = null }) => {
     const fd = new FormData();
     fd.append("action", action);
     fd.append("actor_id", String(actor?.id || ""));
@@ -843,6 +867,7 @@ const api = {
     if (path) fd.append("path", path);
     if (expiresIn) fd.append("expires_in", String(expiresIn));
     if (file) fd.append("file", file, file.name);
+    if (Array.isArray(items)) fd.append("items", JSON.stringify(items));
     const res = await nikiProtectedFetch(`${SUPABASE_URL}/functions/v1/legajos-personal-niki`, { method:"POST", headers:{ apikey:SUPABASE_KEY, Authorization:`Bearer ${SUPABASE_KEY}` }, body:fd });
     const txt = await res.text();
     const data = txt ? JSON.parse(txt) : {};
@@ -857,10 +882,86 @@ const api = {
     if(!path) return;
     await api.personaStorageRequest({ action:"delete", actor, targetUserId:userId, path });
   },
-  signPersonaArchivo: async (actor, userId, path, expiresIn = 600) => {
+  signPersonaArchivo: async (actor, userId, path, expiresIn = 600, { force = false } = {}) => {
     if(!path) return "";
-    const data = await api.personaStorageRequest({ action:"sign", actor, targetUserId:userId, path, expiresIn });
-    return data.url || "";
+    const seconds = Math.max(1, Number(expiresIn) || 600);
+    const key = JSON.stringify([actor?.id, actor?.sessionToken, userId, path, seconds]);
+    const cached = nikiSignedFiles.get(key);
+    if (!force && cached && cached.validUntil > Date.now()) return cached.url;
+    if (nikiSignedFilesPending.has(key)) return nikiSignedFilesPending.get(key);
+    const request = (async () => {
+      const startedAt = Date.now();
+      const data = await api.personaStorageRequest({ action:"sign", actor, targetUserId:userId, path, expiresIn:seconds });
+      const url = data.url || "";
+      if (url) {
+        nikiSignedFiles.set(key, {
+          url,
+          validUntil:startedAt + Math.max(0, seconds - 60) * 1000,
+        });
+        nikiTrimMemoryCache(nikiSignedFiles, 256);
+      }
+      return url;
+    })();
+    nikiSignedFilesPending.set(key, request);
+    try { return await request; }
+    finally {
+      if (nikiSignedFilesPending.get(key) === request) nikiSignedFilesPending.delete(key);
+    }
+  },
+  signPersonaArchivos: async (actor, items = [], expiresIn = 3600) => {
+    const seconds = Math.min(3600, Math.max(60, Number(expiresIn) || 3600));
+    const unique = new Map();
+    for (const item of items) {
+      const userId = Number(item.user_id);
+      const path = String(item.path || "");
+      if (!userId || !path) continue;
+      const key = JSON.stringify([actor?.id, actor?.sessionToken, userId, path, seconds]);
+      unique.set(key, {user_id:userId, path, key});
+    }
+    const results = [];
+    const missing = [];
+    for (const item of unique.values()) {
+      const cached = nikiSignedFiles.get(item.key);
+      if (cached && cached.validUntil > Date.now()) {
+        results.push(Promise.resolve({user_id:item.user_id, path:item.path, url:cached.url}));
+      } else if (nikiSignedFilesPending.has(item.key)) {
+        results.push(nikiSignedFilesPending.get(item.key).then(
+          url => ({user_id:item.user_id, path:item.path, url}),
+          err => ({user_id:item.user_id, path:item.path, url:"", error:err?.message || String(err)})
+        ));
+      } else missing.push(item);
+    }
+
+    // Una autenticación y una llamada a Storage por lote, sin caché de permisos.
+    for (let offset = 0; offset < missing.length; offset += 100) {
+      const batch = missing.slice(offset, offset + 100);
+      const startedAt = Date.now();
+      const request = api.personaStorageRequest({
+        action:"sign_many", actor, expiresIn:seconds,
+        items:batch.map(({user_id,path}) => ({user_id,path})),
+      });
+      const operations = batch.map(item => {
+        const pending = request.then(response => {
+          const row = (response.items || []).find(r => Number(r.user_id) === item.user_id && r.path === item.path);
+          if (!row?.url) throw new Error(row?.error || "No se pudo firmar la foto.");
+          nikiSignedFiles.set(item.key, {
+            url:row.url,
+            validUntil:startedAt + Math.max(0, seconds - 60) * 1000,
+          });
+          nikiTrimMemoryCache(nikiSignedFiles, 256);
+          return row.url;
+        });
+        nikiSignedFilesPending.set(item.key, pending);
+        return pending.then(
+          url => ({user_id:item.user_id, path:item.path, url}),
+          err => ({user_id:item.user_id, path:item.path, url:"", error:err?.message || String(err)})
+        ).finally(() => {
+          if (nikiSignedFilesPending.get(item.key) === pending) nikiSignedFilesPending.delete(item.key);
+        });
+      });
+      results.push(...operations);
+    }
+    return Promise.all(results);
   },
   setUsuarioLocales: async (userId, localIds) => {
     await sb(`usuario_locales?user_id=eq.${userId}`, { method:"DELETE", prefer:"" });
@@ -965,15 +1066,34 @@ const api = {
     const ids=Array.from(new Set((localIds||[]).map(Number).filter(Boolean))).sort((a,b)=>a-b);
     if(!ids.length) return [];
     const scopeKey=ids.join(",");
+    const key=JSON.stringify([nikiMemoryActorKey(), scopeKey]);
+    if(nikiCrmScopesPending.has(key)) return nikiCrmScopesPending.get(key);
 
-    // El CRM interactivo lee EXCLUSIVAMENTE la cache precalculada.
-    // No hacemos fallback a crm_clientes_scope_json porque ese cálculo en vivo
-    // es justamente el que puede disparar 57014 con el histórico completo.
-    const cached=await sb(`crm_clientes_scope_cache?select=data,refreshed_at&scope_key=eq.${encodeURIComponent(scopeKey)}&limit=1`);
-    const row=Array.isArray(cached)?cached[0]:null;
-    if(Array.isArray(row?.data)) return row.data;
+    const request=(async()=>{
+      const query=`scope_key=eq.${encodeURIComponent(scopeKey)}&limit=1`;
+      // Consultar la versión cuesta unos bytes; el JSON grande sólo se descarga
+      // si aún no está en memoria o cambió en Supabase.
+      const metadata=await sb(`crm_clientes_scope_cache?select=refreshed_at&${query}`);
+      const version=Array.isArray(metadata)?metadata[0]?.refreshed_at:null;
+      const cached=nikiCrmScopes.get(key);
+      if(version && cached?.version===version) return cached.rows;
 
-    throw new Error(`No existe cache CRM para el alcance ${scopeKey}. Ejecutá refrescar_niki_caches_operativos().`);
+      // Sin fallback al cálculo en vivo: siempre leer el caché precalculado.
+      const response=await sb(`crm_clientes_scope_cache?select=data,refreshed_at&${query}`);
+      const row=Array.isArray(response)?response[0]:null;
+      if(Array.isArray(row?.data)) {
+        nikiCrmScopes.set(key, {version:row.refreshed_at, rows:row.data});
+        nikiTrimMemoryCache(nikiCrmScopes, 8);
+        return row.data;
+      }
+      nikiCrmScopes.delete(key);
+      throw new Error(`No existe cache CRM para el alcance ${scopeKey}. Ejecutá refrescar_niki_caches_operativos().`);
+    })();
+    nikiCrmScopesPending.set(key,request);
+    try { return await request; }
+    finally {
+      if(nikiCrmScopesPending.get(key)===request) nikiCrmScopesPending.delete(key);
+    }
   },
   getClientesCrmGlobalAll: async (localIds=[]) => api.getClientesCrmScopeAll(localIds),
   getClienteCrmVisitas: (clientId, localIds=[]) => {
@@ -2016,8 +2136,9 @@ function Avatar({ nombre, size = 36, photoUrl = "", userId = null }) {
   const registry = window.__nikiUsers || [];
   const matched = registry.find(u => (userId && parseInt(u.id)===parseInt(userId)) || (!userId && String(u.nombre||"").trim().toLowerCase()===String(nombre||"").trim().toLowerCase()));
   const src = photoUrl || matched?.fotoPerfilUrl || "";
+  const [failedSrc, setFailedSrc] = useState("");
   const i = String(nombre||"?").split(" ").filter(Boolean).map(p=>p[0]).slice(0,2).join("").toUpperCase();
-  return src ? <img src={src} alt={nombre||"Foto de perfil"} onError={()=>{ if(userId && window.__nikiRefreshPhoto) window.__nikiRefreshPhoto(userId); }} style={{width:size,height:size,borderRadius:"50%",objectFit:"cover",border:"2px solid #fff",boxShadow:"0 1px 5px rgba(0,0,0,.12)",flexShrink:0}}/> : <div style={{width:size,height:size,borderRadius:"50%",background:COLORS.pinkLight,color:COLORS.pinkDark,display:"flex",alignItems:"center",justifyContent:"center",fontWeight:500,fontSize:size*.35,flexShrink:0}}>{i}</div>;
+  return src && src !== failedSrc ? <img src={src} loading="lazy" decoding="async" alt={nombre||"Foto de perfil"} onError={()=>{ setFailedSrc(src); if(userId && window.__nikiRefreshPhoto) window.__nikiRefreshPhoto(userId); }} style={{width:size,height:size,borderRadius:"50%",objectFit:"cover",border:"2px solid #fff",boxShadow:"0 1px 5px rgba(0,0,0,.12)",flexShrink:0}}/> : <div style={{width:size,height:size,borderRadius:"50%",background:COLORS.pinkLight,color:COLORS.pinkDark,display:"flex",alignItems:"center",justifyContent:"center",fontWeight:500,fontSize:size*.35,flexShrink:0}}>{i}</div>;
 }
 function Badge({ children, color = "pink" }) { const map = { pink:[COLORS.pinkLight,COLORS.pinkDark],success:[COLORS.successLight,COLORS.success],danger:[COLORS.dangerLight,COLORS.danger],amber:[COLORS.amberLight,COLORS.amber],info:[COLORS.infoLight,COLORS.info],gray:[COLORS.grayLight,"#444"] }; const [bg,fg] = map[color]||map.pink; return <span style={{ background:bg,color:fg,fontSize:11,fontWeight:500,padding:"2px 8px",borderRadius:20,whiteSpace:"nowrap" }}>{children}</span>; }
 function Card({ children, style, ...props }) { return <div {...props} style={{ background:"var(--color-background-primary)",border:"0.5px solid rgba(120,120,120,0.18)",borderRadius:12,padding:"1rem 1.25rem",...style }}>{children}</div>; }
@@ -14054,6 +14175,15 @@ function NikiCommissionConfigModal({modalidad,data,onClose,onSaved}) {
   const [exceptionRows,setExceptionRows]=useState([]);
   const [selection,setSelection]=useState({userId:'',localId:''});
   const [personal,setPersonal]=useState({});
+  const [filterLocal,setFilterLocal]=useState('todos');
+  const [filterTipo,setFilterTipo]=useState('todos');
+  const [filterZona,setFilterZona]=useState('todos');
+  const [filterJornada,setFilterJornada]=useState('todos');
+  const [filterEstado,setFilterEstado]=useState('activas');
+  const [filterConfig,setFilterConfig]=useState('todas');
+  const [filterQuery,setFilterQuery]=useState('');
+  const [jornadasEdit,setJornadasEdit]=useState({});
+  const [savedJornadas,setSavedJornadas]=useState({});
   const [busy,setBusy]=useState(false);
   const [loading,setLoading]=useState(true);
   const [error,setError]=useState('');
@@ -14083,6 +14213,7 @@ function NikiCommissionConfigModal({modalidad,data,onClose,onSaved}) {
     ['tardanzas_penalizacion','Tardanzas que reducen'],['faltas_no_justificadas','Faltas permitidas']
   ];
   const localNames=new Map((data.locales||[]).map(x=>[Number(x.id),x.nombre]));
+  const localById=new Map((data.locales||[]).map(x=>[Number(x.id),x]));
   const personas=(data.users||[]).filter(x=>x.rol==='manicura'||(data.manicuraHistorialLocales||[]).some(h=>Number(h.userId)===Number(x.id)));
   const localidades=new Map();
   personas.forEach(x=>{
@@ -14090,6 +14221,41 @@ function NikiCommissionConfigModal({modalidad,data,onClose,onSaved}) {
     exceptionRows.filter(z=>Number(z.user_id)===Number(x.id)).forEach(z=>ids.add(z.local_id));
     localidades.set(Number(x.id),[...ids].map(Number).filter(k=>k>0&&localNames.has(k)));
   });
+  // La jornada es una propiedad global del usuario, compartida por ambas modalidades.
+  // No se guarda en las tablas independientes de excepciones de liquidación.
+  const rowsConfig=useMemo(()=>personas.flatMap(persona=>(localidades.get(Number(persona.id))||[]).map(localId=>{
+    const local=localById.get(Number(localId));
+    const exception=exceptionRows.find(z=>Number(z.user_id)===Number(persona.id)&&Number(z.local_id)===Number(localId));
+    return {persona,localId:Number(localId),local,exception};
+  })).filter(({persona,localId,local,exception})=>{
+    if(filterLocal!=='todos'&&Number(filterLocal)!==Number(localId))return false;
+    if(filterTipo!=='todos'&&String(local?.tipoLocal||local?.tipo_local||'propio').toLowerCase()!==filterTipo)return false;
+    if(filterZona!=='todos'&&String(local?.zona||'estandar').toLowerCase()!==filterZona)return false;
+    if(filterEstado==='activas'&&persona.activo===false)return false;
+    if(filterEstado==='inactivas'&&persona.activo!==false)return false;
+    const weekend=Object.prototype.hasOwnProperty.call(jornadasEdit,persona.id)?jornadasEdit[persona.id]:(Object.prototype.hasOwnProperty.call(savedJornadas,persona.id)?savedJornadas[persona.id]:persona.soloFinDeSemana===true);
+    if(filterJornada==='finde'&&!weekend)return false;
+    if(filterJornada==='habitual'&&weekend)return false;
+    if(filterConfig==='excepciones'&&!exception)return false;
+    if(filterConfig==='generales'&&!!exception)return false;
+    const query=filterQuery.trim().toLocaleLowerCase('es');
+    return !query||String(persona.nombre||'').toLocaleLowerCase('es').includes(query)||String(local?.nombre||'').toLocaleLowerCase('es').includes(query);
+  }).sort((a,b)=>String(a.local?.nombre||'').localeCompare(String(b.local?.nombre||''),'es')||String(a.persona.nombre||'').localeCompare(String(b.persona.nombre||''),'es')),
+  [personas,localidades,exceptionRows,filterLocal,filterTipo,filterZona,filterEstado,filterJornada,filterConfig,filterQuery,jornadasEdit,savedJornadas]);
+  const saveJornada=async(persona)=>{
+    const id=Number(persona.id);
+    if(!Object.prototype.hasOwnProperty.call(jornadasEdit,id))return;
+    setBusy(true);setError('');
+    try{
+      await api.updateUser(id,{solo_fin_de_semana:jornadasEdit[id]===true});
+      // Conserva el mismo valor al cambiar de sucursal y en la ficha del usuario.
+      await onSaved?.();
+      setSavedJornadas(prev=>({...prev,[id]:jornadasEdit[id]===true}));
+      notifyToast('Jornada actualizada en la ficha de la manicura.','success');
+      setJornadasEdit(prev=>{const next={...prev};delete next[id];return next;});
+    }catch(e){setError('No se pudo cambiar la jornada: '+(e.message||String(e)));}
+    finally{setBusy(false);}
+  };
   const fetchCurrent=async()=>{
     setLoading(true);setError('');
     try{const out=await nikiCommissionConfigEdge('load',modalidad);
@@ -14128,8 +14294,42 @@ function NikiCommissionConfigModal({modalidad,data,onClose,onSaved}) {
         <section style={{padding:14,border:'1px solid #eadce2',borderRadius:13}}>
           <h3 style={{margin:'0 0 7px',color:'#72243e'}}>Excepciones por manicura y sucursal</h3>
           <p style={{margin:'0 0 12px',fontSize:11,color:'#826a74'}}>Dejá vacío cualquier valor que deba heredar la configuración general. Una excepción no modifica períodos ya validados.</p>
-          <div style={{display:'grid',gridTemplateColumns:'minmax(180px,1fr) minmax(180px,1fr)',gap:10,marginBottom:12}}>
-            <label>Manicura<select style={{...input,marginTop:4}} value={selection.userId} onChange={e=>setSelection({userId:e.target.value,localId:''})}><option value=''>Seleccionar...</option>{personas.sort((a,b)=>a.nombre.localeCompare(b.nombre)).map(x=><option key={x.id} value={x.id}>{x.nombre}</option>)}</select></label>
+          <div style={{display:'grid',gridTemplateColumns:'repeat(auto-fit,minmax(155px,1fr))',gap:8,marginBottom:10}}>
+            <input aria-label='Buscar manicura o local' placeholder='Buscar manicura o local…' style={input} value={filterQuery} onChange={e=>setFilterQuery(e.target.value)}/>
+            <select aria-label='Filtrar sucursal' style={input} value={filterLocal} onChange={e=>setFilterLocal(e.target.value)}><option value='todos'>Todos los locales</option>{[...(data.locales||[])].sort((a,b)=>a.nombre.localeCompare(b.nombre,'es')).map(l=><option key={l.id} value={l.id}>{l.nombre}</option>)}</select>
+            <select aria-label='Filtrar tipo de local' style={input} value={filterTipo} onChange={e=>setFilterTipo(e.target.value)}><option value='todos'>Todos los tipos</option><option value='propio'>Propios</option><option value='franquicia'>Franquicias</option></select>
+            <select aria-label='Filtrar zona' style={input} value={filterZona} onChange={e=>setFilterZona(e.target.value)}><option value='todos'>Todas las zonas</option><option value='estandar'>Estándar</option><option value='premium'>Premium</option><option value='exclusiva'>Exclusiva</option></select>
+            <select aria-label='Filtrar jornada' style={input} value={filterJornada} onChange={e=>setFilterJornada(e.target.value)}><option value='todos'>Todas las jornadas</option><option value='habitual'>Habitual</option><option value='finde'>Fin de semana</option></select>
+            <select aria-label='Filtrar estado' style={input} value={filterEstado} onChange={e=>setFilterEstado(e.target.value)}><option value='activas'>Activas</option><option value='inactivas'>Inactivas</option><option value='todas'>Todas</option></select>
+            <select aria-label='Filtrar configuración' style={input} value={filterConfig} onChange={e=>setFilterConfig(e.target.value)}><option value='todas'>Todas las configuraciones</option><option value='excepciones'>Con excepción</option><option value='generales'>Valores generales</option></select>
+          </div>
+          <div style={{fontSize:11,color:'#826a74',marginBottom:8}}>Se muestran {rowsConfig.length} asignaciones. La jornada se comparte entre todas las sucursales de la misma manicura y su ficha de usuario.</div>
+          <div style={{maxHeight:350,overflow:'auto',border:'1px solid #eadce2',borderRadius:10,marginBottom:14}}>
+            <table style={{width:'100%',borderCollapse:'collapse',minWidth:860,fontSize:11}}>
+              <thead style={{position:'sticky',top:0,zIndex:2,background:'#f9f1f4'}}><tr>{['MANICURA','LOCAL','JORNADA','HORAS','% NORMAL','% REDUCIDO','TARDES','FALTAS','CONFIGURACIÓN'].map(t=><th key={t} style={{textAlign:'left',padding:'10px 8px',borderBottom:'1px solid #eadce2',whiteSpace:'nowrap'}}>{t}</th>)}</tr></thead>
+              <tbody>{rowsConfig.map(({persona,localId,exception})=>{
+                const editable=Object.prototype.hasOwnProperty.call(jornadasEdit,persona.id);
+                const weekend=editable?jornadasEdit[persona.id]:persona.soloFinDeSemana===true;
+                const getValue=(key,generalKey)=>exception?.[key]??general?.[generalKey]??'—';
+                const selected=Number(selection.userId)===Number(persona.id)&&Number(selection.localId)===Number(localId);
+                return <tr key={`${persona.id}-${localId}`} style={{background:selected?'#fcf0f4':'#fff',borderBottom:'1px solid #f1e8ec'}}>
+                  <td style={{padding:8,fontWeight:700,whiteSpace:'nowrap'}}>{persona.nombre}{persona.activo===false?' · Inactiva':''}</td>
+                  <td style={{padding:8,whiteSpace:'nowrap'}}>{localNames.get(localId)}</td>
+                  <td style={{padding:8}}><div style={{display:'flex',gap:4,alignItems:'center'}}><select aria-label={`Jornada de ${persona.nombre}`} disabled={busy} style={{...input,minWidth:118,padding:'5px 4px',background:weekend?'#f9ecf1':'#fff'}} value={weekend?'finde':'habitual'} onChange={e=>setJornadasEdit(prev=>({...prev,[persona.id]:e.target.value==='finde'}))}><option value='habitual'>Habitual</option><option value='finde'>Fin de semana</option></select>{editable&&<button type='button' disabled={busy} onClick={()=>saveJornada(persona)} title='Guardar jornada en la ficha de usuario' style={{background:'#72243e',color:'#fff',border:0,borderRadius:6,padding:'6px 7px',cursor:'pointer'}}>Guardar</button>}</div></td>
+                  <td style={{padding:8}}>{getValue(semanal?'horas_objetivo_semanales':(weekend?'horas_finde_dia':'horas_quincenales'),semanal?(weekend?'horas_objetivo_fin_semana':'horas_objetivo_default'):(weekend?'horas_finde_dia':'horas_quincenales'))}</td>
+                  <td style={{padding:8}}>{getValue(semanal?'porcentaje_base':'porcentaje_normal',semanal?'porcentaje_base':'porcentaje_normal')}</td>
+                  <td style={{padding:8}}>{getValue('porcentaje_reducido','porcentaje_reducido')}</td>
+                  <td style={{padding:8}}>{getValue(semanal?'max_llegadas_tarde':'tardanzas_penalizacion',semanal?'max_llegadas_tarde':'tardanzas_penalizacion')}</td>
+                  <td style={{padding:8}}>{getValue(semanal?'max_faltas_no_justificadas':'faltas_no_justificadas',semanal?'max_faltas_no_justificadas':'faltas_no_justificadas')}</td>
+                  <td style={{padding:8}}><button type='button' onClick={()=>setSelection({userId:String(persona.id),localId:String(localId)})} style={{border:'1px solid #e7d5dc',borderRadius:7,padding:'6px 9px',background:exception?'#f7e6ee':'#fff',color:'#72243e',cursor:'pointer',whiteSpace:'nowrap'}}>{exception?'Editar excepción':'Configurar'}</button></td>
+                </tr>;
+              })}</tbody>
+            </table>
+            {!rowsConfig.length&&<div style={{padding:16,color:'#836d78'}}>No hay manicuras para los filtros seleccionados.</div>}
+          </div>
+          <div style={{fontSize:12,fontWeight:700,color:'#72243e',marginBottom:7}}>Configuración individual</div>
+          <div style={{display:'grid',gridTemplateColumns:'repeat(auto-fit,minmax(190px,1fr))',gap:10,marginBottom:12}}>
+            <label>Manicura<select style={{...input,marginTop:4}} value={selection.userId} onChange={e=>setSelection({userId:e.target.value,localId:''})}><option value=''>Seleccionar...</option>{[...personas].sort((a,b)=>a.nombre.localeCompare(b.nombre,'es')).map(x=><option key={x.id} value={x.id}>{x.nombre}</option>)}</select></label>
             <label>Sucursal<select style={{...input,marginTop:4}} value={selection.localId} onChange={e=>setSelection(x=>({...x,localId:e.target.value}))} disabled={!selection.userId}><option value=''>Seleccionar...</option>{(localidades.get(Number(selection.userId))||[]).map(k=><option key={k} value={k}>{localNames.get(k)}</option>)}</select></label>
           </div>
           {selection.userId&&selection.localId&&<><div style={{fontSize:11,marginBottom:8,color:'#886674'}}>Configuración de <b>{selectedPerson?.nombre}</b> en <b>{localNames.get(Number(selection.localId))}</b></div><div style={{display:'grid',gridTemplateColumns:'repeat(auto-fit,minmax(135px,1fr))',gap:9}}>{personales.map(([key,text])=><label key={key} style={{fontSize:11,fontWeight:700,color:'#765765'}}>{text}<input type='number' min='0' placeholder='General' style={{...input,marginTop:5}} value={personal[key]??''} onChange={e=>setPersonal(p=>({...p,[key]:e.target.value===''?'':Number(e.target.value)}))}/></label>)}</div><div style={{display:'flex',gap:9,marginTop:12,flexWrap:'wrap'}}><Btn disabled={busy} onClick={savePerson}>{busy?'Guardando...':'Guardar excepción'}</Btn><Btn variant='secondary' disabled={busy} onClick={removePerson}>Usar valores generales</Btn></div></>}
@@ -14209,7 +14409,7 @@ function ReporteComisionesSemanalOperativo({ data, user, modalidad='quincenal' }
     if(weeklyLoadedScope.current!==`${semanaActual?.desdeKey}|${semanaActual?.hastaKey}`)setWeeklyPilotReady(false);
     setWeeklyPilotError('');
     if(!esSemanal)return;
-    if(!['admin','casa_matriz'].includes(user.rol)){
+    if(!canManage){
       setWeeklyPilotData({liquidaciones:{},porcentajes:{},recuperaciones:[]});
       setWeeklyPilotReady(true);
       return;
@@ -14458,7 +14658,7 @@ function ReporteComisionesSemanalOperativo({ data, user, modalidad='quincenal' }
   const totalPagado=id=>pagosLiquidacion(id).reduce((s,p)=>s+Number(p.importe||0),0);
   const estadoPago=r=>!r.liquidacionId?'Sin revisar':totalPagado(r.liquidacionId)>=Number(r.total)-0.01?'Pagada':totalPagado(r.liquidacionId)>0?'Parcial':'Pendiente';
   const ejecutarSemanalLocal=async(action,r,extra={})=>{
-    if(!weeklyPilotReady||pagoBusy||!['admin','casa_matriz'].includes(user.rol))return;
+    if(!weeklyPilotReady||pagoBusy||!canManage)return;
     if(r.conflictoLocales){notifyToast('Liquidación bloqueada: registró ventas u horarios en más de un local.','error');return;}
     setPagoBusy(true);
     try{
@@ -14472,7 +14672,7 @@ function ReporteComisionesSemanalOperativo({ data, user, modalidad='quincenal' }
     finally{setPagoBusy(false);}
   };
   const ejecutarPago=async(action,r,extra={})=>{
-    if(pagoBusy||!weeklyPilotReady||!['admin','casa_matriz'].includes(user.rol))return;
+    if(pagoBusy||!weeklyPilotReady||!canManage)return;
     if(!r?.liquidacionId){notifyToast('Primero validá la liquidación.','error');return;}
     setPagoBusy(true);
     try{
@@ -14511,7 +14711,7 @@ function ReporteComisionesSemanalOperativo({ data, user, modalidad='quincenal' }
   const saveConfig=async()=>{if(NIKI_LIQUIDACIONES_SOLO_LECTURA){notifyToast('Configuración bloqueada en prueba local.','error');return;}if(esSemanal)return;setSaving(true);try{await sb('comisiones_quincenales_config?id=eq.1',{method:'PATCH',body:JSON.stringify({...configDraft,actualizado_por_user_id:user.id,actualizado_en:new Date().toISOString()})});setConfigOpen(false);await load();notifyToast('Configuración quincenal guardada.','success');}catch(e){notifyToast(e.message||String(e),'error');}finally{setSaving(false);}};
   const saveModes=async()=>{if(NIKI_LIQUIDACIONES_SOLO_LECTURA){notifyToast('Modalidad de sucursales bloqueada en prueba local.','error');return;}setSaving(true);try{for(const row of modesDraft){await sb('comisiones_quincenales_locales?on_conflict=local_id',{method:'POST',prefer:'resolution=merge-duplicates,return=representation',body:JSON.stringify({local_id:Number(row.local_id),modalidad:row.modalidad,fecha_desde:row.fecha_desde||null,actualizado_por_user_id:user.id,actualizado_en:new Date().toISOString()})});}setModesOpen(false);await load();notifyToast('Modalidad por sucursal guardada. Los reportes semanales siguen sin cambios.','success');}catch(e){notifyToast(e.message||String(e),'error');}finally{setSaving(false);}};
   const savePct=async()=>{
-    if(!pctEdit||saving||!weeklyPilotReady||!['admin','casa_matriz'].includes(user.rol))return;
+    if(!pctEdit||saving||!weeklyPilotReady||!canManage)return;
     const row=shown.find(r=>Number(r.uid)===Number(pctEdit.uid)&&Number(r.principal)===Number(pctEdit.localId));
     if(!row||row.congelada){notifyToast('La liquidación está validada. Reabrila para cambiar su porcentaje.','error');return;}
     setSaving(true);
@@ -14529,7 +14729,7 @@ function ReporteComisionesSemanalOperativo({ data, user, modalidad='quincenal' }
   };
   const guardarPorcentajeDirecto=async(r,valor)=>{
     if(esSemanal){
-      if(!weeklyPilotReady||!['admin','casa_matriz'].includes(user.rol)||r.congelada||saving)return;
+      if(!weeklyPilotReady||!canManage||r.congelada||saving)return;
       setSaving(true);
       try{
         await nikiLiquidacionesSemanalOperativoEdge('percentage',{desde,hasta,local_id:Number(r.principal),user_id:Number(r.uid),porcentaje:valor==='auto'?null:Number(valor),motivo:'Selección manual - semanal'});
@@ -14541,20 +14741,20 @@ function ReporteComisionesSemanalOperativo({ data, user, modalidad='quincenal' }
     if(!canManage||saving||r.congelada||(!esSemanal&&!pagosReady))return;
     setSaving(true);
     try {
-      if(valor==='auto') await sb(`comisiones_quincenales_porcentajes?periodo=eq.${encodeURIComponent(keyCorte)}&user_id=eq.${Number(r.uid)}`,{method:'DELETE',prefer:''});
+      if(valor==='auto') await nikiPagosQuincenalesEdge('percentage',{periodo,quincena:Number(quincena),local_id:Number(r.principal),user_id:Number(r.uid),porcentaje:null});
       else {
         const porcentaje=Number(valor);
         if(![35,40].includes(porcentaje))throw new Error('Solo se admite 35% o 40%.');
-        await sb('comisiones_quincenales_porcentajes?on_conflict=periodo,user_id',{method:'POST',prefer:'resolution=merge-duplicates,return=representation',body:JSON.stringify({periodo:keyCorte,user_id:r.uid,porcentaje,motivo:'Selección manual en resumen quincenal',actualizado_por_user_id:user.id,actualizado_en:new Date().toISOString()})});
+        await nikiPagosQuincenalesEdge('percentage',{periodo,quincena:Number(quincena),local_id:Number(r.principal),user_id:Number(r.uid),porcentaje,motivo:'Selección manual en resumen quincenal'});
       }
       await load();notifyToast('Porcentaje actualizado.','success');
     }catch(e){notifyToast(e.message||String(e),'error');}finally{setSaving(false);}
   };
-  const selectorPorcentaje=r=><select aria-label={`Porcentaje de ${r.nombre}`} title="Cambiá entre automático, 35% o 40%" disabled={(NIKI_LIQUIDACIONES_SOLO_LECTURA&&!esSemanal)||saving||r.congelada||(!esSemanal&&!pagosReady)||!['admin','casa_matriz'].includes(user.rol)} value={(r.manualPctRow||r.congelada&&Number(r.pct)!==Number(r.autoPct))?String(r.pct):'auto'} onChange={e=>void guardarPorcentajeDirecto(r,e.target.value)} style={{fontSize:11,padding:'4px 5px',background:'#fff',border:'1px solid #e6d6dc',borderRadius:7,color:'#72243e',maxWidth:115,cursor:'pointer'}}><option value="auto">Auto ({r.autoPct}%)</option><option value="35">35%</option><option value="40">40%</option></select>;
+  const selectorPorcentaje=r=><select aria-label={`Porcentaje de ${r.nombre}`} title="Cambiá entre automático, 35% o 40%" disabled={(NIKI_LIQUIDACIONES_SOLO_LECTURA&&!esSemanal)||saving||r.congelada||(!esSemanal&&!pagosReady)||!canManage} value={(r.manualPctRow||r.congelada&&Number(r.pct)!==Number(r.autoPct))?String(r.pct):'auto'} onChange={e=>void guardarPorcentajeDirecto(r,e.target.value)} style={{fontSize:11,padding:'4px 5px',background:'#fff',border:'1px solid #e6d6dc',borderRadius:7,color:'#72243e',maxWidth:115,cursor:'pointer'}}><option value="auto">Auto ({r.autoPct}%)</option><option value="35">35%</option><option value="40">40%</option></select>;
   const editPct=r=>setPctEdit({uid:r.uid,localId:r.principal,nombre:r.nombre,manual:!!r.manualPctRow,porcentaje:r.pct,motivo:r.manualPctRow?.motivo||'',automatico:r.autoPct});
   const saveRecovery=async()=>{
     if(esSemanal){
-      if(!weeklyPilotReady||!['admin','casa_matriz'].includes(user.rol)||saving||!overrideEdit)return;
+      if(!weeklyPilotReady||!canManage||saving||!overrideEdit)return;
       const row=shown.find(r=>Number(r.uid)===Number(overrideEdit.uid)&&Number(r.principal)===Number(overrideEdit.localId)&&r.unexcused?.some(a=>a.fecha===overrideEdit.fecha));
       if(!row){notifyToast('No se encontró la ausencia en este corte.','error');return;}
       if(row.congelada){notifyToast('Reabrí la liquidación antes de modificar recuperaciones.','error');return;}
@@ -14579,13 +14779,13 @@ function ReporteComisionesSemanalOperativo({ data, user, modalidad='quincenal' }
     {setupNeeded&&<Card style={{border:'1px solid #e8ae6b',background:'#fff9ef'}}><strong>Falta preparar Supabase</strong><p style={{fontSize:12}}>Ejecutá el SQL entregado junto con esta versión para crear configuración, modalidad por local e historial de recuperación. El circuito semanal existente no se modifica.</p></Card>}
     {error&&<Card><p style={{color:'#aa3838',margin:0,fontSize:12}}>{error}</p></Card>}
     {snapshot&&corteValidado&&<>{false&&<div style={{padding:'10px 14px',border:'1px solid #e5bc86',borderRadius:9,background:'#fff8ec',fontSize:12,color:'#8f591a'}}>{esSemanal?'Liquidaciones semanales: operaciones registradas en Supabase.':'Liquidaciones quincenales'}</div>}<div style={{display:'grid',gridTemplateColumns:'repeat(auto-fit,minmax(200px,1fr))',gap:12}}>{[["Total estimado",fmtMoney(total),'💰'],['Manicuras',shown.length,'👩'],['En 40%',shown.filter(r=>r.pct===40).length,'🌿'],['Recuperaciones pendientes',shown.reduce((n,r)=>n+r.pending.length,0),'🕘']].map(([title,value,ico])=><div key={title} style={{...cardStyle,background:'#faf5f7'}}><div style={{fontSize:12,color:'#876577'}}>{ico} {title}</div><div style={{fontSize:24,fontWeight:850,color:'#72243e',marginTop:8}}>{value}</div></div>)}</div>
-      {canManage&&<div style={{display:'flex',gap:7,flexWrap:'wrap',padding:'4px 0'}}>{[['resumen','Resumen de pago'],['control','Control semanal'],['movimientos','Movimientos y ajustes'],['servicios','Detalle de servicios'],...(['admin','casa_matriz'].includes(user.rol)?[['pagos','Preparación y pagos']]:[])].map(([key,title])=><Btn key={key} size='sm' variant={quincenalTab===key?'primary':'secondary'} onClick={()=>setQuincenalTab(key)}>{title}</Btn>)}</div>}
+      {canManage&&<div style={{display:'flex',gap:7,flexWrap:'wrap',padding:'4px 0'}}>{[['resumen','Resumen de pago'],['control','Control semanal'],['movimientos','Movimientos y ajustes'],['servicios','Detalle de servicios'],...(canManage?[['pagos','Preparación y pagos']]:[])].map(([key,title])=><Btn key={key} size='sm' variant={quincenalTab===key?'primary':'secondary'} onClick={()=>setQuincenalTab(key)}>{title}</Btn>)}</div>}
       {canManage&&quincenalTab==='resumen'&&<div style={{...cardStyle,padding:0,overflow:'hidden'}}>
         <div style={{padding:'13px 16px',background:'#fbf5f7',display:'flex',justifyContent:'space-between',gap:8,flexWrap:'wrap'}}><strong style={{color:'#72243e'}}>Resumen de pago · {shown.length} manicuras</strong><span style={{fontSize:11,color:'#876577'}}>Seleccioná una manicura para ver su explicación, ventas o ausencias</span></div>
         <div style={{overflowX:'auto'}}><table style={{width:'100%',borderCollapse:'collapse',fontSize:12}}>
           <thead><tr style={{background:'#f8eff2'}}>{['Manicura','Comisión','Descuentos','Otros (+/-)','Total estimado','Detalle'].map((t,i)=><th key={t} style={{padding:'9px 8px',textAlign:i===0||i===5?'left':'right',whiteSpace:'nowrap'}}>{t}</th>)}</tr></thead>
           <tbody>{shown.map((r,i)=>{const tieneMinimo=r.complemento>0;const revisar35=Number(r.pct)===35;return <tr key={`${r.principal}-${r.uid}`} style={{background:revisar35?'#fff4e8':tieneMinimo?'#f5faf2':i%2?'#fdf9fb':'#fff',borderBottom:'1px solid #efe6e9',borderLeft:revisar35?'3px solid #c17a22':tieneMinimo?'3px solid #639922':'3px solid transparent'}}>
-            <td style={{padding:'7px 8px',fontWeight:700,minWidth:150}}>{r.nombre} {r.conflictoLocales&&<span title='Liquidación bloqueada: ventas/horarios de varios locales' style={{color:'#af3d24',fontSize:10,marginLeft:5}}>⚠ Varios locales · Bloqueada</span>} {r.congelada&&<span title='Cálculo congelado' style={{fontSize:10,color:'#44782b'}}>✓ Validada v{r.version}</span>} {esSemanal&&!r.congelada&&!r.conflictoLocales&&['admin','casa_matriz'].includes(user.rol)&&<button type='button' onClick={()=>ejecutarSemanalLocal('review',r)} style={{marginLeft:5,border:'1px solid #d7c3cb',borderRadius:6,padding:'3px 6px',background:'#fff',fontSize:10,color:'#72243e',cursor:'pointer'}}>Validar</button>} {!NIKI_LIQUIDACIONES_SOLO_LECTURA&&!esSemanal&&!r.congelada&&pagosReady&&['admin','casa_matriz'].includes(user.rol)&&<button type='button' disabled={pagoBusy} title='Guardar foto del cálculo' onClick={()=>void ejecutarPago('review',r,{snapshot:r})} style={{marginLeft:5,border:'1px solid #d7c3cb',borderRadius:6,padding:'3px 6px',background:'#fff',fontSize:10,color:'#72243e',cursor:'pointer'}}>Revisar</button>} {esSemanal&&r.congelada&&['admin','casa_matriz'].includes(user.rol)&&<button type='button' onClick={()=>setReabrirEdit({r,motivo:''})} style={{border:0,background:'none',fontSize:10,color:'#99606f',cursor:'pointer'}}>Reabrir</button>} {!NIKI_LIQUIDACIONES_SOLO_LECTURA&&!esSemanal&&r.congelada&&totalPagado(r.liquidacionId)===0&&<button type='button' onClick={()=>setReabrirEdit({r,motivo:''})} style={{border:0,background:'none',fontSize:10,color:'#99606f',cursor:'pointer'}}>Reabrir</button>} {revisar35&&<span title='Comisión al 35%. Revisar asistencia y criterio aplicado.' style={{fontSize:10,padding:'3px 6px',borderRadius:6,color:'#99570c',background:'#ffe6c7',whiteSpace:'nowrap'}}>⚠ 35% · Revisar</span>} {tieneMinimo&&<span title={`Complemento por mínimo: ${fmtMoney(r.complemento)}${r.garantiaHasta?` · Hasta ${parseDateLabel(r.garantiaHasta)}`:''}`} style={{fontSize:11,color:'#46762b'}}>✓ Mín.</span>}<div style={{fontWeight:400,fontSize:10,color:'#877480'}}>{r.localNombre}</div></td>
+            <td style={{padding:'7px 8px',fontWeight:700,minWidth:150}}>{r.nombre} {r.conflictoLocales&&<span title='Liquidación bloqueada: ventas/horarios de varios locales' style={{color:'#af3d24',fontSize:10,marginLeft:5}}>⚠ Varios locales · Bloqueada</span>} {r.congelada&&<span title='Cálculo congelado' style={{fontSize:10,color:'#44782b'}}>✓ Validada v{r.version}</span>} {esSemanal&&!r.congelada&&!r.conflictoLocales&&canManage&&<button type='button' onClick={()=>ejecutarSemanalLocal('review',r)} style={{marginLeft:5,border:'1px solid #d7c3cb',borderRadius:6,padding:'3px 6px',background:'#fff',fontSize:10,color:'#72243e',cursor:'pointer'}}>Validar</button>} {!NIKI_LIQUIDACIONES_SOLO_LECTURA&&!esSemanal&&!r.congelada&&pagosReady&&canManage&&<button type='button' disabled={pagoBusy} title='Guardar foto del cálculo' onClick={()=>void ejecutarPago('review',r,{snapshot:r})} style={{marginLeft:5,border:'1px solid #d7c3cb',borderRadius:6,padding:'3px 6px',background:'#fff',fontSize:10,color:'#72243e',cursor:'pointer'}}>Revisar</button>} {esSemanal&&r.congelada&&canManage&&<button type='button' onClick={()=>setReabrirEdit({r,motivo:''})} style={{border:0,background:'none',fontSize:10,color:'#99606f',cursor:'pointer'}}>Reabrir</button>} {!NIKI_LIQUIDACIONES_SOLO_LECTURA&&!esSemanal&&r.congelada&&totalPagado(r.liquidacionId)===0&&<button type='button' onClick={()=>setReabrirEdit({r,motivo:''})} style={{border:0,background:'none',fontSize:10,color:'#99606f',cursor:'pointer'}}>Reabrir</button>} {revisar35&&<span title='Comisión al 35%. Revisar asistencia y criterio aplicado.' style={{fontSize:10,padding:'3px 6px',borderRadius:6,color:'#99570c',background:'#ffe6c7',whiteSpace:'nowrap'}}>⚠ 35% · Revisar</span>} {tieneMinimo&&<span title={`Complemento por mínimo: ${fmtMoney(r.complemento)}${r.garantiaHasta?` · Hasta ${parseDateLabel(r.garantiaHasta)}`:''}`} style={{fontSize:11,color:'#46762b'}}>✓ Mín.</span>}<div style={{fontWeight:400,fontSize:10,color:'#877480'}}>{r.localNombre}</div></td>
             <td style={{padding:'7px 8px',textAlign:'right',whiteSpace:'nowrap'}}><strong>{fmtMoney(r.comision)}</strong><div style={{marginTop:3}}>{canManage?selectorPorcentaje(r):<span style={{fontSize:10,color:'#876577'}}>{r.pct}%</span>}</div></td>
             <td style={{padding:'7px 8px',textAlign:'right'}}>{fmtMoney(r.adelantos)}</td>
             <td style={{padding:'7px 8px',textAlign:'right'}}>{fmtMoney(r.ajustesGarantia)}</td>
@@ -14595,7 +14795,7 @@ function ReporteComisionesSemanalOperativo({ data, user, modalidad='quincenal' }
       </div>}
       {canManage&&quincenalTab==='control'&&<div style={{...cardStyle,padding:0,overflow:'hidden'}}><div style={{padding:'13px 16px',background:'#fbf5f7'}}><strong style={{color:'#72243e'}}>Control de horas, asistencia y recuperaciones</strong></div><div style={{overflowX:'auto'}}><table style={{width:'100%',borderCollapse:'collapse',fontSize:12}}><thead><tr style={{background:'#f8eff2'}}>{['Manicura','Horas computables','Objetivo','Tardanzas','Ausencias pendientes','% aplicado','Acciones'].map(t=><th key={t} style={{padding:10,textAlign:'left'}}>{t}</th>)}</tr></thead><tbody>{shown.map(r=><tr key={`${r.principal}-${r.uid}`} style={{borderBottom:'1px solid #eee'}}><td style={{padding:10,fontWeight:700}}>{r.nombre}</td><td style={{padding:10}}>{r.weekend?`${r.detalleFinSemana.filter(d=>d.cumpleHoras).length} de ${r.finDates.length} jornadas válidas`:fmtH(r.horasElegibles)}</td><td style={{padding:10}}>{r.weekend?`${fmtH(Number(config.horas_finde_dia??10))} por jornada`:fmtH(r.objetivo)}</td><td style={{padding:10}}>{r.late}</td><td style={{padding:10}}>{r.pending.length}</td><td style={{padding:10}}>{r.pct}%</td><td style={{padding:10}}><div style={{display:'flex',gap:5,flexWrap:'wrap'}}><Btn size='sm' variant='secondary' onClick={()=>setDetalle(r)}>Detalle</Btn><Btn size='sm' variant='secondary' onClick={()=>editPct(r)} disabled={r.congelada}>Editar %</Btn>{r.unexcused.length>0&&<Btn size='sm' variant='secondary' onClick={()=>setRecoveryList(r)}>Recuperaciones</Btn>}</div></td></tr>)}</tbody></table></div></div>}
       {canManage&&quincenalTab==='movimientos'&&<div style={cardStyle}><h3 style={{marginTop:0,color:'#72243e'}}>Movimientos y ajustes</h3><p style={{fontSize:12,color:'#876577'}}>Garantías y adelantos aplicados al corte, con acceso a los servicios y explicaciones individuales.</p><div style={{overflowX:'auto'}}><table style={{width:'100%',borderCollapse:'collapse',fontSize:12}}><thead><tr>{['Manicura','Garantías (+/-)','Adelantos descontados','Complemento mínimo','Total estimado','Detalle'].map(t=><th key={t} style={{padding:10,textAlign:'left',borderBottom:'1px solid #eee'}}>{t}</th>)}</tr></thead><tbody>{shown.map(r=><tr key={`${r.principal}-${r.uid}`} style={{borderBottom:'1px solid #eee'}}><td style={{padding:10,fontWeight:700}}>{r.nombre}</td><td style={{padding:10}}>{fmtMoney(r.ajustesGarantia)}</td><td style={{padding:10}}>{fmtMoney(r.adelantos)}</td><td style={{padding:10}}>{fmtMoney(r.complemento)}</td><td style={{padding:10,fontWeight:700}}>{fmtMoney(r.total)}</td><td style={{padding:10}}><Btn size='sm' variant='secondary' onClick={()=>setDetalle(r)}>Entender pago</Btn></td></tr>)}</tbody></table></div></div>}
-      {['admin','casa_matriz'].includes(user.rol)&&['admin','casa_matriz'].includes(user.rol)&&quincenalTab==='pagos'&&<div style={cardStyle}>
+      {canManage&&canManage&&quincenalTab==='pagos'&&<div style={cardStyle}>
         <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',gap:10,flexWrap:'wrap'}}>
           <div><h3 style={{margin:'0 0 4px',color:'#72243e'}}>Preparación y registro de pagos</h3><p style={{margin:0,fontSize:12,color:'#876577'}}>Primero validá cada liquidación para congelar el cálculo. Después arrastrá a Efectivo o Transferencia y registrá los pagos. Casa Matriz y Administración pueden operar todo el circuito.</p></div>
           <Btn size='sm' variant='secondary' onClick={()=>void refreshWeeklyPilot()}>Actualizar estados</Btn>
@@ -14678,7 +14878,7 @@ function ReporteComisionesSemanalOperativo({ data, user, modalidad='quincenal' }
         <Btn variant='secondary' onClick={()=>setRecoveryList(null)}>Cerrar</Btn>
       </div>
     </Modal>}
-    {overrideEdit&&<Modal title={`Recuperación de ausencia · ${overrideEdit.nombre}`} onClose={()=>setOverrideEdit(null)} width={560}><div style={{display:'grid',gap:12}}><p style={{margin:0,fontSize:13}}>Ausencia injustificada del <b>{parseDateLabel(overrideEdit.fecha)}</b>. La encargada confirma aquí la recuperación realizada dentro del corte seleccionado. Se guarda quién confirma, cuándo y cuántas horas. Para justificar una falta deben recuperarse las horas de la jornada ausente.</p><label style={{fontSize:13}}><input type='checkbox' checked={overrideEdit.recuperada} onChange={e=>setOverrideEdit(o=>({...o,recuperada:e.target.checked}))}/> Horas recuperadas y verificadas</label><label style={{fontSize:12}}>Horas recuperadas<input style={inputStyle} type='number' min='0' step='0.5' value={overrideEdit.horas} onChange={e=>setOverrideEdit(o=>({...o,horas:e.target.value}))}/></label><label style={{fontSize:12}}>Detalle / fecha de recuperación<textarea style={{...inputStyle,minHeight:76}} value={overrideEdit.detalle} onChange={e=>setOverrideEdit(o=>({...o,detalle:e.target.value}))}/></label><div style={{display:'flex',gap:8}}><Btn disabled={saving||overrideEdit.recuperada&&Number(overrideEdit.horas)<=0||esSemanal&&!['admin','casa_matriz'].includes(user.rol)} onClick={saveRecovery}>{saving?'Guardando…':'Guardar confirmación'}</Btn><Btn variant='secondary' onClick={()=>setOverrideEdit(null)}>Cancelar</Btn></div></div></Modal>}
+    {overrideEdit&&<Modal title={`Recuperación de ausencia · ${overrideEdit.nombre}`} onClose={()=>setOverrideEdit(null)} width={560}><div style={{display:'grid',gap:12}}><p style={{margin:0,fontSize:13}}>Ausencia injustificada del <b>{parseDateLabel(overrideEdit.fecha)}</b>. La encargada confirma aquí la recuperación realizada dentro del corte seleccionado. Se guarda quién confirma, cuándo y cuántas horas. Para justificar una falta deben recuperarse las horas de la jornada ausente.</p><label style={{fontSize:13}}><input type='checkbox' checked={overrideEdit.recuperada} onChange={e=>setOverrideEdit(o=>({...o,recuperada:e.target.checked}))}/> Horas recuperadas y verificadas</label><label style={{fontSize:12}}>Horas recuperadas<input style={inputStyle} type='number' min='0' step='0.5' value={overrideEdit.horas} onChange={e=>setOverrideEdit(o=>({...o,horas:e.target.value}))}/></label><label style={{fontSize:12}}>Detalle / fecha de recuperación<textarea style={{...inputStyle,minHeight:76}} value={overrideEdit.detalle} onChange={e=>setOverrideEdit(o=>({...o,detalle:e.target.value}))}/></label><div style={{display:'flex',gap:8}}><Btn disabled={saving||overrideEdit.recuperada&&Number(overrideEdit.horas)<=0||esSemanal&&!canManage} onClick={saveRecovery}>{saving?'Guardando…':'Guardar confirmación'}</Btn><Btn variant='secondary' onClick={()=>setOverrideEdit(null)}>Cancelar</Btn></div></div></Modal>}
     {modesOpen&&<Modal title='Modalidad de liquidación por local' onClose={()=>setModesOpen(false)} width={780}><div style={{display:'grid',gap:10}}><p style={{fontSize:12,margin:0,color:'#765a68'}}>La modalidad por sucursal rige qué cortes se pueden liquidar.</p>{modesDraft.map((r,i)=><div key={r.local_id} style={{display:'grid',gridTemplateColumns:'minmax(130px,1fr) 145px 155px',gap:10,alignItems:'center',padding:10,background:'#faf5f7',borderRadius:10}}><strong style={{fontSize:12}}>{r.local_nombre}</strong><select style={inputStyle} value={r.modalidad} onChange={e=>setModesDraft(rows=>rows.map((x,j)=>i===j?{...x,modalidad:e.target.value}:x))}><option value='semanal'>Semanal</option><option value='quincenal'>Quincenal</option></select><input type='date' style={inputStyle} value={r.fecha_desde} onChange={e=>setModesDraft(rows=>rows.map((x,j)=>i===j?{...x,fecha_desde:e.target.value}:x))}/></div>)}<div style={{display:'flex',gap:8}}><Btn onClick={saveModes} disabled={saving}>{saving?'Guardando…':'Guardar modalidades'}</Btn><Btn variant='secondary' onClick={()=>setModesOpen(false)}>Cancelar</Btn></div></div></Modal>}
     {configOpen&&configDraft&&<Modal title={esSemanal?'Configuración · Liquidación semanal':'Configuración · Liquidación quincenal'} onClose={()=>setConfigOpen(false)} width={760}><div style={{display:'grid',gap:14}}><p style={{fontSize:12,margin:0,color:'#745e69'}}>{esSemanal?'Parámetros semanales actuales (consulta). La edición por manicura permanece en la configuración general existente.':'Esta configuración es solo quincenal. Los mínimos, horas y criterios del régimen semanal quedan intactos.'}</p><div style={{display:'grid',gridTemplateColumns:'repeat(auto-fit,minmax(200px,1fr))',gap:12}}>{[['minimo_estandar','Mínimo quincenal estándar'],['minimo_premium','Mínimo quincenal premium'],['minimo_finde_estandar','Mínimo por día · fin de semana estándar'],['minimo_finde_premium','Mínimo por día · fin de semana premium'],['horas_quincenales','Horas mínimas quincenales'],['horas_finde_dia','Horas mínimas por día de fin de semana'],['porcentaje_normal','Porcentaje normal'],['porcentaje_reducido','Porcentaje reducido'],['tardanzas_penalizacion','Cantidad de tardanzas que penaliza']].map(([k,label])=><label key={k} style={{fontSize:12,fontWeight:700}}>{label}<input style={inputStyle} disabled={esSemanal} type='number' min='0' value={configDraft[k]??0} onChange={e=>setConfigDraft(d=>({...d,[k]:Number(e.target.value)}))}/></label>)}</div><div style={{display:'flex',gap:8}}>{!esSemanal&&<Btn onClick={saveConfig} disabled={saving}>{saving?'Guardando…':'Guardar configuración quincenal'}</Btn>}<Btn variant='secondary' onClick={()=>setConfigOpen(false)}>Cancelar</Btn></div></div></Modal>}
   </div>;
@@ -14780,7 +14980,7 @@ function ReporteComisionesQuincenalPiloto({ data, user, modalidad='quincenal' })
   },[desde,hasta,keyCorte,esSemanal]);
   useEffect(()=>{void load();},[load]);
   const refreshPagos=useCallback(async()=>{
-    if(esSemanal||!['admin','casa_matriz'].includes(user.rol))return;
+    if(esSemanal||!canManage)return;
     const localIds=(data.locales||[]).filter(l=>user.rol==='admin'||getAssignedLocalIds(data,user).some(id=>Number(id)===Number(l.id))).map(l=>Number(l.id));
     try{
       const r=await nikiPagosQuincenalesEdge('list',{periodo,quincena:Number(quincena),local_ids:localIds});
@@ -14959,25 +15159,25 @@ function ReporteComisionesQuincenalPiloto({ data, user, modalidad='quincenal' })
   const saveConfig=async()=>{if(esSemanal)return;setSaving(true);try{await sb('comisiones_quincenales_config?id=eq.1',{method:'PATCH',body:JSON.stringify({...configDraft,actualizado_por_user_id:user.id,actualizado_en:new Date().toISOString()})});setConfigOpen(false);await load();notifyToast('Configuración quincenal guardada.','success');}catch(e){notifyToast(e.message||String(e),'error');}finally{setSaving(false);}};
   const saveModes=async()=>{setSaving(true);try{for(const row of modesDraft){await sb('comisiones_quincenales_locales?on_conflict=local_id',{method:'POST',prefer:'resolution=merge-duplicates,return=representation',body:JSON.stringify({local_id:Number(row.local_id),modalidad:row.modalidad,fecha_desde:row.fecha_desde||null,actualizado_por_user_id:user.id,actualizado_en:new Date().toISOString()})});}setModesOpen(false);await load();notifyToast('Modalidad por sucursal guardada. Los reportes semanales siguen sin cambios.','success');}catch(e){notifyToast(e.message||String(e),'error');}finally{setSaving(false);}};
   const savePct=async()=>{if(esSemanal||!pctEdit||!canManage)return;setSaving(true);try{
-    if(pctEdit.manual){if(![35,40].includes(Number(pctEdit.porcentaje)))throw new Error('Solo se admite 35% o 40%.');await sb('comisiones_quincenales_porcentajes?on_conflict=periodo,user_id',{method:'POST',prefer:'resolution=merge-duplicates,return=representation',body:JSON.stringify({periodo:keyCorte,user_id:pctEdit.uid,porcentaje:Number(pctEdit.porcentaje),motivo:String(pctEdit.motivo||'').trim(),actualizado_por_user_id:user.id,actualizado_en:new Date().toISOString()})});}
-    else{await sb(`comisiones_quincenales_porcentajes?periodo=eq.${encodeURIComponent(keyCorte)}&user_id=eq.${Number(pctEdit.uid)}`,{method:'DELETE',prefer:''});}
+    if(pctEdit.manual){if(![35,40].includes(Number(pctEdit.porcentaje)))throw new Error('Solo se admite 35% o 40%.');await nikiPagosQuincenalesEdge('percentage',{periodo,quincena:Number(quincena),local_id:Number(pctEdit.localId),user_id:Number(pctEdit.uid),porcentaje:Number(pctEdit.porcentaje),motivo:String(pctEdit.motivo||'').trim()});}
+    else{await nikiPagosQuincenalesEdge('percentage',{periodo,quincena:Number(quincena),local_id:Number(pctEdit.localId),user_id:Number(pctEdit.uid),porcentaje:null});}
     setPctEdit(null);await load();notifyToast('Porcentaje quincenal actualizado.','success');
   }catch(e){notifyToast(e.message||String(e),'error');}finally{setSaving(false);}};
   const guardarPorcentajeDirecto=async(r,valor)=>{
     if(esSemanal||!canManage||saving)return;
     setSaving(true);
     try {
-      if(valor==='auto') await sb(`comisiones_quincenales_porcentajes?periodo=eq.${encodeURIComponent(keyCorte)}&user_id=eq.${Number(r.uid)}`,{method:'DELETE',prefer:''});
+      if(valor==='auto') await nikiPagosQuincenalesEdge('percentage',{periodo,quincena:Number(quincena),local_id:Number(r.principal),user_id:Number(r.uid),porcentaje:null});
       else {
         const porcentaje=Number(valor);
         if(![35,40].includes(porcentaje))throw new Error('Solo se admite 35% o 40%.');
-        await sb('comisiones_quincenales_porcentajes?on_conflict=periodo,user_id',{method:'POST',prefer:'resolution=merge-duplicates,return=representation',body:JSON.stringify({periodo:keyCorte,user_id:r.uid,porcentaje,motivo:'Selección manual en resumen quincenal',actualizado_por_user_id:user.id,actualizado_en:new Date().toISOString()})});
+        await nikiPagosQuincenalesEdge('percentage',{periodo,quincena:Number(quincena),local_id:Number(r.principal),user_id:Number(r.uid),porcentaje,motivo:'Selección manual en resumen quincenal'});
       }
       await load();notifyToast('Porcentaje actualizado.','success');
     }catch(e){notifyToast(e.message||String(e),'error');}finally{setSaving(false);}
   };
   const selectorPorcentaje=r=><select aria-label={`Porcentaje de ${r.nombre}`} title="Cambiá entre automático, 35% o 40%" disabled={esSemanal||saving||r.congelada} value={r.manualPctRow?String(r.pct):'auto'} onChange={e=>void guardarPorcentajeDirecto(r,e.target.value)} style={{fontSize:11,padding:'4px 5px',background:'#fff',border:'1px solid #e6d6dc',borderRadius:7,color:'#72243e',maxWidth:115,cursor:'pointer'}}><option value="auto">Auto ({r.autoPct}%)</option><option value="35">35%</option><option value="40">40%</option></select>;
-  const editPct=r=>setPctEdit({uid:r.uid,nombre:r.nombre,manual:!!r.manualPctRow,porcentaje:r.pct,motivo:r.manualPctRow?.motivo||'',automatico:r.autoPct});
+  const editPct=r=>setPctEdit({uid:r.uid,localId:r.principal,nombre:r.nombre,manual:!!r.manualPctRow,porcentaje:r.pct,motivo:r.manualPctRow?.motivo||'',automatico:r.autoPct});
   const saveRecovery=async()=>{if(esSemanal)return;setSaving(true);try{await sb('comisiones_quincenales_recuperaciones?on_conflict=periodo,user_id,fecha_ausencia',{method:'POST',prefer:'resolution=merge-duplicates,return=representation',body:JSON.stringify({periodo:keyCorte,user_id:overrideEdit.uid,fecha_ausencia:overrideEdit.fecha,recuperada:overrideEdit.recuperada,horas_recuperadas:Number(overrideEdit.horas||0),detalle:overrideEdit.detalle||'',confirmado_por_user_id:user.id,confirmado_en:new Date().toISOString()})});setOverrideEdit(null);await load();notifyToast('Recuperación registrada con trazabilidad.','success');}catch(e){notifyToast(e.message||String(e),'error');}finally{setSaving(false);}};
   return <div style={{display:'grid',gap:14}}>
     {advancedSettingsOpen&&<NikiCommissionConfigModal modalidad={esSemanal?'semanal':'quincenal'} data={data} onClose={()=>setAdvancedSettingsOpen(false)} onSaved={load}/> }
@@ -14987,13 +15187,13 @@ function ReporteComisionesQuincenalPiloto({ data, user, modalidad='quincenal' })
     {setupNeeded&&<Card style={{border:'1px solid #e8ae6b',background:'#fff9ef'}}><strong>Falta preparar Supabase</strong><p style={{fontSize:12}}>Ejecutá el SQL entregado junto con esta versión para crear configuración, modalidad por local e historial de recuperación. El circuito semanal existente no se modifica.</p></Card>}
     {error&&<Card><p style={{color:'#aa3838',margin:0,fontSize:12}}>{error}</p></Card>}
     {snapshot&&!loading&&<><div style={{display:'grid',gridTemplateColumns:'repeat(auto-fit,minmax(200px,1fr))',gap:12}}>{[["Total estimado",fmtMoney(total),'💰'],['Manicuras',shown.length,'👩'],['En 40%',shown.filter(r=>r.pct===40).length,'🌿'],['Recuperaciones pendientes',shown.reduce((n,r)=>n+r.pending.length,0),'🕘']].map(([title,value,ico])=><div key={title} style={{...cardStyle,background:'#faf5f7'}}><div style={{fontSize:12,color:'#876577'}}>{ico} {title}</div><div style={{fontSize:24,fontWeight:850,color:'#72243e',marginTop:8}}>{value}</div></div>)}</div>
-      {canManage&&<div style={{display:'flex',gap:7,flexWrap:'wrap',padding:'4px 0'}}>{[['resumen','Resumen de pago'],['control','Control semanal'],['movimientos','Movimientos y ajustes'],['servicios','Detalle de servicios'],...(!esSemanal&&['admin','casa_matriz'].includes(user.rol)?[['pagos','Preparación y pagos']]:[])].map(([key,title])=><Btn key={key} size='sm' variant={quincenalTab===key?'primary':'secondary'} onClick={()=>setQuincenalTab(key)}>{title}</Btn>)}</div>}
+      {canManage&&<div style={{display:'flex',gap:7,flexWrap:'wrap',padding:'4px 0'}}>{[['resumen','Resumen de pago'],['control','Control semanal'],['movimientos','Movimientos y ajustes'],['servicios','Detalle de servicios'],...(!esSemanal&&canManage?[['pagos','Preparación y pagos']]:[])].map(([key,title])=><Btn key={key} size='sm' variant={quincenalTab===key?'primary':'secondary'} onClick={()=>setQuincenalTab(key)}>{title}</Btn>)}</div>}
       {canManage&&quincenalTab==='resumen'&&<div style={{...cardStyle,padding:0,overflow:'hidden'}}>
         <div style={{padding:'13px 16px',background:'#fbf5f7',display:'flex',justifyContent:'space-between',gap:8,flexWrap:'wrap'}}><strong style={{color:'#72243e'}}>Resumen de pago · {shown.length} manicuras</strong><span style={{fontSize:11,color:'#876577'}}>Seleccioná una manicura para ver su explicación, ventas o ausencias</span></div>
         <div style={{overflowX:'auto'}}><table style={{width:'100%',borderCollapse:'collapse',fontSize:12}}>
           <thead><tr style={{background:'#f8eff2'}}>{['Manicura','Comisión','Descuentos','Otros (+/-)','Total estimado','Detalle'].map((t,i)=><th key={t} style={{padding:'9px 8px',textAlign:i===0||i===5?'left':'right',whiteSpace:'nowrap'}}>{t}</th>)}</tr></thead>
           <tbody>{shown.map((r,i)=>{const tieneMinimo=r.complemento>0;const revisar35=Number(r.pct)===35;return <tr key={r.uid} style={{background:revisar35?'#fff4e8':tieneMinimo?'#f5faf2':i%2?'#fdf9fb':'#fff',borderBottom:'1px solid #efe6e9',borderLeft:revisar35?'3px solid #c17a22':tieneMinimo?'3px solid #639922':'3px solid transparent'}}>
-            <td style={{padding:'7px 8px',fontWeight:700,minWidth:150}}>{r.nombre} {r.congelada&&<span title='Cálculo congelado' style={{fontSize:10,color:'#44782b'}}>✓ Revisada v{r.version}</span>} {!r.congelada&&pagosReady&&['admin','casa_matriz'].includes(user.rol)&&<button type='button' disabled={pagoBusy} title='Guardar foto del cálculo' onClick={()=>void ejecutarPago('review',r,{snapshot:r})} style={{marginLeft:5,border:'1px solid #d7c3cb',borderRadius:6,padding:'3px 6px',background:'#fff',fontSize:10,color:'#72243e',cursor:'pointer'}}>Revisar</button>} {r.congelada&&totalPagado(r.liquidacionId)===0&&<button type='button' onClick={()=>setReabrirEdit({r,motivo:''})} style={{border:0,background:'none',fontSize:10,color:'#99606f',cursor:'pointer'}}>Reabrir</button>} {revisar35&&<span title='Comisión al 35%. Revisar asistencia y criterio aplicado.' style={{fontSize:10,padding:'3px 6px',borderRadius:6,color:'#99570c',background:'#ffe6c7',whiteSpace:'nowrap'}}>⚠ 35% · Revisar</span>} {tieneMinimo&&<span title={`Complemento por mínimo: ${fmtMoney(r.complemento)}${r.garantiaHasta?` · Hasta ${parseDateLabel(r.garantiaHasta)}`:''}`} style={{fontSize:11,color:'#46762b'}}>✓ Mín.</span>}<div style={{fontWeight:400,fontSize:10,color:'#877480'}}>{r.localNombre}</div></td>
+            <td style={{padding:'7px 8px',fontWeight:700,minWidth:150}}>{r.nombre} {r.congelada&&<span title='Cálculo congelado' style={{fontSize:10,color:'#44782b'}}>✓ Revisada v{r.version}</span>} {!r.congelada&&pagosReady&&canManage&&<button type='button' disabled={pagoBusy} title='Guardar foto del cálculo' onClick={()=>void ejecutarPago('review',r,{snapshot:r})} style={{marginLeft:5,border:'1px solid #d7c3cb',borderRadius:6,padding:'3px 6px',background:'#fff',fontSize:10,color:'#72243e',cursor:'pointer'}}>Revisar</button>} {r.congelada&&totalPagado(r.liquidacionId)===0&&<button type='button' onClick={()=>setReabrirEdit({r,motivo:''})} style={{border:0,background:'none',fontSize:10,color:'#99606f',cursor:'pointer'}}>Reabrir</button>} {revisar35&&<span title='Comisión al 35%. Revisar asistencia y criterio aplicado.' style={{fontSize:10,padding:'3px 6px',borderRadius:6,color:'#99570c',background:'#ffe6c7',whiteSpace:'nowrap'}}>⚠ 35% · Revisar</span>} {tieneMinimo&&<span title={`Complemento por mínimo: ${fmtMoney(r.complemento)}${r.garantiaHasta?` · Hasta ${parseDateLabel(r.garantiaHasta)}`:''}`} style={{fontSize:11,color:'#46762b'}}>✓ Mín.</span>}<div style={{fontWeight:400,fontSize:10,color:'#877480'}}>{r.localNombre}</div></td>
             <td style={{padding:'7px 8px',textAlign:'right',whiteSpace:'nowrap'}}><strong>{fmtMoney(r.comision)}</strong><div style={{marginTop:3}}>{canManage?selectorPorcentaje(r):<span style={{fontSize:10,color:'#876577'}}>{r.pct}%</span>}</div></td>
             <td style={{padding:'7px 8px',textAlign:'right'}}>{fmtMoney(r.adelantos)}</td>
             <td style={{padding:'7px 8px',textAlign:'right'}}>{fmtMoney(r.ajustesGarantia)}</td>
@@ -15003,7 +15203,7 @@ function ReporteComisionesQuincenalPiloto({ data, user, modalidad='quincenal' })
       </div>}
       {canManage&&quincenalTab==='control'&&<div style={{...cardStyle,padding:0,overflow:'hidden'}}><div style={{padding:'13px 16px',background:'#fbf5f7'}}><strong style={{color:'#72243e'}}>Control de horas, asistencia y recuperaciones</strong></div><div style={{overflowX:'auto'}}><table style={{width:'100%',borderCollapse:'collapse',fontSize:12}}><thead><tr style={{background:'#f8eff2'}}>{['Manicura','Horas computables','Objetivo','Tardanzas','Ausencias pendientes','% aplicado','Acciones'].map(t=><th key={t} style={{padding:10,textAlign:'left'}}>{t}</th>)}</tr></thead><tbody>{shown.map(r=><tr key={r.uid} style={{borderBottom:'1px solid #eee'}}><td style={{padding:10,fontWeight:700}}>{r.nombre}</td><td style={{padding:10}}>{r.weekend?`${r.detalleFinSemana.filter(d=>d.cumpleHoras).length} de ${r.finDates.length} jornadas válidas`:fmtH(r.horasElegibles)}</td><td style={{padding:10}}>{r.weekend?`${fmtH(Number(config.horas_finde_dia??10))} por jornada`:fmtH(r.objetivo)}</td><td style={{padding:10}}>{r.late}</td><td style={{padding:10}}>{r.pending.length}</td><td style={{padding:10}}>{r.pct}%</td><td style={{padding:10}}><div style={{display:'flex',gap:5,flexWrap:'wrap'}}><Btn size='sm' variant='secondary' onClick={()=>setDetalle(r)}>Detalle</Btn><Btn size='sm' variant='secondary' onClick={()=>editPct(r)} disabled={r.congelada}>Editar %</Btn>{r.unexcused.length>0&&<Btn size='sm' variant='secondary' onClick={()=>setRecoveryList(r)}>Recuperaciones</Btn>}</div></td></tr>)}</tbody></table></div></div>}
       {canManage&&quincenalTab==='movimientos'&&<div style={cardStyle}><h3 style={{marginTop:0,color:'#72243e'}}>Movimientos y ajustes</h3><p style={{fontSize:12,color:'#876577'}}>Garantías y adelantos aplicados al corte, con acceso a los servicios y explicaciones individuales.</p><div style={{overflowX:'auto'}}><table style={{width:'100%',borderCollapse:'collapse',fontSize:12}}><thead><tr>{['Manicura','Garantías (+/-)','Adelantos descontados','Complemento mínimo','Total estimado','Detalle'].map(t=><th key={t} style={{padding:10,textAlign:'left',borderBottom:'1px solid #eee'}}>{t}</th>)}</tr></thead><tbody>{shown.map(r=><tr key={r.uid} style={{borderBottom:'1px solid #eee'}}><td style={{padding:10,fontWeight:700}}>{r.nombre}</td><td style={{padding:10}}>{fmtMoney(r.ajustesGarantia)}</td><td style={{padding:10}}>{fmtMoney(r.adelantos)}</td><td style={{padding:10}}>{fmtMoney(r.complemento)}</td><td style={{padding:10,fontWeight:700}}>{fmtMoney(r.total)}</td><td style={{padding:10}}><Btn size='sm' variant='secondary' onClick={()=>setDetalle(r)}>Entender pago</Btn></td></tr>)}</tbody></table></div></div>}
-      {['admin','casa_matriz'].includes(user.rol)&&quincenalTab==='pagos'&&<div style={cardStyle}>
+      {canManage&&quincenalTab==='pagos'&&<div style={cardStyle}>
         <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',gap:10,flexWrap:'wrap'}}>
           <div><h3 style={{margin:'0 0 4px',color:'#72243e'}}>Preparación y registro de pagos</h3><p style={{margin:0,fontSize:12,color:'#876577'}}>Primero revisá cada liquidación para congelar el cálculo. Después arrastrá a Efectivo o Transferencia y registrá los pagos. Casa Matriz y Administración pueden operar todo el circuito.</p></div>
           <Btn size='sm' variant='secondary' onClick={()=>void refreshPagos()}>Actualizar estados</Btn>
@@ -18209,7 +18409,6 @@ function ClientesCrm({ data, user }) {
     try { return normalizeCrmClientColumnOrder(JSON.parse(localStorage.getItem(columnStorageKey)||"null")); }
     catch { return [...CRM_CLIENT_COLUMN_ORDER_DEFAULT]; }
   });
-  const scopeCacheRef=useRef(new Map());
 
   useEffect(()=>{
     try { localStorage.setItem(columnStorageKey,JSON.stringify(columnOrder)); } catch {}
@@ -18247,17 +18446,12 @@ function ClientesCrm({ data, user }) {
     setError("");
     try {
       if(!currentScopeIds.length) { setScopeRows([]); return; }
-      if(scopeCacheRef.current.has(scopeKey)) {
-        setScopeRows(scopeCacheRef.current.get(scopeKey));
-        return;
-      }
       // Tanto la red completa como los alcances parciales se sirven desde
       // crm_clientes_scope_cache. Nunca ejecutamos el cálculo pesado al navegar.
       const raw=await api.getClientesCrmScopeAll(currentScopeIds);
       const normalized=(raw||[]).map(normalizeClienteCrm);
       // En alcance global no existe "otra sucursal fuera del alcance".
       const finalRows=isFullNetworkScope ? normalized.map(r=>({ ...r, atendidaDespuesOtroLocal:false, ultimaVisitaGlobal:r.ultimaVisitaGlobal||r.ultimaVisita, ultimoLocalGlobal:r.ultimoLocalGlobal||r.localPrincipal })) : normalized;
-      scopeCacheRef.current.set(scopeKey,finalRows);
       setScopeRows(finalRows);
     } catch(e) {
       console.error("CRM scope error",e);
@@ -18867,6 +19061,8 @@ function sectionAllowedForRole(section, role) {
 
 export default function App() {
   const [data, setData] = useState(null);
+  const latestDataRef = useRef(data);
+  useEffect(() => { latestDataRef.current = data; }, [data]);
   const [user, setUser] = useState(() => {
     try { return JSON.parse(localStorage.getItem("niki_user") || "null"); }
     catch { return null; }
@@ -18884,6 +19080,7 @@ export default function App() {
     };
     const onExpired = (ev) => {
       localStorage.removeItem("niki_user");
+      clearNikiDownloadCaches();
       clearNikiSessionClock();
       window.__nikiCurrentUser = null;
       setUser(null);
@@ -18988,6 +19185,7 @@ const refreshTimer = window.setInterval(check, 10 * 60 * 1000);
   const [desktopMenuGroupsOpen, setDesktopMenuGroupsOpen] = useState({});
   const [isDesktopMenu, setIsDesktopMenu] = useState(() => window.innerWidth >= 768);
   const [loading, setLoading] = useState(true);
+  const [dataLoadError, setDataLoadError] = useState("");
   const [agendaRequest, setAgendaRequest] = useState(null);
   const [agendaOpenRequest, setAgendaOpenRequest] = useState(null);
   const [reportRestore, setReportRestore] = useState(null);
@@ -19162,19 +19360,20 @@ const refreshTimer = window.setInterval(check, 10 * 60 * 1000);
     const [users, locales, horarios, asistencias, periodos, feriados, reglasCobertura, configCobertura, encargadoLocales, usuarioLocales, manicuraHistorialLocales, usuarioHistorialLaboral, personaDocumentos, comisionesConfiguracion, comisionesManicuraConfig, agendaProfesionalesNoVinculables, adelantos, garantias, informesDiarios, agendaServicios, agendaManicuraServicios, agendaListasPrecios, agendaLocalListas, agendaPreciosServicios, agendaListaVigencias, agendaPreciosVigencia, agendaClientes, agendaTurnos, agendaTurnosPagos, agendaTurnoServicios, agendaBloqueos, reclutamientoCandidatas] = await Promise.all([
       api.getUsers(), api.getLocales(), api.getHorarios(), api.getAsistencias(), api.getPeriodos(), api.getFeriados(), api.getReglasCobertura(), api.getConfigCobertura(), api.getEncargadoLocales(), api.getUsuarioLocales(), api.getManicuraHistorialLocales(), api.getUsuarioHistorialLaboral(), api.getPersonaDocumentos(), api.getComisionesConfiguracion(), api.getComisionesManicuraConfig(), api.getAgendaProfesionalesNoVinculables(), api.getAdelantos(), api.getGarantias(), api.getInformesDiarios(), api.getAgendaServicios(), api.getAgendaManicuraServicios(), api.getAgendaListasPrecios(), api.getAgendaLocalListas(), api.getAgendaPreciosServicios(), api.getAgendaListaVigencias(), api.getAgendaPreciosVigencia(), api.getAgendaClientes(), api.getAgendaTurnos(), api.getAgendaTurnosPagos(), api.getAgendaTurnoServicios(), api.getAgendaBloqueos(), reclutamientoPromise
     ]);
+    const normalizedUsers = (users || []).map(normalizeUser);
+    if (actor?.id && actor?.sessionToken) {
+      const photoItems = normalizedUsers.filter(u => u.fotoPerfilPath)
+        .map(u => ({user_id:u.id, path:u.fotoPerfilPath}));
+      const signed = await api.signPersonaArchivos(actor, photoItems, 3600);
+      const byPath = new Map(signed.map(row => [JSON.stringify([row.user_id,row.path]), row]));
+      for (const u of normalizedUsers) {
+        if (u.fotoPerfilPath) u.fotoPerfilUrl = byPath.get(JSON.stringify([Number(u.id),u.fotoPerfilPath]))?.url || "";
+      }
+      const failed = signed.filter(row => row.error);
+      if (failed.length) console.warn(`No se pudieron cargar ${failed.length} fotos de perfil.`, failed[0].error);
+    }
     const nextData = {
-      users: await Promise.all((users || []).map(async raw => {
-        const u = normalizeUser(raw);
-        if (u.fotoPerfilPath && actor?.id && actor?.sessionToken) {
-          try {
-            u.fotoPerfilUrl = await api.signPersonaArchivo(actor, u.id, u.fotoPerfilPath, 3600);
-          } catch (err) {
-            console.warn(`No se pudo cargar la foto de perfil de ${u.nombre || u.id}`, err);
-            u.fotoPerfilUrl = "";
-          }
-        }
-        return u;
-      })),
+      users: normalizedUsers,
       locales: (locales||[]).map(normalizeLocal),
       horarios: horarios.map(normalizeHorario),
       asistencias: asistencias.map(normalizeAsistencia),
@@ -19212,6 +19411,7 @@ const refreshTimer = window.setInterval(check, 10 * 60 * 1000);
       reclutamientoCandidatas: reclutamientoCandidatas || [],
     };
     window.__nikiUsers = nextData.users;
+    latestDataRef.current = nextData;
     setData(nextData);
     return nextData;
   }, []);
@@ -19222,7 +19422,12 @@ const refreshTimer = window.setInterval(check, 10 * 60 * 1000);
       const target = (data?.users || []).find(u => Number(u.id)===Number(userId));
       if (!actor?.id || !target?.fotoPerfilPath) return;
       try {
-        const url = await api.signPersonaArchivo(actor, target.id, target.fotoPerfilPath, 3600);
+        const retryKey = JSON.stringify([actor.id, target.id, target.fotoPerfilPath]);
+        const now = Date.now();
+        if (now - (nikiPhotoRetryAt.get(retryKey) || 0) < 60 * 1000) return;
+        nikiPhotoRetryAt.set(retryKey, now);
+        nikiTrimMemoryCache(nikiPhotoRetryAt, 256);
+        const url = await api.signPersonaArchivo(actor, target.id, target.fotoPerfilPath, 3600, {force:true});
         if (url) setData(prev => prev ? ({ ...prev, users:(prev.users||[]).map(u => Number(u.id)===Number(target.id) ? { ...u, fotoPerfilUrl:url } : u) }) : prev);
       } catch (err) {
         console.warn("No se pudo renovar la foto de perfil", err);
@@ -19230,6 +19435,32 @@ const refreshTimer = window.setInterval(check, 10 * 60 * 1000);
     };
     return () => { delete window.__nikiRefreshPhoto; };
   }, [data?.users, user?.id]);
+
+  // Un cambio de turno sólo requiere datos de agenda, no volver a descargar
+  // horarios, asistencias, legajos, listas, informes y fotos de toda la red.
+  const reloadAgendaRealtime = useCallback(async () => {
+    const actorId = userRef.current?.id;
+    if (!actorId || !latestDataRef.current) return null;
+    const [clientes, turnos, pagos, servicios, bloqueos] = await Promise.all([
+      api.getAgendaClientes(),
+      api.getAgendaTurnos(),
+      api.getAgendaTurnosPagos(),
+      api.getAgendaTurnoServicios(),
+      api.getAgendaBloqueos(),
+    ]);
+    if (Number(userRef.current?.id) !== Number(actorId)) return null;
+    const patch = {
+      agendaClientes:(clientes || []).map(normalizeAgendaCliente),
+      agendaTurnos:(turnos || []).map(normalizeAgendaTurno),
+      agendaTurnosPagos:(pagos || []).map(normalizeAgendaTurnoPago),
+      agendaTurnoServicios:(servicios || []).map(normalizeAgendaTurnoServicio),
+      agendaBloqueos:(bloqueos || []).map(normalizeAgendaBloqueo),
+    };
+    const next = {...latestDataRef.current, ...patch};
+    latestDataRef.current = next;
+    setData(prev => prev ? {...prev, ...patch} : prev);
+    return next;
+  }, []);
 
   const applyPeriodoRealtime = useCallback((payload) => {
     const raw = payload.eventType === "DELETE" ? payload.old : payload.new;
@@ -19262,17 +19493,18 @@ const refreshTimer = window.setInterval(check, 10 * 60 * 1000);
         (payload) => {
           clearTimeout(refreshTimer);
           refreshTimer = setTimeout(() => {
-            reloadData()
+            reloadAgendaRealtime()
               .then((nextData) => {
-                if (!canUserReceiveTurnoRealtimeNotifications(user)) return;
+                const actor = userRef.current;
+                if (!nextData || !canUserReceiveTurnoRealtimeNotifications(actor)) return;
 
                 const rawTurno = payload.eventType === "DELETE" ? payload.old : payload.new;
-                const toastPayload = buildTurnoToastPayload(nextData, rawTurno, payload.eventType, user);
+                const toastPayload = buildTurnoToastPayload(nextData, rawTurno, payload.eventType, actor);
                 if (toastPayload) notifyToast(toastPayload);
               })
               .catch((err) => {
                 console.error("No se pudo actualizar la agenda en tiempo real", err);
-                if (canUserReceiveTurnoRealtimeNotifications(user)) {
+                if (canUserReceiveTurnoRealtimeNotifications(userRef.current)) {
                   notifyToast("No se pudo actualizar la agenda en tiempo real.", "error");
                 }
               });
@@ -19296,9 +19528,24 @@ const refreshTimer = window.setInterval(check, 10 * 60 * 1000);
       clearTimeout(refreshTimer);
       supabaseRealtime.removeChannel(channel);
     };
-  }, [user, reloadData, applyPeriodoRealtime]);
+  }, [user?.id, reloadAgendaRealtime, applyPeriodoRealtime]);
 
-  useEffect(()=>{ reloadData().then(()=>setLoading(false)).catch(()=>setLoading(false)); },[]);
+  const loadInitialData = useCallback(async (actor = null) => {
+    setLoading(true);
+    setDataLoadError("");
+    try { return await reloadData(actor); }
+    catch (err) {
+      setDataLoadError(err?.message || "No se pudieron cargar los datos.");
+      throw err;
+    } finally { setLoading(false); }
+  }, [reloadData]);
+
+  useEffect(() => {
+    // La pantalla de ingreso no necesita descargar datos operativos.
+    // Login solicita la carga después de autenticar al usuario.
+    if (!userRef.current?.id) { setLoading(false); return; }
+    void loadInitialData().catch(() => {});
+  }, [loadInitialData]);
 
   useEffect(() => {
     const onResize = () => setIsDesktopMenu(window.innerWidth >= 768);
@@ -19420,14 +19667,23 @@ const refreshTimer = window.setInterval(check, 10 * 60 * 1000);
   if (!user && currentPublicHash === "ayuda") return <CentroAyuda onBack={() => { window.location.hash = ""; }}/>; 
 
   if (loading) return <NikiSplash text="" />;
+  if (user && !data) return <div style={{padding:24}}><Card>
+    <p>No se pudieron cargar los datos de NikiOS.</p>
+    <p style={{fontSize:12,color:COLORS.danger}}>{dataLoadError}</p>
+    <Btn onClick={() => { void loadInitialData().catch(() => {}); }}>Reintentar</Btn>
+  </Card></div>;
   if (!user) return <Login onLogin={u=>{
+    setData(null);
+    latestDataRef.current = null;
+    setLoading(true);
+    setDataLoadError("");
     localStorage.setItem("niki_user", JSON.stringify(u));
     initializeNikiSessionClock(u, true);
     setUser(u);
 
     window.history.replaceState(null, "", "#inicio");
     setSeccion("inicio");
-  }} reloadData={reloadData}/>;
+  }} reloadData={loadInitialData}/>;
 
   const menuGroupsBase = [
     {
@@ -19495,9 +19751,7 @@ const refreshTimer = window.setInterval(check, 10 * 60 * 1000);
       label: "Comisiones",
       icon: "💰",
       items: [
-        { id: "reportes_comisiones", label: "Análisis de comisiones", icon: "📊" },
         { id: "mis_comisiones", label: "Mis comisiones", icon: "💰" },
-        { id: "reporte_pago_comisiones", label: "Pagos de comisiones", icon: "💳" },
         { id: "comisiones_semanal_nuevo", label: "Liquidaciones semanales", icon: "📅" },
         { id: "comisiones_quincenal_piloto", label: "Liquidaciones quincenales", icon: "📅" },
         { id: "garantias", label: "Garantías", icon: "🛠️" },
@@ -19994,7 +20248,7 @@ const refreshTimer = window.setInterval(check, 10 * 60 * 1000);
           {isDesktopMenu && <><Avatar nombre={user.nombre} userId={user.id} photoUrl={(data.users||[]).find(u=>u.id===user.id)?.fotoPerfilUrl||user.fotoPerfilUrl} size={34}/><span style={{ fontSize:13,opacity:0.9 }}>{user.nombre}</span></>}
           {dualOperationalProfile&&<select value={operatingMode} onChange={e=>switchOperatingMode(e.target.value)} title="Cambiar función de trabajo" aria-label="Cambiar función de trabajo" style={{border:"1px solid rgba(114,36,62,.18)",background:"rgba(255,255,255,.66)",color:COLORS.pinkDark,borderRadius:9,padding:"6px 8px",fontSize:11.5,fontWeight:700,cursor:"pointer",maxWidth:isDesktopMenu?150:118}}><option value="manicura">💅 Manicura</option><option value="encargada">👥 Encargada</option></select>}
           <NotificationBell history={notificationHistory} open={notificationOpen} setOpen={setNotificationOpen} onClear={() => setNotificationHistory(prev => prev.filter(n=>n.isRelease))} onAction={handleNotificationAction}/>
-          <button onClick={()=>{ localStorage.removeItem("niki_user"); if(user?.id)localStorage.removeItem(`niki_operating_mode_${user.id}`); clearNikiSessionClock(); setUser(null); setMenuOpen(false); setMobileMenuGroup(null); }} style={{ background:"rgba(114,36,62,0.12)",border:"none",color:COLORS.pinkDark,borderRadius:6,padding:"4px 10px",fontSize:12,cursor:"pointer" }}>Salir</button>
+          <button onClick={()=>{ localStorage.removeItem("niki_user"); clearNikiDownloadCaches(); if(user?.id)localStorage.removeItem(`niki_operating_mode_${user.id}`); clearNikiSessionClock(); setUser(null); setMenuOpen(false); setMobileMenuGroup(null); }} style={{ background:"rgba(114,36,62,0.12)",border:"none",color:COLORS.pinkDark,borderRadius:6,padding:"4px 10px",fontSize:12,cursor:"pointer" }}>Salir</button>
         </div>
       </header>
 

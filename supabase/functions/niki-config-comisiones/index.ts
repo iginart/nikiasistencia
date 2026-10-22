@@ -9,6 +9,17 @@ const fortnightGeneral=['porcentaje_normal','porcentaje_reducido','horas_quincen
 const weeklyPersonal=['horas_objetivo_semanales','porcentaje_base','porcentaje_reducido','max_llegadas_tarde','max_faltas_no_justificadas'];
 const fortnightPersonal=['horas_quincenales','horas_finde_dia','porcentaje_normal','porcentaje_reducido','tardanzas_penalizacion','faltas_no_justificadas'];
 const asNumeric=(obj:Record<string,unknown>,names:string[])=>{const out:Record<string,number|null>={};for(const k of names){const v=obj[k];if(v===''||v==null){out[k]=null;continue;}const n=Number(v);if(!Number.isFinite(n)||n<0||((k.startsWith('porcentaje_'))&&n>100))throw new Error(`Valor inválido: ${k}`);out[k]=n;}return out;};
+
+async function allowedLocales(admin:any,actor:any){
+ const {data:all,error:le}=await admin.from('locales').select('id,tipo_local');if(le)throw le;
+ if(actor.rol==='admin')return (all||[]).map((l:any)=>Number(l.id));
+ const tables=actor.rol==='encargada'?['encargado_locales']:['usuario_locales'];
+ const query=await admin.from(tables[0]).select('local_id').eq('user_id',Number(actor.id));if(query.error)throw query.error;
+ const assigned=new Set((query.data||[]).map((r:any)=>Number(r.local_id)));
+ if(actor.rol==='casa_matriz')return (all||[]).filter((l:any)=>String(l.tipo_local||'propio')==='propio'||assigned.has(Number(l.id))).map((l:any)=>Number(l.id));
+ return (all||[]).filter((l:any)=>assigned.has(Number(l.id))).map((l:any)=>Number(l.id));
+}
+
 Deno.serve(async req=>{
  if(req.method==='OPTIONS')return new Response('ok',{headers});
  if(req.method!=='POST')return json({ok:false,error:'Método no permitido'},405);
@@ -25,7 +36,8 @@ Deno.serve(async req=>{
   const mode=String(body.modalidad||'');if(!['semanal','quincenal'].includes(mode))throw new Error('Modalidad inválida');
   const action=String(body.action||'load');
   const canWrite=['admin','casa_matriz'].includes(user.rol);
-  if(action!=='load'&&!canWrite)return json({ok:false,error:'Solo Administración y Casa Matriz pueden modificar configuraciones'},403);
+  const allowed=new Set(await allowedLocales(admin,user));
+  if(action==='save_general'&&!canWrite)return json({ok:false,error:'Solo Administración y Casa Matriz pueden modificar la configuración general'},403);
   const generalTable=mode==='semanal'?'comisiones_configuracion':'comisiones_quincenales_config';
   const personalTable=mode==='semanal'?'comisiones_manicura_config':'comisiones_quincenales_manicura_config';
   if(action==='load'){
@@ -34,15 +46,8 @@ Deno.serve(async req=>{
       admin.from(personalTable).select('*')
     ]);
     if(g.error||p.error)throw(g.error||p.error);
-    if(canWrite)return json({ok:true,general:g.data?.[0]||null,excepciones:p.data||[]});
-    const [mine,managed]=await Promise.all([
-      admin.from('usuario_locales').select('local_id').eq('user_id',actorId),
-      admin.from('encargado_locales').select('local_id').eq('user_id',actorId)
-    ]);
-    // Las configuraciones personales solo se comparten para sucursales permitidas.
-    if(mine.error||managed.error)throw(mine.error||managed.error);
-    const ids=new Set([Number(user.local_id),...(mine.data||[]).map((x:any)=>Number(x.local_id)),...(managed.data||[]).map((x:any)=>Number(x.local_id))]);
-    return json({ok:true,general:g.data?.[0]||null,excepciones:(p.data||[]).filter((x:any)=>ids.has(Number(x.local_id)))});
+    if(user.rol==='admin')return json({ok:true,general:g.data?.[0]||null,excepciones:p.data||[]});
+     return json({ok:true,general:g.data?.[0]||null,excepciones:(p.data||[]).filter((x:any)=>allowed.has(Number(x.local_id)))});
   }
   if(action==='save_general'){
     const obj=asNumeric(body.valores||{},mode==='semanal'?weeklyGeneral:fortnightGeneral);
@@ -57,6 +62,7 @@ Deno.serve(async req=>{
     const [target,local]=await Promise.all([admin.from('users').select('id,activo,rol').eq('id',uid).maybeSingle(),admin.from('locales').select('id').eq('id',lid).maybeSingle()]);
     if(target.error||local.error)throw(target.error||local.error);
     if(!target.data||!local.data)throw new Error('Manicura o sucursal no encontrada');
+    if(!allowed.has(lid))return json({ok:false,error:'No tenés permisos para el local'},403);
     if(action==='delete_person'){
       const {error}=await admin.from(personalTable).delete().eq('user_id',uid).eq('local_id',lid);
       if(error)throw error;return json({ok:true});

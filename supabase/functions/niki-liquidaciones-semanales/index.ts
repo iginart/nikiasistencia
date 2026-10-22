@@ -4,6 +4,17 @@ const json=(x:unknown,status=200)=>new Response(JSON.stringify(x),{status,header
 const b64url=(input:ArrayBuffer)=>btoa(String.fromCharCode(...new Uint8Array(input))).replace(/\+/g,'-').replace(/\//g,'_').replace(/=+$/g,'');
 async function hmac(msg:string,secret:string){const key=await crypto.subtle.importKey('raw',new TextEncoder().encode(secret),{name:'HMAC',hash:'SHA-256'},false,['sign']);return b64url(await crypto.subtle.sign('HMAC',key,new TextEncoder().encode(msg)));}
 async function session(token:string,secret:string){const [body,sig]=String(token||'').split('.');if(!body||!sig||await hmac(body,secret)!==sig)return null;try{const raw=body.replace(/-/g,'+').replace(/_/g,'/');const obj=JSON.parse(atob(raw+'='.repeat((4-raw.length%4)%4)));return Number(obj.exp)>Date.now()/1000?obj:null;}catch{return null;}}
+
+async function allowedLocales(admin:any,actor:any){
+ const {data:all,error:le}=await admin.from('locales').select('id,tipo_local');if(le)throw le;
+ if(actor.rol==='admin')return (all||[]).map((l:any)=>Number(l.id));
+ const tables=actor.rol==='encargada'?['encargado_locales']:['usuario_locales'];
+ const query=await admin.from(tables[0]).select('local_id').eq('user_id',Number(actor.id));if(query.error)throw query.error;
+ const assigned=new Set((query.data||[]).map((r:any)=>Number(r.local_id)));
+ if(actor.rol==='casa_matriz')return (all||[]).filter((l:any)=>String(l.tipo_local||'propio')==='propio'||assigned.has(Number(l.id))).map((l:any)=>Number(l.id));
+ return (all||[]).filter((l:any)=>assigned.has(Number(l.id))).map((l:any)=>Number(l.id));
+}
+
 Deno.serve(async req=>{
  if(req.method==='OPTIONS')return new Response('ok',{headers});
  if(req.method!=='POST')return json({ok:false,error:'Método inválido'},405);
@@ -14,18 +25,8 @@ Deno.serve(async req=>{
   const auth=await session(String(b.session_token||''),secret);const actorId=Number(b.actor_id);
   if(!auth||Number(auth.uid)!==actorId)return json({ok:false,error:'Sesión inválida'},401);
   const {data:actor,error:ae}=await admin.from('users').select('id,rol,activo').eq('id',actorId).maybeSingle();
-  if(ae)throw ae;if(!actor||actor.activo===false||!['admin','casa_matriz'].includes(actor.rol))return json({ok:false,error:'Solo Administración y Casa Matriz'},403);
-  // Aplicar el mismo alcance que getAssignedLocalIds: Casa Matriz ve todos
-  // los propios y solo las franquicias explícitamente asignadas.
-  const {data:allLocales,error:le}=await admin.from('locales').select('id,tipo_local');
-  if(le)throw le;
-  let allowedLocalIds=(allLocales||[]).map((x:any)=>Number(x.id));
-  if(actor.rol==='casa_matriz'){
-    const {data:assigned,error:ue}=await admin.from('usuario_locales').select('local_id').eq('user_id',actorId);
-    if(ue)throw ue;
-    const explicit=new Set((assigned||[]).map((x:any)=>Number(x.local_id)));
-    allowedLocalIds=(allLocales||[]).filter((x:any)=>String(x.tipo_local||'propio')==='propio'||explicit.has(Number(x.id))).map((x:any)=>Number(x.id));
-  }
+  if(ae)throw ae;if(!actor||actor.activo===false||!['admin','casa_matriz','franquiciado','encargada'].includes(actor.rol))return json({ok:false,error:'Solo Administración y Casa Matriz'},403);
+   const allowedLocalIds=await allowedLocales(admin,actor);
   const allowed=new Set(allowedLocalIds);
   const desde=String(b.desde||'');const hasta=String(b.hasta||'');
   if(!/^\d{4}-\d{2}-\d{2}$/.test(desde)||!/^\d{4}-\d{2}-\d{2}$/.test(hasta))throw new Error('Fechas inválidas');
