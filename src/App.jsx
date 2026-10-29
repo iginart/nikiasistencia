@@ -324,6 +324,7 @@ function clearNikiDownloadCaches() {
   nikiPhotoRetryAt.clear();
   nikiCrmScopes.clear();
   nikiCrmScopesPending.clear();
+  nikiResultadosInvalidarCache();
 }
 
 const sb = async (path, opts = {}) => {
@@ -333,7 +334,9 @@ const sb = async (path, opts = {}) => {
   const res = await fetch(`${SUPABASE_URL}/rest/v1/${path}`, { method: opts.method || "GET", headers, body: opts.body });
   if (!res.ok) { const e = await res.text(); throw new Error(e); }
   const text = await res.text();
-  return text ? JSON.parse(text) : null;
+  const value = text ? JSON.parse(text) : null;
+  if ((opts.method || 'GET').toUpperCase() !== 'GET') nikiResultadosInvalidarCache();
+  return value;
 };
 
 const sbAll = async (path, opts = {}) => {
@@ -710,6 +713,7 @@ const nikiLiquidacionesSemanalOperativoEdge = async (action, payload = {}) => {
   });
   const txt=await res.text();let out={};try{out=txt?JSON.parse(txt):{};}catch{}
   if(!res.ok||out.ok!==true)throw new Error(out.error||txt||'No se pudo gestionar la liquidación semanal.');
+  if (!['list','load'].includes(action)) nikiResultadosInvalidarCache();
   return out;
 };
 
@@ -736,6 +740,7 @@ const nikiPagosQuincenalesEdge = async (action, payload = {}) => {
   });
   const txt = await res.text();let out={};try{out=txt?JSON.parse(txt):{};}catch{}
   if(!res.ok || out.ok!==true)throw new Error(out.error||txt||'No se pudo gestionar el pago.');
+  if (!['list','load','history'].includes(action)) nikiResultadosInvalidarCache();
   return out;
 };
 
@@ -2237,7 +2242,15 @@ function ToastStack({ toasts, onDismiss, onAction }) {
 }
 
 // Comunicados versionados. Al cambiar el ID de un anuncio se presenta de nuevo.
+const NIKI_RESULTADOS_NOVEDAD = {
+  id:'resultados-locales-v1',audience:'gestion',roles:['admin','casa_matriz','franquiciado','encargada'],featured:true,icon:'📊',
+  title:'Nuevo: Resultados por local',
+  message:'En Administración > Resultados por local podés consultar ventas, gastos, resultado y margen por sucursal. Filtrá por mes, tipo de local o varias sucursales, y seleccioná un importe para ver sus movimientos. También podés corregir gastos de AgendaPro y agregar, editar o eliminar gastos manuales, eligiendo sucursal, concepto y medio de pago. La evolución mensual permite detectar variaciones y posibles faltantes de carga. Las comisiones incluyen el cálculo disponible hasta su validación y las correcciones de AgendaPro se conservan en las próximas recargas. Cada perfil accede a sus sucursales permitidas.',
+  action:{kind:'openSection',section:'resultados_gestion'},button:'Abrir Resultados por local',
+};
+
 const NIKI_RELEASE_NOTICES = [
+  NIKI_RESULTADOS_NOVEDAD,
   { id:"navegacion-pestanas-20261021", audience:"todos", featured:true, icon:"🗂️", title:"¡Importante! Ahora podés trabajar con varias pestañas", message:"Abrí distintos reportes y pantallas desde el menú y alterná entre ellos sin cerrar lo que estabas haciendo. Al volver, conservás los filtros, las selecciones y el lugar donde estabas trabajando. Usá la × para cerrar una pestaña cuando ya no la necesites. Disponible en escritorio.", action:{kind:"openSection",section:"inicio"}, button:"Ir a Inicio" },
   { id:"consulta-precios-20261021", audience:"gestion", icon:"🏷️", title:"Nuevo: consulta de precios y presupuestos", message:"Desde Consultar precios podés marcar varios servicios y conocer el total que deberá abonar la clienta. El reporte diferencia el valor en efectivo del correspondiente a otros medios de pago, para ayudarte a informar un presupuesto antes de cobrar.", action:{kind:"openSection",section:"consulta_precios"}, button:"Consultar precios" },
   { id:"comisiones-servicios-20261021", audience:"manicura", icon:"💅", title:"Consultá la comisión de cada servicio", message:"En Servicios y comisiones 35/40 % podés consultar cuánto corresponde de comisión para cada servicio, comparar ambos porcentajes y entender el importe antes de realizar una atención.", action:{kind:"openSection",section:"consulta_comisiones_precios"}, button:"Ver comisiones por servicio" },
@@ -14171,6 +14184,7 @@ async function nikiCommissionConfigEdge(action, modalidad, payload={}) {
   });
   const txt=await res.text();let out={};try{out=txt?JSON.parse(txt):{};}catch{}
   if(!res.ok||out?.ok!==true)throw new Error(out?.error||txt||'No se pudo guardar la configuración.');
+  if (action !== 'load') nikiResultadosInvalidarCache();
   return out;
 }
 function NikiCommissionConfigModal({modalidad,data,onClose,onSaved,onJornadaSaved}) {
@@ -17637,6 +17651,1113 @@ function dashboardBuildMonthRows(diaRows, periodo, locales = []) {
   }).sort((a,b)=>Number(b.ventas||0)-Number(a.ventas||0));
 }
 
+// Sólo memoria de esta pestaña. No persiste datos ni tokens en localStorage.
+function nikiResultadosCache(){
+  if(!nikiResultadosCache.state)nikiResultadosCache.state={actor:null,entries:new Map(),refs:new WeakMap(),next:0};
+  return nikiResultadosCache.state;
+}
+function nikiResultadosInvalidarCache(){
+  const state=nikiResultadosCache();state.entries.clear();
+}
+function nikiResultadosContextKey(data){
+  const state=nikiResultadosCache();
+  return ['users','locales','garantias','adelantos','usuarioHistorialLaboral','manicuraHistorialLocales'].map(k=>{
+    const value=data?.[k];if(!value||typeof value!=='object')return 0;
+    if(!state.refs.has(value))state.refs.set(value,++state.next);
+    return state.refs.get(value);
+  }).join(',');
+}
+function nikiResultadosCompartir(actor,key,read,{force=false,ttl=45000,context=''}={}){
+  const state=nikiResultadosCache(),actorKey=JSON.stringify([actor?.id,actor?.sessionToken]);
+  if(state.actor!==actorKey){state.entries.clear();state.actor=actorKey;}
+  const cacheKey=JSON.stringify([key,context]),now=Date.now(),existing=state.entries.get(cacheKey);
+  // También compartir la promesa en curso al repetir un efecto de montaje.
+  if(existing&&(existing.pending||(!force&&now-existing.at<ttl)))return existing.promise;
+  for(const [k,v] of state.entries)if(!v.pending&&now-v.at>=ttl)state.entries.delete(k);
+  const entry={pending:true,at:now,promise:null};
+  entry.promise=Promise.resolve().then(read).then(value=>{
+    entry.pending=false;entry.at=Date.now();return value;
+  },error=>{if(state.entries.get(cacheKey)===entry)state.entries.delete(cacheKey);throw error;});
+  state.entries.delete(cacheKey);state.entries.set(cacheKey,entry);
+  while(state.entries.size>8)state.entries.delete(state.entries.keys().next().value);
+  return entry.promise;
+}
+function nikiCargarResultadoGestion(actor,data,desde,hasta,ids,{force=false}={}){
+  const scope=[...ids].sort((a,b)=>a-b);
+  return nikiResultadosCompartir(actor,JSON.stringify(['resultado',desde,hasta,scope]),async()=>{
+    const [result,live]=await Promise.all([
+      nikiResultadosRequest(actor,{action:'resultados',desde,hasta,local_ids:scope}),
+      nikiCargarComisionesResultado(data,desde,hasta,scope)
+    ]);
+    if(result.comisiones_version!==2)throw new Error('Ejecutá el SQL de resultados y comisiones antes de cargar el tablero.');
+    return {...nikiCombinarComisionesResultado(result,live,desde,hasta),consultado_en:new Date().toISOString()};
+  },{force,context:nikiResultadosContextKey(data)});
+}
+
+
+function nikiCalcularCostoSemanal({snapshot,data,savedOverrides=[],pctOverrides=[],config,personalConfigRows=[],localModes=[],desde,hasta,keyCorte,esSemanal=true,weeklyPilotData={porcentajes:{},recuperaciones:[]}}) {
+  const sandboxRead=()=>weeklyPilotData;
+  const laborableCount=(a,b)=>{
+    if(!a||!b||a>b)return 0;
+    let n=0;
+    const current=parseDateLocal(a),last=parseDateLocal(b);
+    while(current<=last){
+      const md=`${String(current.getMonth()+1).padStart(2,'0')}-${String(current.getDate()).padStart(2,'0')}`;
+      if(current.getDay()!==0&&!['01-01','05-01','12-25'].includes(md))n++;
+      current.setDate(current.getDate()+1);
+    }
+    return n;
+  };
+  const timeMinutes=(v)=>{const x=String(v||'').slice(0,5).split(':').map(Number);return x.length===2&&x.every(Number.isFinite)?x[0]*60+x[1]:null;};
+  const hoursOf=(a,b)=>{const aa=timeMinutes(a),bb=timeMinutes(b);return aa===null||bb===null?0:Math.max(0,(bb-aa)/60);};
+
+    if(!snapshot)return [];
+    const uMap=new Map((data.users||[]).map(x=>[Number(x.id),x]));
+    const lMap=new Map((data.locales||[]).map(x=>[Number(x.id),x]));
+    // Una liquidación se identifica por SEMANA + SUCURSAL + MANICURA.
+    // No se mezclan prestaciones, jornadas o descuentos de sucursales distintas.
+    const baseByUserLocal=new Map();
+    const ensureGroup=(uid,local)=>{
+      const k=`${uid}|${local}`;
+      if(!baseByUserLocal.has(k))baseByUserLocal.set(k,{uid,principal:local,ventas:[]});
+      return baseByUserLocal.get(k);
+    };
+    (snapshot.ventas||[]).forEach(v=>{const uid=Number(v.userId),loc=Number(v.localId);if(uid&&loc&&uMap.has(uid))ensureGroup(uid,loc).ventas.push(v);});
+    (snapshot.horarios||[]).forEach(h=>{const uid=Number(h.userId),loc=Number(h.localId);if(uid&&loc&&uMap.has(uid))ensureGroup(uid,loc);});
+    (snapshot.asistencias||[]).forEach(h=>{const uid=Number(h.userId),loc=Number(h.localId);if(uid&&loc&&uMap.has(uid))ensureGroup(uid,loc);});
+    const localSetByUser=new Map();
+    for(const g of baseByUserLocal.values()){
+      if(!localSetByUser.has(g.uid))localSetByUser.set(g.uid,new Set());
+      localSetByUser.get(g.uid).add(g.principal);
+    }
+    // Históricos sin local inequívoco se asignan solo cuando hay un local único.
+    // En caso contrario el cálculo se bloquea para impedir un pago incorrecto.
+    const result=[];
+    for(const group of baseByUserLocal.values()){
+      const uid=group.uid, principal=group.principal;
+      const persona=uMap.get(uid);
+      const userLocals=localSetByUser.get(uid)||new Set([principal]);
+      const multipleLocals=userLocals.size>1;
+      const unknownSale=(snapshot.ventas||[]).some(v=>Number(v.userId)===uid&&!Number(v.localId));
+      const unknownAttendance=[...(snapshot.horarios||[]),...(snapshot.asistencias||[])].some(v=>Number(v.userId)===uid&&!Number(v.localId));
+      const unknownAdjustment=(data.garantias||[]).some(g=>!Number(g.localId)&&String(g.fechaReparacion||'').slice(0,10)>=desde&&String(g.fechaReparacion||'').slice(0,10)<=hasta&&(Number(g.manicuraOriginalId)===uid||Number(g.manicuraReparacionId)===uid))||
+        (data.adelantos||[]).some(d=>Number(d.userId)===uid&&!Number(d.localId)&&String(d.fechaDescuento||d.fecha||'').slice(0,10)>=desde&&String(d.fechaDescuento||d.fecha||'').slice(0,10)<=hasta);
+      const conflictoLocales=unknownSale||(multipleLocals&&(unknownAttendance||unknownAdjustment));
+      const matchedLocals=[principal];
+      const mode=localModes.find(x=>Number(x.local_id)===principal&&(!x.fecha_desde||x.fecha_desde<=hasta));
+      // Se conserva la separación por sucursal; operaciones mezcladas quedan bloqueadas.
+      const zona=String(lMap.get(principal)?.zona||'estandar').toLowerCase();const premium=['premium','exclusiva'].includes(zona);
+      const weekend=persona.soloFinDeSemana===true;
+      const exception=personalConfigRows.find(x=>x.activo!==false&&Number(x.user_id)===uid&&Number(x.local_id)===principal)||null;
+      const configured=(key,fallbackValue)=>exception?.[key]==null?fallbackValue:Number(exception[key]);
+      const normalPct=configured(esSemanal?'porcentaje_base':'porcentaje_normal',Number(config.porcentaje_normal??40));
+      const reducedPct=configured(esSemanal?'porcentaje_reducido':'porcentaje_reducido',Number(config.porcentaje_reducido??35));
+      const lateThreshold=esSemanal?configured('max_llegadas_tarde',Math.max(0,Number(config.tardanzas_penalizacion??3)-1))+1:configured('tardanzas_penalizacion',Number(config.tardanzas_penalizacion??2));
+      const maxAbsences=configured(esSemanal?'max_faltas_no_justificadas':'faltas_no_justificadas',Number(config.faltas_no_justificadas??0));
+      const hRows=(snapshot.horarios||[]).filter(h=>Number(h.userId)===uid&&(Number(h.localId)===principal||(!Number(h.localId)&&!multipleLocals))&&h.fecha>=desde&&h.fecha<=hasta);
+      const aRows=(snapshot.asistencias||[]).filter(a=>Number(a.userId)===uid&&(Number(a.localId)===principal||(!Number(a.localId)&&!multipleLocals))&&a.fecha>=desde&&a.fecha<=hasta);
+      const history=(data.usuarioHistorialLaboral||[]).filter(x=>Number(x.userId)===uid).map(x=>x.fechaInicio).filter(Boolean).sort();
+      const localHistory=(data.manicuraHistorialLocales||[]).filter(x=>Number(x.userId)===uid).map(x=>x.fechaInicio).filter(Boolean).sort();
+      const start=history[0]||localHistory[0]||'';
+      const ingresante=!!start&&start>desde&&start<=hasta;
+      const effectiveDesde=ingresante?start:desde;
+      const factor=ingresante?laborableCount(effectiveDesde,hasta)/Math.max(1,laborableCount(desde,hasta)):1;
+      const objetivo=weekend?configured('horas_finde_dia',Number(config.horas_finde_dia??10)):configured(esSemanal?'horas_objetivo_semanales':'horas_quincenales',Number(config.horas_quincenales??72))*factor;
+      const minimoFull=Number(weekend?(premium?config.minimo_finde_premium:config.minimo_finde_estandar):(premium?config.minimo_premium:config.minimo_estandar)||0);
+      // "Fin de semana" es una modalidad de la manicura (users.solo_fin_de_semana),
+      // no un filtro por dia de la semana. Se consideran TODAS sus jornadas
+      // programadas dentro del corte: viernes, sabados, feriados u otros dias.
+      const jornadasModalidad=hRows.filter(h=>weekend&&h.trabaja&&h.fecha>=effectiveDesde);
+      const finDates=[...new Set(jornadasModalidad.map(h=>h.fecha))];
+      const diasEsperados=weekend?finDates.length:0;
+      const minimoAplicable=weekend?minimoFull*diasEsperados:minimoFull*factor; // Referencia acumulada, no umbral de pago por jornada.
+      const diaMap=new Map();
+      hRows.forEach(h=>{if(h.fecha<effectiveDesde)return;const x=diaMap.get(h.fecha)||{horas:0,plan:0};if(h.trabaja){x.plan+=hoursOf(h.entrada,h.salida);}diaMap.set(h.fecha,x);});
+      aRows.forEach(a=>{
+        if(a.fecha<effectiveDesde)return;
+        const x=diaMap.get(a.fecha)||{horas:0,plan:0};
+        // Mismo criterio que el reporte de horas vigente: asistencia "presente" acredita
+        // las horas del horario planificado. Para "tarde", usamos la marcación real
+        // con las horas planificadas como alternativa si falta una de las dos marcas.
+        const planDia=hRows.find(h=>h.fecha===a.fecha&&h.trabaja);
+        if(a.estado==='presente'){
+          x.horas+=planDia?hoursOf(planDia.entrada,planDia.salida):hoursOf(a.entradaReal,a.salidaReal);
+        }else if(a.estado==='tarde'){
+          x.horas+=hoursOf(a.entradaReal||planDia?.entrada,a.salidaReal||planDia?.salida);
+        }
+        diaMap.set(a.fecha,x);
+      });
+      // Una marcación completa define horas reales; la planificación no se cuenta automáticamente como trabajo efectivo.
+      let hours=0;for(const x of diaMap.values())hours+=x.horas;
+      const falls=aRows.filter(a=>a.estado==='ausente'&&a.fecha>=effectiveDesde).map(a=>({fecha:a.fecha,certificado:!!a.certificado,plan:diaMap.get(a.fecha)?.plan||0}));
+      const unexcused=falls.filter(a=>!a.certificado);
+      const late=aRows.filter(a=>a.fecha>=effectiveDesde&&a.estado==='tarde').length;
+      const overrides=esSemanal?sandboxRead().recuperaciones.filter(x=>Number(x.user_id)===uid&&Number(x.local_id)===principal):savedOverrides.filter(x=>Number(x.user_id)===uid&&x.periodo===keyCorte);
+      const pending=unexcused.filter(a=>!overrides.some(o=>o.fecha_ausencia===a.fecha&&o.recuperada===true&&Number(o.horas_recuperadas||0)+0.01>=a.plan));
+      const countedMedical=falls.filter(x=>x.certificado).reduce((s,x)=>s+x.plan,0);
+      const recoveredHours=overrides.filter(x=>x.recuperada===true&&unexcused.some(a=>a.fecha===x.fecha_ausencia)).reduce((s,x)=>s+Number(x.horas_recuperadas||0),0);
+      // Para evitar doble conteo, la recuperación declarada se usa para justificar la ausencia,
+      // no se vuelve a sumar a las horas reales ya registradas.
+      const eligibleHours=hours+countedMedical;
+      const hoursOk=weekend?finDates.every(d=>(diaMap.get(d)?.horas||0)+(falls.some(f=>f.fecha===d&&f.certificado)?(diaMap.get(d)?.plan||0):0)>=configured('horas_finde_dia',Number(config.horas_finde_dia??10))):eligibleHours+1e-6>=objetivo;
+      const penalized=late>=lateThreshold||pending.length>maxAbsences;
+      const autoPct=penalized?reducedPct:normalPct;
+      const manualPctRow=esSemanal ? (sandboxRead().porcentajes[`${principal}|${uid}`]||null) : pctOverrides.find(o=>Number(o.user_id)===uid&&o.periodo===keyCorte);
+      const pct=manualPctRow?Number(manualPctRow.porcentaje):autoPct;
+      const originalRate=40; // Comisión de origen AgendaPro, normalmente expresada al 40%.
+      const ventaComision40=group.ventas.reduce((s,v)=>s+Number(v.comision||0),0);
+      const ventaTotal=group.ventas.reduce((s,v)=>s+Number(v.precio||0),0);
+      const comision=ventaComision40*pct/originalRate;
+      const garantiaVigencia=getMinimumGuaranteeStatus(data.manicuraHistorialLocales||[],uid,principal,desde,hasta);
+      const garantiaHasta=garantiaVigencia?.endDateKey||'';
+      const beneficioVigente=!!garantiaVigencia?.activeInWeek&&!!garantiaHasta&&garantiaHasta>=desde;
+      const minimoHabilitado=beneficioVigente&&hoursOk&&!penalized&&pct>=normalPct;
+      // Para trabajo solo de fines de semana, evaluar cada jornada por separado.
+      // El total de comisiones de la quincena nunca compensa una jornada por debajo de su minimo.
+      const detalleFinSemana=weekend?finDates.sort().map(fecha=>{
+        const info=diaMap.get(fecha)||{horas:0,plan:0};
+        const ausenciaCertificada=falls.some(f=>f.fecha===fecha&&f.certificado);
+        const horasComputables=Number(info.horas||0)+(ausenciaCertificada?Number(info.plan||0):0);
+        const horasObjetivo=Number(config.horas_finde_dia??10);
+        const cumpleHoras=horasComputables+1e-6>=horasObjetivo;
+        const ausenciaPendiente=pending.some(a=>a.fecha===fecha);
+        const comisionDia=group.ventas.filter(v=>String(v.fechaPago||'').slice(0,10)===fecha)
+          .reduce((sum,v)=>sum+Number(v.comision||0)*pct/originalRate,0);
+        // Se respeta la habilitacion por porcentaje y penalizaciones de la quincena.
+        // La vigencia del beneficio tambien se evalua POR FECHA: un beneficio
+        // vencido no puede generar complementos en dias posteriores.
+        const beneficioEnFecha=beneficioVigente&&fecha<=garantiaHasta;
+        const habilitado=beneficioEnFecha&&cumpleHoras&&!ausenciaPendiente&&!penalized&&pct>=normalPct;
+        const complementoDia=habilitado?Math.max(0,minimoFull-comisionDia):0;
+        return {fecha,horas:info.horas||0,horasComputables,horasObjetivo,cumpleHoras,
+          beneficioEnFecha,ausenciaPendiente,comisionDia,minimoDiario:minimoFull,habilitado,complementoDia};
+      }):[];
+      const complemento=weekend
+        ?detalleFinSemana.reduce((sum,d)=>sum+d.complementoDia,0)
+        :(minimoHabilitado?Math.max(0,minimoAplicable-comision):0);
+      const ajustesGarantia=(data.garantias||[]).reduce((s,g)=>{
+        if(String(g.fechaReparacion||'').slice(0,10)<desde||String(g.fechaReparacion||'').slice(0,10)>hasta)return s;
+        if(Number(g.localId)!==principal&&!(Number(g.localId)===0&&!multipleLocals))return s;
+        return s+(Number(g.manicuraReparacionId)===uid?Math.abs(Number(g.importeComision||0)):0)-(Number(g.manicuraOriginalId)===uid?Math.abs(Number(g.importeComision||0)):0);
+      },0);
+      const adelantos=(data.adelantos||[]).filter(a=>Number(a.userId)===uid&&(Number(a.localId)===principal||(!Number(a.localId)&&!multipleLocals))&&String(a.fechaDescuento||a.fecha||'').slice(0,10)>=desde&&String(a.fechaDescuento||a.fecha||'').slice(0,10)<=hasta).reduce((s,a)=>s+Math.abs(Number(a.importe||0)),0);
+      const fechasDetalle=[...new Set([...group.ventas.map(v=>String(v.fechaPago||'').slice(0,10)).filter(Boolean),...hRows.filter(h=>h.trabaja).map(h=>h.fecha)])].filter(f=>f>=desde&&f<=hasta).sort();
+      const todosLosDias=fechasDetalle.map(fecha=>({
+        fecha,
+        diaSemana:parseDateLocal(fecha)?.getDay(),
+        horas:Number(diaMap.get(fecha)?.horas||0),
+        comision:group.ventas.filter(v=>String(v.fechaPago||'').slice(0,10)===fecha).reduce((sum,v)=>sum+Number(v.comision||0)*pct/originalRate,0),
+        minimo:detalleFinSemana.find(d=>d.fecha===fecha)?.complementoDia||0,
+        esFinDeSemana:detalleFinSemana.some(d=>d.fecha===fecha),
+      }));
+      result.push({conflictoLocales,todosLosDias,garantiaHasta,beneficioVigente,uid,nombre:persona.nombre||'Manicura',principal,localNombre:lMap.get(principal)?.nombre||'Sin local',localIds:matchedLocals,mode:mode?.modalidad||'semanal',zona,weekend,ventas:group.ventas,ventaTotal,ventaComision40,horas:hours,horasMedicas:countedMedical,horasElegibles:eligibleHours,horasRecuperadas:recoveredHours,objetivo,horasOk:hoursOk,late,falls,unexcused,pending,overrides,pct,autoPct,manualPctRow,penalized,ingresante,start,factor,minimoAplicable,minimoDiario:minimoFull,detalleFinSemana,minimoHabilitado,comision,complemento,ajustesGarantia,adelantos,total:comision+complemento+ajustesGarantia-adelantos,finDates,diaMap});
+    }
+    return result.sort((a,b)=>a.nombre.localeCompare(b.nombre)||a.principal-b.principal);
+}
+
+function nikiCalcularCostoQuincenal({snapshot,data,savedOverrides=[],pctOverrides=[],config,personalConfigRows=[],localModes=[],desde,hasta,keyCorte,esSemanal=false,weeklyPilotData={porcentajes:{},recuperaciones:[]}}) {
+  const sandboxRead=()=>weeklyPilotData;
+  const laborableCount=(a,b)=>{
+    if(!a||!b||a>b)return 0;
+    let n=0;
+    const current=parseDateLocal(a),last=parseDateLocal(b);
+    while(current<=last){
+      const md=`${String(current.getMonth()+1).padStart(2,'0')}-${String(current.getDate()).padStart(2,'0')}`;
+      if(current.getDay()!==0&&!['01-01','05-01','12-25'].includes(md))n++;
+      current.setDate(current.getDate()+1);
+    }
+    return n;
+  };
+  const timeMinutes=(v)=>{const x=String(v||'').slice(0,5).split(':').map(Number);return x.length===2&&x.every(Number.isFinite)?x[0]*60+x[1]:null;};
+  const hoursOf=(a,b)=>{const aa=timeMinutes(a),bb=timeMinutes(b);return aa===null||bb===null?0:Math.max(0,(bb-aa)/60);};
+
+    if(!snapshot)return [];
+    const uMap=new Map((data.users||[]).map(x=>[Number(x.id),x]));
+    const lMap=new Map((data.locales||[]).map(x=>[Number(x.id),x]));
+    const baseByUser=new Map();
+    (snapshot.ventas||[]).forEach(v=>{const uid=Number(v.userId);if(!uid||!uMap.has(uid))return;const obj=baseByUser.get(uid)||{ventas:[],localIds:new Set()};obj.ventas.push(v);obj.localIds.add(Number(v.localId||0));baseByUser.set(uid,obj);});
+    (snapshot.horarios||[]).forEach(h=>{const uid=Number(h.userId);if(!uid||!uMap.has(uid))return;if(!baseByUser.has(uid))baseByUser.set(uid,{ventas:[],localIds:new Set()});baseByUser.get(uid).localIds.add(Number(h.localId||0));});
+    const result=[];
+    for(const [uid,group] of baseByUser){
+      const persona=uMap.get(uid);
+      const matchedLocals=[...group.localIds].filter(Boolean);
+      const principal=Number(group.ventas[0]?.localId||matchedLocals[0]||persona.localId||0);
+      const mode=localModes.find(x=>Number(x.local_id)===principal&&(!x.fecha_desde||x.fecha_desde<=hasta));
+      // Sin activación explícita mantenemos esta simulación identificada como piloto.
+      const zona=String(lMap.get(principal)?.zona||'estandar').toLowerCase();const premium=['premium','exclusiva'].includes(zona);
+      const weekend=persona.soloFinDeSemana===true;
+      const exception=personalConfigRows.find(x=>x.activo!==false&&Number(x.user_id)===uid&&Number(x.local_id)===principal)||null;
+      const configured=(key,fallbackValue)=>exception?.[key]==null?fallbackValue:Number(exception[key]);
+      const normalPct=configured(esSemanal?'porcentaje_base':'porcentaje_normal',Number(config.porcentaje_normal??40));
+      const reducedPct=configured(esSemanal?'porcentaje_reducido':'porcentaje_reducido',Number(config.porcentaje_reducido??35));
+      const lateThreshold=esSemanal?configured('max_llegadas_tarde',Math.max(0,Number(config.tardanzas_penalizacion??3)-1))+1:configured('tardanzas_penalizacion',Number(config.tardanzas_penalizacion??2));
+      const maxAbsences=configured(esSemanal?'max_faltas_no_justificadas':'faltas_no_justificadas',Number(config.faltas_no_justificadas??0));
+      const hRows=(snapshot.horarios||[]).filter(h=>Number(h.userId)===uid&&h.fecha>=desde&&h.fecha<=hasta);
+      const aRows=(snapshot.asistencias||[]).filter(a=>Number(a.userId)===uid&&a.fecha>=desde&&a.fecha<=hasta);
+      const history=(data.usuarioHistorialLaboral||[]).filter(x=>Number(x.userId)===uid).map(x=>x.fechaInicio).filter(Boolean).sort();
+      const localHistory=(data.manicuraHistorialLocales||[]).filter(x=>Number(x.userId)===uid).map(x=>x.fechaInicio).filter(Boolean).sort();
+      const start=history[0]||localHistory[0]||'';
+      const ingresante=!!start&&start>desde&&start<=hasta;
+      const effectiveDesde=ingresante?start:desde;
+      const factor=ingresante?laborableCount(effectiveDesde,hasta)/Math.max(1,laborableCount(desde,hasta)):1;
+      const objetivo=weekend?configured('horas_finde_dia',Number(config.horas_finde_dia??10)):configured(esSemanal?'horas_objetivo_semanales':'horas_quincenales',Number(config.horas_quincenales??72))*factor;
+      const minimoFull=Number(weekend?(premium?config.minimo_finde_premium:config.minimo_finde_estandar):(premium?config.minimo_premium:config.minimo_estandar)||0);
+      // "Fin de semana" es una modalidad de la manicura (users.solo_fin_de_semana),
+      // no un filtro por dia de la semana. Se consideran TODAS sus jornadas
+      // programadas dentro del corte: viernes, sabados, feriados u otros dias.
+      const jornadasModalidad=hRows.filter(h=>weekend&&h.trabaja&&h.fecha>=effectiveDesde);
+      const finDates=[...new Set(jornadasModalidad.map(h=>h.fecha))];
+      const diasEsperados=weekend?finDates.length:0;
+      const minimoAplicable=weekend?minimoFull*diasEsperados:minimoFull*factor; // Referencia acumulada, no umbral de pago por jornada.
+      const diaMap=new Map();
+      hRows.forEach(h=>{if(h.fecha<effectiveDesde)return;const x=diaMap.get(h.fecha)||{horas:0,plan:0};if(h.trabaja){x.plan+=hoursOf(h.entrada,h.salida);}diaMap.set(h.fecha,x);});
+      aRows.forEach(a=>{
+        if(a.fecha<effectiveDesde)return;
+        const x=diaMap.get(a.fecha)||{horas:0,plan:0};
+        // Mismo criterio que el reporte de horas vigente: asistencia "presente" acredita
+        // las horas del horario planificado. Para "tarde", usamos la marcación real
+        // con las horas planificadas como alternativa si falta una de las dos marcas.
+        const planDia=hRows.find(h=>h.fecha===a.fecha&&Number(h.localId||0)===Number(a.localId||0)&&h.trabaja);
+        if(a.estado==='presente'){
+          x.horas+=planDia?hoursOf(planDia.entrada,planDia.salida):hoursOf(a.entradaReal,a.salidaReal);
+        }else if(a.estado==='tarde'){
+          x.horas+=hoursOf(a.entradaReal||planDia?.entrada,a.salidaReal||planDia?.salida);
+        }
+        diaMap.set(a.fecha,x);
+      });
+      // Una marcación completa define horas reales; la planificación no se cuenta automáticamente como trabajo efectivo.
+      let hours=0;for(const x of diaMap.values())hours+=x.horas;
+      const falls=aRows.filter(a=>a.estado==='ausente'&&a.fecha>=effectiveDesde).map(a=>({fecha:a.fecha,certificado:!!a.certificado,plan:diaMap.get(a.fecha)?.plan||0}));
+      const unexcused=falls.filter(a=>!a.certificado);
+      const late=aRows.filter(a=>a.fecha>=effectiveDesde&&a.estado==='tarde').length;
+      const overrides=savedOverrides.filter(x=>Number(x.user_id)===uid&&x.periodo===keyCorte);
+      const pending=unexcused.filter(a=>!overrides.some(o=>o.fecha_ausencia===a.fecha&&o.recuperada===true&&Number(o.horas_recuperadas||0)+0.01>=a.plan));
+      const countedMedical=falls.filter(x=>x.certificado).reduce((s,x)=>s+x.plan,0);
+      const recoveredHours=overrides.filter(x=>x.recuperada===true&&unexcused.some(a=>a.fecha===x.fecha_ausencia)).reduce((s,x)=>s+Number(x.horas_recuperadas||0),0);
+      // Para evitar doble conteo, la recuperación declarada se usa para justificar la ausencia,
+      // no se vuelve a sumar a las horas reales ya registradas.
+      const eligibleHours=hours+countedMedical;
+      const hoursOk=weekend?finDates.every(d=>(diaMap.get(d)?.horas||0)+(falls.some(f=>f.fecha===d&&f.certificado)?(diaMap.get(d)?.plan||0):0)>=configured('horas_finde_dia',Number(config.horas_finde_dia??10))):eligibleHours+1e-6>=objetivo;
+      const penalized=late>=lateThreshold||pending.length>maxAbsences;
+      const autoPct=penalized?reducedPct:normalPct;
+      const manualPctRow=pctOverrides.find(o=>Number(o.user_id)===uid&&o.periodo===keyCorte);
+      const pct=manualPctRow?Number(manualPctRow.porcentaje):autoPct;
+      const originalRate=40; // Comisión de origen AgendaPro, normalmente expresada al 40%.
+      const ventaComision40=group.ventas.reduce((s,v)=>s+Number(v.comision||0),0);
+      const ventaTotal=group.ventas.reduce((s,v)=>s+Number(v.precio||0),0);
+      const comision=ventaComision40*pct/originalRate;
+      const garantiaVigencia=getMinimumGuaranteeStatus(data.manicuraHistorialLocales||[],uid,principal,desde,hasta);
+      const garantiaHasta=garantiaVigencia?.endDateKey||'';
+      const beneficioVigente=!!garantiaVigencia?.activeInWeek&&!!garantiaHasta&&garantiaHasta>=desde;
+      const minimoHabilitado=beneficioVigente&&hoursOk&&!penalized&&pct>=normalPct;
+      // Para trabajo solo de fines de semana, evaluar cada jornada por separado.
+      // El total de comisiones de la quincena nunca compensa una jornada por debajo de su minimo.
+      const detalleFinSemana=weekend?finDates.sort().map(fecha=>{
+        const info=diaMap.get(fecha)||{horas:0,plan:0};
+        const ausenciaCertificada=falls.some(f=>f.fecha===fecha&&f.certificado);
+        const horasComputables=Number(info.horas||0)+(ausenciaCertificada?Number(info.plan||0):0);
+        const horasObjetivo=Number(config.horas_finde_dia??10);
+        const cumpleHoras=horasComputables+1e-6>=horasObjetivo;
+        const ausenciaPendiente=pending.some(a=>a.fecha===fecha);
+        const comisionDia=group.ventas.filter(v=>String(v.fechaPago||'').slice(0,10)===fecha)
+          .reduce((sum,v)=>sum+Number(v.comision||0)*pct/originalRate,0);
+        // Se respeta la habilitacion por porcentaje y penalizaciones de la quincena.
+        // La vigencia del beneficio tambien se evalua POR FECHA: un beneficio
+        // vencido no puede generar complementos en dias posteriores.
+        const beneficioEnFecha=beneficioVigente&&fecha<=garantiaHasta;
+        const habilitado=beneficioEnFecha&&cumpleHoras&&!ausenciaPendiente&&!penalized&&pct>=normalPct;
+        const complementoDia=habilitado?Math.max(0,minimoFull-comisionDia):0;
+        return {fecha,horas:info.horas||0,horasComputables,horasObjetivo,cumpleHoras,
+          beneficioEnFecha,ausenciaPendiente,comisionDia,minimoDiario:minimoFull,habilitado,complementoDia};
+      }):[];
+      const complemento=weekend
+        ?detalleFinSemana.reduce((sum,d)=>sum+d.complementoDia,0)
+        :(minimoHabilitado?Math.max(0,minimoAplicable-comision):0);
+      const ajustesGarantia=(data.garantias||[]).reduce((s,g)=>{
+        if(String(g.fechaReparacion||'').slice(0,10)<desde||String(g.fechaReparacion||'').slice(0,10)>hasta)return s;
+        return s+(Number(g.manicuraReparacionId)===uid?Math.abs(Number(g.importeComision||0)):0)-(Number(g.manicuraOriginalId)===uid?Math.abs(Number(g.importeComision||0)):0);
+      },0);
+      const adelantos=(data.adelantos||[]).filter(a=>Number(a.userId)===uid&&String(a.fechaDescuento||a.fecha||'').slice(0,10)>=desde&&String(a.fechaDescuento||a.fecha||'').slice(0,10)<=hasta).reduce((s,a)=>s+Math.abs(Number(a.importe||0)),0);
+      const fechasDetalle=[...new Set([...group.ventas.map(v=>String(v.fechaPago||'').slice(0,10)).filter(Boolean),...hRows.filter(h=>h.trabaja).map(h=>h.fecha)])].filter(f=>f>=desde&&f<=hasta).sort();
+      const todosLosDias=fechasDetalle.map(fecha=>({
+        fecha,
+        diaSemana:parseDateLocal(fecha)?.getDay(),
+        horas:Number(diaMap.get(fecha)?.horas||0),
+        comision:group.ventas.filter(v=>String(v.fechaPago||'').slice(0,10)===fecha).reduce((sum,v)=>sum+Number(v.comision||0)*pct/originalRate,0),
+        minimo:detalleFinSemana.find(d=>d.fecha===fecha)?.complementoDia||0,
+        esFinDeSemana:detalleFinSemana.some(d=>d.fecha===fecha),
+      }));
+      result.push({todosLosDias,garantiaHasta,beneficioVigente,uid,nombre:persona.nombre||'Manicura',principal,localNombre:lMap.get(principal)?.nombre||'Sin local',localIds:matchedLocals,mode:mode?.modalidad||'semanal',zona,weekend,ventas:group.ventas,ventaTotal,ventaComision40,horas:hours,horasMedicas:countedMedical,horasElegibles:eligibleHours,horasRecuperadas:recoveredHours,objetivo,horasOk:hoursOk,late,falls,unexcused,pending,overrides,pct,autoPct,manualPctRow,penalized,ingresante,start,factor,minimoAplicable,minimoDiario:minimoFull,detalleFinSemana,minimoHabilitado,comision,complemento,ajustesGarantia,adelantos,total:comision+complemento+ajustesGarantia-adelantos,finDates,diaMap});
+    }
+    return result.sort((a,b)=>a.nombre.localeCompare(b.nombre));
+}
+
+// La API puede devolver menos filas que el límite solicitado. Una página corta
+// no acredita que terminó el rango: continuar con el offset de las filas recibidas.
+async function nikiResultadosReadAll(path) {
+  const rows=[],seen=new Set();let offset=0;
+  for(let page=0;page<1000;page++){
+    const batch=await sb(`${path}${path.includes('?')?'&':'?'}limit=1000&offset=${offset}`);
+    if(!Array.isArray(batch))throw new Error('La lectura de comisiones devolvió una respuesta incompleta.');
+    if(batch.length===0)return rows;
+    for(const row of batch){
+      if(row.id!=null){const key=String(row.id);if(seen.has(key))throw new Error('Los datos cambiaron durante la lectura de comisiones. Actualizá el tablero.');seen.add(key);}
+      rows.push(row);
+    }
+    offset+=batch.length;
+  }
+  throw new Error('No se pudo completar la lectura de comisiones.');
+}
+
+// Un único rango cubre los cortes completos, incluso los días del mes vecino.
+// Mantener la paginación hasta una página vacía; una página corta no es el final.
+async function nikiResultadosInsumos(periods,cutoff){
+  if(!periods.length)return {ventas:[],horarios:[],asistencias:[],porcentajes_semanales:[],recuperaciones_semanales:[],porcentajes_quincenales:[],recuperaciones_quincenales:[]};
+  const from=periods.map(p=>p.desde).sort()[0],end=periods.map(p=>p.hasta).sort().at(-1),effectiveEnd=end<cutoff?end:cutoff;
+  const weeks=periods.filter(p=>p.modalidad==='semanal'),fortnights=periods.filter(p=>p.modalidad==='quincenal');
+  const weekly=[],keys=fortnights.map(p=>p.key).join(',');let index=0;
+  const worker=async()=>{while(index<weeks.length){const p=weeks[index++];const value=await nikiLiquidacionesSemanalOperativoEdge('list',{desde:p.desde,hasta:p.hasta});
+    weekly.push({p,value});}};
+  const [ventas,horarios,asistencias,porcentajes_quincenales,recuperaciones_quincenales]=await Promise.all([
+    nikiResultadosReadAll(`comisiones_agendapro_shadow?select=id,user_id,local_id,fecha_pago,comision,precio&fecha_pago=gte.${from}&fecha_pago=lte.${effectiveEnd}&order=fecha_pago.desc,id.desc`),
+    nikiResultadosReadAll(`horarios?select=id,user_id,local_id,fecha,trabaja,entrada,salida&fecha=gte.${from}&fecha=lte.${end}&order=id`),
+    nikiResultadosReadAll(`asistencias?select=id,user_id,local_id,fecha,estado,entrada_real,salida_real,certificado&fecha=gte.${from}&fecha=lte.${effectiveEnd}&order=id`),
+    keys?nikiResultadosReadAll(`comisiones_quincenales_porcentajes?select=*&periodo=in.(${keys})&order=user_id.asc`):Promise.resolve([]),
+    keys?nikiResultadosReadAll(`comisiones_quincenales_recuperaciones?select=*&periodo=in.(${keys})&order=user_id.asc,fecha_ausencia.asc`):Promise.resolve([]),
+    // Acotar la concurrencia de funciones; no lanzar una por semana a la vez.
+    ...Array.from({length:Math.min(2,weeks.length)},worker)
+  ]);
+  return {ventas,horarios,asistencias,porcentajes_quincenales,recuperaciones_quincenales,
+    porcentajes_semanales:weekly.flatMap(({p,value})=>(value.porcentajes||[]).map(x=>({...x,desde:p.desde,hasta:p.hasta}))),
+    recuperaciones_semanales:weekly.flatMap(({p,value})=>(value.recuperaciones||[]).map(x=>({...x,desde:p.desde,hasta:p.hasta})))};
+}
+
+// Calcular con las mismas funciones de Liquidaciones y recortar luego al mes.
+async function nikiCargarComisionesResultado(data,desde,hasta,ids,preload=null) {
+  const [year,month]=desde.split('-').map(Number);
+  // Para un mes pasado, completar el corte con los datos ya disponibles
+  // del mes siguiente antes de imputar sólo la parte seleccionada.
+  const calculationCutoff=dateKey(new Date());
+  const weeks=getCommissionWeeksForMonth(year,month-1).filter(w=>w.desdeKey<=hasta&&w.hastaKey>=desde);
+  const periods=[...weeks.map(w=>({modalidad:'semanal',desde:w.desdeKey,hasta:w.hastaKey,key:`${desde.slice(0,7)}-S${w.numero}`})),
+    ...[1,2].map(q=>({modalidad:'quincenal',desde:`${desde.slice(0,7)}-${q===1?'01':'16'}`,hasta:q===1?`${desde.slice(0,7)}-15`:dateKey(new Date(year,month,0,12)),key:`${desde.slice(0,7)}-${q}`})).filter(p=>p.desde<=hasta)];
+  const modes=preload?preload.modos:await nikiResultadosReadAll('comisiones_quincenales_locales?select=*&order=local_id.asc');
+  const modeFor=(id,end)=>(modes||[]).find(m=>Number(m.local_id)===Number(id)&&(!m.fecha_desde||m.fecha_desde<=end))?.modalidad||'semanal';
+  const activePeriods=periods.filter(p=>ids.some(id=>modeFor(id,p.hasta)===p.modalidad));
+  const needed=new Set(activePeriods.map(p=>p.modalidad)),configs={};
+  const [inputs]=await Promise.all([preload?Promise.resolve(preload):nikiResultadosInsumos(activePeriods,calculationCutoff),...([...needed].map(async mode=>{
+    if(preload){preload.configs=preload.configs||{};preload.configs[mode]=preload.configs[mode]||nikiCommissionConfigEdge('load',mode);configs[mode]=await preload.configs[mode];}
+    else configs[mode]=await nikiCommissionConfigEdge('load',mode);
+  }))]);
+  // El orden determina la sucursal principal en la modalidad quincenal.
+  // Conservar el mismo orden que la lectura original, también en Evolución.
+  const orderedInputs={...inputs,ventas:[...(inputs.ventas||[])].sort((a,b)=>String(b.fecha_pago).localeCompare(String(a.fecha_pago))||String(b.id).localeCompare(String(a.id),'en',{numeric:true})),
+    horarios:[...(inputs.horarios||[])].sort((a,b)=>Number(a.id)-Number(b.id)),asistencias:[...(inputs.asistencias||[])].sort((a,b)=>Number(a.id)-Number(b.id))};
+  const calculationData={...data,garantias:(data.garantias||[]).filter(x=>String(x.fechaReparacion||'').slice(0,10)<=calculationCutoff),adelantos:(data.adelantos||[]).filter(x=>String(x.fechaDescuento||x.fecha||'').slice(0,10)<=calculationCutoff)};
+  const rows=[],salesById=new Map();
+  for(const p of activePeriods){
+    const esSemanal=p.modalidad==='semanal',remote=configs[p.modalidad],g=remote.general;
+    if(!g)throw new Error(`No se pudo leer la configuración ${p.modalidad} de comisiones.`);
+    const fallback={minimo_estandar:0,minimo_premium:0,minimo_finde_estandar:0,minimo_finde_premium:0,horas_quincenales:72,horas_finde_dia:10,porcentaje_normal:40,porcentaje_reducido:35,tardanzas_penalizacion:2};
+    const config=esSemanal?{...fallback,minimo_estandar:Number(g.minimo_semanal_estandar||0),minimo_premium:Number(g.minimo_semanal_premium_exclusiva||0),minimo_finde_estandar:Number(g.minimo_semanal_estandar_fin_semana??g.minimo_semanal_estandar??0),minimo_finde_premium:Number(g.minimo_semanal_premium_exclusiva_fin_semana??g.minimo_semanal_premium_exclusiva??0),horas_quincenales:Number(g.horas_objetivo_default??36),horas_finde_dia:Number(g.horas_objetivo_fin_semana??10),porcentaje_normal:Number(g.porcentaje_base??40),porcentaje_reducido:Number(g.porcentaje_reducido??35),tardanzas_penalizacion:Number(g.max_llegadas_tarde??2)+1,faltas_no_justificadas:Number(g.max_faltas_no_justificadas??0)}:{...fallback,...g};
+    const inPeriod=(rows,key)=>(rows||[]).filter(x=>String(x[key]||'').slice(0,10)>=p.desde&&String(x[key]||'').slice(0,10)<=p.hasta);
+    const [sales,schedules,attendances,controls]=[inPeriod(orderedInputs.ventas,'fecha_pago'),inPeriod(orderedInputs.horarios,'fecha'),inPeriod(orderedInputs.asistencias,'fecha'),
+      {porcentajes:(inputs.porcentajes_semanales||[]).filter(x=>String(x.desde||'').slice(0,10)===p.desde&&String(x.hasta||'').slice(0,10)===p.hasta),recuperaciones:(inputs.recuperaciones_semanales||[]).filter(x=>String(x.desde||'').slice(0,10)===p.desde&&String(x.hasta||'').slice(0,10)===p.hasta)}];
+    const cutSnapshot={ventas:sales.map(normalizeComision).map(x=>({...x,fechaPago:String(x.fechaPago||'').slice(0,10)})).filter(x=>x.fechaPago>=p.desde&&x.fechaPago<=p.hasta&&x.fechaPago<=calculationCutoff),
+      horarios:schedules.map(normalizeHorario),asistencias:attendances.map(normalizeAsistencia).filter(x=>x.fecha<=calculationCutoff)};
+    for(const v of cutSnapshot.ventas){
+      if(!ids.includes(Number(v.localId))||v.fechaPago<desde||v.fechaPago>hasta)continue;
+      const k=v.id==null?JSON.stringify(v):String(v.id);salesById.set(k,v);
+    }
+    let weeklyPilotData={porcentajes:{},recuperaciones:[]},savedOverrides=[],pctOverrides=[];
+    if(esSemanal){
+      weeklyPilotData.recuperaciones=controls.recuperaciones||[];
+      for(const x of controls.porcentajes||[])weeklyPilotData.porcentajes[`${x.local_id}|${x.user_id}`]=x;
+    }else{
+      [savedOverrides,pctOverrides]=[(inputs.recuperaciones_quincenales||[]).filter(x=>x.periodo===p.key),(inputs.porcentajes_quincenales||[]).filter(x=>x.periodo===p.key)];
+    }
+    const calculator=esSemanal?nikiCalcularCostoSemanal:nikiCalcularCostoQuincenal;
+    const calculation=calculator({snapshot:cutSnapshot,data:calculationData,config,personalConfigRows:remote.excepciones||[],localModes:modes||[],
+      desde:p.desde,hasta:p.hasta,keyCorte:p.key,esSemanal,weeklyPilotData,savedOverrides:savedOverrides||[],pctOverrides:pctOverrides||[]});
+    for(const r of calculation){
+      if((esSemanal?r.mode==='quincenal':r.mode!=='quincenal')||(!ids.includes(Number(r.principal))&&!(r.ventas||[]).some(v=>ids.includes(Number(v.localId)))))continue;
+      rows.push({modalidad:p.modalidad,local_id:Number(r.principal),user_id:Number(r.uid),desde:p.desde,hasta:p.hasta,
+        comision:r.comision,complemento:r.complemento,ajustes:r.ajustesGarantia,
+        costo_laboral:Number(r.comision)+Number(r.complemento)+Number(r.ajustesGarantia),snapshot:r,origen:'provisional',conflicto:!!r.conflictoLocales});
+    }
+  }
+  return {rows,sales:[...salesById.values()]};
+}
+
+// Liquidaciones semanales conserva los importes definitivos dentro de snapshot.
+// No tomar como definitivo el cero que un lector anterior devolvía al buscar
+// columnas externas ausentes. La copia congelada tiene prioridad sobre el cálculo vivo.
+function nikiNormalizarComisionValidadaResultado(row) {
+  const snapshot=row.snapshot&&typeof row.snapshot==='object'?row.snapshot:{};
+  const read=(...values)=>{
+    for(const v of values){
+      if(v===null||v===undefined||v==='')continue;
+      if(typeof v==='boolean'||!Number.isFinite(Number(v)))throw new Error('Una liquidación validada contiene un importe inválido.');
+      return Number(v);
+    }
+    return null;
+  };
+  const frozenCommission=read(snapshot.comision);
+  const frozenNet=read(snapshot.total);
+  const advance=read(snapshot.adelantos,row.adelantos)??0;
+  let commission,minimum,adjustments,cost;
+  if(frozenCommission!==null){
+    commission=frozenCommission;
+    minimum=read(snapshot.complemento,snapshot.complemento_minimo,row.complemento,row.complemento_minimo)??0;
+    adjustments=read(snapshot.ajustesGarantia,snapshot.ajustes_garantia,row.ajustes,row.ajustes_garantia)??0;
+    cost=commission+minimum+adjustments;
+  }else if(frozenNet!==null){
+    // Compatibilidad con snapshots anteriores que sólo conservaron neto y adelantos.
+    cost=frozenNet+advance;
+    minimum=read(row.complemento,row.complemento_minimo)??0;
+    adjustments=read(row.ajustes,row.ajustes_garantia)??0;commission=cost-minimum-adjustments;
+  }else{
+    commission=read(row.comision);minimum=read(row.complemento,row.complemento_minimo)??0;
+    adjustments=read(row.ajustes,row.ajustes_garantia)??0;
+    cost=read(row.costo_laboral)??(commission===null?null:commission+minimum+adjustments);
+    if(cost===null)throw new Error('Una liquidación validada no conserva un importe recuperable.');
+  }
+  return {...row,snapshot,comision:commission,complemento:minimum,ajustes:adjustments,adelantos:advance,
+    costo_laboral:Math.round((cost+Number.EPSILON)*100)/100,origen:'validada'};
+}
+
+function nikiCombinarComisionesResultado(payload,live,desde,hasta) {
+  const key=r=>[r.modalidad,Number(r.local_id),Number(r.user_id),r.desde,r.hasta].join('|');
+  const cuts=new Map((live.rows||[]).map(r=>[key(r),r]));
+  // El snapshot validado reemplaza el cálculo, incluso si la fuente cambió o desapareció.
+  for(const r of payload.liquidaciones||[])cuts.set(key(r),nikiNormalizarComisionValidadaResultado(r));
+  const values=[...cuts.values()];
+  // Un cambio de modalidad superpuesto necesita revisión, no un doble costo.
+  for(let i=0;i<values.length;i++)for(let j=i+1;j<values.length;j++){
+    const a=values[i],b=values[j];
+    if(Number(a.local_id)===Number(b.local_id)&&Number(a.user_id)===Number(b.user_id)&&a.desde<=b.hasta&&b.desde<=a.hasta)
+      throw new Error('Hay períodos de comisión superpuestos para una manicura y sucursal. Revisá las modalidades antes de calcular el resultado.');
+  }
+  const days=[],pending=new Map(),periodSummary=new Map();
+  for(const r of values){
+    const s=r.snapshot||{},weights=new Map();
+    const spreadLocals=r.origen==='provisional'&&r.modalidad==='quincenal'&&new Set((s.ventas||[]).map(v=>Number(v.localId)).filter(Boolean)).size>1;
+    if(spreadLocals)for(const v of s.ventas||[]){const fecha=String(v.fechaPago||'').slice(0,10);if(fecha>=r.desde&&fecha<=r.hasta){const k=`${Number(v.localId)}|${fecha}`;weights.set(k,(weights.get(k)||0)+Math.abs(Number(v.comision||0)));}}
+    if(!spreadLocals)for(const d of s.todosLosDias||[]){if(d.fecha>=r.desde&&d.fecha<=r.hasta)weights.set(d.fecha,(weights.get(d.fecha)||0)+Math.abs(Number(d.comision||0))+Math.abs(Number(d.minimo||0)));}
+    if(![...weights.values()].some(x=>x>0))for(const v of s.ventas||[]){const d=String(v.fechaPago||v.fecha_pago||'').slice(0,10);if(d>=r.desde&&d<=r.hasta)weights.set(d,(weights.get(d)||0)+Math.abs(Number(v.comision||0)));}
+    if(![...weights.values()].some(x=>x>0)){
+      weights.clear();const end=r.origen==='provisional'&&r.hasta>hasta?hasta:r.hasta;
+      for(let d=parseDateLocal(r.desde);dateKey(d)<=end;d.setDate(d.getDate()+1))weights.set(dateKey(d),1);
+    }
+    const entries=[...weights.entries()].sort((a,b)=>a[0].localeCompare(b[0])),totalWeight=entries.reduce((a,[,v])=>a+v,0);
+    const cents=Math.round(Number(r.costo_laboral||0)*100);let prior=0,cumulative=0;
+    for(const [dayKey,weight] of entries){
+      const [atLocal,fecha]=dayKey.includes('|')?dayKey.split('|'):[r.local_id,dayKey];
+      cumulative+=weight;const next=Math.round(cents*cumulative/totalWeight),amount=(next-prior)/100;prior=next;
+      const summaryKey=[r.modalidad,Number(atLocal),r.desde,r.hasta].join('|');
+      if(!periodSummary.has(summaryKey))periodSummary.set(summaryKey,{modalidad:r.modalidad,local_id:Number(atLocal),desde:r.desde,hasta:r.hasta,total_corte:0,incluido_mes:0,validadas:0,provisionales:0});
+      const summary=periodSummary.get(summaryKey);summary.total_corte+=amount;
+      if(fecha>=desde&&fecha<=hasta){
+        summary.incluido_mes+=amount;summary[r.origen==='validada'?'validadas':'provisionales']+=amount;
+        days.push({local_id:Number(atLocal),user_id:r.user_id,fecha,desde:r.desde,hasta:r.hasta,importe:amount,origen:r.origen,conflicto:!!r.conflicto});
+      }
+    }
+  }
+  // Los servicios todavía sin vínculo conservan la comisión de referencia disponible.
+  // Se muestran como provisionales y pendientes de revisión, nunca como un cero.
+  for(const v of live.sales||[]){
+    const covered=values.some(r=>Number(r.user_id)===Number(v.userId)&&v.fechaPago>=r.desde&&v.fechaPago<=r.hasta&&(Number(r.local_id)===Number(v.localId)||(r.snapshot?.ventas||[]).some(x=>Number(x.localId)===Number(v.localId)&&String(x.fechaPago||'').slice(0,10)===v.fechaPago)));
+    if(covered)continue;
+    const local_id=Number(v.localId);pending.set(local_id,(pending.get(local_id)||0)+1);
+    days.push({local_id,fecha:v.fechaPago,importe:Number(v.comision||0),origen:'provisional',conflicto:true});
+    const k=`referencia|${local_id}|${desde}|${hasta}`;
+    if(!periodSummary.has(k))periodSummary.set(k,{modalidad:'referencia',local_id,desde,hasta,total_corte:0,incluido_mes:0,validadas:0,provisionales:0});
+    const summary=periodSummary.get(k),amount=Number(v.comision||0);summary.total_corte+=amount;summary.incluido_mes+=amount;summary.provisionales+=amount;
+  }
+  return {...payload,comisiones_diarias:days,detalle_cortes:[...periodSummary.values()].sort((a,b)=>a.desde.localeCompare(b.desde)||a.local_id-b.local_id),pendientes:[...pending].map(([local_id,servicios_sin_corte])=>({local_id,servicios_sin_corte}))};
+}
+
+const NIKI_RESULTADO_CATEGORIES = {
+  "1":["Comisiones","Costo laboral"],"2":["Limpieza","Limpieza"],
+  "3":["Alquiler + servicios","Alquiler y servicios"],"4":["Papelería","Insumos"],
+  "5":["Retiro de socios/franquiciados","Retiros"],"6":["Sueldos","Costo laboral"],
+  "7":["Servicio de café","Insumos"],"8":["Insumos de servicios","Insumos"],
+  "9":["Insumos generales","Insumos"],"10":["Varios","Insumos"],
+  "11":["Fletes / envíos","Envíos"],"12":["Marketing y publicidad","MKT"],
+  "13":["IIBB y monotributo","Impuestos"],"14":["Royalty","Royalty"],
+  "15":["Gastos financieros · 1 % de ventas","Financieros"],
+  "16":["Mantenimiento y amortización de herramientas","Herramientas"],
+  "17":["Refrigerios","Refrigerios"],
+};
+
+function nikiBuildResultadoRows(payload, locales, conceptos=[]) {
+  const labels=new Map(conceptos.map(c=>[String(c.codigo||"").replace(/^0+(?=\d)/,""),c.nombre]));
+  const outsideCodes=['5','19','21'];
+  const categoryName=code=>labels.get(String(code))||NIKI_RESULTADO_CATEGORIES[code]?.[0]||(outsideCodes.includes(String(code))?`Concepto ${code}`:`Sin clasificar · ${code}`);
+  const byLocal=new Map(locales.map(l=>[Number(l.id),{id:Number(l.id),nombre:l.nombre,ventas:0,
+    gastos:0,comisiones:0,financieros:0,retiros:0,fueraResultado:0,excluido1:0,excluido15:0,pendientes:0,
+    porCodigo:{},registrosPorCodigo:{},diasCubiertos:0,diasEsperados:0,desconocidos:0,conflictos:0,validadas:0,provisionales:0,cantidadProvisionales:0}]));
+  const categories=new Map();const byDay=new Map();
+  const dayFor=fecha=>{if(!byDay.has(fecha))byDay.set(fecha,{fecha,label:String(fecha).slice(8,10),ventas:0,costos:0});return byDay.get(fecha);};
+  const addCategory=(code,amount)=>{
+    if(!categories.has(code))categories.set(code,{codigo:code,nombre:categoryName(code),grupo:NIKI_RESULTADO_CATEGORIES[code]?.[1]||"Sin clasificar",importe:0});
+    categories.get(code).importe+=amount;
+  };
+  for(const r of payload.ventas||[]){const local=byLocal.get(Number(r.local_id));if(!local)continue;
+    local.ventas+=Number(r.ventas||0);dayFor(r.fecha).ventas+=Number(r.ventas||0);
+    dayFor(r.fecha).costos+=Number(r.ventas||0)*0.01;
+  }
+  for(const r of payload.gastos||[]){const local=byLocal.get(Number(r.local_id));if(!local)continue;
+    const code=String(r.codigo),amount=Number(r.importe||0);
+    if(code==="1"){local.excluido1+=amount;continue;}
+    if(code==="15"){local.excluido15+=amount;continue;}
+    if(outsideCodes.includes(code)){
+      local.fueraResultado+=amount;local.porCodigo[code]=(local.porCodigo[code]||0)+amount;
+      local.registrosPorCodigo[code]=(local.registrosPorCodigo[code]||0)+Number(r.registros??1);
+      if(code==='5')local.retiros+=amount;
+      continue;
+    }
+    local.registrosPorCodigo[code]=(local.registrosPorCodigo[code]||0)+Number(r.registros??1);
+    local.gastos+=amount;local.porCodigo[code]=(local.porCodigo[code]||0)+amount;addCategory(code,amount);dayFor(r.fecha).costos+=amount;
+    if(!NIKI_RESULTADO_CATEGORIES[code]&&!labels.has(code))local.desconocidos+=Number(r.registros||0);
+  }
+  if(Array.isArray(payload.comisiones_diarias)){
+    for(const r of payload.comisiones_diarias){const local=byLocal.get(Number(r.local_id));if(!local)continue;
+      const cost=Number(r.importe||0);local.registrosPorCodigo["1"]=(local.registrosPorCodigo["1"]||0)+1;local.comisiones+=cost;local.porCodigo["1"]=(local.porCodigo["1"]||0)+cost;
+      local[r.origen==='validada'?'validadas':'provisionales']+=cost;
+      if(r.origen!=='validada')local.cantidadProvisionales++;
+      if(r.conflicto)local.conflictos++;
+      addCategory("1",cost);dayFor(r.fecha).costos+=cost;
+    }
+  }else{
+  const cuts=payload.liquidaciones||[];const conflicts=new Set();
+  for(let i=0;i<cuts.length;i++)for(let j=i+1;j<cuts.length;j++){
+    const a=cuts[i],b=cuts[j];
+    if(Number(a.local_id)===Number(b.local_id)&&Number(a.user_id)===Number(b.user_id)
+      &&a.desde<=b.hasta&&b.desde<=a.hasta){conflicts.add(i);conflicts.add(j);}
+  }
+  for(const [index,r] of cuts.entries()){const local=byLocal.get(Number(r.local_id));if(!local)continue;
+    if(conflicts.has(index)){local.conflictos++;continue;}
+    const cost=Number(r.costo_laboral||0);local.registrosPorCodigo["1"]=(local.registrosPorCodigo["1"]||0)+1;local.comisiones+=cost;local.porCodigo["1"]=(local.porCodigo["1"]||0)+cost;addCategory("1",cost);dayFor(r.hasta).costos+=cost;
+  }
+  }
+  for(const r of payload.pendientes||[]){const local=byLocal.get(Number(r.local_id));if(local)local.pendientes+=Number(r.servicios_sin_corte||0);}
+  for(const r of payload.cobertura||[]){const local=byLocal.get(Number(r.local_id));if(local){local.diasCubiertos=Number(r.dias_cubiertos||0);local.diasEsperados=Number(r.dias_esperados||0);}}
+  const rows=[...byLocal.values()].map(l=>{const cost=l.ventas*0.01;l.financieros=Math.sign(cost)*Math.round((Math.abs(cost)+Number.EPSILON)*100)/100;
+    l.porCodigo["15"]=l.financieros;l.registrosPorCodigo["15"]=l.ventas!==0?1:0;l.margen=l.ventas!==0?(l.ventas-l.gastos-l.comisiones-l.financieros)/l.ventas*100:null;
+    l.costos=l.gastos+l.comisiones+l.financieros;l.resultado=l.ventas-l.costos;
+    l.observaciones=[];
+    if(l.diasEsperados===0)l.observaciones.push('Sin registro de importación de gastos');
+    else if(l.diasCubiertos<l.diasEsperados)l.observaciones.push(`Faltan importar ${l.diasEsperados-l.diasCubiertos} días de gastos`);
+    if(l.desconocidos>0)l.observaciones.push(`${l.desconocidos} ${l.desconocidos===1?'gasto sin clasificar':'gastos sin clasificar'}`);
+    if(l.pendientes>0)l.observaciones.push(`${l.pendientes} ${l.pendientes===1?'servicio por vincular':'servicios por vincular'}`);
+    if(l.conflictos>0)l.observaciones.push(`${l.conflictos} ${l.conflictos===1?'asignación por resolver':'asignaciones por resolver'}`);
+    l.parcial=l.observaciones.length>0;
+    return l;
+  });
+  addCategory("15",rows.reduce((a,l)=>a+l.financieros,0));
+  const totals=rows.reduce((a,l)=>{for(const key of ["ventas","gastos","comisiones","financieros","retiros","fueraResultado","costos","resultado","pendientes","excluido1","excluido15","desconocidos","conflictos","validadas","provisionales","cantidadProvisionales"])a[key]=(a[key]||0)+l[key];a.parcial=a.parcial||l.parcial;return a;},{parcial:false});
+  totals.margen=totals.ventas!==0?totals.resultado/totals.ventas*100:null;
+  const codes=[...new Set([...categories.keys(),...conceptos.map(c=>String(c.codigo??"")),"1","15"])].filter(c=>c&&c!=="0"&&!outsideCodes.includes(c)).sort((a,b)=>a.localeCompare(b,"es",{numeric:true}));
+  return {rows,totals,codes,outsideCodes,categoryName,categories:[...categories.values()].sort((a,b)=>b.importe-a.importe),days:[...byDay.values()].sort((a,b)=>a.fecha.localeCompare(b.fecha))};
+}
+
+function nikiMediosPagoOpciones(medios,actual=''){
+  const key=value=>String(value).trim().normalize('NFD').replace(/[\u0300-\u036f]/g,'').toLowerCase();
+  const common=['Efectivo','Transferencia','Tarjeta','Otro'],labels=new Map(common.map(x=>[key(x),x]));
+  const valid=[...new Set((medios||[]).map(x=>String(x).trim()).filter(Boolean))],grouped=new Map();
+  for(const value of [...common,...valid])if(valid.includes(value)&&!grouped.has(key(value)))grouped.set(key(value),{value,label:labels.get(key(value))||value});
+  if(actual&&valid.includes(actual))grouped.set(key(actual),{value:actual,label:labels.get(key(actual))||actual});
+  return [...grouped.values()].sort((a,b)=>a.label.localeCompare(b.label,'es'));
+}
+
+function nikiValidarGastoFormulario(form,options){
+  const localId=Number(form.local_id),code=String(form.codigo||'').trim(),amount=String(form.importe??'').trim();
+  if(!options.locales.some(l=>Number(l.id)===localId))throw new Error('Seleccioná una sucursal permitida.');
+  if(!options.conceptos.some(c=>String(c.codigo)===code))throw new Error('Seleccioná un concepto de gasto.');
+  if(!/^\d{4}-\d{2}-\d{2}$/.test(form.fecha||'')||Number.isNaN(Date.parse(form.fecha))||new Date(form.fecha).toISOString().slice(0,10)!==form.fecha)throw new Error('Completá una fecha válida.');
+  const notes=String(form.detalle||'').trim(),method=String(form.medio_pago||'').trim();
+  if(!notes||notes.length>5000)throw new Error('Completá el detalle (hasta 5.000 caracteres).');
+  if(!method||!options.medios_pago?.some(m=>m.value===method))throw new Error('Seleccioná un medio de pago de la lista.');
+  if(!/^-?\d+(\.\d{1,2})?$/.test(amount)||!Number.isFinite(Number(amount)))throw new Error('Completá un importe, con hasta dos decimales.');
+  return {local_id:localId,fecha:form.fecha,codigo:code,detalle:notes,medio_pago:method,importe:amount};
+}
+
+async function nikiResultadosRequest(actor,payload){
+  const response=await nikiProtectedFetch(`${SUPABASE_URL}/functions/v1/niki-resultados-gestion`,{
+    method:"POST",headers:{apikey:SUPABASE_KEY,Authorization:`Bearer ${SUPABASE_KEY}`,"Content-Type":"application/json"},
+    body:JSON.stringify({actor_id:actor.id,session_token:actor.sessionToken,...payload}),
+  });
+  const text=await response.text();let body;
+  try{body=JSON.parse(text);}catch{throw new Error("La función de resultados no devolvió una respuesta válida.");}
+  if(!response.ok||body.ok!==true){
+    if(body.error==="Acción desconocida"&&["detalle","evolucion","reglas","reglas_save","gasto_formulario","gasto_guardar","gasto_eliminar"].includes(payload.action))
+      throw new Error("La versión publicada del servicio no incluye esta vista. Administración debe actualizar el servicio de Resultados por local.");
+    throw new Error(body.error||"No se pudo cargar el resultado.");
+  }
+  if(['gasto_guardar','gasto_eliminar','config_save','reglas_save'].includes(payload.action))nikiResultadosInvalidarCache();
+  return body;
+}
+
+
+function nikiReglaGastoDefault(codigo,nombre=''){
+  if(codigo==='15')return {tipo:'sin_control',obligatorio:false,umbral_pct:30};
+  const fixed=codigo==='3'||/alquiler|expensas|internet|seguro|alarma|electricidad|\bluz\b|\bagua\b|\bgas\b/i.test(nombre);
+  return {tipo:fixed?'fijo':'variable',obligatorio:fixed,umbral_pct:30};
+}
+function nikiResultadoControles(meses,locales,conceptos,reglas=[],fijos=[]){
+  const alerts=[],marks=new Map();
+  const label=c=>conceptos.find(x=>String(x.codigo)===String(c))?.nombre||NIKI_RESULTADO_CATEGORIES[c]?.[0]||`Código ${c}`;
+  const median=values=>{const v=[...values].sort((a,b)=>a-b),n=v.length;return n%2?v[(n-1)/2]:(v[n/2-1]+v[n/2])/2;};
+  const references=(entries,code)=>entries.map(x=>({periodo:x.m.periodo,importe:Number(x.r.porCodigo[code]||0),ventas:x.r.ventas,participacion:x.r.ventas>0?Number(x.r.porCodigo[code]||0)/x.r.ventas*100:null}));
+  const add=a=>{alerts.push(a);const key=`${a.periodo}|${a.local_id}|${a.codigo||'cobertura'}`;if(!marks.has(key))marks.set(key,[]);marks.get(key).push(a.mensaje);};
+  const codes=[...new Set([...meses.flatMap(m=>m.report.codes),...reglas.map(r=>String(r.codigo))])].filter(c=>c&& !['0','5','19','21'].includes(c)).sort((a,b)=>a.localeCompare(b,'es',{numeric:true}));
+  for(const [i,m] of meses.entries())for(const local of locales){
+    const r=m.report.rows.find(x=>x.id===Number(local.id));if(!r)continue;
+    const rowAt=j=>meses[j]?.report.rows.find(x=>x.id===Number(local.id));
+    const prior=[i-3,i-2,i-1].filter(j=>j>=0).map(j=>({m:meses[j],r:rowAt(j)})).filter(x=>x.r&&x.r.diasEsperados>0&&x.r.diasCubiertos===x.r.diasEsperados);
+    const covered=r.diasEsperados>0&&r.diasCubiertos===r.diasEsperados;
+    if(!covered){add({periodo:m.periodo,local_id:r.id,nivel:'carga',codigo:null,mensaje:`Importación incompleta: ${r.diasCubiertos}/${r.diasEsperados} días. Revisar la recarga antes de evaluar faltantes.`});continue;}
+    for(const code of codes){
+      const rule=reglas.find(x=>Number(x.local_id)===r.id&&String(x.codigo)===code)||nikiReglaGastoDefault(code,label(code));
+      const amount=Number(r.porCodigo[code]||0),seen=prior.filter(x=>Number(x.r.registrosPorCodigo[code]||0)>0);
+      const enCurso=m.hasta<dateKey(new Date(Number(m.periodo.slice(0,4)),Number(m.periodo.slice(5,7)),0,12));
+      const context={tipo_control:rule.tipo,umbral:Number(rule.umbral_pct||30),enCurso};
+      if(rule.tipo==='fijo'&&rule.obligatorio&&Number(r.registrosPorCodigo[code]||0)===0&&(seen.length>0||reglas.some(x=>Number(x.local_id)===r.id&&String(x.codigo)===code&&x.obligatorio))){
+        add({...context,periodo:m.periodo,local_id:r.id,codigo:code,nivel:enCurso?'pendiente':'faltante',referencias:references(seen,code),criterio:'Gasto fijo configurado como esperado cada mes, sin comprobantes registrados en este período.',mensaje:`${label(code)} sin comprobantes registrados${enCurso?' al corte del mes en curso':''}.`});
+      }
+      if(rule.tipo==='fijo'&&Number(r.registrosPorCodigo[code]||0)>0&&seen.length>=2){
+        const base=median(seen.map(x=>Math.abs(Number(x.r.porCodigo[code]||0)))),change=base>0?(amount/base-1)*100:0;
+        if(Math.abs(change)>=Number(rule.umbral_pct||30))add({...context,periodo:m.periodo,local_id:r.id,codigo:code,nivel:'variacion',referencias:references(seen,code),referencia:base,actual:amount,metrica:'importe',criterio:`El importe varía al menos ${Number(rule.umbral_pct||30)} % respecto de la mediana de importes absolutos de los meses de referencia con comprobantes.`,mensaje:`${label(code)}: ${change>=0?'+':''}${change.toFixed(0)} % frente a la mediana de meses previos completos.`});
+      }
+      if(rule.tipo==='variable'&&r.ventas>0&&prior.filter(x=>x.r.ventas>0).length>=2){
+        const ratios=prior.filter(x=>x.r.ventas>0).map(x=>Number(x.r.porCodigo[code]||0)/x.r.ventas*100),base=median(ratios),ratio=amount/r.ventas*100;
+        const variation=base>0?(ratio/base-1)*100:null;
+        const comparison={...context,referencias:references(prior.filter(x=>x.r.ventas>0),code),referencia:base,actual:ratio,metrica:'participacion'};
+        if(base===0&&ratio>=1)add({...comparison,periodo:m.periodo,local_id:r.id,codigo:code,nivel:'variacion',criterio:'La mediana de participación en ventas de los meses de referencia es cero y este gasto representa al menos 1 % de las ventas actuales.',mensaje:`${label(code)}: gasto equivalente a ${ratio.toFixed(1).replace('.',',')} % de ventas; mediana de referencia 0 %.`});
+        if(base>0&&variation!==null&&Math.abs(variation)>=Number(rule.umbral_pct||30)&&Math.abs(ratio-base)>=1){
+          add({...comparison,periodo:m.periodo,local_id:r.id,codigo:code,nivel:'variacion',criterio:`La participación en ventas varía al menos ${Number(rule.umbral_pct||30)} % respecto de la mediana y se aleja al menos 1 punto porcentual. Los meses sin importe aportan 0 % a la referencia.`,mensaje:`${label(code)}: ${ratio.toFixed(1).replace('.',',')} % de ventas; referencia ${base.toFixed(1).replace('.',',')} % (${variation>=0?'+':''}${variation.toFixed(0)} %).`});
+        }
+      }
+    }
+    // Detectar conceptos dentro del mismo código, aunque otros gastos de ese código sí estén cargados.
+    const named=[...new Set(fijos.filter(x=>Number(x.local_id)===r.id&&prior.some(p=>p.m.periodo===x.periodo)).map(x=>`${x.codigo}|${x.nombre}`))];
+    for(const key of named){const [code,name]=key.split('|');
+      if(['5','19','21'].includes(code))continue;
+      const rule=reglas.find(x=>Number(x.local_id)===r.id&&String(x.codigo)===code)||nikiReglaGastoDefault(code,label(code));
+      if(rule.tipo!=='fijo'||!rule.obligatorio||Number(r.registrosPorCodigo[code]||0)===0)continue;
+      const countPrior=prior.filter(p=>fijos.some(x=>Number(x.local_id)===r.id&&x.periodo===p.m.periodo&&String(x.codigo)===code&&x.nombre===name)).length;
+      const exists=fijos.some(x=>Number(x.local_id)===r.id&&x.periodo===m.periodo&&String(x.codigo)===code&&x.nombre===name);
+      if(countPrior>=2&&!exists)add({periodo:m.periodo,local_id:r.id,codigo:code,nivel:'faltante',enCurso:m.hasta<dateKey(new Date(Number(m.periodo.slice(0,4)),Number(m.periodo.slice(5,7)),0,12)),referencias:references(prior.filter(p=>fijos.some(x=>Number(x.local_id)===r.id&&x.periodo===p.m.periodo&&String(x.codigo)===code&&x.nombre===name)),code),criterio:`Se reconocía ${name} en las notas de al menos dos meses previos y no se reconoce en este período. Los importes de referencia corresponden al código completo, no sólo a ese concepto.`,mensaje:`Posible faltante de ${name}: aparecía en ${countPrior} meses previos y no se reconoce en las notas de este mes. Revisar comprobantes.`});
+    }
+  }
+  return {alerts,marks,codes};
+}
+function nikiResultadoDetalleCalculado(payload,codigo,ids,users=[]){
+  const has=id=>ids.includes(Number(id)),rows=[];
+  if(codigo==='1'){
+    const groups=new Map();
+    for(const d of payload.comisiones_diarias||[]){if(!has(d.local_id))continue;
+      const key=[d.local_id,d.user_id||'',d.desde||d.fecha,d.hasta||d.fecha,d.origen].join('|');
+      if(!groups.has(key))groups.set(key,{local_id:Number(d.local_id),fecha:d.desde||d.fecha,hasta:d.hasta||d.fecha,importe:0,
+        detalle:users.find(u=>Number(u.id)===Number(d.user_id))?.nombre||(d.user_id?`Manicura #${d.user_id}`:'Servicio por vincular'),estado:d.origen==='validada'?'Validada':'Provisional'});
+      groups.get(key).importe+=Number(d.importe||0);
+    }rows.push(...groups.values());
+  }else if(codigo==='15'){
+    for(const id of ids){const days=(payload.ventas||[]).filter(d=>Number(d.local_id)===id);const total=days.reduce((a,d)=>a+Number(d.ventas||0),0);
+      const target=Math.sign(total)*Math.round((Math.abs(total*0.01)+Number.EPSILON)*100);let used=0;
+      days.forEach((d,i)=>{const cents=i===days.length-1?target-used:Math.round(Number(d.ventas||0));used+=cents;
+        rows.push({local_id:id,fecha:d.fecha,importe:cents/100,detalle:`1 % sobre ventas ${fmtMoney(d.ventas||0)}${i===days.length-1?' · redondeo mensual':''}`,estado:'Calculado'});});
+    }
+  }else if(codigo==='0')for(const d of payload.ventas||[])if(has(d.local_id))rows.push({local_id:Number(d.local_id),fecha:d.fecha,importe:Number(d.ventas||0),detalle:`Ventas · ${Number(d.visitas||0)} visitas`,estado:'Venta'});
+  rows.sort((a,b)=>String(a.fecha).localeCompare(String(b.fecha))||a.local_id-b.local_id);
+  return {filas:rows,registros:rows.length,total:rows.reduce((a,r)=>a+r.importe,0)};
+}
+
+function nikiReglaEvolucion(codigo,nombre='',saved){
+  const base={...nikiReglaGastoDefault(codigo,nombre),...saved},fixed=base.tipo==='fijo';
+  return {...base,umbral_pct:saved?.umbral_pct??(fixed?20:30),max_ventas_pct:saved?.max_ventas_pct??null,
+    min_cambio_importe:saved?.min_cambio_importe??(fixed?50000:100000),min_impacto_ventas_pct:saved?.min_impacto_ventas_pct??(fixed?0.25:0.5)};
+}
+function nikiEvolucionAnalisis(meses,locales,conceptos,reglas=[],fijos=[],selected='todos'){
+  const codes=[...new Set([...meses.flatMap(m=>m.report.codes),...reglas.map(r=>String(r.codigo))])].filter(c=>c&& !['0','5','19','21'].includes(c)).sort((a,b)=>a.localeCompare(b,'es',{numeric:true}));
+  const cells=new Map(),alerts=[],selectedIds=locales.filter(l=>selected==='todos'||Number(l.id)===Number(selected)).map(l=>Number(l.id));
+  const label=c=>conceptos.find(x=>String(x.codigo)===c)?.nombre||NIKI_RESULTADO_CATEGORIES[c]?.[0]||`Código ${c}`;
+  const byMonth=new Map(meses.map(m=>[m.periodo,m]));
+  const full=m=>!!m&&m.hasta===dateKey(new Date(Number(m.periodo.slice(0,4)),Number(m.periodo.slice(5,7)),0,12));
+  const covered=r=>!!r&&r.diasEsperados>0&&r.diasCubiertos===r.diasEsperados;
+  const ruleFor=(id,code)=>nikiReglaEvolucion(code,label(code),reglas.find(r=>Number(r.local_id)===id&&String(r.codigo)===code));
+  // Conservar los controles de cobertura/faltantes. Las señales de variación se
+  // calculan abajo contra el mes inmediatamente anterior, sin usar medianas.
+  const missing=nikiResultadoControles(meses,locales,conceptos,reglas,fijos).alerts.filter(a=>a.nivel!=='variacion'&&selectedIds.includes(a.local_id));
+  for(const a of missing)alerts.push({...a,grupo:'faltante'});
+  for(const m of meses){
+    const rows=m.report.rows.filter(r=>selectedIds.includes(r.id)),sales=rows.reduce((s,r)=>s+r.ventas,0);
+    const previousKey=dateKey(new Date(Number(m.periodo.slice(0,4)),Number(m.periodo.slice(5,7))-2,1,12)).slice(0,7),previous=byMonth.get(previousKey);
+    const previousRows=(previous?.report.rows||[]).filter(r=>selectedIds.includes(r.id)),prevSales=previousRows.reduce((s,r)=>s+r.ventas,0);
+    const salesCell={variacion:null,signals:[],excesos:[]};
+    if(previous&&rows.length>0&&previousRows.length===rows.length&&full(previous)){
+      // En meses abiertos, comparar el mismo tramo calendario, no un acumulado con un cierre.
+      const partial=!full(m),day=Number(m.hasta.slice(8,10));
+      const previousEnd=partial?`${previousKey}-${String(Math.min(day,Number(previous.hasta.slice(8,10)))).padStart(2,'0')}`:previous.hasta;
+      const daily=previous.payload?.ventas;
+      const before=partial?(Array.isArray(daily)?daily.filter(r=>selectedIds.includes(Number(r.local_id))&&r.fecha>=`${previousKey}-01`&&r.fecha<=previousEnd).reduce((s,r)=>s+Number(r.ventas||0),0):null):prevSales;
+      if(before!==null){
+        const delta=sales-before,change=before!==0?delta/Math.abs(before)*100:null;
+        const a={grupo:'ventas',nivel:delta>0?'crecimiento_ventas':delta<0?'caida_ventas':'ventas_estables',periodo:m.periodo,codigo:'0',local_id:rows.length===1?rows[0].id:'todos',local_ids:rows.map(r=>r.id),actual:sales,referencia:before,delta,porcentaje:change,enCurso:partial,
+          mensaje:change===null?(sales===0?'Sin ventas en ambos períodos.':'El período anterior no tiene ventas: no se puede calcular un porcentaje de variación.'):`${change>=0?'+':''}${change.toLocaleString('es-AR',{maximumFractionDigits:1})} % frente a ${previousKey}.`,
+          criterio:partial?'Se comparan las ventas acumuladas hasta el día indicado con el mismo tramo calendario del mes anterior. Si el mes anterior es más corto, se toma hasta su último día.':'Se comparan las ventas totales de dos meses completos consecutivos.',
+          referencias:[{periodo:previousKey,desde:`${previousKey}-01`,hasta:previousEnd,importe:before},{periodo:m.periodo,desde:`${m.periodo}-01`,hasta:m.hasta,importe:sales}]};
+        salesCell.variacion=a;
+      }else salesCell.comparisonReason='Falta el detalle diario del mes anterior para comparar el mismo tramo.';
+    }else salesCell.comparisonReason='Se necesita el mes anterior completo para comparar ventas.';
+    cells.set(`${m.periodo}|0`,salesCell);
+    for(const code of codes){
+      const amount=rows.reduce((s,r)=>s+Number(r.porCodigo[code]||0),0),before=previousRows.reduce((s,r)=>s+Number(r.porCodigo[code]||0),0),ratio=sales>0?amount/sales*100:null;
+      const cell={periodo:m.periodo,codigo:code,amount,before,ratio,previous:previousKey,signals:[],excesos:[],variacion:null,incomplete:rows.some(r=>!covered(r)),enCurso:!full(m)};
+      const caps=rows.map(r=>({r,rule:ruleFor(r.id,code)})).filter(x=>x.rule.max_ventas_pct!=null&&x.rule.max_ventas_pct!=='');
+      cell.limitPct=caps.length===rows.length&&rows.every(r=>r.ventas>0)&&sales>0?caps.reduce((s,x)=>s+x.r.ventas*Number(x.rule.max_ventas_pct)/100,0)/sales*100:null;
+      for(const {r,rule} of caps){
+        const actual=r.ventas>0?Number(r.porCodigo[code]||0)/r.ventas*100:null;
+        if(actual!==null&&actual>Number(rule.max_ventas_pct)+1e-9){
+          const a={grupo:'tope',nivel:'tope',periodo:m.periodo,local_id:r.id,codigo:code,enCurso:!full(m),actual,referencia:Number(rule.max_ventas_pct),metrica:'participacion',
+            criterio:'El gasto acumulado de la sucursal supera el porcentaje máximo sobre sus ventas configurado para este concepto.',
+            mensaje:`${label(code)}: ${actual.toFixed(1).replace('.',',')} % de ventas; máximo ${Number(rule.max_ventas_pct).toLocaleString('es-AR')} %.`,referencias:[{periodo:m.periodo,importe:Number(r.porCodigo[code]||0),ventas:r.ventas,participacion:actual}]};
+          cell.excesos.push(a);cell.signals.push(a);alerts.push(a);
+        }
+      }
+      cell.sinTope=caps.length<rows.length;
+      const active=rows.map(r=>({r,rule:ruleFor(r.id,code)})),allActive=active.every(x=>x.rule.tipo!=='sin_control');
+      if(!previous)cell.comparisonReason='El mes anterior no está en el historial cargado.';
+      else if(previousRows.length!==rows.length||rows.some(r=>!covered(r))||previousRows.some(r=>!covered(r))||!full(previous))cell.comparisonReason='La comparación requiere cobertura de importación completa para las sucursales y un mes anterior completo.';
+      else if(!allActive)cell.comparisonReason='La comparación de variaciones está desactivada en alguna sucursal seleccionada.';
+      else{
+        const delta=amount-before,change=before!==0?delta/Math.abs(before)*100:null,baseSales=Math.max(sales,prevSales),impact=baseSales>0?Math.abs(delta)/baseSales*100:null;
+        const weights=active.map(x=>Math.abs(Number(previousRows.find(r=>r.id===x.r.id)?.porCodigo[code]||0))),sumWeights=weights.reduce((s,v)=>s+v,0);
+        const weighted=key=>active.reduce((s,x,i)=>s+Number(x.rule[key])*(sumWeights>0?weights[i]/sumWeights:1/Math.max(1,active.length)),0);
+        const threshold=weighted('umbral_pct'),minAmount=weighted('min_cambio_importe'),minImpact=weighted('min_impacto_ventas_pct');
+        const material=Math.abs(delta)>0&&Math.abs(delta)+1e-9>=minAmount&&(impact===null||impact+1e-9>=minImpact),relative=change===null?delta!==0:Math.abs(change)+1e-9>=threshold;
+        if(material&&relative){
+          const down=delta<0,missingFixed=down&&missing.some(a=>a.periodo===m.periodo&&a.codigo===code&&a.nivel!=='carga');
+          const pending=down&&(!full(m)||missingFixed),direction=down?'baja':'suba';
+          const a={grupo:'cambio',nivel:pending?'pendiente_variacion':direction,periodo:m.periodo,local_id:rows.length===1?rows[0].id:'todos',local_ids:rows.map(r=>r.id),codigo:code,enCurso:!full(m),
+            actual:amount,referencia:before,delta,porcentaje:change,impacto:impact,base_ventas:baseSales,umbral:threshold,min_importe:minAmount,min_impacto:minImpact,metrica:'importe',
+            criterio:`Se exige una variación de al menos ${threshold.toLocaleString('es-AR',{maximumFractionDigits:1})} %, un cambio de ${fmtMoney(minAmount)} y un impacto de ${minImpact.toLocaleString('es-AR',{maximumFractionDigits:2})} % sobre la mayor venta de ambos meses. Si no hay ventas, se aplica el mínimo en pesos. En el total, los umbrales se ponderan por el gasto del mes anterior.`,
+            mensaje:`${label(code)}: ${change===null?'nuevo importe':`${change>=0?'+':''}${change.toFixed(1).replace('.',',')} %`} frente a ${previousKey} (${delta>=0?'+':'−'}${fmtMoney(Math.abs(delta))}).${pending?' Baja pendiente de confirmar: mes en curso o posible gasto fijo sin cargar.':''}`,
+            referencias:[{periodo:previousKey,importe:before,ventas:prevSales,participacion:prevSales>0?before/prevSales*100:null},{periodo:m.periodo,importe:amount,ventas:sales,participacion:ratio}]};
+          cell.variacion=a;cell.signals.push(a);alerts.push(a);
+        }else cell.comparisonReason='La variación no supera a la vez el porcentaje y los mínimos de importancia configurados.';
+      }
+      cell.signals.push(...missing.filter(a=>a.periodo===m.periodo&&a.codigo===code));
+      cells.set(`${m.periodo}|${code}`,cell);
+    }
+  }
+  return {codes,cells,alerts};
+}
+
+function ResultadosGestion({data,user}){
+  const canEditExpenseRules=['admin','casa_matriz','franquiciado'].includes(user.rol);
+  const inputStyle={border:'1px solid #e4d3db',borderRadius:8,padding:'8px 10px',fontSize:12,background:'#fff',color:COLORS.pinkDark,minWidth:0};
+  const [periodo,setPeriodo]=useState(()=>fmtPeriodo(new Date())),[tipo,setTipo]=useState('todos'),[selectedLocalIds,setSelectedLocalIds]=useState(null);
+  const [incluirInactivos,setIncluirInactivos]=useState(false);
+  const [payload,setPayload]=useState(null),[conceptos,setConceptos]=useState([]),[busy,setBusy]=useState(false),[error,setError]=useState(''),[refresh,setRefresh]=useState(0);
+  const [config,setConfig]=useState(null),[saving,setSaving]=useState(false),[detail,setDetail]=useState(null);
+  const [history,setHistory]=useState(null),[historyBusy,setHistoryBusy]=useState(false),[historyError,setHistoryError]=useState(''),[months,setMonths]=useState('6'),[historyLocal,setHistoryLocal]=useState('todos');
+  const [rulesModal,setRulesModal]=useState(null),[rulesBusy,setRulesBusy]=useState(false),[alertDetail,setAlertDetail]=useState(null);
+  const historySequence=useRef(0),detailSequence=useRef(0);
+  const lastRefresh=useRef(refresh);
+  const [expenseEditor,setExpenseEditor]=useState(null),[expenseDelete,setExpenseDelete]=useState(null),[expenseBusy,setExpenseBusy]=useState(false);
+  const expenseSequence=useRef(0),expenseLock=useRef(false),restoreExpenseDetail=useRef(null);
+  const scopeIds=getAssignedLocalIds(data,user).map(Number);
+  const localesFiltro=(data.locales||[]).filter(l=>scopeIds.includes(Number(l.id))&&(incluirInactivos||l.activo!==false)&&(tipo==='todos'||(l.tipoLocal||l.tipo_local||'propio')===tipo));
+  const locales=localesFiltro.filter(l=>selectedLocalIds===null||selectedLocalIds.includes(Number(l.id)));
+  const filterScopeKey=localesFiltro.map(l=>Number(l.id)).sort((a,b)=>a-b).join(',');
+  useEffect(()=>{if(selectedLocalIds===null)return;const next=selectedLocalIds.filter(id=>localesFiltro.some(l=>Number(l.id)===id));if(next.length!==selectedLocalIds.length)setSelectedLocalIds(next.length?next:null);},[filterScopeKey,selectedLocalIds]);
+  const calculationContext=nikiResultadosContextKey(data);
+  const ids=locales.map(l=>Number(l.id)).sort((a,b)=>a-b),scopeKey=ids.join(',');
+  const desde=`${periodo}-01`,[year,month]=periodo.split('-').map(Number),today=dateKey(new Date());
+  const monthEnd=dateKey(new Date(year,month,0,12)),hasta=monthEnd<today?monthEnd:today;
+  const localName=id=>(data.locales||[]).find(l=>Number(l.id)===Number(id))?.nombre||String(id);
+  const pct=n=>n==null?'—':`${Number(n).toLocaleString('es-AR',{maximumFractionDigits:1})} %`;
+  useEffect(()=>{let active=true;nikiResultadosCompartir(user,'conceptos',()=>api.getInformeGastoConceptos()).then(r=>{if(active)setConceptos(r||[]);}).catch(()=>{});return()=>{active=false;};},[]);
+  useEffect(()=>{
+    let active=true;const restore=restoreExpenseDetail.current;restoreExpenseDetail.current=null;setPayload(null);setError('');setHistory(null);setHistoryError('');setHistoryBusy(false);historySequence.current++;detailSequence.current++;expenseSequence.current++;setDetail(null);setExpenseEditor(null);setExpenseDelete(null);setRulesModal(null);setAlertDetail(null);setHistoryLocal('todos');
+    if(!/^\d{4}-\d{2}$/.test(periodo)||desde>hasta||!ids.length){setBusy(false);return;}
+    setBusy(true);
+    const force=lastRefresh.current!==refresh;lastRefresh.current=refresh;
+    const timer=setTimeout(()=>{
+      if(!active)return;
+      nikiCargarResultadoGestion(user,data,desde,hasta,ids,{force}).then(combined=>{
+        if(active){setPayload(combined);if(restore)void loadDetail(restore);}
+      }).catch(e=>{if(active)setError(e.message);}).finally(()=>{if(active)setBusy(false);});
+    },120);
+    return()=>{active=false;clearTimeout(timer);};
+  },[user.id,user.sessionToken,periodo,scopeKey,refresh,calculationContext]);
+  const report=nikiBuildResultadoRows(payload||{},locales,conceptos),total=report.totals;
+  const ruleCodes=[...new Set([...report.codes,...(history?.meses||[]).flatMap(m=>m.report.codes),...(rulesModal?.saved||[]).map(r=>String(r.codigo))])].filter(c=>c&& !['0','5','19','21'].includes(c)).sort((a,b)=>a.localeCompare(b,'es',{numeric:true}));
+  const styles={th:{padding:'11px 13px',textAlign:'right',whiteSpace:'nowrap',fontSize:11,borderBottom:'2px solid #eadce2',background:'#fcf6f8'},td:{padding:'10px 13px',textAlign:'right',whiteSpace:'nowrap',fontSize:12,borderBottom:'1px solid #f0e5e9'}};
+  const sticky={position:'sticky',left:0,zIndex:1,background:'#fff',textAlign:'left',minWidth:215};
+  const salesCellStyle={...styles.td,background:'#f6e9ef',fontSize:14,fontWeight:800,borderBottom:'2px solid #e3ced8',color:COLORS.pinkDark};
+  const closeDetail=()=>{detailSequence.current++;setDetail(null);};
+  const loadDetail=async(target,append=false)=>{
+    const request=++detailSequence.current;
+    const offset=append?(target.filas||[]).length:0;
+    setDetail({...target,busy:true,error:''});
+    try{
+      const result=await nikiResultadosRequest(user,{action:'detalle',desde:target.desde,hasta:target.hasta,local_ids:target.local_ids,codigo:target.codigo,limit:100,offset});
+      if(request!==detailSequence.current)return;
+      setDetail({...target,...result,filas:append?[...(target.filas||[]),...(result.filas||[])]:result.filas||[],busy:false,error:'',loaded:true});
+    }catch(e){if(request===detailSequence.current)setDetail({...target,busy:false,error:e.message});}
+  };
+  const openCost=(codigo,scope=ids,monthKey=periodo)=>{
+    const source=monthKey===periodo?payload:history?.meses.find(m=>m.periodo===monthKey)?.payload;
+    const from=`${monthKey}-01`,end=monthKey===periodo?hasta:history?.meses.find(m=>m.periodo===monthKey)?.hasta;
+    if(!source||!end)return;
+    const target={codigo:String(codigo),local_ids:scope,periodo:monthKey,desde:from,hasta:end,filas:[],registros:0,total:0,busy:false,error:'',loaded:false};
+    if(['0','1','15'].includes(String(codigo))){detailSequence.current++;setDetail({...target,...nikiResultadoDetalleCalculado(source,String(codigo),scope,data.users||[]),loaded:true});}
+    else void loadDetail(target);
+  };
+  const openExpense=async(row=null)=>{
+    const request=++expenseSequence.current;
+    setExpenseEditor({row,loading:true,error:'',form:null,locales:[],conceptos:[]});
+    try{
+      const options=await nikiResultadosRequest(user,{action:'gasto_formulario'});
+      if(options.gastos_edicion_version!==1)throw new Error('Ejecutá el SQL de edición y gastos manuales antes de guardar gastos.');
+      if(options.gastos_medios_version!==1||!Array.isArray(options.medios_pago))throw new Error('Ejecutá el SQL de medios de pago para cargar las opciones del formulario.');
+      if(request!==expenseSequence.current)return;
+      const form={fecha:row?.fecha||hasta,local_id:row?.local_id||(ids.length===1?ids[0]:''),codigo:row?.codigo||'',detalle:row?.detalle||'',medio_pago:row?.medio_pago||'',importe:row?String(row.importe??''):'',request_id:row?null:crypto.randomUUID()};
+      if(!options.conceptos.some(c=>String(c.codigo)===String(form.codigo)))form.codigo='';
+      form.medio_pago=String(form.medio_pago||'').trim();
+      setExpenseEditor({row,form,loading:false,error:'',locales:options.locales||[],conceptos:[...(options.conceptos||[])].sort((a,b)=>String(a.codigo).localeCompare(String(b.codigo),'es',{numeric:true})),medios_pago:nikiMediosPagoOpciones(options.medios_pago,form.medio_pago)});
+    }catch(e){if(request===expenseSequence.current)setExpenseEditor(x=>({...x,loading:false,error:e.message}));}
+  };
+  const closeExpense=()=>{if(!expenseLock.current){expenseSequence.current++;setExpenseEditor(null);}};
+  const finishExpenseChange=message=>{
+    nikiResultadosInvalidarCache();
+    restoreExpenseDetail.current=detail?{...detail,filas:[],loaded:false}:null;
+    setExpenseEditor(null);setExpenseDelete(null);setRefresh(x=>x+1);notifyToast(message+' La evolución se actualizará al volver a cargarla.','success');
+  };
+  const saveExpense=async e=>{
+    e.preventDefault();if(expenseLock.current||!expenseEditor?.form)return;
+    try{
+      const gasto=nikiValidarGastoFormulario(expenseEditor.form,expenseEditor);
+      expenseLock.current=true;setExpenseBusy(true);setExpenseEditor(x=>({...x,error:''}));
+      const row=expenseEditor.row;
+      await nikiResultadosRequest(user,{action:'gasto_guardar',gasto,expense_id:row?.expense_id??null,revision:row?.revision??null,request_id:expenseEditor.form.request_id});
+      const fueraDelFiltro=gasto.fecha<desde||gasto.fecha>hasta||!ids.includes(gasto.local_id);
+      finishExpenseChange((row?'Gasto actualizado.':'Gasto agregado.')+(fueraDelFiltro?` Se guardó para el ${gasto.fecha} en ${localName(gasto.local_id)}; revisá los filtros para verlo.`:''));
+    }catch(e){setExpenseEditor(x=>x?{...x,error:e.message}:x);}finally{expenseLock.current=false;setExpenseBusy(false);}
+  };
+  const removeExpense=async()=>{
+    if(expenseLock.current||!expenseDelete)return;
+    expenseLock.current=true;setExpenseBusy(true);setExpenseDelete(x=>({...x,error:''}));
+    try{await nikiResultadosRequest(user,{action:'gasto_eliminar',expense_id:expenseDelete.expense_id,revision:expenseDelete.revision});finishExpenseChange('Gasto eliminado.');}
+    catch(e){setExpenseDelete(x=>x?{...x,error:e.message}:x);}finally{expenseLock.current=false;setExpenseBusy(false);}
+  };
+  const amountButton=(value,codigo,scope,highlight=false)=> <button type='button' title='Ver detalle' onClick={()=>openCost(codigo,scope)} style={{border:0,background:'transparent',color:COLORS.pinkDark,font:'inherit',fontWeight:highlight?800:600,cursor:'pointer',padding:0,textDecoration:highlight?'none':'underline',textDecorationColor:'#dec4ce',textUnderlineOffset:4}}>{fmtMoney(value||0)}</button>;
+  const openConfig=async()=>{try{setSaving(true);const result=await nikiResultadosRequest(user,{action:'config'});
+    const normalize=name=>String(name||'').normalize('NFD').replace(/[\u0300-\u036f]/g,'').toLowerCase().replace(/niki\s*beauty\s*bar/g,'').replace(/[^a-z0-9]/g,'');
+    setConfig((result.fuentes||[]).map(r=>{const matches=(data.locales||[]).filter(l=>normalize(l.nombre)===normalize(r.nombre));return {...r,local_id:r.local_id||(matches.length===1?matches[0].id:''),propuesto:!r.local_id&&matches.length===1};}));
+  }catch(e){notifyToast(e.message,'error');}finally{setSaving(false);}};
+  const saveConfig=async()=>{try{setSaving(true);await nikiResultadosRequest(user,{action:'config_save',items:config.map(r=>({location_id:Number(r.location_id),local_id:r.local_id?Number(r.local_id):null}))});setConfig(null);setRefresh(x=>x+1);notifyToast('Vínculos guardados.','success');}catch(e){notifyToast(e.message,'error');}finally{setSaving(false);}};
+  const loadHistory=async()=>{
+    const request=++historySequence.current;setHistoryBusy(true);setHistoryError('');setHistory(null);setAlertDetail(null);
+    try{
+      const from=dateKey(new Date(year,month-Number(months),1,12));
+      const remote=await nikiResultadosRequest(user,{action:'evolucion',desde:from,hasta,local_ids:ids});
+      if(!Array.isArray(remote.meses)||!remote.insumos)throw new Error('Publicá la función y ejecutá el SQL del nuevo cuadro de resultados.');
+      const result=[];
+      for(const m of remote.meses){
+        if(request!==historySequence.current)return;
+        const live=await nikiCargarComisionesResultado(data,m.desde,m.hasta,ids,remote.insumos);
+        const combined=nikiCombinarComisionesResultado(m.datos,live,m.desde,m.hasta);
+        result.push({...m,payload:combined,report:nikiBuildResultadoRows(combined,locales,conceptos)});
+        await new Promise(resolve=>setTimeout(resolve,0));
+      }
+      if(request===historySequence.current)setHistory({meses:result,reglas:remote.reglas||[],fijos:remote.fijos||[]});
+    }catch(e){if(request===historySequence.current)setHistoryError(e.message);}finally{if(request===historySequence.current)setHistoryBusy(false);}
+  };
+  const openRules=async()=>{try{setRulesBusy(true);const remote=await nikiResultadosRequest(user,{action:'reglas',local_ids:ids});if(remote.evolucion_alertas_version!==2)throw new Error('Ejecutá el SQL de alertas de evolución para guardar los nuevos límites.');setRulesModal({local_id:historyLocal==='todos'?ids[0]:Number(historyLocal),saved:remote.reglas||[],edits:{}});}catch(e){notifyToast(e.message,'error');}finally{setRulesBusy(false);}};
+  const ruleFor=code=>rulesModal?.edits[`${rulesModal.local_id}|${code}`]||nikiReglaEvolucion(code,report.categoryName(code),rulesModal?.saved.find(r=>Number(r.local_id)===Number(rulesModal.local_id)&&String(r.codigo)===code));
+  const editRule=(code,patch)=>{if(!canEditExpenseRules)return;setRulesModal(r=>({...r,edits:{...r.edits,[`${r.local_id}|${code}`]:{...ruleFor(code),...patch}}}));};
+  const saveRules=async()=>{if(!canEditExpenseRules){notifyToast('Este perfil sólo puede consultar los controles de gastos.','error');return;}try{setRulesBusy(true);const lid=Number(rulesModal.local_id),rules=ruleCodes.map(c=>({codigo:c,...ruleFor(c)})).map(r=>({codigo:r.codigo,tipo:r.tipo,obligatorio:r.tipo==='fijo'&&!!r.obligatorio,umbral_pct:Number(r.umbral_pct),max_ventas_pct:r.max_ventas_pct==null||r.max_ventas_pct===''?null:Number(r.max_ventas_pct),min_cambio_importe:r.min_cambio_importe===''?NaN:Number(r.min_cambio_importe),min_impacto_ventas_pct:r.min_impacto_ventas_pct===''?NaN:Number(r.min_impacto_ventas_pct)}));
+    if(rules.some(r=>!Number.isFinite(r.umbral_pct)||r.umbral_pct<5||r.umbral_pct>500))throw new Error('Los umbrales deben estar entre 5 y 500 %.');
+    if(rules.some(r=>(r.max_ventas_pct!=null&&(!Number.isFinite(r.max_ventas_pct)||r.max_ventas_pct<0||r.max_ventas_pct>1000))||!Number.isFinite(r.min_cambio_importe)||r.min_cambio_importe<0||r.min_cambio_importe>1e15||Math.abs(r.min_cambio_importe*100-Math.round(r.min_cambio_importe*100))>0.001||!Number.isFinite(r.min_impacto_ventas_pct)||r.min_impacto_ventas_pct<0||r.min_impacto_ventas_pct>1000))throw new Error('Revisá el tope sobre ventas y los mínimos de importancia. Un tope vacío deja ese control sin activar.');
+    await nikiResultadosRequest(user,{action:'reglas_save',local_ids:[lid],local_id:lid,reglas:rules});
+    setHistory(h=>h?{...h,reglas:[...h.reglas.filter(r=>Number(r.local_id)!==lid),...rules.map(r=>({...r,local_id:lid}))]}:h);
+    setRulesModal(null);setAlertDetail(null);notifyToast('Controles guardados para la sucursal.','success');
+  }catch(e){notifyToast(e.message,'error');}finally{setRulesBusy(false);}};
+  const analysis=history?nikiEvolucionAnalisis(history.meses,locales,conceptos,history.reglas,history.fijos,historyLocal):null;
+  const visibleAlerts=analysis?.alerts||[];
+  const alertLabel=a=>a.grupo==='tope'?'Sobre el tope de ventas':a.nivel==='suba'?'Aumento relevante':a.nivel==='baja'?'Disminución relevante':a.nivel==='pendiente_variacion'?'Baja por confirmar':a.nivel==='carga'?'Importación incompleta':a.nivel==='pendiente'?'Sin carga al corte':'Posible faltante';
+  const [showAllAlerts,setShowAllAlerts]=useState(false);
+  return <div style={{display:'grid',gap:15,minWidth:0}}>
+    <Card style={{padding:20,background:'linear-gradient(125deg,#fff,#fbf0f4)'}}>
+      <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',gap:12,flexWrap:'wrap'}}><div><h2 style={{margin:0,color:COLORS.pinkDark}}>Resultados por local</h2><p style={{fontSize:12,color:'#806774',margin:'6px 0 0'}}>Estado de resultados, detalle de costos y evolución mensual.</p></div><div style={{display:'flex',gap:8,flexWrap:'wrap'}}>
+        <input aria-label='Mes de resultados' type='month' value={periodo} onChange={e=>setPeriodo(e.target.value)} style={inputStyle}/>
+        <select aria-label='Tipo de local' value={tipo} onChange={e=>{setTipo(e.target.value);setSelectedLocalIds(null);}} style={inputStyle}><option value='todos'>Propios y franquicias</option><option value='propio'>Propios</option><option value='franquicia'>Franquicias</option></select>
+        <div role='group' aria-label='Sucursales de resultados' style={{minWidth:245}}><DashboardLocalMultiSelect locales={localesFiltro.map(l=>l.activo===false?{...l,nombre:`${l.nombre} (inactivo)`}:l)} selectedIds={selectedLocalIds} onChange={setSelectedLocalIds}/></div>
+        <label style={{display:'inline-flex',alignItems:'center',gap:6,fontSize:11,color:'#806774',cursor:'pointer',whiteSpace:'nowrap'}}><input type='checkbox' aria-label='Incluir locales inactivos' checked={incluirInactivos} onChange={e=>{setIncluirInactivos(e.target.checked);setSelectedLocalIds(null);}} style={{accentColor:COLORS.pinkDark}}/>Incluir locales inactivos</label>
+        <Btn variant='secondary' onClick={()=>void openExpense()} disabled={busy||expenseBusy||!scopeIds.length}>Agregar gasto</Btn><Btn onClick={()=>setRefresh(x=>x+1)} disabled={busy||expenseBusy}>Actualizar</Btn>
+      </div></div><div style={{marginTop:13,fontSize:11,color:'#806774',display:'flex',justifyContent:'space-between',gap:10,flexWrap:'wrap'}}><span>{desde} al {hasta} · Gastos de AgendaPro y NikiOS · Importes antes de adelantos</span>{user.rol==='admin'&&<Btn size='sm' variant='secondary' disabled={saving} onClick={openConfig}>Vincular sucursales de AgendaPro</Btn>}</div>
+    </Card>
+    {payload?.consultado_en&&!busy&&<div style={{fontSize:10,color:'#8e7580',textAlign:'right'}}>Datos consultados a las {new Date(payload.consultado_en).toLocaleTimeString('es-AR',{hour:'2-digit',minute:'2-digit',second:'2-digit'})} · Actualizar consulta datos nuevos</div>}
+    {busy?<NikiSplash fullScreen={false} compact text='Cargando resultados…'/>:error?<Card><p role='alert' style={{color:COLORS.danger}}>{error}</p></Card>:!payload?<Card>Seleccioná un mes y una sucursal con datos disponibles.</Card>:<>
+      <div aria-label='Indicadores del período' className='niki-dashboard-kpis' style={{display:'grid',gridTemplateColumns:'repeat(4,minmax(0,1fr))',gap:12}}>
+        <DashboardMetricCard icon='💳' label='Ventas' value={fmtMoney(total.ventas||0)} detail={`${locales.length} ${locales.length===1?'sucursal':'sucursales'} · período seleccionado`} accent />
+        <DashboardMetricCard icon='≡' label='Costos totales' value={fmtMoney(total.costos||0)} detail={total.ventas!==0?`${pct(total.costos/total.ventas*100)} de las ventas`:'Sin ventas para calcular participación'} />
+        <DashboardMetricCard icon='$' label={total.parcial?'Resultado parcial':total.cantidadProvisionales>0?'Resultado estimado':'Resultado operativo'} value={<span style={total.resultado<0?{color:COLORS.danger}:undefined}>{fmtMoney(total.resultado||0)}</span>} detail='Ventas menos costos' accent />
+        <DashboardMetricCard icon='%' label='Margen operativo' value={<span style={total.margen<0?{color:COLORS.danger}:undefined}>{pct(total.margen)}</span>} detail={total.margen===null?'Sin ventas para calcular el margen':'Resultado / ventas'} />
+      </div>
+      {total.parcial&&<Card style={{fontSize:12,background:'#fff6e5',lineHeight:1.6}}><strong>Resultado parcial: hay datos por completar o clasificar.</strong> Cada sucursal muestra su motivo debajo del nombre. Las variaciones de evolución son un control aparte y no generan este aviso.{total.pendientes>0&&` ${total.pendientes} servicios requieren revisión de su vínculo; su comisión de referencia está incluida.`}{total.desconocidos>0&&` ${total.desconocidos} gastos tienen un código sin clasificar; sus importes ya están incluidos.`}{total.conflictos>0&&` ${total.conflictos} registros requieren revisar su asignación.`}</Card>}
+      {total.cantidadProvisionales>0&&<Card style={{fontSize:12,background:'#f1f5fb',lineHeight:1.6}}><strong>Incluye comisiones provisionales: {fmtMoney(total.provisionales||0)}.</strong> Importe validado: {fmtMoney(total.validadas||0)}. Se usa el cálculo actual hasta su validación.</Card>}
+      <Card style={{padding:0,overflow:'hidden'}}><div style={{padding:'17px 18px',display:'flex',justifyContent:'space-between',gap:10,alignItems:'center',flexWrap:'wrap'}}><div><h3 style={{margin:0,fontSize:16,color:COLORS.pinkDark}}>Cuadro de resultados</h3><p style={{margin:'5px 0 0',fontSize:11,color:'#8e7580'}}>Seleccioná un importe para abrir sus movimientos. Margen = resultado / ventas.</p></div><Btn variant='secondary' size='sm' disabled={rulesBusy} onClick={openRules}>Controles de gastos</Btn></div>
+        <div style={{overflowX:'auto'}}><table aria-label='Cuadro de resultados por sucursal' style={{width:'100%',borderCollapse:'separate',borderSpacing:0}}><thead><tr><th style={{...styles.th,...sticky,background:'#fcf6f8',zIndex:2}}>Código · Concepto</th>{report.rows.map(r=><th key={r.id} style={{...styles.th,minWidth:150}}><div>{r.nombre}</div><div style={{fontSize:9,fontWeight:400,marginTop:4,color:r.diasEsperados===0||r.diasCubiertos<r.diasEsperados?'#a57528':'#8e7580'}}>Gastos importados: {r.diasCubiertos}/{r.diasEsperados} días</div>{r.observaciones.map(m=><div key={m} style={{fontSize:9,fontWeight:500,marginTop:4,color:'#a57528'}}>{m}</div>)}</th>)}<th style={{...styles.th,minWidth:150,background:'#f6e9ef'}}>TOTAL</th></tr></thead><tbody>
+          <tr aria-label='Ventas del período'><td style={{...salesCellStyle,...sticky,background:'#f6e9ef'}}>0 · Ventas</td>{report.rows.map(r=><td key={r.id} style={salesCellStyle}>{amountButton(r.ventas,'0',[r.id],true)}</td>)}<td style={{...salesCellStyle,background:'#eedce5'}}>{amountButton(total.ventas,'0',ids,true)}</td></tr>
+          {report.codes.map(code=><tr key={code}><td style={{...styles.td,...sticky}}><strong style={{color:COLORS.pinkDark}}>{code}</strong> · {report.categoryName(code)}</td>{report.rows.map(r=><td key={r.id} style={styles.td}>{amountButton(r.porCodigo[code]||0,code,[r.id])}</td>)}<td style={{...styles.td,background:'#fcf4f7'}}>{amountButton(report.rows.reduce((a,r)=>a+Number(r.porCodigo[code]||0),0),code,ids)}</td></tr>)}
+          {[['Total de costos','costos'],[total.parcial?'Resultado parcial':total.cantidadProvisionales>0?'Resultado estimado':'Resultado operativo','resultado']].map(([label,key])=><tr key={key}><td style={{...styles.td,...sticky,background:key==='resultado'?'#f5e9ef':'#faf6f8',fontWeight:800}}>{label}</td>{[...report.rows,total].map((r,i)=><td key={i} style={{...styles.td,background:key==='resultado'?'#f5e9ef':'#faf6f8',fontWeight:800,color:Number(r[key])<0?COLORS.danger:COLORS.pinkDark}}>{fmtMoney(r[key]||0)}</td>)}</tr>)}
+          <tr><td style={{...styles.td,...sticky,fontWeight:800}}>Margen sobre ventas</td>{[...report.rows,total].map((r,i)=><td key={i} style={{...styles.td,fontWeight:800,color:r.margen<0?COLORS.danger:COLORS.pinkDark}}>{pct(r.margen)}</td>)}</tr>
+          <tr><th colSpan={report.rows.length+2} style={{...styles.th,textAlign:'left',borderTop:'2px solid #eadce2',color:'#806774'}}>Movimientos fuera del resultado · no afectan costos ni margen</th></tr>
+          {report.outsideCodes.map(code=><tr key={`fuera-${code}`}><td style={{...styles.td,...sticky,color:'#8e7580'}}>{code} · {report.categoryName(code)}</td>{report.rows.map(r=><td key={r.id} style={styles.td}>{amountButton(r.porCodigo[code]||0,code,[r.id])}</td>)}<td style={styles.td}>{amountButton(report.rows.reduce((a,r)=>a+Number(r.porCodigo[code]||0),0),code,ids)}</td></tr>)}
+        </tbody></table></div><p style={{padding:'0 18px 12px',fontSize:10,color:'#8e7580'}}>La cobertura indica qué días se importaron, no que todos los comprobantes estén cargados en AgendaPro. Los gastos sin clasificar se suman al resultado. Las comisiones provisionales y las variaciones históricas no generan por sí solas un resultado parcial. Los conceptos 5, 19 y 21 se informan por fuera del resultado y no afectan costos ni margen. Código 1: comisión de NikiOS + mínimo + garantías, antes de adelantos. Código 15: 1 % de ventas. Los códigos 1 y 15 de AgendaPro se reemplazan por esos cálculos. No se incluyen gastos del informe diario.</p>
+      </Card>
+      <Card style={{minWidth:0}}>
+        <div style={{display:'flex',justifyContent:'space-between',gap:12,flexWrap:'wrap',alignItems:'center'}}>
+          <div><h3 style={{margin:0,fontSize:16,color:COLORS.pinkDark}}>Evolución mensual de gastos</h3><p style={{fontSize:11,color:'#8e7580',margin:'6px 0'}}>Ventas y gastos por mes. Seleccioná un importe para ver sus movimientos o un indicador para conocer la variación.</p></div>
+          <div style={{display:'flex',gap:8,flexWrap:'wrap'}}>
+            <Btn variant='secondary' size='sm' disabled={rulesBusy} onClick={openRules}>{canEditExpenseRules?'Configurar alertas':'Ver controles'}</Btn>
+            <select aria-label='Meses a comparar' value={months} onChange={e=>{setMonths(e.target.value);setAlertDetail(null);historySequence.current++;setHistory(null);setHistoryBusy(false);}} style={inputStyle}>{[3,6,12].map(n=><option key={n} value={n}>Últimos {n} meses</option>)}</select>
+            <Btn disabled={historyBusy} onClick={loadHistory}>{historyBusy?'Calculando evolución…':history?'Actualizar evolución':'Cargar evolución'}</Btn>
+          </div>
+        </div>
+        <div style={{display:'flex',gap:14,flexWrap:'wrap',fontSize:10.5,margin:'12px 0',padding:'10px 12px',background:'#faf7f9',borderRadius:9}}>
+          {analysis?.alerts.some(a=>a.grupo==='tope')&&<span><span style={{display:'inline-block',width:11,height:11,background:'#ffe0cb',border:'1px solid #efb18e',borderRadius:3,marginRight:5}}/>Supera el tope sobre ventas</span>}
+          <span style={{color:'#ad343e',display:'inline-flex',alignItems:'center',gap:5}}><span aria-hidden='true' style={{fontSize:19,lineHeight:1}}>⚠︎</span>Aumento importante de gasto</span><span style={{color:'#277747',display:'inline-flex',alignItems:'center',gap:5}}><span aria-hidden='true' style={{fontSize:19,fontWeight:800,lineHeight:1}}>✓</span>Disminución importante de gasto</span><span style={{color:'#96702a',display:'inline-flex',alignItems:'center',gap:5}}><span aria-hidden='true' style={{fontSize:19,lineHeight:1}}>⚠︎</span>Baja por confirmar</span>
+        </div>
+        {historyError&&<p role='alert' style={{color:COLORS.danger,fontSize:12}}>{historyError}</p>}
+        {historyBusy&&<p style={{fontSize:12,color:'#8e7580'}}>Recuperando meses y calculando las comisiones con los mismos criterios del cuadro principal…</p>}
+        {!history&&!historyBusy&&<p style={{fontSize:11,color:'#806774',lineHeight:1.6}}>Cargá la evolución para comparar los meses. {canEditExpenseRules?'Podés ajustar los criterios desde Configurar alertas.':'Podés consultar los criterios desde Ver controles.'}</p>}
+        {history&&<>
+          <div style={{display:'flex',gap:8,alignItems:'center',margin:'12px 0',flexWrap:'wrap'}}>
+            <label style={{fontSize:12}}>Ver evolución de </label><select aria-label='Sucursal de evolución' value={historyLocal} onChange={e=>{setHistoryLocal(e.target.value);setAlertDetail(null);}} style={inputStyle}><option value='todos'>Total de sucursales seleccionadas</option>{locales.map(l=><option key={l.id} value={l.id}>{l.nombre}</option>)}</select>
+            <span style={{fontSize:10,color:'#8e7580'}}>Importe y porcentaje. Los indicadores se pueden seleccionar para ver el detalle.</span>
+          </div>
+          <div style={{overflowX:'auto'}}><table aria-label='Evolución mensual de costos' style={{width:'100%',borderCollapse:'separate',borderSpacing:0}}>
+            <thead><tr><th style={{...styles.th,...sticky}}>Código · Concepto</th>{history.meses.map(m=><th key={m.periodo} style={{...styles.th,paddingRight:47}}>{m.periodo}{m.hasta<dateKey(new Date(Number(m.periodo.slice(0,4)),Number(m.periodo.slice(5,7)),0,12))?<div style={{fontSize:9,fontWeight:500,marginTop:4}}>Al {m.hasta.slice(8,10)}/{m.hasta.slice(5,7)} · En curso</div>:null}</th>)}</tr></thead>
+            <tbody>{['0',...analysis.codes,'costos','resultado','margen','fuera',...report.outsideCodes].map(code=>code==='fuera'?<tr key={code}><th colSpan={history.meses.length+1} style={{...styles.th,textAlign:'left',borderTop:'2px solid #eadce2',color:'#806774'}}>Movimientos fuera del resultado · no afectan costos ni margen</th></tr>:<tr key={code}>
+              <td style={{...styles.td,...sticky,background:code==='0'?'#f6e9ef':'#fff',color:code==='0'?COLORS.pinkDark:undefined,fontWeight:['costos','resultado','margen','0'].includes(code)?800:400}}>{code==='0'?'0 · Ventas':code==='costos'?'Total de costos':code==='resultado'?'Resultado':code==='margen'?'Margen':`${code} · ${report.categoryName(code)}`}</td>
+              {history.meses.map(m=>{
+                const selected=m.report.rows.filter(r=>historyLocal==='todos'||r.id===Number(historyLocal)),scope=selected.map(r=>r.id),sales=selected.reduce((a,r)=>a+r.ventas,0);
+                const value=code==='0'?sales:code==='costos'?selected.reduce((a,r)=>a+r.costos,0):code==='resultado'||code==='margen'?selected.reduce((a,r)=>a+r.resultado,0):selected.reduce((a,r)=>a+Number(r.porCodigo[code]||0),0);
+                const cell=analysis.cells.get(`${m.periodo}|${code}`),variation=cell?.variacion,missing=(cell?.signals||[]).filter(a=>a.grupo==='faltante'),incomplete=selected.some(r=>r.diasEsperados===0||r.diasCubiertos<r.diasEsperados);
+                const salesVariation=code==='0',direction=variation?.nivel==='crecimiento_ventas'||variation?.nivel==='baja'?'#277747':variation?.nivel==='caida_ventas'||variation?.nivel==='suba'?'#ad343e':variation?.nivel==='ventas_estables'?'#8e7580':'#96702a';
+                return <td key={m.periodo} style={{...styles.td,verticalAlign:'top',background:code==='0'?'#f6e9ef':cell?.excesos.length?'#fff0e7':undefined}}>
+                  <div data-evolution-value style={{display:'grid',gridTemplateColumns:'minmax(0,1fr) 28px',columnGap:6,alignItems:'center',textAlign:'right',fontVariantNumeric:'tabular-nums'}}>
+                    <div style={{textAlign:'right',fontWeight:code==='0'?800:700,fontSize:code==='0'?14:undefined}}>
+                      {code==='margen'?pct(sales!==0?value/sales*100:null):['costos','resultado'].includes(code)?<strong>{fmtMoney(value)}</strong>:<button type='button' onClick={()=>openCost(code,scope,m.periodo)} style={{border:0,background:'transparent',font:'inherit',fontWeight:'inherit',fontVariantNumeric:'tabular-nums',color:COLORS.pinkDark,cursor:'pointer',textDecoration:'none',padding:0,margin:0,width:'100%',textAlign:'right'}}>{fmtMoney(value)}</button>}
+                    </div>
+                    <span data-evolution-indicator style={{width:28,textAlign:'center'}}>{variation&&!salesVariation&&<button type='button' aria-label={`${alertLabel(variation)} ${code} ${m.periodo}`} title='Ver variación' onClick={()=>setAlertDetail([variation])} style={{border:`1px solid ${direction}55`,borderRadius:7,background:variation.nivel==='suba'?'#fff0f1':variation.nivel==='baja'?'#edf7ef':'#fff6de',color:direction,font:'inherit',fontSize:20,fontWeight:800,padding:0,width:28,height:28,display:'inline-flex',alignItems:'center',justifyContent:'center',cursor:'pointer',textDecoration:'none',lineHeight:1}}><span aria-hidden='true'>{variation.nivel==='baja'?'✓':'⚠︎'}</span></button>}</span>
+                  </div>
+                  {!['margen','0','resultado',...report.outsideCodes].includes(code)&&<div style={{fontSize:9.5,color:cell?.excesos.length?'#a75d25':'#8e7580',marginTop:5,paddingRight:34,textAlign:'right',fontVariantNumeric:'tabular-nums'}}>{sales>0?`${Number(value/sales*100).toLocaleString('es-AR',{maximumFractionDigits:2})} %`:'—'}</div>}
+                  {salesVariation&&<div style={{textAlign:'right',paddingRight:34,marginTop:5}}>{variation?<button type='button' aria-label={`Variación de ventas ${m.periodo}`} onClick={()=>setAlertDetail([variation])} style={{border:0,background:'transparent',color:direction,font:'inherit',fontVariantNumeric:'tabular-nums',fontSize:11,fontWeight:700,padding:0,cursor:'pointer',textDecoration:'none'}}>{variation.porcentaje==null?(variation.actual===0?'0 %':'Sin base'):`${variation.porcentaje>0?'+':''}${variation.porcentaje.toLocaleString('es-AR',{maximumFractionDigits:1})} %`}</button>:<span style={{fontSize:9,color:'#8e7580'}}>—</span>}</div>}
+                  {cell?.excesos.length>0&&<div style={{textAlign:'right',paddingRight:34}}><button type='button' aria-label={`Ver tope ${code} ${m.periodo}`} onClick={()=>setAlertDetail(cell.excesos)} style={{border:0,background:'transparent',color:'#a75d25',font:'inherit',fontSize:9.5,padding:'4px 0 0',cursor:'pointer',textDecoration:'none',textAlign:'right'}}>{scope.length===1?`Supera el tope (${Number(cell.excesos[0].referencia).toLocaleString('es-AR',{maximumFractionDigits:2})} %)`:`${cell.excesos.length} ${cell.excesos.length===1?'sucursal supera':'sucursales superan'} su tope`}</button></div>}
+                  {missing.length>0&&<div style={{textAlign:'right',paddingRight:34}}><button type='button' onClick={()=>setAlertDetail(missing)} style={{border:0,background:'transparent',font:'inherit',fontSize:9.5,color:'#96702a',padding:'4px 0 0',cursor:'pointer'}}>⚠ Posible faltante</button></div>}
+                  {code==='1'&&selected.some(r=>r.cantidadProvisionales>0)&&<div style={{fontSize:9,color:'#6b7c99',marginTop:3,paddingRight:34,textAlign:'right'}}>Incluye provisional</div>}
+                  {incomplete&&<div style={{fontSize:9,color:'#96702a',marginTop:3,paddingRight:34,textAlign:'right'}}>Importación incompleta</div>}
+                </td>;
+              })}
+            </tr>)}</tbody>
+          </table></div>
+          <div style={{marginTop:18}}>
+            <h4 style={{fontSize:13,margin:'0 0 9px'}}>Señales detectadas · {visibleAlerts.length}</h4>
+            {visibleAlerts.length===0?<p style={{fontSize:12,color:'#8e7580'}}>No se detectan alertas con los datos y los criterios configurados. La primera columna necesita el mes anterior para comparar.</p>:(showAllAlerts?visibleAlerts:visibleAlerts.slice(0,12)).map((a,i)=><div key={i} style={{padding:'10px 12px',marginBottom:6,borderRadius:8,borderLeft:`3px solid ${a.nivel==='suba'?'#ad343e':a.nivel==='baja'?'#277747':a.grupo==='tope'?'#d58f54':'#aa915a'}`,background:a.nivel==='baja'?'#f1f8f2':a.nivel==='suba'?'#fff3f3':a.grupo==='tope'?'#fff4e9':'#faf6ed',fontSize:11,display:'flex',gap:10,justifyContent:'space-between',alignItems:'center',flexWrap:'wrap'}}>
+              <span><strong>{a.periodo} · {a.local_id==='todos'?'Total de la selección':localName(a.local_id)} · {alertLabel(a)}</strong><br/>{a.grupo==='cambio'?report.categoryName(a.codigo):a.mensaje}</span>
+              <div style={{display:'flex',gap:10,flexShrink:0}}><button type='button' onClick={()=>setAlertDetail([a])} style={{border:0,background:'transparent',font:'inherit',color:COLORS.pinkDark,fontWeight:700,cursor:'pointer'}}>Ver motivo</button>{a.codigo&&<button type='button' onClick={()=>openCost(a.codigo,a.local_ids||[a.local_id],a.periodo)} style={{border:0,background:'transparent',font:'inherit',color:COLORS.pinkDark,fontWeight:700,cursor:'pointer'}}>Ver gastos</button>}</div>
+            </div>)}
+            {visibleAlerts.length>12&&<Btn variant='secondary' size='sm' onClick={()=>setShowAllAlerts(x=>!x)}>{showAllAlerts?'Mostrar menos':'Ver todas las señales'}</Btn>}
+            <p style={{fontSize:10,color:'#8e7580',lineHeight:1.65}}>{analysis.alerts.some(a=>a.grupo==='tope')&&'El fondo indica las sucursales que superan su tope sobre ventas. '}El ícono de color compara el importe con el mes inmediatamente anterior y exige superar a la vez la variación porcentual, el mínimo en pesos y el impacto mínimo sobre ventas. Los fijos tienen mínimos iniciales más sensibles. Las bajas del mes en curso o con posibles fijos faltantes quedan por confirmar, sin indicador verde. Una importación incompleta suspende los indicadores de gastos. En ventas, verde indica crecimiento y rojo una caída; el mes en curso se compara con el mismo tramo del anterior. Los avisos no modifican importes y se recalculan: no son estados pendientes de aprobación.</p>
+          </div>
+        </>}
+      </Card>
+      <details style={{fontSize:11,color:'#8e7580',padding:'2px 5px'}}><summary style={{cursor:'pointer'}}>Criterios y actualización</summary><p>Las comisiones validadas usan su snapshot. Las pendientes y reabiertas usan el cálculo actual. Los pagos y adelantos no reducen el costo laboral. Los cortes se distribuyen por su detalle diario de comisiones y mínimos; sin detalle, por días. La cobertura indica los días importados de gastos, no que todos los comprobantes hayan sido registrados.</p><p>Última importación del período: {payload.sincronizaciones?.[0]?new Date(payload.sincronizaciones[0].synced_at).toLocaleString('es-AR'):'Sin registro'}.</p></details>
+    </>}
+    {alertDetail?.[0]?.grupo==='ventas'&&<Modal title='Variación de ventas' onClose={()=>setAlertDetail(null)} width={750}>
+      {alertDetail.map((a,i)=><div key={i} style={{fontSize:12,lineHeight:1.7}}>
+        <strong>{a.periodo} · {a.local_ids.map(localName).join(' · ')}</strong>
+        <p>{a.mensaje}</p><p>{a.criterio}</p>
+        <table aria-label='Comparación de ventas' style={{width:'100%',borderCollapse:'collapse'}}><thead><tr>{['Período','Hasta','Ventas'].map(x=><th key={x} style={styles.th}>{x}</th>)}</tr></thead><tbody>{a.referencias.map(r=><tr key={r.periodo}><td style={styles.td}>{r.periodo}</td><td style={styles.td}>{r.hasta}</td><td style={styles.td}>{fmtMoney(r.importe)}</td></tr>)}</tbody></table>
+        <p><strong>Cambio en pesos: </strong>{a.delta>=0?'+':'−'}{fmtMoney(Math.abs(a.delta))}</p>
+        <Btn variant='secondary' size='sm' onClick={()=>{setAlertDetail(null);openCost('0',a.local_ids,a.periodo);}}>Ver ventas de este mes</Btn>
+      </div>)}
+      <div style={{marginTop:15}}><Btn variant='secondary' onClick={()=>setAlertDetail(null)}>Cerrar</Btn></div>
+    </Modal>}
+    {alertDetail&&alertDetail[0]?.grupo!=='ventas'&&<Modal title='Motivo del aviso' onClose={()=>setAlertDetail(null)} width={850}>
+      <p style={{fontSize:12,lineHeight:1.6,marginTop:0}}>Comparación automática, sin estado pendiente de aprobación. Si los datos y las reglas no cambian, el aviso puede permanecer aunque el gasto sea correcto. No cambia los importes ni marca el resultado como parcial.</p>
+      {alertDetail.map((a,i)=><div key={i} style={{borderTop:'1px solid #eadce2',paddingTop:13,marginTop:13,fontSize:12,lineHeight:1.6}}>
+        <strong>{a.periodo} · {a.local_id==='todos'?`Total: ${a.local_ids.map(localName).join(' · ')}`:localName(a.local_id)} · {alertLabel(a)}</strong>
+        <p style={{margin:'7px 0'}}>{a.mensaje}</p>
+        {a.criterio&&<p style={{margin:'7px 0'}}><strong>Criterio: </strong>{a.criterio}</p>}
+        {a.grupo==='cambio'&&<p style={{margin:'7px 0'}}><strong>Cambio en pesos: </strong>{a.delta>=0?'+':'−'}{fmtMoney(Math.abs(a.delta))} · <strong>Impacto: </strong>{a.impacto==null?'Sin ventas para ponderar':`${Number(a.impacto).toLocaleString('es-AR',{maximumFractionDigits:2})} % sobre ${fmtMoney(a.base_ventas)} de ventas`}</p>}
+        {a.referencia!=null&&<p style={{margin:'7px 0'}}><strong>{a.grupo==='tope'?'Tope configurado: ':a.grupo==='cambio'?`Mes anterior (${a.previous||a.referencias?.[0]?.periodo}): `:'Referencia: '}</strong>{a.metrica==='participacion'?pct(a.referencia):fmtMoney(a.referencia)} · <strong>Actual: </strong>{a.metrica==='participacion'?pct(a.actual):fmtMoney(a.actual)}</p>}
+        {!!a.referencias?.length&&<><div style={{overflowX:'auto'}}><table aria-label='Meses de referencia del aviso' style={{width:'100%',borderCollapse:'collapse'}}><thead><tr>{['Mes de referencia','Gasto del código','Ventas','% sobre ventas'].map(x=><th key={x} style={styles.th}>{x}</th>)}</tr></thead><tbody>{a.referencias.map(r=><tr key={r.periodo}><td style={styles.td}>{r.periodo}</td><td style={styles.td}>{fmtMoney(r.importe)}</td><td style={styles.td}>{fmtMoney(r.ventas)}</td><td style={styles.td}>{pct(r.participacion)}</td></tr>)}</tbody></table></div><p style={{fontSize:11,color:'#806774'}}>{a.grupo==='cambio'?'Se muestran el mes inmediatamente anterior y el mes actual. Los indicadores comparan importes, no la mediana del historial. Las tres condiciones de importancia deben cumplirse al mismo tiempo.':a.grupo==='tope'?'El tope se aplica a las ventas de esta sucursal. El fondo del total también avisa cuando alguna de las sucursales seleccionadas supera su límite.':'Los posibles faltantes usan comprobantes y notas de meses anteriores con importación completa. La cobertura no asegura que se hayan registrado todos los comprobantes.'}</p></>}
+        {a.enCurso&&<p style={{fontSize:11,color:'#806774'}}>Este mes sigue en curso. El tope usa las ventas y gastos acumulados. Las variaciones se comparan con el mes anterior completo; una baja queda por confirmar y no se presenta como ahorro. Un aumento puede señalarse si lo acumulado ya supera los mínimos de importancia.</p>}
+        {a.codigo&&<Btn variant='secondary' size='sm' onClick={()=>{setAlertDetail(null);openCost(a.codigo,a.local_ids||[a.local_id],a.periodo);}}>Ver gastos de este mes</Btn>}
+      </div>)}
+      <p style={{fontSize:11,color:'#806774',lineHeight:1.6}}>{canEditExpenseRules?'Podés ajustar topes y mínimos por concepto y sucursal desde Configurar alertas.':'Podés consultar los topes y mínimos por concepto y sucursal desde Ver controles.'} Un tilde verde indica menor gasto registrado; puede incluir reintegros y no confirma un ahorro definitivo.</p>
+      <Btn variant='secondary' onClick={()=>setAlertDetail(null)}>Cerrar</Btn>
+    </Modal>}
+    {detail&&!expenseEditor&&!expenseDelete&&<Modal title={`${detail.codigo} · ${detail.codigo==='0'?'Ventas':report.categoryName(detail.codigo)} · ${detail.periodo}`} onClose={closeDetail} width={1000}>
+      <div style={{fontSize:12,lineHeight:1.6,marginBottom:12}}>{detail.local_ids.map(localName).join(' · ')}<br/><strong>Total: {detail.loaded?fmtMoney(detail.total||0):detail.error?'Sin datos':'Consultando…'}</strong> · {detail.loaded?detail.registros:'…'} movimientos{detail.codigo==='1'&&<div>Importe incluido en el mes por manicura y corte. Antes de adelantos; los importes validados conservan su snapshot.</div>}{detail.codigo==='15'&&<div>Gasto calculado como 1 % de las ventas por sucursal; el último día absorbe el redondeo mensual.</div>}</div>
+      {detail.error&&<p role='alert' style={{color:COLORS.danger}}>{detail.error}</p>}
+      <div style={{maxHeight:'58vh',overflow:'auto'}}><table style={{width:'100%',borderCollapse:'collapse'}}><thead><tr>{['Fecha / Corte','Sucursal','Detalle','Medio / Estado','Importe',...(!['0','1','15'].includes(detail.codigo)?['Acciones']:[])].map(x=><th key={x} style={styles.th}>{x}</th>)}</tr></thead><tbody>{(detail.filas||[]).map((r,i)=><tr key={r.expense_id||i}><td style={{...styles.td,textAlign:'left'}}>{r.fecha}{r.hasta&&r.hasta!==r.fecha?` al ${r.hasta}`:''}</td><td style={{...styles.td,textAlign:'left'}}>{localName(r.local_id)}</td><td style={{...styles.td,textAlign:'left',whiteSpace:'normal',minWidth:220}}>{r.detalle||'Sin descripción'}{r.expense_id&&<div style={{fontSize:9,color:'#8e7580'}}>{r.origen==='manual'?'NikiOS · Manual':`AgendaPro #${r.expense_id}${r.editado?' · Ajustado en NikiOS':''}`}</div>}</td><td style={styles.td}>{r.estado||r.medio_pago||'—'}</td><td style={styles.td}>{fmtMoney(r.importe||0)}</td>{!['0','1','15'].includes(detail.codigo)&&<td style={styles.td}><div style={{display:'flex',gap:7,justifyContent:'flex-end'}}><Btn size='sm' variant='secondary' onClick={()=>void openExpense(r)}>Editar</Btn>{r.origen==='manual'&&<Btn size='sm' variant='danger' onClick={()=>setExpenseDelete({...r,error:''})}>Eliminar</Btn>}</div></td>}</tr>)}</tbody></table>{!detail.busy&&!detail.error&&!detail.filas?.length&&<p style={{fontSize:12}}>No hay movimientos en este alcance.</p>}</div>
+      <div style={{display:'flex',gap:10,alignItems:'center',marginTop:13}}>{detail.busy?<span style={{fontSize:12}}>Cargando movimientos…</span>:detail.filas.length<detail.registros&&<Btn variant='secondary' onClick={()=>void loadDetail(detail,true)}>Cargar más</Btn>}<span style={{fontSize:11,color:'#8e7580'}}>Mostrando {detail.filas?.length||0} de {detail.registros||0}</span><Btn variant='secondary' onClick={closeDetail}>Cerrar</Btn></div>
+    </Modal>}
+    {expenseEditor&&<Modal title={expenseEditor.row?'Editar gasto':'Agregar gasto'} onClose={closeExpense} width={740}>
+      {expenseEditor.loading?<p style={{fontSize:12}}>Cargando sucursales y conceptos…</p>:expenseEditor.form?<form aria-label='Formulario de gasto' onSubmit={saveExpense}>
+        <p style={{fontSize:12,lineHeight:1.6,marginTop:0}}>Todos los campos son obligatorios.{expenseEditor.row?.origen==='agendapro'?' Los cambios se aplican en NikiOS y se conservan en las próximas recargas de AgendaPro.':' El gasto se incluirá junto con los importados de AgendaPro.'}</p>
+        <div style={{display:'grid',gridTemplateColumns:'repeat(auto-fit,minmax(230px,1fr))',gap:14}}>
+          <label style={{fontSize:12}}>Fecha *<input aria-label='Fecha del gasto' type='date' required value={expenseEditor.form.fecha} disabled={expenseBusy} onChange={e=>setExpenseEditor(x=>({...x,form:{...x.form,fecha:e.target.value}}))} style={{...inputStyle,display:'block',width:'100%',boxSizing:'border-box',marginTop:5,fontFamily:'inherit'}}/></label>
+          <label style={{fontSize:12}}>Sucursal *<select aria-label='Sucursal del gasto' required value={expenseEditor.form.local_id} disabled={expenseBusy} onChange={e=>setExpenseEditor(x=>({...x,form:{...x.form,local_id:e.target.value}}))} style={{...inputStyle,display:'block',width:'100%',marginTop:5,fontFamily:'inherit'}}><option value=''>Seleccionar sucursal</option>{expenseEditor.locales.map(l=><option key={l.id} value={l.id}>{l.nombre}</option>)}</select></label>
+          <label style={{fontSize:12}}>Concepto *<select aria-label='Concepto del gasto' required value={expenseEditor.form.codigo} disabled={expenseBusy} onChange={e=>setExpenseEditor(x=>({...x,form:{...x.form,codigo:e.target.value}}))} style={{...inputStyle,display:'block',width:'100%',marginTop:5,fontFamily:'inherit'}}><option value=''>Seleccionar concepto</option>{expenseEditor.conceptos.map(c=><option key={c.codigo} value={c.codigo}>{c.codigo} · {c.nombre}</option>)}</select></label>
+          <label style={{fontSize:12}}>Importe *<input aria-label='Importe del gasto' type='number' step='0.01' required value={expenseEditor.form.importe} disabled={expenseBusy} onChange={e=>setExpenseEditor(x=>({...x,form:{...x.form,importe:e.target.value}}))} style={{...inputStyle,display:'block',width:'100%',boxSizing:'border-box',marginTop:5,fontFamily:'inherit'}}/><small style={{fontSize:10,color:'#806774'}}>Positivo para gastos; negativo para reintegros.</small></label>
+          <label style={{fontSize:12}}>Medio de pago *<select aria-label='Medio de pago del gasto' required value={expenseEditor.form.medio_pago} disabled={expenseBusy} onChange={e=>setExpenseEditor(x=>({...x,form:{...x.form,medio_pago:e.target.value}}))} style={{...inputStyle,display:'block',width:'100%',marginTop:5,fontFamily:'inherit'}}><option value=''>Seleccionar medio de pago</option>{expenseEditor.medios_pago.map(m=><option key={m.value} value={m.value}>{m.label}</option>)}</select></label>
+        </div>
+        <label style={{display:'block',fontSize:12,marginTop:14}}>Detalle *<textarea aria-label='Detalle del gasto' required maxLength={5000} rows={3} value={expenseEditor.form.detalle} disabled={expenseBusy} onChange={e=>setExpenseEditor(x=>({...x,form:{...x.form,detalle:e.target.value}}))} style={{...inputStyle,display:'block',width:'100%',boxSizing:'border-box',marginTop:5,fontFamily:'inherit',resize:'vertical'}}/></label>
+        <p style={{fontSize:10,color:'#806774',lineHeight:1.5}}>Comisiones y gastos financieros se calculan automáticamente y conservan su lógica actual. Los conceptos 5, 19 y 21 se muestran separados del resultado operativo.</p>
+        {expenseEditor.error&&<p role='alert' style={{fontSize:12,color:COLORS.danger}}>{expenseEditor.error}</p>}
+        <div style={{display:'flex',gap:9,marginTop:16}}><button type='submit' disabled={expenseBusy||!expenseEditor.locales.length||!expenseEditor.conceptos.length} style={{border:0,borderRadius:8,padding:'8px 18px',background:COLORS.pink,color:'#fff',font:'inherit',cursor:expenseBusy?'wait':'pointer',opacity:expenseBusy?0.5:1}}>{expenseBusy?'Guardando…':'Guardar gasto'}</button><button type='button' disabled={expenseBusy} onClick={closeExpense} style={{border:0,borderRadius:8,padding:'8px 18px',background:COLORS.pinkLight,color:COLORS.pinkDark,font:'inherit',cursor:'pointer'}}>Cancelar</button></div>
+        {!expenseEditor.conceptos.length&&<p role='alert' style={{fontSize:12}}>No hay conceptos de gasto vigentes para seleccionar. Revisá el maestro de conceptos.</p>}
+      </form>:<><p role='alert' style={{color:COLORS.danger,fontSize:12}}>{expenseEditor.error}</p><Btn variant='secondary' onClick={()=>void openExpense(expenseEditor.row)}>Reintentar</Btn></>}
+    </Modal>}
+    {expenseDelete&&<Modal title='Eliminar gasto manual' onClose={()=>{if(!expenseLock.current)setExpenseDelete(null);}} width={560}>
+      <p style={{fontSize:12,lineHeight:1.7}}>Se quitará este gasto del cuadro de resultados y de la evolución.</p>
+      <p style={{fontSize:12,lineHeight:1.7}}><strong>{localName(expenseDelete.local_id)} · {expenseDelete.fecha}</strong><br/>{expenseDelete.codigo} · {report.categoryName(String(expenseDelete.codigo))}<br/>{expenseDelete.detalle}<br/>{expenseDelete.medio_pago} · <strong>{fmtMoney(expenseDelete.importe)}</strong></p>
+      {expenseDelete.error&&<p role='alert' style={{color:COLORS.danger,fontSize:12}}>{expenseDelete.error}</p>}
+      <div style={{display:'flex',gap:9}}><Btn variant='danger' disabled={expenseBusy} onClick={removeExpense}>{expenseBusy?'Eliminando…':'Eliminar gasto'}</Btn><Btn variant='secondary' disabled={expenseBusy} onClick={()=>setExpenseDelete(null)}>Cancelar</Btn></div>
+    </Modal>}
+    {rulesModal&&<Modal title='Alertas de evolución por sucursal' width={1120} onClose={()=>setRulesModal(null)}>
+      {!canEditExpenseRules&&<p role='note' style={{fontSize:12,color:'#806774',background:'#faf7f9',padding:10,borderRadius:8}}>Modo consulta. Este perfil puede ver los controles de gastos, pero no modificarlos.</p>}
+      <p style={{fontSize:12,lineHeight:1.65,marginTop:0}}><strong>Color:</strong> {canEditExpenseRules?'definí el máximo permitido sobre ventas; vacío significa sin tope.':'se resalta el gasto que supera el máximo configurado sobre ventas.'} <strong>Indicadores:</strong> deben superarse simultáneamente el porcentaje de variación, el cambio mínimo en pesos y su impacto mínimo sobre ventas. Se compara contra el mes anterior. Los valores iniciales son para probar y se aplican por concepto.</p>
+      <label style={{fontSize:12}}>Sucursal <select aria-label='Sucursal de controles' value={rulesModal.local_id} style={inputStyle} onChange={e=>setRulesModal(r=>({...r,local_id:Number(e.target.value)}))}>{locales.map(l=><option key={l.id} value={l.id}>{l.nombre}</option>)}</select></label>
+      <div style={{maxHeight:'55vh',overflow:'auto',marginTop:14}}><table style={{width:'100%',borderCollapse:'collapse',minWidth:960}}>
+        <thead><tr><th rowSpan={2} style={{...styles.th,textAlign:'left'}}>Código · Gasto</th><th rowSpan={2} style={styles.th}>Tipo</th><th style={{...styles.th,color:'#a75d25'}}>Fondo de celda</th><th colSpan={3} style={{...styles.th,textAlign:'center',color:'#7d4e62'}}>Variación vs. mes anterior</th><th rowSpan={2} style={styles.th}>Esperado<br/>cada mes</th></tr><tr>{['Máximo % de ventas','Variación %','Cambio mín. $','Impacto mín. % ventas'].map(x=><th key={x} style={styles.th}>{x}</th>)}</tr></thead>
+        <tbody>{ruleCodes.map(code=>{const r=ruleFor(code),disabled=!canEditExpenseRules||r.tipo==='sin_control';return <tr key={code}>
+          <td style={{...styles.td,textAlign:'left',whiteSpace:'normal',minWidth:175}}>{code} · {report.categoryName(code)}</td>
+          <td style={styles.td}><select aria-label={`Tipo de control ${code}`} disabled={!canEditExpenseRules} value={r.tipo} style={{...inputStyle,width:125}} onChange={e=>editRule(code,{tipo:e.target.value,obligatorio:e.target.value==='fijo'&&r.obligatorio})}><option value='fijo'>Fijo</option><option value='variable'>Variable</option><option value='sin_control'>Sin variación</option></select></td>
+          <td style={{...styles.td,background:'#fff9f2'}}><input aria-label={`Tope ventas ${code}`} disabled={!canEditExpenseRules} type='number' min={0} max={1000} step='0.01' placeholder='Sin tope' value={r.max_ventas_pct??''} onChange={e=>editRule(code,{max_ventas_pct:e.target.value})} style={{...inputStyle,width:90}}/></td>
+          <td style={styles.td}><input aria-label={`Umbral ${code}`} type='number' min={5} max={500} step='0.1' disabled={disabled} value={r.umbral_pct} onChange={e=>editRule(code,{umbral_pct:e.target.value})} style={{...inputStyle,width:75}}/></td>
+          <td style={styles.td}><input aria-label={`Cambio mínimo ${code}`} type='number' min={0} max={1000000000000000} step='0.01' disabled={disabled} value={r.min_cambio_importe} onChange={e=>editRule(code,{min_cambio_importe:e.target.value})} style={{...inputStyle,width:105}}/></td>
+          <td style={styles.td}><input aria-label={`Impacto mínimo ${code}`} type='number' min={0} max={1000} step='0.01' disabled={disabled} value={r.min_impacto_ventas_pct} onChange={e=>editRule(code,{min_impacto_ventas_pct:e.target.value})} style={{...inputStyle,width:75}}/></td>
+          <td style={styles.td}><input aria-label={`Esperado cada mes ${code}`} type='checkbox' disabled={!canEditExpenseRules||r.tipo!=='fijo'} checked={!!r.obligatorio&&r.tipo==='fijo'} onChange={e=>editRule(code,{obligatorio:e.target.checked})}/></td>
+        </tr>;})}</tbody>
+      </table></div>
+      <div style={{fontSize:11,color:'#806774',lineHeight:1.6,marginTop:13}}>Ejemplo: de $1.000 a $5.000 son +400 %, pero sólo $4.000 de diferencia. No genera un indicador con estos mínimos iniciales. De $1.000.000 a $2.000.000 sí puede ser relevante. El impacto se calcula sobre la mayor venta de los dos meses; sin ventas se utiliza el mínimo en pesos. “Esperado cada mes” conserva el aviso de posibles gastos fijos sin cargar.</div>
+      <div style={{display:'flex',gap:8,marginTop:16}}>{canEditExpenseRules&&<Btn disabled={rulesBusy} onClick={saveRules}>{rulesBusy?'Guardando…':'Guardar controles de esta sucursal'}</Btn>}<Btn variant='secondary' onClick={()=>setRulesModal(null)}>{canEditExpenseRules?'Cancelar':'Cerrar'}</Btn></div>
+    </Modal>}
+    {config&&<Modal title='Vincular sucursales · gastos de AgendaPro' onClose={()=>setConfig(null)} width={780}><p style={{fontSize:12}}>Revisá la relación de sucursales. Las coincidencias por nombre se aplican sólo al guardar.</p><div style={{display:'grid',gap:9}}>{config.map((r,index)=><div key={r.location_id} style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:10,padding:9,borderBottom:'1px solid #eee'}}><div style={{fontSize:12}}>{r.nombre||r.location_id}{r.propuesto?' · Propuesto':''}</div><select style={inputStyle} value={r.local_id||''} onChange={e=>setConfig(rows=>rows.map((x,i)=>i===index?{...x,local_id:e.target.value,propuesto:false}:x))}><option value=''>Sin vincular</option>{(data.locales||[]).map(l=><option key={l.id} value={l.id}>{l.nombre}</option>)}</select></div>)}</div><div style={{display:'flex',gap:8,marginTop:16}}><Btn disabled={saving||!config.length} onClick={saveConfig}>Guardar vínculos</Btn><Btn variant='secondary' onClick={()=>setConfig(null)}>Cancelar</Btn></div></Modal>}
+  </div>;
+}
+
 function DashboardComercial({ data, user }) {
   const [mesRows,setMesRows]=useState([]);
   const [diaRows,setDiaRows]=useState([]);
@@ -19056,6 +20177,7 @@ function defaultSectionForRole(role) {
 }
 
 function sectionAllowedForRole(section, role) {
+  if (section === "resultados_gestion") return ["admin","casa_matriz","franquiciado","encargada"].includes(role);
   const reportesOperativos = ["reportes","reportes_horas","reportes_cobertura","reportes_comisiones","reporte_pago_comisiones","comisiones_quincenal_piloto","comisiones_semanal_nuevo","consulta_precios","consulta_comisiones_precios"];
   const admin = ["inicio","dashboard","dashboard_manicuras","clientes_crm","ayuda","roadmap","asistencia","horarios","pizarra_semanal","dotacion_cupos","horarios_encargadas","vacaciones_encargadas","bloqueo_horarios",...reportesOperativos,"preliquidacion_encargadas","turnos","servicios","listas_precios","adelantos","garantias","gastos_vencimientos","reclamos","auditorias","informes","informes_mensajeria","manicuras","encargadas","reclutamiento_busquedas","reclutamiento_candidatas","reclutamiento_calendario","reclutamiento_aprobaciones","reclutamiento_antiguedad","reclutamiento_config","locales","cobertura_config","perfil"];
   const casaMatriz = ["inicio","dashboard","dashboard_manicuras","clientes_crm","ayuda","roadmap","asistencia","horarios","pizarra_semanal","dotacion_cupos","horarios_encargadas","vacaciones_encargadas","bloqueo_horarios",...reportesOperativos,"preliquidacion_encargadas","servicios","listas_precios","adelantos","garantias","gastos_vencimientos","reclamos","auditorias","informes","informes_mensajeria","manicuras","encargadas","reclutamiento_busquedas","reclutamiento_candidatas","reclutamiento_calendario","reclutamiento_aprobaciones","reclutamiento_antiguedad","reclutamiento_config","locales","cobertura_config","perfil"];
@@ -19220,7 +20342,7 @@ const refreshTimer = window.setInterval(check, 10 * 60 * 1000);
   const effectiveRole = dualOperationalProfile ? (operatingMode === "encargada" ? "encargada" : "manicura") : user?.rol;
   const effectiveUser = user ? (dualOperationalProfile ? {...user,rol:effectiveRole,baseRol:user.rol,operatingMode:effectiveRole} : user) : null;
 
-  const applicableReleaseNotices=useMemo(()=>NIKI_RELEASE_NOTICES.filter(n=>n.audience==="todos" || n.audience===(effectiveRole==="manicura"?"manicura":"gestion")),[effectiveRole]);
+  const applicableReleaseNotices=useMemo(()=>NIKI_RELEASE_NOTICES.filter(n=>(n.audience==="todos" || n.audience===(effectiveRole==="manicura"?"manicura":"gestion")) && (!n.roles || n.roles.includes(effectiveRole))),[effectiveRole]);
   useEffect(()=>{
     if(!user?.id || !data || !effectiveRole) { setReleasePopupIds([]); return; }
     const key=`${user.id}:${effectiveRole}`;
@@ -19773,6 +20895,7 @@ const refreshTimer = window.setInterval(check, 10 * 60 * 1000);
       icon: "🧾",
       items: [
         { id: "gastos_vencimientos", label: "Gastos y vencimientos", icon: "🧾" },
+        { id: "resultados_gestion", label: "Resultados por local", icon: "📈" },
       ],
     },
     {
@@ -19956,6 +21079,7 @@ const refreshTimer = window.setInterval(check, 10 * 60 * 1000);
     const novedades = effectiveRole === "manicura" ? [
       { icon:"💗", title:"¡Nuevo! Mis comisiones", text:"Consultá tu período en curso, servicios realizados, horas, ausencias y el cálculo estimado. Revisá tus liquidaciones semanales o quincenales, verificá si ya se validaron o pagaron y actualizá tu alias/CBU.", target:"mis_comisiones", action:"Abrir Mis comisiones" },
     ] : [
+      ...(sectionAllowedForRole("resultados_gestion",effectiveRole)?[{icon:NIKI_RESULTADOS_NOVEDAD.icon,title:NIKI_RESULTADOS_NOVEDAD.title,text:NIKI_RESULTADOS_NOVEDAD.message,target:"resultados_gestion",action:NIKI_RESULTADOS_NOVEDAD.button}]:[]),
       { icon:"📅", title:"Nuevas liquidaciones semanales", text:"Validá importes por semana, revisá porcentajes, asistencia, recuperaciones y ajustes. Prepará pagos en efectivo o transferencia y consultá fechas previstas de cobro. Incluye configuración y excepciones por manicura.", target:"comisiones_semanal_nuevo", action:"Ver liquidaciones semanales" },
       { icon:"🧾", title:"Liquidaciones quincenales", text:"Consultá y validá cada quincena, con detalle de servicios y cálculo, configuración independiente, excepciones y seguimiento de pagos. Las liquidaciones ya cerradas conservan sus importes.", target:"comisiones_quincenal_piloto", action:"Ver liquidaciones quincenales" },
       { icon:"✨", title:"Nuevo espacio para manicuras", text:"Las manicuras ya tienen Mis comisiones: una pantalla personal para consultar servicios, liquidaciones validadas, pagos y saldos, sin tener que elegir entre semanal o quincenal.", target:"mis_comisiones", action:"Conocer Mis comisiones" },
@@ -20178,6 +21302,7 @@ const refreshTimer = window.setInterval(check, 10 * 60 * 1000);
     const appUser=effectiveUser || user;
     if (tabSection==="inicio") return renderMobileHome();
     if (tabSection==="dashboard") return effectiveRole!=="manicura" ? <DashboardComercial data={data} user={appUser}/> : null;
+    if (tabSection==="resultados_gestion") return sectionAllowedForRole("resultados_gestion",effectiveRole) ? <ResultadosGestion data={data} user={appUser}/> : null;
     if (tabSection==="dashboard_manicuras") return effectiveRole!=="manicura" ? <DashboardManicuras data={data} user={appUser}/> : null;
     if (tabSection==="clientes_crm") return effectiveRole!=="manicura" ? <ClientesCrm data={data} user={appUser}/> : null;
     if (tabSection==="asistencia") return <AsistenciaDiaria data={data} setData={setData} reloadData={reloadData} user={appUser}/>;
