@@ -64,15 +64,6 @@ function minutes(value: string | null | undefined) {
   if (!Number.isFinite(h) || !Number.isFinite(m)) return null;
   return h*60+m;
 }
-function hoursOutside(planDesde: string | null, planHasta: string | null, realDesde: string | null, realHasta: string | null) {
-  const rs = minutes(realDesde), re = minutes(realHasta);
-  if (rs == null || re == null || re <= rs) return 0;
-  const ps = minutes(planDesde), pe = minutes(planHasta);
-  if (ps == null || pe == null || pe <= ps) return (re-rs)/60;
-  const before = Math.max(0, Math.min(re, ps) - rs);
-  const after = Math.max(0, re - Math.max(rs, pe));
-  return (before + after) / 60;
-}
 function intervalHours(rows:any[]){
   const ints=rows.map(r=>[minutes(r.desde),minutes(r.hasta)]).filter(x=>x[0]!=null&&x[1]!=null&&x[1]>x[0]).sort((a:any,b:any)=>a[0]-b[0]);
   let total=0,start:number|null=null,end:number|null=null;
@@ -84,6 +75,23 @@ function worked(row: any) {
   if (["ausencia","vacaciones"].includes(String(row.estado || ""))) return false;
   const rs = minutes(row.hora_real_desde), re = minutes(row.hora_real_hasta);
   return rs != null && re != null && re > rs;
+}
+// Una sola base de minutos para el detalle diario y su total mensual.
+function dailyOvertime(plans:any[],reals:any[],coverages:any[]){
+  const planned=plans.map((p:any)=>({desde:p.hora_desde,hasta:p.hora_hasta}));
+  const actual=reals.filter(worked).map((r:any)=>({desde:r.hora_real_desde,hasta:r.hora_real_hasta}));
+  const coverage=coverages.map((c:any)=>({desde:c.hora_real_desde||c.hora_desde,hasta:c.hora_real_hasta||c.hora_hasta}));
+  // intervalHours une intervalos superpuestos: una cobertura nunca duplica minutos.
+  const plannedMinutes=Math.round(intervalHours(planned)*60);
+  const actualMinutes=Math.round(intervalHours([...actual,...coverage])*60);
+  const extraMinutes=Math.max(0,actualMinutes-plannedMinutes);
+  return {
+    minutos_teoricos:plannedMinutes,minutos_reales:actualMinutes,minutos_extra:extraMinutes,
+    horas_teoricas:plannedMinutes/60,horas_reales:actualMinutes/60,horas_extra:Math.round(extraMinutes/60*100)/100,
+    tramos_teoricos:plans.map((p:any)=>({local_id:p.local_id,hora_desde:p.hora_desde,hora_hasta:p.hora_hasta})),
+    tramos_reales:[...reals.filter((r:any)=>!["ausencia","vacaciones"].includes(String(r.estado||""))).map((r:any)=>({local_id:r.local_id,hora_desde:r.hora_real_desde,hora_hasta:r.hora_real_hasta,origen:"jornada"})),
+      ...coverages.map((c:any)=>({local_id:c.local_id,hora_desde:c.hora_real_desde||c.hora_desde,hora_hasta:c.hora_real_hasta||c.hora_hasta,origen:"cobertura"}))]
+  };
 }
 function weekType(fecha: string, refA: string | null) {
   if (!refA) return "a";
@@ -193,7 +201,7 @@ Deno.serve(async (req) => {
       const requestedLocalId = body.local_id ? Number(body.local_id) : null;
       if (requestedLocalId && !allowedLocalIds.includes(requestedLocalId)) return json({ok:false,error:"Sucursal fuera de tu alcance."},403);
       const localIds = requestedLocalId ? [requestedLocalId] : allowedLocalIds;
-      if (!localIds.length) return json({ok:true,periodo,rows:[],locales:[]});
+      if (!localIds.length) return json({ok:true,periodo,horas_extra_version:2,rows:[],locales:[]});
 
       const { data:encRel,error:relError } = await admin.from("encargado_locales").select("user_id,local_id").in("local_id",localIds);
       if (relError) throw relError;
@@ -204,7 +212,7 @@ Deno.serve(async (req) => {
         if (!(await canAccessEncargada(requestedUserId))) return json({ok:false,error:"Encargada fuera de tu alcance."},403);
         userIds = userIds.filter((id:number)=>id===requestedUserId);
       }
-      if (!userIds.length) return json({ok:true,periodo,rows:[],locales:[]});
+      if (!userIds.length) return json({ok:true,periodo,horas_extra_version:2,rows:[],locales:[]});
 
       const semesterStartMonth = m <= 6 ? 1 : 7;
       const semDesde = `${y}-${String(semesterStartMonth).padStart(2,"0")}-01`;
@@ -224,7 +232,6 @@ Deno.serve(async (req) => {
       const err = [usersQ,localesQ,planQ,realQ,ferQ,salaryQ,histQ,vacQ,covQ].find((x:any)=>x.error)?.error; if (err) throw err;
       const users = usersQ.data||[], locales = localesQ.data||[], planRows = (planQ.data||[]).map((r:any)=>({local_id:Number(r.local_id),user_id:Number(r.user_id),fecha:String(r.fecha),hora_desde:r.hora_desde,hora_hasta:r.hora_hasta,fuente:"confirmado"})), real = realQ.data||[], feriados = new Set((ferQ.data||[]).map((x:any)=>String(x.fecha)));
       const salary = salaryQ.data||[], laborHist = histQ.data||[], vacations=vacQ.data||[], coverages=covQ.data||[];
-      const planByKey = new Map(planRows.map(r=>[`${r.local_id}|${r.user_id}|${r.fecha}`,r]));
       const realByUser = new Map<number,any[]>();
       (real||[]).filter((r:any)=>userIds.includes(Number(r.user_id))).forEach((r:any)=>{ const uid=Number(r.user_id); if(!realByUser.has(uid))realByUser.set(uid,[]);realByUser.get(uid)!.push(r); });
       const rows = users.map((u:any)=>{
@@ -234,15 +241,14 @@ Deno.serve(async (req) => {
         const agendados=new Set(plans.map((p:any)=>String(p.fecha)));
         const trabajados=new Set(reals.filter(worked).map((r:any)=>String(r.fecha)));
         const ausencias=new Set(reals.filter((r:any)=>String(r.estado)==="ausencia").map((r:any)=>String(r.fecha)));
-        let extra=0;
+        let extraMinutes=0;
+        const overtimeByDate=new Map<string,ReturnType<typeof dailyOvertime>>();
         const allDates=Array.from(new Set([...plans.map((p:any)=>String(p.fecha)),...reals.map((r:any)=>String(r.fecha)),...coverages.filter((c:any)=>Number(c.reemplazo_user_id)===uid).map((c:any)=>String(c.fecha))]));
         for(const f of allDates){
-          const baseIntervals=plans.filter((p:any)=>String(p.fecha)===f).map((p:any)=>({desde:p.hora_desde,hasta:p.hora_hasta}));
-          const realIntervals=reals.filter((r:any)=>String(r.fecha)===f&&worked(r)).map((r:any)=>({desde:r.hora_real_desde,hasta:r.hora_real_hasta}));
-          const covIntervals=coverages.filter((c:any)=>Number(c.reemplazo_user_id)===uid&&String(c.fecha)===f).map((c:any)=>({desde:c.hora_real_desde||c.hora_desde,hasta:c.hora_real_hasta||c.hora_hasta}));
-          extra+=Math.max(0,intervalHours([...realIntervals,...covIntervals])-intervalHours(baseIntervals));
+          const daily=dailyOvertime(plans.filter((p:any)=>String(p.fecha)===f),reals.filter((r:any)=>String(r.fecha)===f),coverages.filter((c:any)=>Number(c.reemplazo_user_id)===uid&&String(c.fecha)===f));
+          overtimeByDate.set(f,daily);extraMinutes+=daily.minutos_extra;
         }
-        extra = Math.round(extra*100)/100;
+        const extra=Math.round(extraMinutes/60*100)/100;
         const feriadosTrabajados = new Set(reals.filter((r:any)=>worked(r)&&feriados.has(String(r.fecha))).map((r:any)=>String(r.fecha))).size;
         const salaryRows=salary.filter((s:any)=>Number(s.user_id)===uid&&String(s.vigencia_desde)<=hasta);
         const current=salaryRows.length?salaryRows[salaryRows.length-1]:null;
@@ -261,15 +267,15 @@ Deno.serve(async (req) => {
         // Vacaciones mensualizadas: valor vacacional base/25. Variables/convenio requieren ajuste contable.
         const plusVacacional=baseVac>0?Math.max(0,(baseVac/25-baseVac/30)*diasVacaciones):0;
         const total = sueldoBase + montoExtras + montoFeriados + aguinaldo + plusVacacional;
-        const detail = Array.from(new Set([...plans.map((p:any)=>String(p.fecha)),...reals.map((r:any)=>String(r.fecha))])).sort().map(fecha=>{
+        const detail = [...allDates].sort().map(fecha=>{
           const dayPlans=plans.filter((p:any)=>String(p.fecha)===fecha);
           const dayReals=reals.filter((r:any)=>String(r.fecha)===fecha);
-          const extraDay = dayReals.filter(worked).reduce((acc:number,r:any)=>{ const p=planByKey.get(`${r.local_id}|${uid}|${fecha}`); return acc+hoursOutside(r.hora_plan_desde||p?.hora_desde||null,r.hora_plan_hasta||p?.hora_hasta||null,r.hora_real_desde,r.hora_real_hasta); },0);
-          return { fecha, agendado:dayPlans.length>0, trabajado:dayReals.some(worked), ausencia:dayReals.some((r:any)=>String(r.estado)==="ausencia"), cambio_turno:dayReals.some((r:any)=>String(r.estado)==="cambio_turno"), feriado:feriados.has(fecha), horas_extra:Math.round(extraDay*100)/100, plan:dayPlans, real:dayReals };
+          const daily=overtimeByDate.get(fecha)!;
+          return { fecha, agendado:dayPlans.length>0, trabajado:dayReals.some(worked), ausencia:dayReals.some((r:any)=>String(r.estado)==="ausencia"), cambio_turno:dayReals.some((r:any)=>String(r.estado)==="cambio_turno"), feriado:feriados.has(fecha), ...daily, plan:dayPlans, real:dayReals };
         });
         return { user_id:uid,nombre:u.nombre,dias_agendados:agendados.size,dias_trabajados:trabajados.size,ausencias:ausencias.size,horas_extra:extra,feriados_trabajados:feriadosTrabajados,sueldo_base:sueldoBase,horas_diarias_habituales:horasDia,valor_hora_extra:valorHoraExtra,monto_horas_extra:montoExtras,monto_feriados:montoFeriados,aguinaldo,dias_vacaciones_liquidadas:diasVacaciones,plus_vacacional:plusVacacional,base_vacaciones:baseVac,mejor_sueldo_base_semestre:bestBase,meses_trabajados_semestre:mesesTrabajados,total_estimado:total,config_vigencia_desde:current?.vigencia_desde||null,detalle:detail};
       }).sort((a:any,b:any)=>String(a.nombre||"").localeCompare(String(b.nombre||"")));
-      return json({ok:true,periodo,rows,locales});
+      return json({ok:true,periodo,horas_extra_version:2,rows,locales});
     }
 
     return json({ok:false,error:"Acción inválida."},400);
@@ -278,3 +284,4 @@ Deno.serve(async (req) => {
     return json({ok:false,error:e instanceof Error?e.message:String(e)},500);
   }
 });
+
