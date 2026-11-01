@@ -306,6 +306,39 @@ const supabaseRealtime = createClient(SUPABASE_URL, SUPABASE_KEY);
 const nikiSignedFiles = new Map();
 const nikiSignedFilesPending = new Map();
 const nikiPhotoRetryAt = new Map();
+// Una lectura compartida por sesión y por tanda de consultas; sin polling.
+const nikiAgendaProEstados=new Map();
+function nikiAgendaProInvalidarEstado(){nikiAgendaProEstados.clear();}
+function nikiAgendaProMarcar(value,estado){
+  if(value&&typeof value==='object')Object.defineProperty(value,'__nikiAgendaPro',{value:estado,enumerable:!Array.isArray(value),configurable:true});
+  return value;
+}
+function nikiAgendaProEstadoDe(value){return value?.__nikiAgendaPro||null;}
+async function nikiAgendaProLeerEstado(){
+  const key=nikiMemoryActorKey(),cached=nikiAgendaProEstados.get(key),now=Date.now();
+  if(cached&&(cached.pending||now-cached.at<45000))return cached.promise;
+  const entry={pending:true,at:now,promise:null};
+  let timer;
+  entry.promise=Promise.race([sb('rpc/niki_agendapro_actualizacion',{method:'POST',body:'{}'}),new Promise(resolve=>{timer=setTimeout(()=>resolve(null),4000);})]).then(out=>out?.version===1?out:null).catch(()=>null).finally(()=>clearTimeout(timer)).then(out=>{entry.pending=false;entry.at=Date.now();return out;});
+  nikiAgendaProEstados.set(key,entry);nikiTrimMemoryCache(nikiAgendaProEstados,4);return entry.promise;
+}
+async function nikiAgendaProCapturar(read){
+  // Tomar la marca antes de leer los datos evita asignarles una recarga posterior.
+  const estado=await nikiAgendaProLeerEstado();
+  return nikiAgendaProMarcar(await read(),estado);
+}
+function nikiAgendaProFechaHora(value){
+  if(!value||!Number.isFinite(new Date(value).getTime()))return null;
+  return new Intl.DateTimeFormat('es-AR',{timeZone:'America/Argentina/Buenos_Aires',day:'2-digit',month:'2-digit',year:'numeric',hour:'2-digit',minute:'2-digit',hourCycle:'h23'}).format(new Date(value));
+}
+function AgendaProUltimaActualizacion({estado,fuentes=['ventas'],loading=false}){
+  const labels={ventas:'Ventas',dashboard:'Dashboard',comisiones:'Servicios y comisiones',crm:'Clientes',gastos:'Gastos de AgendaPro'};
+  return <div aria-label='Última actualización de AgendaPro' style={{fontSize:10.5,color:'var(--color-text-secondary)',display:'flex',gap:'5px 16px',flexWrap:'wrap',padding:'5px 0'}}>
+    {fuentes.map(key=>{const source=estado?.fuentes?.[key],date=nikiAgendaProFechaHora(source?.actualizado_en);return <span key={key} title={source?.desde&&source?.hasta?`Última carga exitosa: ${source.desde} al ${source.hasta}. Hora de Argentina. Al actualizar el reporte se vuelven a consultar los datos.`:'Hora de Argentina. La hora de consulta del navegador no se usa como fecha de carga.'}>{labels[key]||key} · Última actualización: <strong>{date?`${date} hs`:'Sin fecha registrada'}</strong>{source?.estado==='en_curso'?' · Recarga en curso':source?.estado==='error'?' · La última recarga no se completó':source?.estado==='pendiente'?' · Actualización pendiente':''}</span>;})}
+    {loading&&<span>Consultando datos…</span>}
+  </div>;
+}
+
 const nikiCrmScopes = new Map();
 const nikiCrmScopesPending = new Map();
 
@@ -323,6 +356,7 @@ function clearNikiDownloadCaches() {
   nikiSignedFilesPending.clear();
   nikiPhotoRetryAt.clear();
   nikiCrmScopes.clear();
+  nikiAgendaProInvalidarEstado();
   nikiCrmScopesPending.clear();
   nikiResultadosInvalidarCache();
 }
@@ -335,7 +369,7 @@ const sb = async (path, opts = {}) => {
   if (!res.ok) { const e = await res.text(); throw new Error(e); }
   const text = await res.text();
   const value = text ? JSON.parse(text) : null;
-  if ((opts.method || 'GET').toUpperCase() !== 'GET') nikiResultadosInvalidarCache();
+  if ((opts.method || 'GET').toUpperCase() !== 'GET' && path !== 'rpc/niki_agendapro_actualizacion') nikiResultadosInvalidarCache();
   return value;
 };
 
@@ -1052,7 +1086,7 @@ const api = {
   getComisiones: () => sbAll("comisiones_detalle?select=*&order=fecha_pago.desc,id.desc"),
   getComisionesPeriodo: (periodo) => sbAll(`comisiones_detalle?select=*&periodo=eq.${encodeURIComponent(periodo)}&order=fecha_pago.desc,id.desc`),
   getComisionesRango: (desde,hasta) => sbAll(`comisiones_detalle?select=*&fecha_pago=gte.${encodeURIComponent(desde)}&fecha_pago=lte.${encodeURIComponent(hasta)}&order=fecha_pago.desc,id.desc`),
-  getComisionesAgendaProShadowRango: (desde,hasta) => sbAll(`comisiones_agendapro_shadow?select=*&fecha_pago=gte.${encodeURIComponent(desde)}&fecha_pago=lte.${encodeURIComponent(hasta)}&order=fecha_pago.desc,id.desc`),
+  getComisionesAgendaProShadowRango: (desde,hasta) => nikiAgendaProCapturar(()=>sbAll(`comisiones_agendapro_shadow?select=*&fecha_pago=gte.${encodeURIComponent(desde)}&fecha_pago=lte.${encodeURIComponent(hasta)}&order=fecha_pago.desc,id.desc`)),
   getAgendaComisionesSinVincular: () => sbAll("mv_comisiones_agendapro_no_vinculadas_dia?select=local_id,nombre_local,agendapro_provider_id,profesional_agendapro,fecha_pago,precio_efectivo,cantidad&order=fecha_pago.desc"),
   getAgendaComisionesSinVincularRango: (desde,hasta) => sbAll(`mv_comisiones_agendapro_no_vinculadas_dia?select=local_id,nombre_local,agendapro_provider_id,profesional_agendapro,fecha_pago,precio_efectivo,cantidad&fecha_pago=gte.${encodeURIComponent(desde)}&fecha_pago=lte.${encodeURIComponent(hasta)}&order=fecha_pago.desc`),
   getAgendaProfesionalesNoVinculables: () => sb("agendapro_profesionales_no_vinculables?select=*&order=local_id,profesional_agendapro").catch(()=>[]),
@@ -1063,9 +1097,9 @@ const api = {
   refrescarComisionesAgendaProToday: () => sb("rpc/refrescar_comisiones_agendapro_today", { method:"POST", body:"{}" }),
   refrescarVinculoAgendaProShadow: (localId,providerId,desde,hasta) => sb("rpc/refrescar_vinculo_agendapro_shadow", { method:"POST", body:JSON.stringify({ p_local_id:Number(localId), p_provider_id:Number(providerId), p_desde:desde||null, p_hasta:hasta||null }) }),
   refrescarComisionesAgendaProPendientes: () => sb("rpc/refrescar_comisiones_agendapro_pendientes", { method:"POST", body:"{}" }),
-  getDashboardKpiLocalMesActual: () => sbAll("vw_agendapro_kpi_local_mes_actual?select=*&order=ventas.desc"),
-  getDashboardKpiLocalDia: (desde,hasta) => sbAll(`mv_agendapro_kpi_local_dia?select=*&fecha=gte.${encodeURIComponent(desde)}&fecha=lte.${encodeURIComponent(hasta)}&order=fecha.asc,local_id.asc`),
-  getDashboardKpiLocalDiaTodo: () => sbAll("mv_agendapro_kpi_local_dia?select=*&order=fecha.asc,local_id.asc"),
+  getDashboardKpiLocalMesActual: () => nikiAgendaProCapturar(()=>sbAll("vw_agendapro_kpi_local_mes_actual?select=*&order=ventas.desc")),
+  getDashboardKpiLocalDia: (desde,hasta) => nikiAgendaProCapturar(()=>sbAll(`mv_agendapro_kpi_local_dia?select=*&fecha=gte.${encodeURIComponent(desde)}&fecha=lte.${encodeURIComponent(hasta)}&order=fecha.asc,local_id.asc`)),
+  getDashboardKpiLocalDiaTodo: () => nikiAgendaProCapturar(()=>sbAll("mv_agendapro_kpi_local_dia?select=*&order=fecha.asc,local_id.asc")),
   getClientesCrmScopePage: (filters = {}) => crmScopePage(filters),
   getClientesCrmScopeAll: async (localIds=[]) => {
     const ids=Array.from(new Set((localIds||[]).map(Number).filter(Boolean))).sort((a,b)=>a-b);
@@ -1087,6 +1121,7 @@ const api = {
       const response=await sb(`crm_clientes_scope_cache?select=data,refreshed_at&${query}`);
       const row=Array.isArray(response)?response[0]:null;
       if(Array.isArray(row?.data)) {
+        nikiAgendaProMarcar(row.data,{version:1,fuentes:{crm:{actualizado_en:row.refreshed_at,estado:'ok'}}});
         nikiCrmScopes.set(key, {version:row.refreshed_at, rows:row.data});
         nikiTrimMemoryCache(nikiCrmScopes, 8);
         return row.data;
@@ -6908,7 +6943,7 @@ function Reportes({ data, setData, user, onOpenAgenda, reportRestore, reloadData
   const [savingConfigComisiones, setSavingConfigComisiones] = useState(false);
   const [refreshingComisiones, setRefreshingComisiones] = useState(false);
   const [comisionesReady, setComisionesReady] = useState(false);
-  const [ultimaActualizacionComisiones, setUltimaActualizacionComisiones] = useState(null);
+  const [agendaActualizacionComisiones, setAgendaActualizacionComisiones] = useState(null);
   const [comisionesSinVincularModal, setComisionesSinVincularModal] = useState(false);
   const [comisionGlobalDetalle, setComisionGlobalDetalle] = useState(null);
   const [agendaPendientesComisiones, setAgendaPendientesComisiones] = useState([]);
@@ -7015,7 +7050,7 @@ function Reportes({ data, setData, user, onOpenAgenda, reportRestore, reloadData
           asistencias:[...asistenciasFuera,...nuevasAsistencias],
         };
       });
-      setUltimaActualizacionComisiones(new Date());
+      setAgendaActualizacionComisiones(nikiAgendaProEstadoDe(comisionesRaw));
       setComisionesReady(true);
     } catch(e) {
       notifyToast("No se pudieron actualizar los datos de comisiones: " + (e.message || e), "error");
@@ -8218,7 +8253,7 @@ porcentajeReducido: Number(cfg?.porcentajeReducido || configGeneralComisiones.po
         </div>
       </Modal>}
       <div style={{ display:"flex",justifyContent:"space-between",alignItems:"center",gap:8,flexWrap:"wrap",marginBottom:10,padding:"8px 10px",background:"var(--color-background-secondary)",borderRadius:9 }}>
-        <span style={{fontSize:11,color:"var(--color-text-secondary)"}}>{refreshingComisiones?"Actualizando datos del período...":ultimaActualizacionComisiones?`Datos actualizados a las ${ultimaActualizacionComisiones.toLocaleTimeString("es-AR",{hour:"2-digit",minute:"2-digit"})}`:"Los datos se actualizan automáticamente al abrir el reporte."}</span>
+        <AgendaProUltimaActualizacion estado={agendaActualizacionComisiones} fuentes={['comisiones']} loading={refreshingComisiones}/>
         <Btn size="sm" variant="ghost" onClick={()=>refrescarDatosComisiones()} disabled={refreshingComisiones}>{refreshingComisiones?"Actualizando...":"↻ Actualizar ahora"}</Btn>
       </div>
       {puedeGestionar&&agendaPendientesCantidad>0&&<div style={{display:"flex",alignItems:"center",justifyContent:"space-between",gap:10,flexWrap:"wrap",marginBottom:10,padding:"11px 12px",background:COLORS.amberLight,border:`1px solid ${COLORS.amber}55`,borderRadius:10}}>
@@ -14674,7 +14709,7 @@ function ReporteComisionesSemanalOperativo({ data, setData, user, modalidad='qui
         esSemanal?Promise.resolve([]):sb(`comisiones_quincenales_porcentajes?select=*&periodo=eq.${encodeURIComponent(keyCorte)}`),
         canManage?nikiCommissionConfigEdge('load',esSemanal?'semanal':'quincenal'):Promise.resolve(null)
       ]);
-      setSnapshot({ventas:(items[0]||[]).map(normalizeComision),horarios:(items[1]||[]).map(normalizeHorario),asistencias:(items[2]||[]).map(normalizeAsistencia)});
+      setSnapshot({agendaActualizacion:nikiAgendaProEstadoDe(items[0]),ventas:(items[0]||[]).map(normalizeComision),horarios:(items[1]||[]).map(normalizeHorario),asistencias:(items[2]||[]).map(normalizeAsistencia)});
       const remote=items[7]||null, g=remote?.general||null;
       if(esSemanal&&g){setConfig({...fallback,minimo_estandar:Number(g.minimo_semanal_estandar||0),minimo_premium:Number(g.minimo_semanal_premium_exclusiva||0),minimo_finde_estandar:Number(g.minimo_semanal_estandar_fin_semana??g.minimo_semanal_estandar??0),minimo_finde_premium:Number(g.minimo_semanal_premium_exclusiva_fin_semana??g.minimo_semanal_premium_exclusiva??0),horas_quincenales:Number(g.horas_objetivo_default??36),horas_finde_dia:Number(g.horas_objetivo_fin_semana??10),porcentaje_normal:Number(g.porcentaje_base??40),porcentaje_reducido:Number(g.porcentaje_reducido??35),tardanzas_penalizacion:Number(g.max_llegadas_tarde??2)+1,faltas_no_justificadas:Number(g.max_faltas_no_justificadas??0)});}
       else setConfig({...fallback,...(items[3]||[])[0],...(g||{})});
@@ -14978,6 +15013,7 @@ function ReporteComisionesSemanalOperativo({ data, setData, user, modalidad='qui
     }
     if(NIKI_LIQUIDACIONES_SOLO_LECTURA){notifyToast('Modo local de solo lectura.','error');return;}if(!esSemanal&&!corteValidado)return;if(shown.some(r=>r.congelada&&Number(r.uid)===Number(overrideEdit?.uid))){notifyToast('Reabrí la liquidación antes de modificar recuperaciones.','error');return;}setSaving(true);try{await sb('comisiones_quincenales_recuperaciones?on_conflict=periodo,user_id,fecha_ausencia',{method:'POST',prefer:'resolution=merge-duplicates,return=representation',body:JSON.stringify({periodo:keyCorte,user_id:overrideEdit.uid,fecha_ausencia:overrideEdit.fecha,recuperada:overrideEdit.recuperada,horas_recuperadas:Number(overrideEdit.horas||0),detalle:overrideEdit.detalle||'',confirmado_por_user_id:user.id,confirmado_en:new Date().toISOString()})});setOverrideEdit(null);await load();notifyToast('Recuperación registrada con trazabilidad.','success');}catch(e){notifyToast(e.message||String(e),'error');}finally{setSaving(false);}};
   return <div style={{display:'grid',gap:14}}>
+    <AgendaProUltimaActualizacion estado={snapshot?.agendaActualizacion} fuentes={['comisiones']} loading={loading}/>
     {advancedSettingsOpen&&<NikiCommissionConfigModal modalidad={esSemanal?'semanal':'quincenal'} data={data} onClose={()=>setAdvancedSettingsOpen(false)} onSaved={load} onJornadaSaved={(uid,weekend)=>setData(prev=>prev?({...prev,users:(prev.users||[]).map(u=>Number(u.id)===Number(uid)?{...u,soloFinDeSemana:weekend}:u)}):prev)}/> }
     <Card><div style={{display:'flex',justifyContent:'space-between',alignItems:'start',gap:12,flexWrap:'wrap'}}><div><h2 style={{margin:'0 0 5px',fontSize:22,color:'#72243e'}}>{esSemanal?'Liquidaciones semanales':'Liquidaciones quincenales'}</h2><p style={{margin:0,fontSize:12,color:'var(--color-text-secondary)'}}>{esSemanal?'Liquidaciones por semana, con revisión y registro de ajustes.':'Cálculo independiente del informe semanal vigente. Cada quincena cierra sin arrastres semanales.'}</p></div><div style={{display:'flex',gap:8,flexWrap:'wrap'}}>{canConfigureGlobal&&<Btn variant='secondary' onClick={()=>{setModesDraft(allowedLocals.map(l=>{const r=localModes.find(x=>Number(x.local_id)===Number(l.id));return {local_id:l.id,local_nombre:l.nombre,modalidad:r?.modalidad||'semanal',fecha_desde:r?.fecha_desde||''};}));setModesOpen(true);}}>🏬 Modalidad por local</Btn>}{canConfigureGlobal&&<Btn variant='secondary' onClick={()=>setAdvancedSettingsOpen(true)}>⚙ Configuración {esSemanal?'semanal':'quincenal'} y excepciones</Btn>}</div></div>
       <div style={{display:'grid',gridTemplateColumns:'repeat(auto-fit,minmax(170px,1fr))',gap:12,marginTop:16}}><label style={{fontSize:12,fontWeight:700}}>Mes<input type='month' value={periodo} onChange={e=>setPeriodo(e.target.value)} style={inputStyle}/></label><label style={{fontSize:12,fontWeight:700}}>{esSemanal?'Semana':'Quincena'}{esSemanal?<select value={String(semanaActual?.numero||1)} onChange={e=>setSemana(e.target.value)} style={inputStyle}>{semanasDisponibles.map(w=><option key={w.numero} value={w.numero}>{w.label}</option>)}</select>:<select value={quincena} onChange={e=>setQuincena(e.target.value)} style={inputStyle}><option value='1'>Del 1 al 15</option><option value='2'>Del 16 al último día</option></select>}</label><label style={{fontSize:12,fontWeight:700}}>Sucursal<select value={localId} onChange={e=>setLocalId(e.target.value)} style={inputStyle}><option value='todos'>Todas habilitadas</option>{allowedLocals.map(l=><option key={l.id} value={l.id}>{l.nombre}</option>)}</select></label>{canManage&&<label style={{fontSize:12,fontWeight:700}}>Manicura<select value={manicurasDisponibles.some(r=>String(r.uid)===manicuraFiltro)?manicuraFiltro:'todas'} onChange={e=>setManicuraFiltro(e.target.value)} style={inputStyle}><option value='todas'>Todas las manicuras</option>{manicurasDisponibles.map(r=><option key={`${r.principal}-${r.uid}`} value={r.uid}>{r.nombre}</option>)}</select></label>}<div style={{alignSelf:'end'}}><Btn onClick={load} disabled={loading}>{loading?'Calculando…':'↻ Actualizar'}</Btn></div></div>
@@ -15177,7 +15213,7 @@ function ReporteComisionesQuincenalPiloto({ data, setData, user, modalidad='quin
         esSemanal?Promise.resolve([]):sb(`comisiones_quincenales_porcentajes?select=*&periodo=eq.${encodeURIComponent(keyCorte)}`),
         canManage?nikiCommissionConfigEdge('load',esSemanal?'semanal':'quincenal'):Promise.resolve(null)
       ]);
-      setSnapshot({ventas:(items[0]||[]).map(normalizeComision),horarios:(items[1]||[]).map(normalizeHorario),asistencias:(items[2]||[]).map(normalizeAsistencia)});
+      setSnapshot({agendaActualizacion:nikiAgendaProEstadoDe(items[0]),ventas:(items[0]||[]).map(normalizeComision),horarios:(items[1]||[]).map(normalizeHorario),asistencias:(items[2]||[]).map(normalizeAsistencia)});
       const remote=items[7]||null, g=remote?.general||null;
       if(esSemanal&&g){setConfig({...fallback,minimo_estandar:Number(g.minimo_semanal_estandar||0),minimo_premium:Number(g.minimo_semanal_premium_exclusiva||0),minimo_finde_estandar:Number(g.minimo_semanal_estandar_fin_semana??g.minimo_semanal_estandar??0),minimo_finde_premium:Number(g.minimo_semanal_premium_exclusiva_fin_semana??g.minimo_semanal_premium_exclusiva??0),horas_quincenales:Number(g.horas_objetivo_default??36),horas_finde_dia:Number(g.horas_objetivo_fin_semana??10),porcentaje_normal:Number(g.porcentaje_base??40),porcentaje_reducido:Number(g.porcentaje_reducido??35),tardanzas_penalizacion:Number(g.max_llegadas_tarde??2)+1,faltas_no_justificadas:Number(g.max_faltas_no_justificadas??0)});}
       else setConfig({...fallback,...(items[3]||[])[0],...(g||{})});
@@ -15388,6 +15424,7 @@ function ReporteComisionesQuincenalPiloto({ data, setData, user, modalidad='quin
   const editPct=r=>setPctEdit({uid:r.uid,localId:r.principal,nombre:r.nombre,manual:!!r.manualPctRow,porcentaje:r.pct,motivo:r.manualPctRow?.motivo||'',automatico:r.autoPct});
   const saveRecovery=async()=>{if(esSemanal)return;setSaving(true);try{await sb('comisiones_quincenales_recuperaciones?on_conflict=periodo,user_id,fecha_ausencia',{method:'POST',prefer:'resolution=merge-duplicates,return=representation',body:JSON.stringify({periodo:keyCorte,user_id:overrideEdit.uid,fecha_ausencia:overrideEdit.fecha,recuperada:overrideEdit.recuperada,horas_recuperadas:Number(overrideEdit.horas||0),detalle:overrideEdit.detalle||'',confirmado_por_user_id:user.id,confirmado_en:new Date().toISOString()})});setOverrideEdit(null);await load();notifyToast('Recuperación registrada con trazabilidad.','success');}catch(e){notifyToast(e.message||String(e),'error');}finally{setSaving(false);}};
   return <div style={{display:'grid',gap:14}}>
+    <AgendaProUltimaActualizacion estado={snapshot?.agendaActualizacion} fuentes={['comisiones']} loading={loading}/>
     {advancedSettingsOpen&&<NikiCommissionConfigModal modalidad={esSemanal?'semanal':'quincenal'} data={data} onClose={()=>setAdvancedSettingsOpen(false)} onSaved={load} onJornadaSaved={(uid,weekend)=>setData(prev=>prev?({...prev,users:(prev.users||[]).map(u=>Number(u.id)===Number(uid)?{...u,soloFinDeSemana:weekend}:u)}):prev)}/> }
     <Card><div style={{display:'flex',justifyContent:'space-between',alignItems:'start',gap:12,flexWrap:'wrap'}}><div><h2 style={{margin:'0 0 5px',fontSize:22,color:'#72243e'}}>{esSemanal?'Liquidaciones semanales':'Liquidaciones quincenales'}</h2><p style={{margin:0,fontSize:12,color:'var(--color-text-secondary)'}}>{esSemanal?'Vista semanal de validación, sin edición ni registro de pagos.':'Cálculo independiente del informe semanal vigente. Cada quincena cierra sin arrastres semanales.'}</p></div><div style={{display:'flex',gap:8,flexWrap:'wrap'}}>{canConfigureGlobal&&<Btn variant='secondary' onClick={()=>{setModesDraft(allowedLocals.map(l=>{const r=localModes.find(x=>Number(x.local_id)===Number(l.id));return {local_id:l.id,local_nombre:l.nombre,modalidad:r?.modalidad||'semanal',fecha_desde:r?.fecha_desde||''};}));setModesOpen(true);}}>🏬 Modalidad por local</Btn>}{canConfigureGlobal&&<Btn variant='secondary' onClick={()=>setAdvancedSettingsOpen(true)}>⚙ Configuración {esSemanal?'semanal':'quincenal'} y excepciones</Btn>}</div></div>
       <div style={{display:'grid',gridTemplateColumns:'repeat(auto-fit,minmax(170px,1fr))',gap:12,marginTop:16}}><label style={{fontSize:12,fontWeight:700}}>Mes<input type='month' value={periodo} onChange={e=>setPeriodo(e.target.value)} style={inputStyle}/></label><label style={{fontSize:12,fontWeight:700}}>{esSemanal?'Semana':'Quincena'}{esSemanal?<select value={String(semanaActual?.numero||1)} onChange={e=>setSemana(e.target.value)} style={inputStyle}>{semanasDisponibles.map(w=><option key={w.numero} value={w.numero}>{w.label}</option>)}</select>:<select value={quincena} onChange={e=>setQuincena(e.target.value)} style={inputStyle}><option value='1'>Del 1 al 15</option><option value='2'>Del 16 al último día</option></select>}</label><label style={{fontSize:12,fontWeight:700}}>Sucursal<select value={localId} onChange={e=>setLocalId(e.target.value)} style={inputStyle}><option value='todos'>Todas habilitadas</option>{allowedLocals.map(l=><option key={l.id} value={l.id}>{l.nombre}</option>)}</select></label>{canManage&&<label style={{fontSize:12,fontWeight:700}}>Manicura<select value={manicurasDisponibles.some(r=>String(r.uid)===manicuraFiltro)?manicuraFiltro:'todas'} onChange={e=>setManicuraFiltro(e.target.value)} style={inputStyle}><option value='todas'>Todas las manicuras</option>{manicurasDisponibles.map(r=><option key={r.uid} value={r.uid}>{r.nombre}</option>)}</select></label>}<div style={{alignSelf:'end'}}><Btn onClick={load} disabled={loading}>{loading?'Calculando…':'↻ Actualizar'}</Btn></div></div>
@@ -17869,14 +17906,14 @@ function nikiResultadosCompartir(actor,key,read,{force=false,ttl=45000,context='
 }
 function nikiCargarResultadoGestion(actor,data,desde,hasta,ids,{force=false}={}){
   const scope=[...ids].sort((a,b)=>a-b);
-  return nikiResultadosCompartir(actor,JSON.stringify(['resultado',desde,hasta,scope]),async()=>{
+  return nikiResultadosCompartir(actor,JSON.stringify(['resultado',desde,hasta,scope]),()=>nikiAgendaProCapturar(async()=>{
     const [result,live]=await Promise.all([
       nikiResultadosRequest(actor,{action:'resultados',desde,hasta,local_ids:scope}),
       nikiCargarComisionesResultado(data,desde,hasta,scope)
     ]);
     if(result.comisiones_version!==2)throw new Error('Ejecutá el SQL de resultados y comisiones antes de cargar el tablero.');
     return {...nikiCombinarComisionesResultado(result,live,desde,hasta),consultado_en:new Date().toISOString()};
-  },{force,context:nikiResultadosContextKey(data)});
+  }),{force,context:nikiResultadosContextKey(data)});
 }
 
 
@@ -18748,6 +18785,7 @@ function ResultadosGestion({data,user}){
   const loadHistory=async()=>{
     const request=++historySequence.current;setHistoryBusy(true);setHistoryError('');setHistory(null);setAlertDetail(null);
     try{
+      const agendaActualizacion=await nikiAgendaProLeerEstado();
       const from=dateKey(new Date(year,month-Number(months),1,12));
       const remote=await nikiResultadosRequest(user,{action:'evolucion',desde:from,hasta,local_ids:ids});
       if(!Array.isArray(remote.meses)||!remote.insumos)throw new Error('Publicá la función y ejecutá el SQL del nuevo cuadro de resultados.');
@@ -18759,7 +18797,7 @@ function ResultadosGestion({data,user}){
         result.push({...m,payload:combined,report:nikiBuildResultadoRows(combined,locales,conceptos)});
         await new Promise(resolve=>setTimeout(resolve,0));
       }
-      if(request===historySequence.current)setHistory({meses:result,reglas:remote.reglas||[],fijos:remote.fijos||[]});
+      if(request===historySequence.current)setHistory({meses:result,reglas:remote.reglas||[],fijos:remote.fijos||[],agendaActualizacion});
     }catch(e){if(request===historySequence.current)setHistoryError(e.message);}finally{if(request===historySequence.current)setHistoryBusy(false);}
   };
   const openRules=async()=>{try{setRulesBusy(true);const remote=await nikiResultadosRequest(user,{action:'reglas',local_ids:ids});if(remote.evolucion_alertas_version!==2)throw new Error('Ejecutá el SQL de alertas de evolución para guardar los nuevos límites.');setRulesModal({local_id:historyLocal==='todos'?ids[0]:Number(historyLocal),saved:remote.reglas||[],edits:{}});}catch(e){notifyToast(e.message,'error');}finally{setRulesBusy(false);}};
@@ -18786,7 +18824,7 @@ function ResultadosGestion({data,user}){
         <Btn variant='secondary' onClick={()=>void openExpense()} disabled={busy||expenseBusy||!scopeIds.length}>Agregar gasto</Btn><Btn onClick={()=>setRefresh(x=>x+1)} disabled={busy||expenseBusy}>Actualizar</Btn>
       </div></div><div style={{marginTop:13,fontSize:11,color:'#806774',display:'flex',justifyContent:'space-between',gap:10,flexWrap:'wrap'}}><span>{desde} al {hasta} · Gastos de AgendaPro y NikiOS · Importes antes de adelantos</span>{user.rol==='admin'&&<Btn size='sm' variant='secondary' disabled={saving} onClick={openConfig}>Vincular sucursales de AgendaPro</Btn>}</div>
     </Card>
-    {payload?.consultado_en&&!busy&&<div style={{fontSize:10,color:'#8e7580',textAlign:'right'}}>Datos consultados a las {new Date(payload.consultado_en).toLocaleTimeString('es-AR',{hour:'2-digit',minute:'2-digit',second:'2-digit'})} · Actualizar consulta datos nuevos</div>}
+    <AgendaProUltimaActualizacion estado={nikiAgendaProEstadoDe(payload)} fuentes={['ventas','comisiones','gastos']} loading={busy}/>
     {busy?<NikiSplash fullScreen={false} compact text='Cargando resultados…'/>:error?<Card><p role='alert' style={{color:COLORS.danger}}>{error}</p></Card>:!payload?<Card>Seleccioná un mes y una sucursal con datos disponibles.</Card>:<>
       <div aria-label='Indicadores del período' className='niki-dashboard-kpis' style={{display:'grid',gridTemplateColumns:'repeat(4,minmax(0,1fr))',gap:12}}>
         <DashboardMetricCard icon='💳' label='Ventas' value={fmtMoney(total.ventas||0)} detail={`${locales.length} ${locales.length===1?'sucursal':'sucursales'} · período seleccionado`} accent />
@@ -18822,6 +18860,7 @@ function ResultadosGestion({data,user}){
         {historyError&&<p role='alert' style={{color:COLORS.danger,fontSize:12}}>{historyError}</p>}
         {historyBusy&&<p style={{fontSize:12,color:'#8e7580'}}>Recuperando meses y calculando las comisiones con los mismos criterios del cuadro principal…</p>}
         {!history&&!historyBusy&&<p style={{fontSize:11,color:'#806774',lineHeight:1.6}}>Cargá la evolución para comparar los meses. {canEditExpenseRules?'Podés ajustar los criterios desde Configurar alertas.':'Podés consultar los criterios desde Ver controles.'}</p>}
+        {history&&<AgendaProUltimaActualizacion estado={history.agendaActualizacion} fuentes={['ventas','comisiones','gastos']}/>}
         {history&&<>
           <div style={{display:'flex',gap:8,alignItems:'center',margin:'12px 0',flexWrap:'wrap'}}>
             <label style={{fontSize:12}}>Ver evolución de </label><select aria-label='Sucursal de evolución' value={historyLocal} onChange={e=>{setHistoryLocal(e.target.value);setAlertDetail(null);}} style={inputStyle}><option value='todos'>Total de sucursales seleccionadas</option>{locales.map(l=><option key={l.id} value={l.id}>{l.nombre}</option>)}</select>
@@ -19199,6 +19238,7 @@ const reclamos=actuales.length;
       </div>
     </div>
 
+    <AgendaProUltimaActualizacion estado={nikiAgendaProEstadoDe(diaRows)} fuentes={['dashboard']}/>
     <Card style={{ padding:12,boxShadow:"0 8px 24px rgba(0,0,0,.035)" }}>
       <div className="niki-dashboard-filters" style={{ display:"grid",gridTemplateColumns:"repeat(4,minmax(0,1fr))",gap:10 }}>
         <div><label style={{ display:"block",fontSize:10,fontWeight:800,textTransform:"uppercase",color:"var(--color-text-secondary)",marginBottom:5 }}>Tipo de local</label><Select value={tipo} onChange={setTipo}><option value="todos">Todos</option><option value="propio">Propios</option><option value="franquicia">Franquicias</option></Select></div>
@@ -19588,6 +19628,7 @@ function DashboardManicuras({ data, user }) {
 
   if(loading) return <div style={{ padding:28 }}><Card><p style={{ margin:0 }}>Cargando Dashboard de Manicuras...</p></Card></div>;
   return <div style={{ padding:"20px 22px 34px",maxWidth:1500,margin:"0 auto",display:"grid",gap:13 }}>
+    <AgendaProUltimaActualizacion estado={nikiAgendaProEstadoDe(rawComisiones)} fuentes={["comisiones"]}/>
     <div style={{ display:"flex",justifyContent:"space-between",alignItems:"flex-start",gap:12,flexWrap:"wrap" }}>
       <div><p style={{ margin:"0 0 3px",fontSize:10.5,fontWeight:900,color:COLORS.pinkDark,textTransform:"uppercase",letterSpacing:".07em" }}>Personas · desempeño</p><h2 style={{ margin:0,fontSize:22 }}>Dashboard de Manicuras</h2><p style={{ margin:"4px 0 0",fontSize:11,color:"var(--color-text-secondary)" }}>Producción, productividad, asistencia, fidelización y calidad en una misma vista.</p></div>
       <Btn size="sm" variant="secondary" onClick={load}>↻ Actualizar</Btn>
@@ -19709,6 +19750,7 @@ function normalizeCrmClientColumnOrder(value) {
 
 function ClientesCrm({ data, user }) {
   const [scopeRows,setScopeRows]=useState([]);
+  const [agendaActualizacion,setAgendaActualizacion]=useState(null);
   const [loading,setLoading]=useState(true);
   const [error,setError]=useState("");
   const [estado,setEstado]=useState("TODOS");
@@ -19760,10 +19802,11 @@ function ClientesCrm({ data, user }) {
     setLoading(true);
     setError("");
     try {
-      if(!currentScopeIds.length) { setScopeRows([]); return; }
+      if(!currentScopeIds.length) { setScopeRows([]);setAgendaActualizacion(null); return; }
       // Tanto la red completa como los alcances parciales se sirven desde
       // crm_clientes_scope_cache. Nunca ejecutamos el cálculo pesado al navegar.
       const raw=await api.getClientesCrmScopeAll(currentScopeIds);
+      setAgendaActualizacion(nikiAgendaProEstadoDe(raw));
       const normalized=(raw||[]).map(normalizeClienteCrm);
       // En alcance global no existe "otra sucursal fuera del alcance".
       const finalRows=isFullNetworkScope ? normalized.map(r=>({ ...r, atendidaDespuesOtroLocal:false, ultimaVisitaGlobal:r.ultimaVisitaGlobal||r.ultimaVisita, ultimoLocalGlobal:r.ultimoLocalGlobal||r.localPrincipal })) : normalized;
@@ -19771,7 +19814,7 @@ function ClientesCrm({ data, user }) {
     } catch(e) {
       console.error("CRM scope error",e);
       setError(e?.message || "No se pudo cargar Clientes.");
-      setScopeRows([]);
+      setScopeRows([]);setAgendaActualizacion(null);
     } finally {
       setLoading(false);
     }
@@ -19905,6 +19948,7 @@ function ClientesCrm({ data, user }) {
   };
 
   return <div style={{ display:"flex",flexDirection:"column",gap:12 }}>
+    <AgendaProUltimaActualizacion estado={agendaActualizacion} fuentes={["crm"]}/>
     <div style={{ display:"flex",justifyContent:"space-between",gap:10,alignItems:"flex-start",flexWrap:"wrap" }}>
       <div><h2 style={{ margin:0,fontSize:20,color:COLORS.pinkDark }}>Clientes</h2><p style={{ margin:"4px 0 0",fontSize:11,color:"var(--color-text-secondary)",maxWidth:760 }}>Cartera y recuperación por tus locales. Si una clienta se atendió después en otra sucursal Niki, la seguimos mostrando pero lo indicamos para no confundir una migración interna con una pérdida de la marca.</p></div>
       <Badge color="gray">{new Intl.NumberFormat("es-AR").format(scopeRows.length)} clientas</Badge>
@@ -20244,7 +20288,7 @@ function NikiMisComisiones({ user, data, setData }) {
   const fetchMine=useCallback(async()=>{
     setBusy(true);setError('');
     try {
-      const out=await nikiMisComisionesEdge('load',{periodo});
+      const out=await nikiAgendaProCapturar(()=>nikiMisComisionesEdge('load',{periodo}));
       setResult(out);setBank(out.dato_bancario||'');
     } catch(e){setError(e.message||String(e));} finally{setBusy(false);}
   },[periodo]);
@@ -20345,6 +20389,7 @@ function NikiMisComisiones({ user, data, setData }) {
   const periodPaid=pagos.filter(p=>rows.some(r=>r.key===p.liquidacion_key)).reduce((a,p)=>a+Number(p.importe||0),0);
   const actualLabel=Number.isFinite(totalEstimated)?fmtMoney(totalEstimated):'—';
   return <div style={{display:'flex',flexDirection:'column',gap:12,color:'#513341'}}>
+    <AgendaProUltimaActualizacion estado={nikiAgendaProEstadoDe(result)} fuentes={['comisiones']} loading={busy}/>
     <div style={{...card,display:'flex',justifyContent:'space-between',alignItems:'center',gap:12,flexWrap:'wrap'}}><div><h2 style={{margin:0,color:ui.ink,fontSize:27,letterSpacing:'-.025em'}}>Mis comisiones</h2><div style={{fontSize:12,color:ui.muted,marginTop:4}}>Tus ingresos, liquidaciones y pagos, en un solo lugar.</div></div><div style={{display:'flex',gap:8,flexWrap:'wrap'}}><input type="month" value={periodo} onChange={e=>setPeriodo(e.target.value)} style={{...inputStyle,width:160}}/><select value={localFiltro} onChange={e=>setLocalFiltro(e.target.value)} style={{...inputStyle,width:190}}><option value="todos">Todas las sucursales</option>{locales.map(l=><option key={l.id} value={l.id}>{l.nombre}</option>)}</select>{btn(busy?'Actualizando…':'↻ Actualizar',()=>void fetchMine(),true,busy)}</div></div>
     {error&&<div style={{...card,color:COLORS.danger,background:'#fff3f3'}}>{error}</div>}
     {!result&&busy?<div style={card}>Cargando tus comisiones…</div>:<>
@@ -20951,7 +20996,7 @@ const refreshTimer = window.setInterval(check, 10 * 60 * 1000);
         };
         const cur=sumRange(iso(currentStart),cutoffKey);
         const prev=sumRange(iso(previousStart),iso(previousEnd));
-        if (!cancelled) setHomeKpis({ loading:false,error:"",ventas:cur.ventas,ventasAnt:prev.ventas,visitas:cur.visitas,visitasAnt:prev.visitas,ticket:cur.ticket,ticketAnt:prev.ticket,fechaHasta:cutoffKey });
+        if (!cancelled) setHomeKpis({ loading:false,error:"",ventas:cur.ventas,ventasAnt:prev.ventas,visitas:cur.visitas,visitasAnt:prev.visitas,ticket:cur.ticket,ticketAnt:prev.ticket,fechaHasta:cutoffKey,agendaActualizacion:nikiAgendaProEstadoDe(rows) });
       } catch (e) {
         if (!cancelled) setHomeKpis(prev => ({ ...prev, loading:false, error:e?.message || "No se pudo cargar el resumen." }));
       }
@@ -21303,6 +21348,7 @@ const refreshTimer = window.setInterval(check, 10 * 60 * 1000);
                 <button type="button" onClick={()=>goToSection("clientes_crm")} style={{ border:"1px solid rgba(114,36,62,.12)",background:"transparent",color:"var(--color-text-secondary)",borderRadius:10,padding:"6px 9px",fontSize:10.5,fontWeight:700,cursor:"pointer" }}>Clientes →</button>
               </div>
             </div>
+            <AgendaProUltimaActualizacion estado={homeKpis.agendaActualizacion} fuentes={['dashboard']} loading={homeKpis.loading}/>
             {homeKpis.error ? (
               <div style={{ border:"1px solid rgba(176,75,75,.18)",background:COLORS.dangerLight,borderRadius:14,padding:"11px 13px",fontSize:11.5,color:COLORS.danger }}>No se pudo cargar el resumen ahora. Podés seguir usando Inicio normalmente.</div>
             ) : (
