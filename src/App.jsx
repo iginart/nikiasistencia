@@ -306,6 +306,39 @@ const supabaseRealtime = createClient(SUPABASE_URL, SUPABASE_KEY);
 const nikiSignedFiles = new Map();
 const nikiSignedFilesPending = new Map();
 const nikiPhotoRetryAt = new Map();
+// Una lectura compartida por sesión y por tanda de consultas; sin polling.
+const nikiAgendaProEstados=new Map();
+function nikiAgendaProInvalidarEstado(){nikiAgendaProEstados.clear();}
+function nikiAgendaProMarcar(value,estado){
+  if(value&&typeof value==='object')Object.defineProperty(value,'__nikiAgendaPro',{value:estado,enumerable:!Array.isArray(value),configurable:true});
+  return value;
+}
+function nikiAgendaProEstadoDe(value){return value?.__nikiAgendaPro||null;}
+async function nikiAgendaProLeerEstado(){
+  const key=nikiMemoryActorKey(),cached=nikiAgendaProEstados.get(key),now=Date.now();
+  if(cached&&(cached.pending||now-cached.at<45000))return cached.promise;
+  const entry={pending:true,at:now,promise:null};
+  let timer;
+  entry.promise=Promise.race([sb('rpc/niki_agendapro_actualizacion',{method:'POST',body:'{}'}),new Promise(resolve=>{timer=setTimeout(()=>resolve(null),4000);})]).then(out=>out?.version===1?out:null).catch(()=>null).finally(()=>clearTimeout(timer)).then(out=>{entry.pending=false;entry.at=Date.now();return out;});
+  nikiAgendaProEstados.set(key,entry);nikiTrimMemoryCache(nikiAgendaProEstados,4);return entry.promise;
+}
+async function nikiAgendaProCapturar(read){
+  // Tomar la marca antes de leer los datos evita asignarles una recarga posterior.
+  const estado=await nikiAgendaProLeerEstado();
+  return nikiAgendaProMarcar(await read(),estado);
+}
+function nikiAgendaProFechaHora(value){
+  if(!value||!Number.isFinite(new Date(value).getTime()))return null;
+  return new Intl.DateTimeFormat('es-AR',{timeZone:'America/Argentina/Buenos_Aires',day:'2-digit',month:'2-digit',year:'numeric',hour:'2-digit',minute:'2-digit',hourCycle:'h23'}).format(new Date(value));
+}
+function AgendaProUltimaActualizacion({estado,fuentes=['ventas'],loading=false}){
+  const labels={ventas:'Ventas',dashboard:'Dashboard',comisiones:'Servicios y comisiones',crm:'Clientes',gastos:'Gastos de AgendaPro'};
+  return <div aria-label='Última actualización de AgendaPro' style={{fontSize:10.5,color:'var(--color-text-secondary)',display:'flex',gap:'5px 16px',flexWrap:'wrap',padding:'5px 0'}}>
+    {fuentes.map(key=>{const source=estado?.fuentes?.[key],date=nikiAgendaProFechaHora(source?.actualizado_en);return <span key={key} title={source?.desde&&source?.hasta?`Última carga exitosa: ${source.desde} al ${source.hasta}. Hora de Argentina. Al actualizar el reporte se vuelven a consultar los datos.`:'Hora de Argentina. La hora de consulta del navegador no se usa como fecha de carga.'}>{labels[key]||key} · Última actualización: <strong>{date?`${date} hs`:'Sin fecha registrada'}</strong>{source?.estado==='en_curso'?' · Recarga en curso':source?.estado==='error'?' · La última recarga no se completó':source?.estado==='pendiente'?' · Actualización pendiente':''}</span>;})}
+    {loading&&<span>Consultando datos…</span>}
+  </div>;
+}
+
 const nikiCrmScopes = new Map();
 const nikiCrmScopesPending = new Map();
 
@@ -323,6 +356,7 @@ function clearNikiDownloadCaches() {
   nikiSignedFilesPending.clear();
   nikiPhotoRetryAt.clear();
   nikiCrmScopes.clear();
+  nikiAgendaProInvalidarEstado();
   nikiCrmScopesPending.clear();
   nikiResultadosInvalidarCache();
 }
@@ -335,7 +369,7 @@ const sb = async (path, opts = {}) => {
   if (!res.ok) { const e = await res.text(); throw new Error(e); }
   const text = await res.text();
   const value = text ? JSON.parse(text) : null;
-  if ((opts.method || 'GET').toUpperCase() !== 'GET') nikiResultadosInvalidarCache();
+  if ((opts.method || 'GET').toUpperCase() !== 'GET' && path !== 'rpc/niki_agendapro_actualizacion') nikiResultadosInvalidarCache();
   return value;
 };
 
@@ -1052,7 +1086,7 @@ const api = {
   getComisiones: () => sbAll("comisiones_detalle?select=*&order=fecha_pago.desc,id.desc"),
   getComisionesPeriodo: (periodo) => sbAll(`comisiones_detalle?select=*&periodo=eq.${encodeURIComponent(periodo)}&order=fecha_pago.desc,id.desc`),
   getComisionesRango: (desde,hasta) => sbAll(`comisiones_detalle?select=*&fecha_pago=gte.${encodeURIComponent(desde)}&fecha_pago=lte.${encodeURIComponent(hasta)}&order=fecha_pago.desc,id.desc`),
-  getComisionesAgendaProShadowRango: (desde,hasta) => sbAll(`comisiones_agendapro_shadow?select=*&fecha_pago=gte.${encodeURIComponent(desde)}&fecha_pago=lte.${encodeURIComponent(hasta)}&order=fecha_pago.desc,id.desc`),
+  getComisionesAgendaProShadowRango: (desde,hasta) => nikiAgendaProCapturar(()=>sbAll(`comisiones_agendapro_shadow?select=*&fecha_pago=gte.${encodeURIComponent(desde)}&fecha_pago=lte.${encodeURIComponent(hasta)}&order=fecha_pago.desc,id.desc`)),
   getAgendaComisionesSinVincular: () => sbAll("mv_comisiones_agendapro_no_vinculadas_dia?select=local_id,nombre_local,agendapro_provider_id,profesional_agendapro,fecha_pago,precio_efectivo,cantidad&order=fecha_pago.desc"),
   getAgendaComisionesSinVincularRango: (desde,hasta) => sbAll(`mv_comisiones_agendapro_no_vinculadas_dia?select=local_id,nombre_local,agendapro_provider_id,profesional_agendapro,fecha_pago,precio_efectivo,cantidad&fecha_pago=gte.${encodeURIComponent(desde)}&fecha_pago=lte.${encodeURIComponent(hasta)}&order=fecha_pago.desc`),
   getAgendaProfesionalesNoVinculables: () => sb("agendapro_profesionales_no_vinculables?select=*&order=local_id,profesional_agendapro").catch(()=>[]),
@@ -1063,9 +1097,9 @@ const api = {
   refrescarComisionesAgendaProToday: () => sb("rpc/refrescar_comisiones_agendapro_today", { method:"POST", body:"{}" }),
   refrescarVinculoAgendaProShadow: (localId,providerId,desde,hasta) => sb("rpc/refrescar_vinculo_agendapro_shadow", { method:"POST", body:JSON.stringify({ p_local_id:Number(localId), p_provider_id:Number(providerId), p_desde:desde||null, p_hasta:hasta||null }) }),
   refrescarComisionesAgendaProPendientes: () => sb("rpc/refrescar_comisiones_agendapro_pendientes", { method:"POST", body:"{}" }),
-  getDashboardKpiLocalMesActual: () => sbAll("vw_agendapro_kpi_local_mes_actual?select=*&order=ventas.desc"),
-  getDashboardKpiLocalDia: (desde,hasta) => sbAll(`mv_agendapro_kpi_local_dia?select=*&fecha=gte.${encodeURIComponent(desde)}&fecha=lte.${encodeURIComponent(hasta)}&order=fecha.asc,local_id.asc`),
-  getDashboardKpiLocalDiaTodo: () => sbAll("mv_agendapro_kpi_local_dia?select=*&order=fecha.asc,local_id.asc"),
+  getDashboardKpiLocalMesActual: () => nikiAgendaProCapturar(()=>sbAll("vw_agendapro_kpi_local_mes_actual?select=*&order=ventas.desc")),
+  getDashboardKpiLocalDia: (desde,hasta) => nikiAgendaProCapturar(()=>sbAll(`mv_agendapro_kpi_local_dia?select=*&fecha=gte.${encodeURIComponent(desde)}&fecha=lte.${encodeURIComponent(hasta)}&order=fecha.asc,local_id.asc`)),
+  getDashboardKpiLocalDiaTodo: () => nikiAgendaProCapturar(()=>sbAll("mv_agendapro_kpi_local_dia?select=*&order=fecha.asc,local_id.asc")),
   getClientesCrmScopePage: (filters = {}) => crmScopePage(filters),
   getClientesCrmScopeAll: async (localIds=[]) => {
     const ids=Array.from(new Set((localIds||[]).map(Number).filter(Boolean))).sort((a,b)=>a-b);
@@ -1087,6 +1121,7 @@ const api = {
       const response=await sb(`crm_clientes_scope_cache?select=data,refreshed_at&${query}`);
       const row=Array.isArray(response)?response[0]:null;
       if(Array.isArray(row?.data)) {
+        nikiAgendaProMarcar(row.data,{version:1,fuentes:{crm:{actualizado_en:row.refreshed_at,estado:'ok'}}});
         nikiCrmScopes.set(key, {version:row.refreshed_at, rows:row.data});
         nikiTrimMemoryCache(nikiCrmScopes, 8);
         return row.data;
@@ -6908,7 +6943,7 @@ function Reportes({ data, setData, user, onOpenAgenda, reportRestore, reloadData
   const [savingConfigComisiones, setSavingConfigComisiones] = useState(false);
   const [refreshingComisiones, setRefreshingComisiones] = useState(false);
   const [comisionesReady, setComisionesReady] = useState(false);
-  const [ultimaActualizacionComisiones, setUltimaActualizacionComisiones] = useState(null);
+  const [agendaActualizacionComisiones, setAgendaActualizacionComisiones] = useState(null);
   const [comisionesSinVincularModal, setComisionesSinVincularModal] = useState(false);
   const [comisionGlobalDetalle, setComisionGlobalDetalle] = useState(null);
   const [agendaPendientesComisiones, setAgendaPendientesComisiones] = useState([]);
@@ -7015,7 +7050,7 @@ function Reportes({ data, setData, user, onOpenAgenda, reportRestore, reloadData
           asistencias:[...asistenciasFuera,...nuevasAsistencias],
         };
       });
-      setUltimaActualizacionComisiones(new Date());
+      setAgendaActualizacionComisiones(nikiAgendaProEstadoDe(comisionesRaw));
       setComisionesReady(true);
     } catch(e) {
       notifyToast("No se pudieron actualizar los datos de comisiones: " + (e.message || e), "error");
@@ -8218,7 +8253,7 @@ porcentajeReducido: Number(cfg?.porcentajeReducido || configGeneralComisiones.po
         </div>
       </Modal>}
       <div style={{ display:"flex",justifyContent:"space-between",alignItems:"center",gap:8,flexWrap:"wrap",marginBottom:10,padding:"8px 10px",background:"var(--color-background-secondary)",borderRadius:9 }}>
-        <span style={{fontSize:11,color:"var(--color-text-secondary)"}}>{refreshingComisiones?"Actualizando datos del período...":ultimaActualizacionComisiones?`Datos actualizados a las ${ultimaActualizacionComisiones.toLocaleTimeString("es-AR",{hour:"2-digit",minute:"2-digit"})}`:"Los datos se actualizan automáticamente al abrir el reporte."}</span>
+        <AgendaProUltimaActualizacion estado={agendaActualizacionComisiones} fuentes={['comisiones']} loading={refreshingComisiones}/>
         <Btn size="sm" variant="ghost" onClick={()=>refrescarDatosComisiones()} disabled={refreshingComisiones}>{refreshingComisiones?"Actualizando...":"↻ Actualizar ahora"}</Btn>
       </div>
       {puedeGestionar&&agendaPendientesCantidad>0&&<div style={{display:"flex",alignItems:"center",justifyContent:"space-between",gap:10,flexWrap:"wrap",marginBottom:10,padding:"11px 12px",background:COLORS.amberLight,border:`1px solid ${COLORS.amber}55`,borderRadius:10}}>
@@ -9557,7 +9592,7 @@ function VacacionesCalendario({user,localId,revision,active}){
   const key=JSON.stringify([user.id,user.sessionToken,localId,revision,from,to,refresh]);
   useEffect(()=>{if(!active)return;let valid=true;if(loaded.current?.key===key&&Date.now()-loaded.current.at<60000)return;
     setBusy(true);setError('');setResult(null);setDetail(null);
-    encargadasVacacionesEdge('gantt',{local_id:localId?Number(localId):null,desde:from,hasta:to}).then(r=>{if(!valid)return;if(r.vacaciones_version!==3)throw new Error('Publicá la versión actualizada de encargadas-vacaciones-niki para consultar el calendario.');setResult({...r,key});loaded.current={key,at:Date.now()};}).catch(e=>{if(valid)setError(e.message||String(e));}).finally(()=>{if(valid)setBusy(false);});
+    encargadasVacacionesEdge('gantt',{local_id:localId?Number(localId):null,desde:from,hasta:to}).then(r=>{if(!valid)return;if(r.vacaciones_version!==4)throw new Error('Publicá la versión actualizada de encargadas-vacaciones-niki para consultar el calendario.');setResult({...r,key});loaded.current={key,at:Date.now()};}).catch(e=>{if(valid)setError(e.message||String(e));}).finally(()=>{if(valid)setBusy(false);});
     return()=>{valid=false;};
   },[active,key]);
   const data=result?.key===key?result:null;
@@ -9586,6 +9621,45 @@ function VacacionesCalendario({user,localId,revision,active}){
   </Card>;
 }
 
+function VacacionesSolicitudesTabla({rows,loading,name,localMap,rowProfiles,profileLabel,vacationDays,user,saving,onReview,onEdit,onReject,onCancel,onDelete,scopeKey='',responsibleNamesFor=()=>[]}) {
+  const [search,setSearch]=useState(''),[status,setStatus]=useState('activas'),[profile,setProfile]=useState(''),[from,setFrom]=useState(''),[to,setTo]=useState('');
+  const [sort,setSort]=useState({key:'fecha_inicio',asc:true}),[page,setPage]=useState(1);
+  const normalize=v=>String(v||'').normalize('NFD').replace(/[\u0300-\u036f]/g,'').toLocaleLowerCase('es');
+  const stateName=s=>({solicitada:'Pendiente',aprobada:'Aprobada',rechazada:'Rechazada',cancelada:'Cancelada'}[s]||s);
+  const localName=r=>localMap.get(Number(r.local_id_solicitud))?.nombre||'Casa Matriz';
+  const counts={todas:rows.length,solicitada:rows.filter(r=>r.estado==='solicitada').length,aprobada:rows.filter(r=>r.estado==='aprobada').length,finalizadas:rows.filter(r=>['cancelada','rechazada'].includes(r.estado)).length};
+  const matching=rows.filter(r=>(!search||normalize(name(r.user_id)).includes(normalize(search)))&&(!profile||rowProfiles(r).includes(profile))&&(!from||r.fecha_fin>=from)&&(!to||r.fecha_inicio<=to)&&
+    (status==='todas'||status==='activas'&&['solicitada','aprobada'].includes(r.estado)||status==='finalizadas'&&['rechazada','cancelada'].includes(r.estado)||r.estado===status));
+  const value=(r,k)=>k==='persona'?name(r.user_id):k==='local'?localName(r):k==='puesto'?rowProfiles(r).map(profileLabel).join(' + '):k==='dias'?vacationDays(r.fecha_inicio,r.fecha_fin):k==='estado'?stateName(r.estado):r[k];
+  const ordered=[...matching].sort((a,b)=>{const av=value(a,sort.key),bv=value(b,sort.key),cmp=sort.key==='dias'?av-bv:String(av||'').localeCompare(String(bv||''),'es',{numeric:true,sensitivity:'base'});return (sort.asc?cmp:-cmp)||Number(a.id)-Number(b.id);});
+  const maxPage=Math.max(1,Math.ceil(ordered.length/20)),currentPage=Math.min(page,maxPage),visible=ordered.slice((currentPage-1)*20,currentPage*20);
+  useEffect(()=>setPage(1),[search,status,profile,from,to,sort,scopeKey]);
+  const field={border:'1px solid #e7d5dc',borderRadius:9,padding:'8px 10px',font:'inherit',fontSize:12,background:'#fff',minHeight:36,boxSizing:'border-box'};
+  const label={display:'grid',gap:5,fontSize:10,fontWeight:700,color:'#876b76'};
+  const th={padding:'11px 12px',textAlign:'left',fontSize:10,fontWeight:800,color:'#72243e',background:'#faf3f6',borderBottom:'1px solid #e9d7df',whiteSpace:'nowrap'};
+  const td={padding:'12px',fontSize:12,borderBottom:'1px solid #f0e6ea',verticalAlign:'middle'};
+  const badge=s=>{const colors=s==='aprobada'?['#eaf3de','#487c29']:s==='solicitada'?['#fff0dc','#9d681e']:['#fbecef','#ac5665'];return <span style={{display:'inline-block',minWidth:78,padding:'5px 9px',borderRadius:99,textAlign:'center',fontSize:10,fontWeight:700,background:colors[0],color:colors[1]}}>{stateName(s)}</span>;};
+  const sortColumn=(key,title,right=false)=><th key={key} style={{...th,textAlign:right?'right':'left'}} aria-sort={sort.key===key?(sort.asc?'ascending':'descending'):'none'}><button type='button' aria-label={`Ordenar por ${title}`} onClick={()=>setSort(old=>({key,asc:old.key===key?!old.asc:true}))} style={{border:0,background:'transparent',padding:0,color:'inherit',font:'inherit',cursor:'pointer',fontWeight:800}}>{title} <span style={{opacity:sort.key===key?1:.35}}>{sort.key===key?(sort.asc?'↑':'↓'):'↕'}</span></button></th>;
+  return <div style={{display:'grid',gap:12}}>
+    <div style={{display:'grid',gridTemplateColumns:'repeat(auto-fit,minmax(150px,1fr))',gap:10}}>{[['solicitada','Pendientes'],['aprobada','Aprobadas'],['finalizadas','Canceladas y rechazadas'],['todas','Todas las solicitudes']].map(([key,title])=><button type='button' key={key} onClick={()=>setStatus(key)} aria-pressed={status===key} style={{border:`1px solid ${status===key?'#c987a0':'#ecdee4'}`,background:status===key?'#f8ebf0':'#fff',borderRadius:13,padding:'13px 15px',textAlign:'left',font:'inherit',cursor:'pointer'}}><span style={{display:'block',fontSize:11,color:'#876b76'}}>{title}</span><strong style={{display:'block',fontSize:25,color:'#72243e',marginTop:5}}>{counts[key]}</strong></button>)}</div>
+    <section style={{border:'1px solid #eadfe4',borderRadius:14,overflow:'hidden',background:'#fff'}}>
+      <div style={{padding:'15px 16px',display:'flex',justifyContent:'space-between',alignItems:'center',gap:10,flexWrap:'wrap'}}><div><h3 style={{fontSize:16,color:'#72243e',margin:0}}>Solicitudes de vacaciones</h3><p style={{fontSize:11,color:'#987b87',margin:'5px 0 0'}}>Consultá y gestioná cada solicitud desde una misma vista.</p></div><span style={{fontSize:11,color:'#987b87'}}>{matching.length} de {rows.length} solicitudes</span></div>
+      <div style={{display:'grid',gridTemplateColumns:'repeat(auto-fit,minmax(145px,1fr))',gap:10,padding:'0 16px 15px',alignItems:'end'}}>
+        <label style={label}>Persona<input aria-label='Buscar persona en solicitudes' value={search} onChange={e=>setSearch(e.target.value)} placeholder='Buscar por nombre' style={field}/></label>
+        <label style={label}>Estado<select aria-label='Filtrar solicitudes por estado' value={status} onChange={e=>setStatus(e.target.value)} style={field}>{[['activas','Pendientes y aprobadas'],['todas','Todos los estados'],['solicitada','Pendientes'],['aprobada','Aprobadas'],['rechazada','Rechazadas'],['cancelada','Canceladas'],['finalizadas','Canceladas y rechazadas']].map(([v,l])=><option key={v} value={v}>{l}</option>)}</select></label>
+        <label style={label}>Puesto<select aria-label='Filtrar solicitudes por puesto' value={profile} onChange={e=>setProfile(e.target.value)} style={field}><option value=''>Todos los puestos</option>{['encargada','manicura','casa_matriz'].map(p=><option key={p} value={p}>{profileLabel(p)}</option>)}</select></label>
+        <label style={label}>Vacaciones desde<input aria-label='Vacaciones desde' type='date' value={from} onChange={e=>setFrom(e.target.value)} style={field}/></label>
+        <label style={label}>Vacaciones hasta<input aria-label='Vacaciones hasta' type='date' value={to} onChange={e=>setTo(e.target.value)} style={field}/></label>
+        <button type='button' onClick={()=>{setSearch('');setStatus('activas');setProfile('');setFrom('');setTo('');setSort({key:'fecha_inicio',asc:true});}} style={{...field,cursor:'pointer',color:'#72243e',background:'#f8edf1'}}>Limpiar filtros</button>
+      </div>
+      <div style={{overflowX:'auto'}}><table aria-label='Solicitudes de vacaciones' style={{width:'100%',minWidth:1000,borderCollapse:'collapse'}}><thead><tr>{sortColumn('persona','Persona')}{sortColumn('local','Local')}{sortColumn('puesto','Puesto')}{sortColumn('fecha_inicio','Desde',true)}{sortColumn('fecha_fin','Hasta',true)}{sortColumn('dias','Días',true)}{sortColumn('estado','Estado')}<th style={{...th,minWidth:180,textAlign:'right'}}>Acciones</th></tr></thead><tbody>
+        {loading?<tr><td style={{...td,textAlign:'center',padding:28,color:'#987b87'}} colSpan={8}>Cargando solicitudes…</td></tr>:!visible.length?<tr><td style={{...td,textAlign:'center',padding:28,color:'#987b87'}} colSpan={8}>No hay solicitudes con estos filtros.</td></tr>:visible.map(r=><tr key={r.id} data-vacacion-id={r.id}><td style={{...td,minWidth:180}}><strong style={{color:'#5c3446'}}>{name(r.user_id)}</strong><div style={{fontSize:10,color:'#987b87',marginTop:4}}>Año de vacaciones: {r.anio_vacaciones||r.fecha_inicio.slice(0,4)}</div></td><td style={td}>{localName(r)}{responsibleNamesFor(r.local_id_solicitud).length>0&&<div style={{fontSize:9,color:'#987b87',marginTop:4}}>Responsable CM: {responsibleNamesFor(r.local_id_solicitud).join(', ')}</div>}</td><td style={{...td,fontSize:11}}>{rowProfiles(r).map(profileLabel).join(' + ')}</td><td style={{...td,textAlign:'right',whiteSpace:'nowrap',fontVariantNumeric:'tabular-nums'}}>{r.fecha_inicio.split('-').reverse().join('/')}</td><td style={{...td,textAlign:'right',whiteSpace:'nowrap',fontVariantNumeric:'tabular-nums'}}>{r.fecha_fin.split('-').reverse().join('/')}</td><td style={{...td,textAlign:'right',fontWeight:800,fontVariantNumeric:'tabular-nums'}}>{vacationDays(r.fecha_inicio,r.fecha_fin)}</td><td style={td}>{badge(r.estado)}</td><td style={{...td,minWidth:180}}><div style={{display:'flex',gap:6,justifyContent:'flex-end',whiteSpace:'nowrap'}}>{r.estado==='solicitada'&&r.puede_revisar&&<><Btn size='sm' disabled={saving} onClick={()=>onReview(r)}>Revisar</Btn><Btn size='sm' variant='danger' disabled={saving} onClick={()=>onReject(r)}>Rechazar</Btn></>}{r.estado==='aprobada'&&r.puede_editar&&<Btn size='sm' variant='secondary' disabled={saving} onClick={()=>onEdit(r)}>Editar</Btn>}{r.estado==='solicitada'&&Number(r.user_id)===Number(user.id)&&<Btn size='sm' variant='ghost' disabled={saving} onClick={()=>onCancel(r)}>Cancelar</Btn>}{r.puede_eliminar&&<Btn size='sm' variant='danger' disabled={saving} onClick={()=>onDelete(r)}>Eliminar</Btn>}</div></td></tr>)}
+      </tbody></table></div>
+      <div style={{padding:'12px 16px',display:'flex',justifyContent:'space-between',alignItems:'center',gap:10,flexWrap:'wrap',fontSize:11,color:'#987b87'}}><span>{ordered.length?`${(currentPage-1)*20+1}–${Math.min(currentPage*20,ordered.length)} de ${ordered.length}`:'0 solicitudes'} · Las fechas filtran los períodos que se superponen con el rango.</span><div style={{display:'flex',gap:8,alignItems:'center'}}><Btn size='sm' variant='secondary' disabled={currentPage===1} onClick={()=>setPage(currentPage-1)}>Anterior</Btn><span>{currentPage} / {maxPage}</span><Btn size='sm' variant='secondary' disabled={currentPage===maxPage} onClick={()=>setPage(currentPage+1)}>Siguiente</Btn></div></div>
+    </section>
+  </div>;
+}
+
 function VacacionesEncargadas({ data, user }) {
   const isApprover=["admin","casa_matriz","franquiciado"].includes(user.rol);
   const canRequest=["manicura","encargada","casa_matriz"].includes(user.rol) || isEncargadaOperativa(data,user.id) || getActiveManicuraLocalIds(data,user.id).length>0;
@@ -9596,6 +9670,11 @@ function VacacionesEncargadas({ data, user }) {
   const [requestModal,setRequestModal]=useState(false),[form,setForm]=useState({fechaInicio:"",fechaFin:"",anio:new Date().getFullYear(),observacion:"",localId:""});
   const [approval,setApproval]=useState(null),[approvalDetail,setApprovalDetail]=useState(null),[segments,setSegments]=useState([]),[periodo,setPeriodo]=useState(""),[saving,setSaving]=useState(false);
   const [bulkReplacement,setBulkReplacement]=useState("");
+  const [editFields,setEditFields]=useState({desde:'',hasta:'',anio:'',observacion:''}),[previewKey,setPreviewKey]=useState(''),[previewBusy,setPreviewBusy]=useState(false);
+  const previewSeq=useRef(0);
+  const editing=approval?.estado==='aprobada';
+  const editKey=JSON.stringify([editFields.desde,editFields.hasta,String(editFields.anio),periodo]);
+  const previewReady=!editing||previewKey===editKey;
   const [setupModal,setSetupModal]=useState(false),[setup,setSetup]=useState(null),[setupLoading,setSetupLoading]=useState(false),[quotaDraft,setQuotaDraft]=useState({}),[responsibleDraft,setResponsibleDraft]=useState({});
   const localMap=useMemo(()=>new Map((data.locales||[]).map(l=>[Number(l.id),l])),[data.locales]);
   const name=id=>users.find(u=>Number(u.id)===Number(id))?.nombre||(data.users||[]).find(u=>Number(u.id)===Number(id))?.nombre||"Equipo Niki";
@@ -9604,23 +9683,27 @@ function VacacionesEncargadas({ data, user }) {
   const rowProfiles=r=>Array.isArray(r.perfiles_impactados)&&r.perfiles_impactados.length?r.perfiles_impactados:["encargada"];
   const vacationDays=(a,b)=>{const pa=String(a||"").split("-").map(Number),pb=String(b||"").split("-").map(Number);if(pa.length!==3||pb.length!==3||pa.some(x=>!Number.isFinite(x))||pb.some(x=>!Number.isFinite(x)))return 0;const diff=Date.UTC(pb[0],pb[1]-1,pb[2])-Date.UTC(pa[0],pa[1]-1,pa[2]);return diff>=0?Math.floor(diff/86400000)+1:0;};
   const requestDays=vacationDays(form.fechaInicio,form.fechaFin);
-  const approvalDays=approval?(approvalDetail?.days?.length||vacationDays(approval.fecha_inicio,approval.fecha_fin)):0;
+  const approvalDays=approval?(editing?vacationDays(editFields.desde,editFields.hasta):(approvalDetail?.days?.length||vacationDays(approval.fecha_inicio,approval.fecha_fin))):0;
   const requestLocalIds=useMemo(()=>Array.from(new Set([...getActiveManicuraLocalIds(data,user.id),...getEncargadaOperationalLocalIds(data,user.id)].map(Number).filter(Boolean))),[data,user.id]);
   const requestLocals=(data.locales||[]).filter(l=>requestLocalIds.includes(Number(l.id))&&localActivo(l));
   useEffect(()=>{if(requestLocals.length===1&&!form.localId)setForm(f=>({...f,localId:String(requestLocals[0].id)}));},[requestLocals.length]);
   const load=useCallback(async()=>{const sequence=++loadSequence.current;setLoading(true);setErr("");setRows([]);try{
     const r=await encargadasVacacionesEdge("list",{local_id:localFiltro?Number(localFiltro):null});
     if(sequence!==loadSequence.current)return;
-    if(r.vacaciones_version!==3)throw new Error("Publicá la versión actualizada de encargadas-vacaciones-niki para consultar los permisos, el calendario y la eliminación de solicitudes.");
+    if(r.vacaciones_version!==4)throw new Error("Publicá la versión actualizada de encargadas-vacaciones-niki para consultar los permisos, el calendario y la eliminación de solicitudes.");
     setRows(r.rows||[]);setUsers(r.users||[]);setResponsibles(r.responsibles||[]);setVacationLocals(r.locales||[]);setRevision(n=>n+1);
   }catch(e){if(sequence===loadSequence.current){setErr(e.message||String(e));setRows([]);}}finally{if(sequence===loadSequence.current)setLoading(false);}},[localFiltro,user.id,user.sessionToken]);
   useEffect(()=>{load();return()=>{loadSequence.current++;};},[load]);
   const visibleRows=rows.filter(r=>(r.local_id_solicitud==null||vacationLocals.some(l=>Number(l.id)===Number(r.local_id_solicitud)))&&(!localFiltro||Number(r.local_id_solicitud)===Number(localFiltro)));
   const deleteRequest=async()=>{if(!deleteTarget||saving)return;setSaving(true);try{await encargadasVacacionesEdge("delete",{id:deleteTarget.id});setDeleteTarget(null);await load();notifyToast("Solicitud eliminada.","success");}catch(e){notifyToast(e.message||"No se pudo eliminar la solicitud.","error");}finally{setSaving(false);}};
-  const closeApproval=()=>{setApproval(null);setApprovalDetail(null);setSegments([]);setBulkReplacement("");};
-  const openApproval=async r=>{setSaving(true);try{const d=await encargadasVacacionesEdge("detail",{id:r.id});setApproval(r);setApprovalDetail(d);setPeriodo(r.fecha_inicio.slice(0,7));setBulkReplacement("");setSegments((d.plan||[]).map(p=>({local_id:Number(p.local_id),fecha:p.fecha,hora_desde:String(p.hora_desde).slice(0,5),hora_hasta:String(p.hora_hasta).slice(0,5),reemplazo_user_id:""})));}catch(e){notifyToast(e.message||"No se pudo abrir la solicitud.","error");}finally{setSaving(false);}};
+  const closeApproval=()=>{previewSeq.current++;setApproval(null);setApprovalDetail(null);setSegments([]);setBulkReplacement("");setPreviewKey('');setPreviewBusy(false);};
+  const segmentRows=(d,previous=[])=> (d.plan||[]).map(p=>{const match=x=>Number(x.local_id)===Number(p.local_id)&&x.fecha===p.fecha&&String(x.hora_desde).slice(0,5)===String(p.hora_desde).slice(0,5)&&String(x.hora_hasta).slice(0,5)===String(p.hora_hasta).slice(0,5);const saved=previous.find(match)||(d.segments||[]).find(x=>x.estado!=='cancelada'&&match(x));return {local_id:Number(p.local_id),fecha:p.fecha,hora_desde:String(p.hora_desde).slice(0,5),hora_hasta:String(p.hora_hasta).slice(0,5),reemplazo_user_id:saved?.reemplazo_user_id?String(saved.reemplazo_user_id):''};});
+  const openApproval=async r=>{const seq=++previewSeq.current;setSaving(true);try{const d=await encargadasVacacionesEdge('detail',{id:r.id});if(seq!==previewSeq.current)return;const current=d.row||r,month=current.periodo_liquidacion||current.fecha_inicio.slice(0,7);setApproval(current);setApprovalDetail(d);setPeriodo(month);setEditFields({desde:current.fecha_inicio,hasta:current.fecha_fin,anio:String(current.anio_vacaciones||current.fecha_inicio.slice(0,4)),observacion:current.observacion_resolucion||''});setPreviewKey(JSON.stringify([current.fecha_inicio,current.fecha_fin,String(current.anio_vacaciones||current.fecha_inicio.slice(0,4)),month]));setBulkReplacement('');setSegments(segmentRows(d));}catch(e){notifyToast(e.message||'No se pudo abrir la solicitud.','error');}finally{setSaving(false);}};
+  const previewEdit=async()=>{if(!approval||previewBusy)return;const seq=++previewSeq.current,key=editKey;setPreviewBusy(true);try{const d=await encargadasVacacionesEdge('edit_preview',{id:approval.id,fecha_inicio:editFields.desde,fecha_fin:editFields.hasta,anio_vacaciones:Number(editFields.anio),periodo_liquidacion:periodo,observacion:editFields.observacion});if(seq!==previewSeq.current)return;setApprovalDetail(d);setSegments(old=>segmentRows(d,old));setPreviewKey(key);setBulkReplacement('');}catch(e){if(seq===previewSeq.current)notifyToast(e.message||'No se pudieron revisar los cambios.','error');}finally{if(seq===previewSeq.current)setPreviewBusy(false);}};
+
   const submitRequest=async()=>{try{setSaving(true);if(!form.fechaInicio||!form.fechaFin)throw new Error("Indicá fecha de inicio y fin.");if(user.rol!=="casa_matriz"&&requestLocals.length>1&&!form.localId)throw new Error("Seleccioná el local de referencia.");await encargadasVacacionesEdge("create",{fecha_inicio:form.fechaInicio,fecha_fin:form.fechaFin,anio_vacaciones:Number(form.anio),observacion:form.observacion,local_id_solicitud:form.localId?Number(form.localId):null});setRequestModal(false);setForm({fechaInicio:"",fechaFin:"",anio:new Date().getFullYear(),observacion:"",localId:requestLocals.length===1?String(requestLocals[0].id):""});await load();notifyToast("Solicitud de vacaciones enviada.","success");}catch(e){notifyToast(e.message||"No se pudo enviar la solicitud.","error");}finally{setSaving(false);}};
-  const approve=async()=>{try{setSaving(true);if((approvalDetail?.missing_confirmations||[]).length)throw new Error("Hay días de la solicitud cuya planificación todavía no está confirmada.");if(approvalDetail?.requires_coverage&&segments.some(s=>!s.reemplazo_user_id))throw new Error("Definí un reemplazo para todos los turnos.");await encargadasVacacionesEdge("approve",{id:approval.id,periodo_liquidacion:periodo,segments:segments.map(s=>({...s,reemplazo_user_id:Number(s.reemplazo_user_id)}))});closeApproval();await load();notifyToast("Vacaciones aprobadas.","success");}catch(e){notifyToast(e.message||"No se pudo aprobar.","error");}finally{setSaving(false);}};
+  const approve=async()=>{if(saving||previewBusy)return;try{setSaving(true);if(!previewReady)throw new Error('Revisá los cambios para actualizar cupos y coberturas.');if((approvalDetail?.missing_confirmations||[]).length)throw new Error('Hay días cuya planificación todavía no está confirmada.');if(approvalDetail?.requires_coverage&&segments.some(s=>!s.reemplazo_user_id))throw new Error('Definí un reemplazo para todos los turnos.');await encargadasVacacionesEdge(editing?'update_approved':'approve',{id:approval.id,periodo_liquidacion:periodo,segments:segments.map(s=>({...s,reemplazo_user_id:Number(s.reemplazo_user_id)})),...(editing?{fecha_inicio:editFields.desde,fecha_fin:editFields.hasta,anio_vacaciones:Number(editFields.anio),observacion:editFields.observacion,expected_updated_at:approval.actualizado_en}:{})});closeApproval();await load();notifyToast(editing?'Vacaciones actualizadas.':'Vacaciones aprobadas.','success');}catch(e){notifyToast(e.message||'No se pudo guardar.','error');}finally{setSaving(false);}};
+
   const reject=async r=>{try{setSaving(true);await encargadasVacacionesEdge("reject",{id:r.id});await load();notifyToast("Solicitud rechazada.","success");}catch(e){notifyToast(e.message||"No se pudo rechazar.","error");}finally{setSaving(false);}};
   const cancel=async r=>{try{setSaving(true);await encargadasVacacionesEdge("cancel",{id:r.id});await load();notifyToast("Solicitud cancelada.","success");}catch(e){notifyToast(e.message||"No se pudo cancelar.","error");}finally{setSaving(false);}};
   const badgeColor=s=>s==="aprobada"?"success":s==="rechazada"||s==="cancelada"?"danger":"amber";
@@ -9639,12 +9722,11 @@ function VacacionesEncargadas({ data, user }) {
     <Card style={{padding:12,marginBottom:12}}><div style={{display:'flex',gap:10,alignItems:'center',flexWrap:'wrap'}}><label style={{fontSize:12}}>Local <select aria-label='Filtrar vacaciones por local' value={localFiltro} onChange={e=>{setLocalFiltro(e.target.value);closeApproval();setDeleteTarget(null);}} style={{border:'1px solid #e4d3db',borderRadius:8,padding:'7px 9px',font:'inherit',fontSize:12,marginLeft:6}}><option value=''>Todos mis locales</option>{vacationLocals.map(l=><option key={l.id} value={l.id}>{l.nombre}</option>)}</select></label><div role='tablist' aria-label='Vistas de vacaciones' style={{display:'flex',gap:6}}><button type='button' role='tab' aria-selected={vista==='listado'} onClick={()=>setVista('listado')} style={{border:'1px solid #d9bfc8',background:vista==='listado'?'#f6e9ef':'#fff',color:COLORS.pinkDark,borderRadius:8,padding:'7px 12px',font:'inherit',fontSize:12,cursor:'pointer'}}>Solicitudes</button><button type='button' role='tab' aria-selected={vista==='calendario'} onClick={()=>setVista('calendario')} style={{border:'1px solid #d9bfc8',background:vista==='calendario'?'#f6e9ef':'#fff',color:COLORS.pinkDark,borderRadius:8,padding:'7px 12px',font:'inherit',fontSize:12,cursor:'pointer'}}>Calendario semanal</button></div><Btn size='sm' variant='secondary' onClick={load} disabled={loading}>Actualizar solicitudes</Btn></div></Card>
     <div hidden={vista!=='calendario'}><VacacionesCalendario user={user} localId={localFiltro} revision={revision} active={vista==='calendario'&&!loading}/></div>
     <div hidden={vista!=='listado'}>
-    {isApprover&&<Card style={{padding:12,marginBottom:12}}><div style={{display:"flex",justifyContent:"space-between",gap:8,alignItems:"baseline"}}><strong style={{fontSize:13}}>Pendientes de aprobación</strong><span style={{fontSize:10,color:"var(--color-text-secondary)"}}>{visibleRows.filter(r=>r.estado==="solicitada"&&r.puede_revisar).length} pendiente(s)</span></div><div style={{display:"grid",gap:7,marginTop:8}}>{visibleRows.filter(r=>r.estado==="solicitada"&&r.puede_revisar).map(r=>{const dias=vacationDays(r.fecha_inicio,r.fecha_fin),local=localMap.get(Number(r.local_id_solicitud)),resp=responsibleNamesFor(r.local_id_solicitud);return <div key={r.id} style={{display:"grid",gridTemplateColumns:"minmax(180px,1fr) minmax(190px,1fr) auto auto",gap:8,alignItems:"center",padding:"9px 10px",border:"1px solid rgba(120,120,120,.14)",borderRadius:10}} className="niki-mobile-one-column"><div><strong style={{fontSize:12}}>{name(r.user_id)}</strong><div style={{fontSize:9.5,color:"var(--color-text-secondary)"}}>{rowProfiles(r).map(profileLabel).join(" + ")}{local?` · ${local.nombre}`:" · Casa Matriz"}</div></div><div style={{fontSize:10.5}}>{fmtDate(r.fecha_inicio)} → {fmtDate(r.fecha_fin)} · <strong>{dias} día{dias===1?"":"s"}</strong>{resp.length>0&&<div style={{fontSize:9,color:COLORS.info,marginTop:2}}>Responsable CM: {resp.join(", ")}</div>}</div><Btn size="sm" onClick={()=>openApproval(r)}>Revisar</Btn><Btn size="sm" variant="danger" onClick={()=>reject(r)}>Rechazar</Btn></div>})}{!visibleRows.some(r=>r.estado==="solicitada"&&r.puede_revisar)&&<span style={{fontSize:11,color:"var(--color-text-secondary)"}}>No hay solicitudes pendientes.</span>}</div></Card>}
-    <Card style={{padding:0,overflow:"hidden"}}><div style={{padding:"11px 13px",borderBottom:"1px solid rgba(120,120,120,.12)"}}><strong>Historial</strong></div>{loading?<p style={{padding:13}}>Cargando...</p>:<div>{!visibleRows.length&&<p style={{padding:13,fontSize:12}}>No hay solicitudes para el local seleccionado.</p>}{visibleRows.map(r=>{const dias=vacationDays(r.fecha_inicio,r.fecha_fin),local=localMap.get(Number(r.local_id_solicitud));return <div key={r.id} style={{display:"grid",gridTemplateColumns:"minmax(150px,1fr) minmax(210px,1fr) minmax(130px,.7fr) 110px auto",gap:9,alignItems:"center",padding:"10px 13px",borderTop:"1px solid rgba(120,120,120,.08)"}} className="niki-mobile-one-column"><div><strong style={{fontSize:12}}>{name(r.user_id)}</strong><div style={{fontSize:9.5,color:"var(--color-text-secondary)"}}>{rowProfiles(r).map(profileLabel).join(" + ")}</div></div><span style={{fontSize:11}}>{fmtDate(r.fecha_inicio)} → {fmtDate(r.fecha_fin)} · {dias} día{dias===1?"":"s"}</span><span style={{fontSize:10.5}}>{local?.nombre||"Casa Matriz"}</span><Badge color={badgeColor(r.estado)}>{r.estado}</Badge><div style={{display:"flex",gap:6,flexWrap:"wrap"}}>{r.estado==="solicitada"&&Number(r.user_id)===Number(user.id)&&<Btn size="sm" variant="ghost" disabled={saving} onClick={()=>cancel(r)}>Cancelar</Btn>}{r.puede_eliminar&&<Btn size="sm" variant="danger" disabled={saving} onClick={()=>setDeleteTarget(r)}>Eliminar</Btn>}</div></div>})}</div>}</Card>
+    <VacacionesSolicitudesTabla scopeKey={localFiltro} responsibleNamesFor={responsibleNamesFor} rows={visibleRows} loading={loading} name={name} localMap={localMap} rowProfiles={rowProfiles} profileLabel={profileLabel} vacationDays={vacationDays} user={user} saving={saving} onReview={openApproval} onEdit={openApproval} onReject={reject} onCancel={cancel} onDelete={setDeleteTarget}/>
     </div>
     {deleteTarget&&<Modal title='Eliminar solicitud de vacaciones' onClose={()=>{if(!saving)setDeleteTarget(null);}} width={540}><p style={{fontSize:12,lineHeight:1.6}}>Se eliminará la solicitud pendiente de <strong>{name(deleteTarget.user_id)}</strong> del {fmtDate(deleteTarget.fecha_inicio)} al {fmtDate(deleteTarget.fecha_fin)}. Sólo se permite mientras no tenga una resolución registrada.</p><div style={{display:'flex',gap:8,justifyContent:'flex-end'}}><Btn variant='secondary' disabled={saving} onClick={()=>setDeleteTarget(null)}>Volver</Btn><Btn variant='danger' disabled={saving} onClick={deleteRequest}>{saving?'Eliminando…':'Eliminar solicitud'}</Btn></div></Modal>}
     {requestModal&&<Modal title="Solicitar vacaciones" onClose={()=>setRequestModal(false)} width={560}><div style={{display:"grid",gap:12}}>{user.rol!=="casa_matriz"&&requestLocals.length>0&&<ModalSelect label="Local de referencia" value={form.localId} onChange={v=>setForm(f=>({...f,localId:v}))}><option value="">Seleccionar...</option>{requestLocals.map(l=><option key={l.id} value={l.id}>{l.nombre}</option>)}</ModalSelect>}<div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10}}><ModalInput label="Desde" type="date" value={form.fechaInicio} onChange={v=>setForm(f=>({...f,fechaInicio:v}))}/><ModalInput label="Hasta" type="date" value={form.fechaFin} onChange={v=>setForm(f=>({...f,fechaFin:v}))}/></div>{requestDays>0&&<div style={{display:"flex",alignItems:"center",justifyContent:"space-between",gap:8,padding:"8px 10px",borderRadius:9,background:COLORS.infoLight,color:COLORS.info,fontSize:11}}><span>Duración solicitada</span><strong>{requestDays} día{requestDays===1?"":"s"} corrido{requestDays===1?"":"s"}</strong></div>}<ModalInput label="Año de vacaciones" type="number" value={form.anio} onChange={v=>setForm(f=>({...f,anio:v}))}/><div><label style={{fontSize:12,fontWeight:700}}>Observación</label><textarea value={form.observacion} onChange={e=>setForm(f=>({...f,observacion:e.target.value}))} style={{width:"100%",boxSizing:"border-box",minHeight:76,marginTop:5,border:"1px solid #ddd",borderRadius:8,padding:8}}/></div><div style={{display:"flex",justifyContent:"flex-end",gap:8}}><Btn variant="secondary" onClick={()=>setRequestModal(false)}>Cancelar</Btn><Btn onClick={submitRequest} disabled={saving}>{saving?"Enviando...":"Enviar solicitud"}</Btn></div></div></Modal>}
-    {approval&&approvalDetail&&<Modal title={`Aprobar vacaciones · ${name(approval.user_id)}`} onClose={closeApproval} width={860}><div style={{display:"grid",gap:10}}>{(approvalDetail.missing_confirmations||[]).length>0&&<div style={{padding:8,borderRadius:9,background:COLORS.dangerLight,color:COLORS.danger,fontSize:10.5,fontWeight:700}}>Hay planificación de encargadas sin confirmar dentro del período.</div>}<div style={{display:"grid",gridTemplateColumns:"1fr 175px",gap:10,alignItems:"end"}} className="niki-mobile-one-column"><div><div style={{display:"flex",gap:8,alignItems:"center",flexWrap:"wrap"}}><strong>{fmtDate(approval.fecha_inicio)} → {fmtDate(approval.fecha_fin)}</strong><Badge color="info">{rowProfiles(approval).map(profileLabel).join(" + ")}</Badge><span style={{padding:"3px 8px",borderRadius:999,background:COLORS.infoLight,color:COLORS.info,fontSize:10,fontWeight:800}}>{approvalDays} día{approvalDays===1?"":"s"}</span></div><p style={{margin:"5px 0 0",fontSize:9.5,lineHeight:1.35,color:"var(--color-text-secondary)"}}>El cupo se controla por día y perfil. Para encargadas se mantiene además la cobertura de los turnos confirmados.</p></div><ModalInput label="Mes de liquidación" type="month" value={periodo} onChange={setPeriodo}/></div><div style={{border:"1px solid rgba(120,120,120,.14)",borderRadius:10,overflow:"hidden"}}><div style={{padding:"7px 9px",background:"var(--color-background-secondary)",fontSize:10,fontWeight:800}}>Control de cupos</div><div style={{maxHeight:190,overflowY:"auto"}}>{capacitySummary.map((c,i)=><div key={`${c.fecha}-${c.perfil}-${c.local_id}-${i}`} style={{display:"grid",gridTemplateColumns:"90px 110px 1fr 120px",gap:8,padding:"6px 9px",borderTop:"1px solid rgba(120,120,120,.08)",fontSize:10,alignItems:"center",background:c.excede?COLORS.dangerLight:"#fff"}} className="niki-mobile-one-column"><strong>{fmtDate(c.fecha)}</strong><span>{profileLabel(c.perfil)}</span><span>{c.local_id?localMap.get(Number(c.local_id))?.nombre||"Local":"Casa Matriz"}</span><span style={{fontWeight:800,color:c.excede?COLORS.danger:c.cupo==null?COLORS.amber:COLORS.success}}>{c.cupo==null?"Sin cupo configurado":`${c.proyectado}/${c.cupo}${c.excede?" · EXCEDE":""}`}</span></div>)}</div></div>{approvalDetail.requires_coverage&&<>{segments.length>0&&<div style={{display:"grid",gridTemplateColumns:"1fr 150px",gap:8,alignItems:"end",padding:"8px 9px",border:"1px solid rgba(114,36,62,.12)",borderRadius:9,background:"var(--color-background-secondary)"}} className="niki-mobile-one-column"><div><label style={{fontSize:10,fontWeight:800,display:"block",marginBottom:4}}>Reemplazo masivo</label><Select value={bulkReplacement} onChange={applyBulkReplacement} style={{fontSize:11,padding:"5px 7px"}}><option value="">Seleccionar y aplicar a todos...</option>{(approvalDetail.candidates||[]).map(c=><option key={c.id} value={c.id}>{c.nombre}</option>)}</Select></div><div style={{fontSize:9.5,color:"var(--color-text-secondary)"}}>Después podés cambiar excepciones.</div></div>}<div style={{maxHeight:280,overflowY:"auto",border:segments.length?"1px solid rgba(120,120,120,.14)":"none",borderRadius:9}}>{segments.map((s,i)=>{const local=localMap.get(Number(s.local_id));return <div key={`${s.local_id}-${s.fecha}-${i}`} style={{display:"grid",gridTemplateColumns:"82px minmax(110px,1fr) 88px minmax(155px,190px)",gap:6,alignItems:"center",padding:"5px 7px",borderTop:i?"1px solid rgba(120,120,120,.08)":"none",minHeight:34}} className="niki-mobile-one-column"><span style={{fontSize:10,fontWeight:700}}>{fmtDate(s.fecha)}</span><span style={{fontSize:10}}>{local?.nombre||"Local"}</span><span style={{fontSize:10,whiteSpace:"nowrap"}}>{s.hora_desde}–{s.hora_hasta}</span><Select value={s.reemplazo_user_id||""} onChange={v=>setSegments(prev=>prev.map((x,j)=>j===i?{...x,reemplazo_user_id:v}:x))} style={{fontSize:10.5,padding:"4px 6px"}}><option value="">Seleccionar...</option>{(approvalDetail.candidates||[]).map(c=><option key={c.id} value={c.id}>{c.nombre}</option>)}</Select></div>})}{!segments.length&&<div style={{padding:9,background:COLORS.infoLight,borderRadius:8,fontSize:11}}>No hay turnos confirmados para cubrir.</div>}</div></>}<div style={{display:"flex",justifyContent:"flex-end",gap:8,paddingTop:2}}><Btn variant="secondary" onClick={closeApproval}>Cancelar</Btn><Btn onClick={approve} disabled={saving||hasCapacityError||(approvalDetail.missing_confirmations||[]).length>0}>{saving?"Aprobando...":hasCapacityError?"Sin cupo disponible":"✓ Aprobar vacaciones"}</Btn></div></div></Modal>}
+    {approval&&approvalDetail&&<Modal title={`${editing?"Editar vacaciones aprobadas":"Aprobar vacaciones"} · ${name(approval.user_id)}`} onClose={closeApproval} width={860}><div style={{display:"grid",gap:10}}>{editing&&<div style={{display:'grid',gap:10,padding:12,background:'#fbf4f7',borderRadius:11}}><div style={{fontSize:12,color:COLORS.pinkDark}}>Los cambios conservan la aprobación y quedan registrados. La persona y la sucursal se mantienen.</div><div style={{display:'grid',gridTemplateColumns:'repeat(auto-fit,minmax(150px,1fr))',gap:10}}><ModalInput label='Inicio de vacaciones' type='date' value={editFields.desde} onChange={v=>setEditFields(x=>({...x,desde:v}))}/><ModalInput label='Fin de vacaciones' type='date' value={editFields.hasta} onChange={v=>setEditFields(x=>({...x,hasta:v}))}/><ModalInput label='Año de vacaciones' type='number' value={editFields.anio} onChange={v=>setEditFields(x=>({...x,anio:v}))}/></div><label style={{display:'grid',gap:5,fontSize:11,fontWeight:700}}>Observación de aprobación<textarea aria-label='Observación del cambio de vacaciones' value={editFields.observacion} onChange={e=>setEditFields(x=>({...x,observacion:e.target.value}))} style={{border:'1px solid #e5d2da',borderRadius:8,padding:9,font:'inherit',fontSize:12,minHeight:65}}/></label><div style={{display:'flex',gap:10,alignItems:'center',flexWrap:'wrap'}}><Btn variant='secondary' disabled={saving||previewBusy||!editFields.desde||!editFields.hasta} onClick={previewEdit}>{previewBusy?'Revisando…':'Revisar cambios'}</Btn><span style={{fontSize:11,color:previewReady?COLORS.success:COLORS.amber}}>{previewReady?'Cupos y coberturas revisados.':'Revisá las nuevas fechas antes de guardar.'}</span></div></div>}{(approvalDetail.missing_confirmations||[]).length>0&&<div style={{padding:8,borderRadius:9,background:COLORS.dangerLight,color:COLORS.danger,fontSize:10.5,fontWeight:700}}>Hay planificación de encargadas sin confirmar dentro del período.</div>}<div style={{display:"grid",gridTemplateColumns:"minmax(0,1fr) 210px",gap:10,alignItems:"end"}} className="niki-mobile-one-column"><div><div style={{display:"flex",gap:8,alignItems:"center",flexWrap:"wrap"}}><strong>{fmtDate(editing?editFields.desde:approval.fecha_inicio)} → {fmtDate(editing?editFields.hasta:approval.fecha_fin)}</strong><Badge color="info">{rowProfiles(approval).map(profileLabel).join(" + ")}</Badge><span style={{padding:"3px 8px",borderRadius:999,background:COLORS.infoLight,color:COLORS.info,fontSize:10,fontWeight:800}}>{approvalDays} día{approvalDays===1?"":"s"}</span></div><p style={{margin:"5px 0 0",fontSize:9.5,lineHeight:1.35,color:"var(--color-text-secondary)"}}>El cupo se controla por día y perfil. Para encargadas se mantiene además la cobertura de los turnos confirmados.</p></div><ModalInput label="Mes de liquidación" type="month" value={periodo} onChange={setPeriodo}/></div>{previewReady&&<div style={{border:"1px solid rgba(120,120,120,.14)",borderRadius:10,overflow:"hidden"}}><div style={{padding:"7px 9px",background:"var(--color-background-secondary)",fontSize:10,fontWeight:800}}>Control de cupos</div><div style={{maxHeight:190,overflowY:"auto"}}>{capacitySummary.map((c,i)=><div key={`${c.fecha}-${c.perfil}-${c.local_id}-${i}`} style={{display:"grid",gridTemplateColumns:"90px 110px 1fr 120px",gap:8,padding:"6px 9px",borderTop:"1px solid rgba(120,120,120,.08)",fontSize:10,alignItems:"center",background:c.excede?COLORS.dangerLight:"#fff"}} className="niki-mobile-one-column"><strong>{fmtDate(c.fecha)}</strong><span>{profileLabel(c.perfil)}</span><span>{c.local_id?localMap.get(Number(c.local_id))?.nombre||"Local":"Casa Matriz"}</span><span style={{fontWeight:800,color:c.excede?COLORS.danger:c.cupo==null?COLORS.amber:COLORS.success}}>{c.cupo==null?"Sin cupo configurado":`${c.proyectado}/${c.cupo}${c.excede?" · EXCEDE":""}`}</span></div>)}</div></div>}{previewReady&&approvalDetail.requires_coverage&&<>{segments.length>0&&<div style={{display:"grid",gridTemplateColumns:"1fr 150px",gap:8,alignItems:"end",padding:"8px 9px",border:"1px solid rgba(114,36,62,.12)",borderRadius:9,background:"var(--color-background-secondary)"}} className="niki-mobile-one-column"><div><label style={{fontSize:10,fontWeight:800,display:"block",marginBottom:4}}>Reemplazo masivo</label><Select value={bulkReplacement} onChange={applyBulkReplacement} style={{fontSize:11,padding:"5px 7px"}}><option value="">Seleccionar y aplicar a todos...</option>{(approvalDetail.candidates||[]).map(c=><option key={c.id} value={c.id}>{c.nombre}</option>)}</Select></div><div style={{fontSize:9.5,color:"var(--color-text-secondary)"}}>Después podés cambiar excepciones.</div></div>}<div style={{maxHeight:280,overflowY:"auto",border:segments.length?"1px solid rgba(120,120,120,.14)":"none",borderRadius:9}}>{segments.map((s,i)=>{const local=localMap.get(Number(s.local_id));return <div key={`${s.local_id}-${s.fecha}-${i}`} style={{display:"grid",gridTemplateColumns:"82px minmax(110px,1fr) 88px minmax(155px,190px)",gap:6,alignItems:"center",padding:"5px 7px",borderTop:i?"1px solid rgba(120,120,120,.08)":"none",minHeight:34}} className="niki-mobile-one-column"><span style={{fontSize:10,fontWeight:700}}>{fmtDate(s.fecha)}</span><span style={{fontSize:10}}>{local?.nombre||"Local"}</span><span style={{fontSize:10,whiteSpace:"nowrap"}}>{s.hora_desde}–{s.hora_hasta}</span><Select value={s.reemplazo_user_id||""} onChange={v=>setSegments(prev=>prev.map((x,j)=>j===i?{...x,reemplazo_user_id:v}:x))} style={{fontSize:10.5,padding:"4px 6px"}}><option value="">Seleccionar...</option>{(approvalDetail.candidates||[]).map(c=><option key={c.id} value={c.id}>{c.nombre}</option>)}</Select></div>})}{!segments.length&&<div style={{padding:9,background:COLORS.infoLight,borderRadius:8,fontSize:11}}>No hay turnos confirmados para cubrir.</div>}</div></>}<div style={{display:"flex",justifyContent:"flex-end",gap:8,paddingTop:2}}><Btn variant="secondary" onClick={closeApproval}>Cancelar</Btn><Btn onClick={approve} disabled={saving||previewBusy||!previewReady||hasCapacityError||(approvalDetail.missing_confirmations||[]).length>0||(previewReady&&approvalDetail.requires_coverage&&segments.some(s=>!s.reemplazo_user_id))}>{saving?"Guardando…":hasCapacityError&&previewReady?"Sin cupo disponible":editing?"Guardar cambios":"✓ Aprobar vacaciones"}</Btn></div></div></Modal>}
     {setupModal&&<Modal title="Cupos de vacaciones y responsables" onClose={()=>!setupLoading&&setSetupModal(false)} width={900}><div style={{display:"grid",gap:12}}>{setupLoading&&!setup?<p>Cargando...</p>:setup&&<><div style={{padding:"9px 10px",borderRadius:9,background:COLORS.infoLight,color:COLORS.info,fontSize:11}}>La configuración y la autorización respetan los locales a los que tiene acceso cada perfil. Los responsables de Casa Matriz ordenan el seguimiento.</div>{setup.can_assign_responsibles&&<div style={{display:"grid",gridTemplateColumns:"1fr 130px",gap:10,alignItems:"end",padding:"10px 11px",border:"1px solid rgba(120,120,120,.14)",borderRadius:10}}><div><strong style={{fontSize:12}}>Casa Matriz</strong><p style={{fontSize:10,color:"var(--color-text-secondary)",margin:"3px 0 0"}}>Cantidad máxima de personas de Casa Matriz de vacaciones al mismo tiempo.</p></div><ModalInput label="Cupo" type="number" value={quotaDraft["casa_matriz|cm"]??1} onChange={v=>setQuotaDraft(q=>({...q,["casa_matriz|cm"]:v}))}/></div>}<div style={{maxHeight:430,overflowY:"auto",border:"1px solid rgba(120,120,120,.14)",borderRadius:10}}>{(setup.locals||[]).map(l=><div key={l.id} style={{display:"grid",gridTemplateColumns:"minmax(150px,1fr) 120px 120px minmax(240px,1.4fr)",gap:10,padding:"9px 10px",borderTop:"1px solid rgba(120,120,120,.08)",alignItems:"center"}} className="niki-mobile-one-column"><strong style={{fontSize:12}}>{l.nombre}</strong><ModalInput label="Manicuras" type="number" value={quotaDraft[`manicura|${l.id}`]??1} onChange={v=>setQuotaDraft(q=>({...q,[`manicura|${l.id}`]:v}))}/><ModalInput label="Encargadas" type="number" value={quotaDraft[`encargada|${l.id}`]??1} onChange={v=>setQuotaDraft(q=>({...q,[`encargada|${l.id}`]:v}))}/><div>{setup.can_assign_responsibles?<><label style={{fontSize:10,fontWeight:800}}>Responsables Casa Matriz</label><div style={{display:"flex",gap:5,flexWrap:"wrap",marginTop:4}}>{(setup.casa_matriz_users||[]).map(cm=>{const on=(responsibleDraft[l.id]||[]).includes(Number(cm.id));return <button key={cm.id} type="button" onClick={()=>setResponsibleDraft(d=>({...d,[l.id]:on?(d[l.id]||[]).filter(x=>Number(x)!==Number(cm.id)):[...(d[l.id]||[]),Number(cm.id)]}))} style={{border:`1px solid ${on?COLORS.pink:"#ddd"}`,background:on?COLORS.pinkLight:"#fff",borderRadius:999,padding:"4px 7px",fontSize:9.5,cursor:"pointer"}}>{on?"✓ ":""}{cm.nombre}</button>})}</div></>:<span style={{fontSize:10,color:"var(--color-text-secondary)"}}>Administrado por el franquiciado.</span>}</div></div>)}</div><div style={{display:"flex",justifyContent:"flex-end",gap:8}}><Btn variant="secondary" onClick={()=>setSetupModal(false)}>Cancelar</Btn><Btn onClick={saveSetup} disabled={setupLoading}>{setupLoading?"Guardando...":"Guardar configuración"}</Btn></div></>}</div></Modal>}
   </div>;
 }
@@ -14674,7 +14756,7 @@ function ReporteComisionesSemanalOperativo({ data, setData, user, modalidad='qui
         esSemanal?Promise.resolve([]):sb(`comisiones_quincenales_porcentajes?select=*&periodo=eq.${encodeURIComponent(keyCorte)}`),
         canManage?nikiCommissionConfigEdge('load',esSemanal?'semanal':'quincenal'):Promise.resolve(null)
       ]);
-      setSnapshot({ventas:(items[0]||[]).map(normalizeComision),horarios:(items[1]||[]).map(normalizeHorario),asistencias:(items[2]||[]).map(normalizeAsistencia)});
+      setSnapshot({agendaActualizacion:nikiAgendaProEstadoDe(items[0]),ventas:(items[0]||[]).map(normalizeComision),horarios:(items[1]||[]).map(normalizeHorario),asistencias:(items[2]||[]).map(normalizeAsistencia)});
       const remote=items[7]||null, g=remote?.general||null;
       if(esSemanal&&g){setConfig({...fallback,minimo_estandar:Number(g.minimo_semanal_estandar||0),minimo_premium:Number(g.minimo_semanal_premium_exclusiva||0),minimo_finde_estandar:Number(g.minimo_semanal_estandar_fin_semana??g.minimo_semanal_estandar??0),minimo_finde_premium:Number(g.minimo_semanal_premium_exclusiva_fin_semana??g.minimo_semanal_premium_exclusiva??0),horas_quincenales:Number(g.horas_objetivo_default??36),horas_finde_dia:Number(g.horas_objetivo_fin_semana??10),porcentaje_normal:Number(g.porcentaje_base??40),porcentaje_reducido:Number(g.porcentaje_reducido??35),tardanzas_penalizacion:Number(g.max_llegadas_tarde??2)+1,faltas_no_justificadas:Number(g.max_faltas_no_justificadas??0)});}
       else setConfig({...fallback,...(items[3]||[])[0],...(g||{})});
@@ -14978,6 +15060,7 @@ function ReporteComisionesSemanalOperativo({ data, setData, user, modalidad='qui
     }
     if(NIKI_LIQUIDACIONES_SOLO_LECTURA){notifyToast('Modo local de solo lectura.','error');return;}if(!esSemanal&&!corteValidado)return;if(shown.some(r=>r.congelada&&Number(r.uid)===Number(overrideEdit?.uid))){notifyToast('Reabrí la liquidación antes de modificar recuperaciones.','error');return;}setSaving(true);try{await sb('comisiones_quincenales_recuperaciones?on_conflict=periodo,user_id,fecha_ausencia',{method:'POST',prefer:'resolution=merge-duplicates,return=representation',body:JSON.stringify({periodo:keyCorte,user_id:overrideEdit.uid,fecha_ausencia:overrideEdit.fecha,recuperada:overrideEdit.recuperada,horas_recuperadas:Number(overrideEdit.horas||0),detalle:overrideEdit.detalle||'',confirmado_por_user_id:user.id,confirmado_en:new Date().toISOString()})});setOverrideEdit(null);await load();notifyToast('Recuperación registrada con trazabilidad.','success');}catch(e){notifyToast(e.message||String(e),'error');}finally{setSaving(false);}};
   return <div style={{display:'grid',gap:14}}>
+    <AgendaProUltimaActualizacion estado={snapshot?.agendaActualizacion} fuentes={['comisiones']} loading={loading}/>
     {advancedSettingsOpen&&<NikiCommissionConfigModal modalidad={esSemanal?'semanal':'quincenal'} data={data} onClose={()=>setAdvancedSettingsOpen(false)} onSaved={load} onJornadaSaved={(uid,weekend)=>setData(prev=>prev?({...prev,users:(prev.users||[]).map(u=>Number(u.id)===Number(uid)?{...u,soloFinDeSemana:weekend}:u)}):prev)}/> }
     <Card><div style={{display:'flex',justifyContent:'space-between',alignItems:'start',gap:12,flexWrap:'wrap'}}><div><h2 style={{margin:'0 0 5px',fontSize:22,color:'#72243e'}}>{esSemanal?'Liquidaciones semanales':'Liquidaciones quincenales'}</h2><p style={{margin:0,fontSize:12,color:'var(--color-text-secondary)'}}>{esSemanal?'Liquidaciones por semana, con revisión y registro de ajustes.':'Cálculo independiente del informe semanal vigente. Cada quincena cierra sin arrastres semanales.'}</p></div><div style={{display:'flex',gap:8,flexWrap:'wrap'}}>{canConfigureGlobal&&<Btn variant='secondary' onClick={()=>{setModesDraft(allowedLocals.map(l=>{const r=localModes.find(x=>Number(x.local_id)===Number(l.id));return {local_id:l.id,local_nombre:l.nombre,modalidad:r?.modalidad||'semanal',fecha_desde:r?.fecha_desde||''};}));setModesOpen(true);}}>🏬 Modalidad por local</Btn>}{canConfigureGlobal&&<Btn variant='secondary' onClick={()=>setAdvancedSettingsOpen(true)}>⚙ Configuración {esSemanal?'semanal':'quincenal'} y excepciones</Btn>}</div></div>
       <div style={{display:'grid',gridTemplateColumns:'repeat(auto-fit,minmax(170px,1fr))',gap:12,marginTop:16}}><label style={{fontSize:12,fontWeight:700}}>Mes<input type='month' value={periodo} onChange={e=>setPeriodo(e.target.value)} style={inputStyle}/></label><label style={{fontSize:12,fontWeight:700}}>{esSemanal?'Semana':'Quincena'}{esSemanal?<select value={String(semanaActual?.numero||1)} onChange={e=>setSemana(e.target.value)} style={inputStyle}>{semanasDisponibles.map(w=><option key={w.numero} value={w.numero}>{w.label}</option>)}</select>:<select value={quincena} onChange={e=>setQuincena(e.target.value)} style={inputStyle}><option value='1'>Del 1 al 15</option><option value='2'>Del 16 al último día</option></select>}</label><label style={{fontSize:12,fontWeight:700}}>Sucursal<select value={localId} onChange={e=>setLocalId(e.target.value)} style={inputStyle}><option value='todos'>Todas habilitadas</option>{allowedLocals.map(l=><option key={l.id} value={l.id}>{l.nombre}</option>)}</select></label>{canManage&&<label style={{fontSize:12,fontWeight:700}}>Manicura<select value={manicurasDisponibles.some(r=>String(r.uid)===manicuraFiltro)?manicuraFiltro:'todas'} onChange={e=>setManicuraFiltro(e.target.value)} style={inputStyle}><option value='todas'>Todas las manicuras</option>{manicurasDisponibles.map(r=><option key={`${r.principal}-${r.uid}`} value={r.uid}>{r.nombre}</option>)}</select></label>}<div style={{alignSelf:'end'}}><Btn onClick={load} disabled={loading}>{loading?'Calculando…':'↻ Actualizar'}</Btn></div></div>
@@ -15177,7 +15260,7 @@ function ReporteComisionesQuincenalPiloto({ data, setData, user, modalidad='quin
         esSemanal?Promise.resolve([]):sb(`comisiones_quincenales_porcentajes?select=*&periodo=eq.${encodeURIComponent(keyCorte)}`),
         canManage?nikiCommissionConfigEdge('load',esSemanal?'semanal':'quincenal'):Promise.resolve(null)
       ]);
-      setSnapshot({ventas:(items[0]||[]).map(normalizeComision),horarios:(items[1]||[]).map(normalizeHorario),asistencias:(items[2]||[]).map(normalizeAsistencia)});
+      setSnapshot({agendaActualizacion:nikiAgendaProEstadoDe(items[0]),ventas:(items[0]||[]).map(normalizeComision),horarios:(items[1]||[]).map(normalizeHorario),asistencias:(items[2]||[]).map(normalizeAsistencia)});
       const remote=items[7]||null, g=remote?.general||null;
       if(esSemanal&&g){setConfig({...fallback,minimo_estandar:Number(g.minimo_semanal_estandar||0),minimo_premium:Number(g.minimo_semanal_premium_exclusiva||0),minimo_finde_estandar:Number(g.minimo_semanal_estandar_fin_semana??g.minimo_semanal_estandar??0),minimo_finde_premium:Number(g.minimo_semanal_premium_exclusiva_fin_semana??g.minimo_semanal_premium_exclusiva??0),horas_quincenales:Number(g.horas_objetivo_default??36),horas_finde_dia:Number(g.horas_objetivo_fin_semana??10),porcentaje_normal:Number(g.porcentaje_base??40),porcentaje_reducido:Number(g.porcentaje_reducido??35),tardanzas_penalizacion:Number(g.max_llegadas_tarde??2)+1,faltas_no_justificadas:Number(g.max_faltas_no_justificadas??0)});}
       else setConfig({...fallback,...(items[3]||[])[0],...(g||{})});
@@ -15388,6 +15471,7 @@ function ReporteComisionesQuincenalPiloto({ data, setData, user, modalidad='quin
   const editPct=r=>setPctEdit({uid:r.uid,localId:r.principal,nombre:r.nombre,manual:!!r.manualPctRow,porcentaje:r.pct,motivo:r.manualPctRow?.motivo||'',automatico:r.autoPct});
   const saveRecovery=async()=>{if(esSemanal)return;setSaving(true);try{await sb('comisiones_quincenales_recuperaciones?on_conflict=periodo,user_id,fecha_ausencia',{method:'POST',prefer:'resolution=merge-duplicates,return=representation',body:JSON.stringify({periodo:keyCorte,user_id:overrideEdit.uid,fecha_ausencia:overrideEdit.fecha,recuperada:overrideEdit.recuperada,horas_recuperadas:Number(overrideEdit.horas||0),detalle:overrideEdit.detalle||'',confirmado_por_user_id:user.id,confirmado_en:new Date().toISOString()})});setOverrideEdit(null);await load();notifyToast('Recuperación registrada con trazabilidad.','success');}catch(e){notifyToast(e.message||String(e),'error');}finally{setSaving(false);}};
   return <div style={{display:'grid',gap:14}}>
+    <AgendaProUltimaActualizacion estado={snapshot?.agendaActualizacion} fuentes={['comisiones']} loading={loading}/>
     {advancedSettingsOpen&&<NikiCommissionConfigModal modalidad={esSemanal?'semanal':'quincenal'} data={data} onClose={()=>setAdvancedSettingsOpen(false)} onSaved={load} onJornadaSaved={(uid,weekend)=>setData(prev=>prev?({...prev,users:(prev.users||[]).map(u=>Number(u.id)===Number(uid)?{...u,soloFinDeSemana:weekend}:u)}):prev)}/> }
     <Card><div style={{display:'flex',justifyContent:'space-between',alignItems:'start',gap:12,flexWrap:'wrap'}}><div><h2 style={{margin:'0 0 5px',fontSize:22,color:'#72243e'}}>{esSemanal?'Liquidaciones semanales':'Liquidaciones quincenales'}</h2><p style={{margin:0,fontSize:12,color:'var(--color-text-secondary)'}}>{esSemanal?'Vista semanal de validación, sin edición ni registro de pagos.':'Cálculo independiente del informe semanal vigente. Cada quincena cierra sin arrastres semanales.'}</p></div><div style={{display:'flex',gap:8,flexWrap:'wrap'}}>{canConfigureGlobal&&<Btn variant='secondary' onClick={()=>{setModesDraft(allowedLocals.map(l=>{const r=localModes.find(x=>Number(x.local_id)===Number(l.id));return {local_id:l.id,local_nombre:l.nombre,modalidad:r?.modalidad||'semanal',fecha_desde:r?.fecha_desde||''};}));setModesOpen(true);}}>🏬 Modalidad por local</Btn>}{canConfigureGlobal&&<Btn variant='secondary' onClick={()=>setAdvancedSettingsOpen(true)}>⚙ Configuración {esSemanal?'semanal':'quincenal'} y excepciones</Btn>}</div></div>
       <div style={{display:'grid',gridTemplateColumns:'repeat(auto-fit,minmax(170px,1fr))',gap:12,marginTop:16}}><label style={{fontSize:12,fontWeight:700}}>Mes<input type='month' value={periodo} onChange={e=>setPeriodo(e.target.value)} style={inputStyle}/></label><label style={{fontSize:12,fontWeight:700}}>{esSemanal?'Semana':'Quincena'}{esSemanal?<select value={String(semanaActual?.numero||1)} onChange={e=>setSemana(e.target.value)} style={inputStyle}>{semanasDisponibles.map(w=><option key={w.numero} value={w.numero}>{w.label}</option>)}</select>:<select value={quincena} onChange={e=>setQuincena(e.target.value)} style={inputStyle}><option value='1'>Del 1 al 15</option><option value='2'>Del 16 al último día</option></select>}</label><label style={{fontSize:12,fontWeight:700}}>Sucursal<select value={localId} onChange={e=>setLocalId(e.target.value)} style={inputStyle}><option value='todos'>Todas habilitadas</option>{allowedLocals.map(l=><option key={l.id} value={l.id}>{l.nombre}</option>)}</select></label>{canManage&&<label style={{fontSize:12,fontWeight:700}}>Manicura<select value={manicurasDisponibles.some(r=>String(r.uid)===manicuraFiltro)?manicuraFiltro:'todas'} onChange={e=>setManicuraFiltro(e.target.value)} style={inputStyle}><option value='todas'>Todas las manicuras</option>{manicurasDisponibles.map(r=><option key={r.uid} value={r.uid}>{r.nombre}</option>)}</select></label>}<div style={{alignSelf:'end'}}><Btn onClick={load} disabled={loading}>{loading?'Calculando…':'↻ Actualizar'}</Btn></div></div>
@@ -17869,14 +17953,14 @@ function nikiResultadosCompartir(actor,key,read,{force=false,ttl=45000,context='
 }
 function nikiCargarResultadoGestion(actor,data,desde,hasta,ids,{force=false}={}){
   const scope=[...ids].sort((a,b)=>a-b);
-  return nikiResultadosCompartir(actor,JSON.stringify(['resultado',desde,hasta,scope]),async()=>{
+  return nikiResultadosCompartir(actor,JSON.stringify(['resultado',desde,hasta,scope]),()=>nikiAgendaProCapturar(async()=>{
     const [result,live]=await Promise.all([
       nikiResultadosRequest(actor,{action:'resultados',desde,hasta,local_ids:scope}),
       nikiCargarComisionesResultado(data,desde,hasta,scope)
     ]);
     if(result.comisiones_version!==2)throw new Error('Ejecutá el SQL de resultados y comisiones antes de cargar el tablero.');
     return {...nikiCombinarComisionesResultado(result,live,desde,hasta),consultado_en:new Date().toISOString()};
-  },{force,context:nikiResultadosContextKey(data)});
+  }),{force,context:nikiResultadosContextKey(data)});
 }
 
 
@@ -18748,6 +18832,7 @@ function ResultadosGestion({data,user}){
   const loadHistory=async()=>{
     const request=++historySequence.current;setHistoryBusy(true);setHistoryError('');setHistory(null);setAlertDetail(null);
     try{
+      const agendaActualizacion=await nikiAgendaProLeerEstado();
       const from=dateKey(new Date(year,month-Number(months),1,12));
       const remote=await nikiResultadosRequest(user,{action:'evolucion',desde:from,hasta,local_ids:ids});
       if(!Array.isArray(remote.meses)||!remote.insumos)throw new Error('Publicá la función y ejecutá el SQL del nuevo cuadro de resultados.');
@@ -18759,7 +18844,7 @@ function ResultadosGestion({data,user}){
         result.push({...m,payload:combined,report:nikiBuildResultadoRows(combined,locales,conceptos)});
         await new Promise(resolve=>setTimeout(resolve,0));
       }
-      if(request===historySequence.current)setHistory({meses:result,reglas:remote.reglas||[],fijos:remote.fijos||[]});
+      if(request===historySequence.current)setHistory({meses:result,reglas:remote.reglas||[],fijos:remote.fijos||[],agendaActualizacion});
     }catch(e){if(request===historySequence.current)setHistoryError(e.message);}finally{if(request===historySequence.current)setHistoryBusy(false);}
   };
   const openRules=async()=>{try{setRulesBusy(true);const remote=await nikiResultadosRequest(user,{action:'reglas',local_ids:ids});if(remote.evolucion_alertas_version!==2)throw new Error('Ejecutá el SQL de alertas de evolución para guardar los nuevos límites.');setRulesModal({local_id:historyLocal==='todos'?ids[0]:Number(historyLocal),saved:remote.reglas||[],edits:{}});}catch(e){notifyToast(e.message,'error');}finally{setRulesBusy(false);}};
@@ -18786,7 +18871,7 @@ function ResultadosGestion({data,user}){
         <Btn variant='secondary' onClick={()=>void openExpense()} disabled={busy||expenseBusy||!scopeIds.length}>Agregar gasto</Btn><Btn onClick={()=>setRefresh(x=>x+1)} disabled={busy||expenseBusy}>Actualizar</Btn>
       </div></div><div style={{marginTop:13,fontSize:11,color:'#806774',display:'flex',justifyContent:'space-between',gap:10,flexWrap:'wrap'}}><span>{desde} al {hasta} · Gastos de AgendaPro y NikiOS · Importes antes de adelantos</span>{user.rol==='admin'&&<Btn size='sm' variant='secondary' disabled={saving} onClick={openConfig}>Vincular sucursales de AgendaPro</Btn>}</div>
     </Card>
-    {payload?.consultado_en&&!busy&&<div style={{fontSize:10,color:'#8e7580',textAlign:'right'}}>Datos consultados a las {new Date(payload.consultado_en).toLocaleTimeString('es-AR',{hour:'2-digit',minute:'2-digit',second:'2-digit'})} · Actualizar consulta datos nuevos</div>}
+    <AgendaProUltimaActualizacion estado={nikiAgendaProEstadoDe(payload)} fuentes={['ventas','comisiones','gastos']} loading={busy}/>
     {busy?<NikiSplash fullScreen={false} compact text='Cargando resultados…'/>:error?<Card><p role='alert' style={{color:COLORS.danger}}>{error}</p></Card>:!payload?<Card>Seleccioná un mes y una sucursal con datos disponibles.</Card>:<>
       <div aria-label='Indicadores del período' className='niki-dashboard-kpis' style={{display:'grid',gridTemplateColumns:'repeat(4,minmax(0,1fr))',gap:12}}>
         <DashboardMetricCard icon='💳' label='Ventas' value={fmtMoney(total.ventas||0)} detail={`${locales.length} ${locales.length===1?'sucursal':'sucursales'} · período seleccionado`} accent />
@@ -18822,6 +18907,7 @@ function ResultadosGestion({data,user}){
         {historyError&&<p role='alert' style={{color:COLORS.danger,fontSize:12}}>{historyError}</p>}
         {historyBusy&&<p style={{fontSize:12,color:'#8e7580'}}>Recuperando meses y calculando las comisiones con los mismos criterios del cuadro principal…</p>}
         {!history&&!historyBusy&&<p style={{fontSize:11,color:'#806774',lineHeight:1.6}}>Cargá la evolución para comparar los meses. {canEditExpenseRules?'Podés ajustar los criterios desde Configurar alertas.':'Podés consultar los criterios desde Ver controles.'}</p>}
+        {history&&<AgendaProUltimaActualizacion estado={history.agendaActualizacion} fuentes={['ventas','comisiones','gastos']}/>}
         {history&&<>
           <div style={{display:'flex',gap:8,alignItems:'center',margin:'12px 0',flexWrap:'wrap'}}>
             <label style={{fontSize:12}}>Ver evolución de </label><select aria-label='Sucursal de evolución' value={historyLocal} onChange={e=>{setHistoryLocal(e.target.value);setAlertDetail(null);}} style={inputStyle}><option value='todos'>Total de sucursales seleccionadas</option>{locales.map(l=><option key={l.id} value={l.id}>{l.nombre}</option>)}</select>
@@ -19199,6 +19285,7 @@ const reclamos=actuales.length;
       </div>
     </div>
 
+    <AgendaProUltimaActualizacion estado={nikiAgendaProEstadoDe(diaRows)} fuentes={['dashboard']}/>
     <Card style={{ padding:12,boxShadow:"0 8px 24px rgba(0,0,0,.035)" }}>
       <div className="niki-dashboard-filters" style={{ display:"grid",gridTemplateColumns:"repeat(4,minmax(0,1fr))",gap:10 }}>
         <div><label style={{ display:"block",fontSize:10,fontWeight:800,textTransform:"uppercase",color:"var(--color-text-secondary)",marginBottom:5 }}>Tipo de local</label><Select value={tipo} onChange={setTipo}><option value="todos">Todos</option><option value="propio">Propios</option><option value="franquicia">Franquicias</option></Select></div>
@@ -19588,6 +19675,7 @@ function DashboardManicuras({ data, user }) {
 
   if(loading) return <div style={{ padding:28 }}><Card><p style={{ margin:0 }}>Cargando Dashboard de Manicuras...</p></Card></div>;
   return <div style={{ padding:"20px 22px 34px",maxWidth:1500,margin:"0 auto",display:"grid",gap:13 }}>
+    <AgendaProUltimaActualizacion estado={nikiAgendaProEstadoDe(rawComisiones)} fuentes={["comisiones"]}/>
     <div style={{ display:"flex",justifyContent:"space-between",alignItems:"flex-start",gap:12,flexWrap:"wrap" }}>
       <div><p style={{ margin:"0 0 3px",fontSize:10.5,fontWeight:900,color:COLORS.pinkDark,textTransform:"uppercase",letterSpacing:".07em" }}>Personas · desempeño</p><h2 style={{ margin:0,fontSize:22 }}>Dashboard de Manicuras</h2><p style={{ margin:"4px 0 0",fontSize:11,color:"var(--color-text-secondary)" }}>Producción, productividad, asistencia, fidelización y calidad en una misma vista.</p></div>
       <Btn size="sm" variant="secondary" onClick={load}>↻ Actualizar</Btn>
@@ -19709,6 +19797,7 @@ function normalizeCrmClientColumnOrder(value) {
 
 function ClientesCrm({ data, user }) {
   const [scopeRows,setScopeRows]=useState([]);
+  const [agendaActualizacion,setAgendaActualizacion]=useState(null);
   const [loading,setLoading]=useState(true);
   const [error,setError]=useState("");
   const [estado,setEstado]=useState("TODOS");
@@ -19760,10 +19849,11 @@ function ClientesCrm({ data, user }) {
     setLoading(true);
     setError("");
     try {
-      if(!currentScopeIds.length) { setScopeRows([]); return; }
+      if(!currentScopeIds.length) { setScopeRows([]);setAgendaActualizacion(null); return; }
       // Tanto la red completa como los alcances parciales se sirven desde
       // crm_clientes_scope_cache. Nunca ejecutamos el cálculo pesado al navegar.
       const raw=await api.getClientesCrmScopeAll(currentScopeIds);
+      setAgendaActualizacion(nikiAgendaProEstadoDe(raw));
       const normalized=(raw||[]).map(normalizeClienteCrm);
       // En alcance global no existe "otra sucursal fuera del alcance".
       const finalRows=isFullNetworkScope ? normalized.map(r=>({ ...r, atendidaDespuesOtroLocal:false, ultimaVisitaGlobal:r.ultimaVisitaGlobal||r.ultimaVisita, ultimoLocalGlobal:r.ultimoLocalGlobal||r.localPrincipal })) : normalized;
@@ -19771,7 +19861,7 @@ function ClientesCrm({ data, user }) {
     } catch(e) {
       console.error("CRM scope error",e);
       setError(e?.message || "No se pudo cargar Clientes.");
-      setScopeRows([]);
+      setScopeRows([]);setAgendaActualizacion(null);
     } finally {
       setLoading(false);
     }
@@ -19905,6 +19995,7 @@ function ClientesCrm({ data, user }) {
   };
 
   return <div style={{ display:"flex",flexDirection:"column",gap:12 }}>
+    <AgendaProUltimaActualizacion estado={agendaActualizacion} fuentes={["crm"]}/>
     <div style={{ display:"flex",justifyContent:"space-between",gap:10,alignItems:"flex-start",flexWrap:"wrap" }}>
       <div><h2 style={{ margin:0,fontSize:20,color:COLORS.pinkDark }}>Clientes</h2><p style={{ margin:"4px 0 0",fontSize:11,color:"var(--color-text-secondary)",maxWidth:760 }}>Cartera y recuperación por tus locales. Si una clienta se atendió después en otra sucursal Niki, la seguimos mostrando pero lo indicamos para no confundir una migración interna con una pérdida de la marca.</p></div>
       <Badge color="gray">{new Intl.NumberFormat("es-AR").format(scopeRows.length)} clientas</Badge>
@@ -20230,10 +20321,148 @@ function ConsultaPreciosVigentes({ data, user, soloComisiones=false }) {
 
 
 // ── APP PRINCIPAL ──────────────────────────────────────────────────
+function nikiMisComisionesPeriodos({periodo,hoy,servicios=[],liquidaciones=[],modalidades=[],locales=[],asignaciones=[],actividad=[],localFiltro='todos',localLegacy=null}) {
+  const day=x=>String(x||'').slice(0,10);
+  const shift=(key,n)=>{const d=new Date(`${key}T12:00:00Z`);d.setUTCDate(d.getUTCDate()+n);return d.toISOString().slice(0,10);};
+  const week=key=>{const d=new Date(`${key}T12:00:00Z`),w=d.getUTCDay();return shift(key,w===0?-6:1-w);};
+  const monthEnd=key=>new Date(Date.UTC(Number(key.slice(0,4)),Number(key.slice(5,7)),0)).toISOString().slice(0,10);
+  if(!/^\d{4}-\d{2}$/.test(periodo)||!/^\d{4}-\d{2}-\d{2}$/.test(hoy))return {actuales:[],pendientes:[],validados:[]};
+  const first=`${periodo}-01`,last=monthEnd(periodo);
+  const allowed=id=>Number(id)>0&&(localFiltro==='todos'||String(id)===String(localFiltro));
+  const names=new Map(locales.map(l=>[Number(l.id),l.nombre]));
+  const modeAt=(id,date)=>{
+    const config=modalidades.filter(c=>Number(c.local_id??c.localId)===id&&day(c.fecha_desde??c.fechaDesde??'0000-01-01')<=date)
+      .sort((a,b)=>String(b.fecha_desde??b.fechaDesde??'').localeCompare(String(a.fecha_desde??a.fechaDesde??'')))[0];
+    return String(config?.modalidad||'semanal').toLowerCase()==='quincenal'?'quincenal':'semanal';
+  };
+  const range=(id,date)=>{
+    const modalidad=modeAt(id,date);
+    if(modalidad==='quincenal'){const prefix=date.slice(0,7),one=Number(date.slice(8))<=15;return {modalidad,desde:`${prefix}-${one?'01':'16'}`,hasta:one?`${prefix}-15`:monthEnd(prefix)};}
+    const desde=week(date);return {modalidad,desde,hasta:shift(desde,5)};
+  };
+  const keyOf=(id,r)=>`${id}|${r.modalidad}|${r.desde}|${r.hasta}`;
+  // Elegir siempre la última versión, incluida una reapertura posterior a validar.
+  const latest=new Map();
+  for(const row of liquidaciones){
+    const id=Number(row.local_id);if(!allowed(id))continue;
+    const normalized={...row,desde:day(row.desde),hasta:day(row.hasta),modalidad:String(row.modalidad).toLowerCase()};
+    if(!normalized.desde||!normalized.hasta)continue;
+    const k=keyOf(id,normalized),old=latest.get(k);
+    if(!old||Number(row.version||0)>Number(old.version||0)||(Number(row.version||0)===Number(old.version||0)&&Number(row.id||String(row.key||'').split(':')[1]||0)>Number(old.id||String(old.key||'').split(':')[1]||0)))latest.set(k,normalized);
+  }
+  const groups=new Map();
+  const add=(id,r)=>{
+    const key=keyOf(id,r);if(!groups.has(key))groups.set(key,{...r,key,localId:id,nombre:names.get(id)||`Local ${id}`,services:[],liquidacion:latest.get(key)||null});
+    return groups.get(key);
+  };
+  for(const row of latest.values())add(Number(row.local_id),row);
+  for(const service of servicios){
+    const id=Number(service.local_id),date=day(service.fecha_pago);if(!allowed(id)||!date||date>hoy)continue;
+    const expected=range(id,date);
+    // Un corte ya existente mantiene su rango/modalidad aunque luego cambie la configuración.
+    const candidates=[...latest.values()].filter(r=>Number(r.local_id)===id&&date>=r.desde&&date<=r.hasta);
+    const saved=candidates.find(r=>r.modalidad===expected.modalidad)||candidates[0];
+    const p=add(id,saved||expected);p.services.push({...service,fecha_pago:date});
+  }
+  for(const event of actividad){const id=Number(event.local_id),date=day(event.fecha);if(allowed(id)&&date&&date<=hoy)add(id,range(id,date));}
+  const currentIds=new Set(asignaciones.filter(a=>day(a.fecha_inicio)<=hoy&&(!a.fecha_fin||day(a.fecha_fin)>=hoy)).map(a=>Number(a.local_id)));
+  if(!asignaciones.length&&Number(localLegacy)>0)currentIds.add(Number(localLegacy));
+  // Conservar también los locales con actividad del período actual aunque no haya asignación legacy.
+  for(const s of servicios){const id=Number(s.local_id),date=day(s.fecha_pago),r=range(id,hoy);if(date>=r.desde&&date<=hoy)currentIds.add(id);}
+  for(const id of currentIds){if(allowed(id)&&first<=hoy&&last>=hoy)add(id,range(id,hoy));}
+  const result={actuales:[],pendientes:[],validados:[]};
+  for(const p of groups.values()){
+    const cycleEnd=p.modalidad==='semanal'?shift(p.desde,6):p.hasta;
+    if(p.hasta<first||p.desde>last||p.desde>hoy)continue;
+    p.validada=p.liquidacion?.estado==='revisada';
+    p.incompleto=p.services.some(s=>s.precio==null||s.comision==null);
+    p.referencia=p.services.reduce((sum,s)=>sum+Number(s.comision||0),0);
+    p.total=p.validada?Number(p.liquidacion.total||0):p.referencia;
+    if(p.desde<=hoy&&hoy<=cycleEnd)result.actuales.push(p);
+    else if(p.validada)result.validados.push(p);
+    else result.pendientes.push(p);
+  }
+  for(const list of Object.values(result))list.sort((a,b)=>b.desde.localeCompare(a.desde)||a.nombre.localeCompare(b.nombre,'es'));
+  return result;
+}
+
+function nikiMisComisionesConAjustes(result,periodo,hoy,user,localFiltro='todos') {
+  const inputs=result?.calculo,uid=Number(user.id),services=result?.servicios||[],hist=result?.asignaciones||[];
+  const inferredLocal=(id,date)=>{
+    if(Number(id))return Number(id);
+    const ids=[...new Set(hist.filter(h=>h.fecha_inicio<=date&&(!h.fecha_fin||h.fecha_fin>=date)).map(h=>Number(h.local_id)))];
+    return ids.length===1?ids[0]:!hist.length?Number(result?.local_id||user.localId||0):0;
+  };
+  const activity=[...(result?.horarios||[]).filter(h=>h.trabaja).map(h=>({local_id:h.local_id,fecha:h.fecha})),
+    ...(inputs?.adelantos||[]).map(a=>({local_id:a.local_id,fecha:a.fecha_descuento||a.fecha})),
+    ...(inputs?.garantias||[]).map(g=>({local_id:g.local_id,fecha:g.fecha_reparacion}))]
+    .map(x=>({...x,local_id:inferredLocal(x.local_id,x.fecha)}));
+  const groups=nikiMisComisionesPeriodos({periodo,hoy,servicios:services,liquidaciones:result?.liquidaciones||[],
+    modalidades:result?.modalidades||[],locales:result?.locales||[],asignaciones:hist,actividad:activity,localLegacy:result?.local_id??user.localId});
+  const all=[...groups.actuales,...groups.pendientes,...groups.validados];
+  const modes=[...(result?.modalidades||[])].sort((a,b)=>String(b.fecha_desde||'').localeCompare(String(a.fecha_desde||'')));
+  const data={users:[{...user,id:uid,nombre:inputs?.persona?.nombre||user.nombre,localId:inputs?.persona?.local_id??user.localId,soloFinDeSemana:inputs?.persona?.solo_fin_de_semana===true}],
+    locales:result?.locales||[],manicuraHistorialLocales:hist.map(h=>normalizeManicuraHistorialLocal({...h,user_id:uid})),
+    usuarioHistorialLaboral:(inputs?.historial_laboral||[]).map(h=>({userId:uid,fechaInicio:h.fecha_inicio,fechaFin:h.fecha_fin})),
+    adelantos:(inputs?.adelantos||[]).map(normalizeAdelanto),garantias:(inputs?.garantias||[]).map(normalizeGarantia)};
+  const calculated=new Map(),merged=new Set();
+  for(const p of all){
+    p.localIds=[p.localId];
+    if(p.validada){p.calculo=null;continue;}
+    const remote=inputs?.[p.modalidad];
+    if(!remote?.general){p.incompleto=true;p.errorCalculo='Falta actualizar los datos de cálculo de esta liquidación.';continue;}
+    const key=`${p.modalidad}|${p.desde}|${p.hasta}`;
+    if(!calculated.has(key)){
+      const related=all.filter(g=>g.modalidad===p.modalidad&&g.desde===p.desde&&g.hasta===p.hasta);
+      const ids=new Set(related.map(g=>g.localId));
+      const inRange=(rows,date)=>(rows||[]).filter(x=>String(x[date]||'').slice(0,10)>=p.desde&&String(x[date]||'').slice(0,10)<=p.hasta);
+      const ventas=inRange(services,'fecha_pago').filter(s=>ids.has(Number(s.local_id))&&s.fecha_pago<=hoy).map(s=>normalizeComision({...s,user_id:uid}));
+      const horarios=inRange(result?.horarios,'fecha').filter(h=>!Number(h.local_id)||ids.has(Number(h.local_id))).map(h=>normalizeHorario({...h,user_id:uid}));
+      const asistencias=inRange(result?.asistencias,'fecha').filter(a=>(!Number(a.local_id)||ids.has(Number(a.local_id)))&&a.fecha<=hoy).map(a=>normalizeAsistencia({...a,user_id:uid}));
+      // Un movimiento sin servicios también integra el cálculo, sin inventar horas trabajadas.
+      for(const id of ids)if(!ventas.some(v=>Number(v.localId)===id)&&!horarios.some(h=>Number(h.localId)===id))horarios.push({userId:uid,localId:id,fecha:p.desde,trabaja:false,entrada:'',salida:''});
+      ventas.sort((a,b)=>String(b.fechaPago).localeCompare(String(a.fechaPago))||Number(b.id||0)-Number(a.id||0));
+      const g=remote.general,weekly=p.modalidad==='semanal';
+      const config=weekly?{minimo_estandar:Number(g.minimo_semanal_estandar||0),minimo_premium:Number(g.minimo_semanal_premium_exclusiva||0),
+        minimo_finde_estandar:Number(g.minimo_semanal_estandar_fin_semana??g.minimo_semanal_estandar??0),minimo_finde_premium:Number(g.minimo_semanal_premium_exclusiva_fin_semana??g.minimo_semanal_premium_exclusiva??0),
+        horas_quincenales:Number(g.horas_objetivo_default??36),horas_finde_dia:Number(g.horas_objetivo_fin_semana??10),porcentaje_normal:Number(g.porcentaje_base??40),porcentaje_reducido:Number(g.porcentaje_reducido??35),
+        tardanzas_penalizacion:Number(g.max_llegadas_tarde??2)+1,faltas_no_justificadas:Number(g.max_faltas_no_justificadas??0)}:g;
+      const periodKey=`${p.desde.slice(0,7)}-${p.desde.slice(8)==='01'?1:2}`;
+      const weekPct=(remote.porcentajes||[]).filter(x=>x.desde===p.desde&&x.hasta===p.hasta),weekRec=(remote.recuperaciones||[]).filter(x=>x.desde===p.desde&&x.hasta===p.hasta);
+      const percentages=Object.fromEntries(weekPct.map(x=>[`${x.local_id}|${uid}`,x]));
+      const calculator=weekly?nikiCalcularCostoSemanal:nikiCalcularCostoQuincenal;
+      calculated.set(key,calculator({snapshot:{ventas,horarios,asistencias},data,config,personalConfigRows:remote.excepciones||[],localModes:modes,
+        desde:p.desde,hasta:p.hasta,keyCorte:periodKey,esSemanal:weekly,
+        weeklyPilotData:{porcentajes:percentages,recuperaciones:weekRec},pctOverrides:remote.porcentajes||[],savedOverrides:remote.recuperaciones||[]}));
+    }
+    const candidates=calculated.get(key),r=p.modalidad==='quincenal'?candidates[0]:candidates.find(r=>Number(r.principal)===p.localId);
+    if(!r){p.incompleto=true;p.errorCalculo='No se pudo completar el cálculo del período.';continue;}
+    if(p.modalidad==='quincenal'){
+      const siblings=all.filter(g=>g.modalidad===p.modalidad&&g.desde===p.desde&&g.hasta===p.hasta);
+      const frozen=siblings.find(g=>g.validada);
+      if(frozen){merged.add(p.key);continue;}
+      if(p.localId!==Number(r.principal)){merged.add(p.key);continue;}
+      p.localIds=siblings.map(g=>g.localId);p.services=siblings.flatMap(g=>g.services);p.nombre=p.localIds.map(id=>(result.locales||[]).find(l=>Number(l.id)===id)?.nombre||`Local ${id}`).join(' · ');
+      p.incompleto=p.services.some(s=>s.precio==null||s.comision==null);
+    }
+    p.calculo=r;p.total=r.total;p.referencia=r.comision;
+    p.incompleto=p.incompleto||!!r.conflictoLocales;
+    const periodAdvances=data.adelantos.filter(a=>a.fechaDescuento>=p.desde&&a.fechaDescuento<=p.hasta&&(p.modalidad==='quincenal'||Number(a.localId)===p.localId||(!Number(a.localId)&&!r.conflictoLocales)));
+    const periodRepairs=data.garantias.filter(g=>g.fechaReparacion>=p.desde&&g.fechaReparacion<=p.hasta&&(p.modalidad==='quincenal'||Number(g.localId)===p.localId||(!Number(g.localId)&&!r.conflictoLocales)));
+    p.movimientos={adelantos:periodAdvances,garantias:periodRepairs};
+    p.formula={comision:r.comision,complemento_minimo:r.complemento,ajustes_garantia:r.ajustesGarantia,adelantos:r.adelantos,total:r.total};
+    // El detalle de prestaciones utiliza el mismo porcentaje del cálculo administrativo.
+    p.services=p.services.map(s=>({...s,comision:s.comision==null?null:Number(s.comision)*r.pct/40}));
+  }
+  for(const name of Object.keys(groups))groups[name]=groups[name].filter(p=>!merged.has(p.key)&&(localFiltro==='todos'||p.localIds.includes(Number(localFiltro))));
+  return groups;
+}
+
 function NikiMisComisiones({ user, data, setData }) {
   const inputStyle = {border:'1px solid #e7d5dc',borderRadius:9,padding:'9px 10px',fontSize:13,background:'#fff',width:'100%'};
   const [periodo,setPeriodo]=useState(()=>fmtPeriodo(new Date()));
   const [result,setResult]=useState(null);
+  const fetchSeq=useRef(0);
   const [busy,setBusy]=useState(false);
   const [error,setError]=useState('');
   const [bank,setBank]=useState('');
@@ -20242,13 +20471,15 @@ function NikiMisComisiones({ user, data, setData }) {
   const [open,setOpen]=useState({});
   const [localFiltro,setLocalFiltro]=useState('todos');
   const fetchMine=useCallback(async()=>{
+    const seq=++fetchSeq.current;
     setBusy(true);setError('');
     try {
-      const out=await nikiMisComisionesEdge('load',{periodo});
-      setResult(out);setBank(out.dato_bancario||'');
-    } catch(e){setError(e.message||String(e));} finally{setBusy(false);}
+      const out=await nikiAgendaProCapturar(()=>nikiMisComisionesEdge('load',{periodo}));
+      if(seq!==fetchSeq.current)return;
+      setResult({...out,periodo});setBank(out.dato_bancario||'');
+    } catch(e){if(seq===fetchSeq.current)setError(e.message||String(e));} finally{if(seq===fetchSeq.current)setBusy(false);}
   },[periodo]);
-  useEffect(()=>{void fetchMine();},[fetchMine]);
+  useEffect(()=>{setResult(null);setExpanded({});void fetchMine();return ()=>{fetchSeq.current++;};},[fetchMine]);
   const rows=(result?.liquidaciones||[]).filter(x=>localFiltro==='todos'||String(x.local_id)===localFiltro);
   const pagos=(result?.pagos||[]);
   const servicios=(result?.servicios||[]).filter(x=>localFiltro==='todos'||String(x.local_id)===localFiltro);
@@ -20263,33 +20494,14 @@ function NikiMisComisiones({ user, data, setData }) {
     catch(e){setError(e.message||String(e));}finally{setSavingBank(false);}
   };
   const chip=(v,bg='#f7edf0',color='#72243e')=><span style={{fontSize:10,fontWeight:750,background:bg,color,borderRadius:99,padding:'5px 9px'}}>{v}</span>;
-  const dateNow=dateKey(new Date());
-  const validServices=servicios.filter(x=>!/(retiro|retirad|reconstrucci[oó]n|nail[ -]?art|decoraci[oó]n)/i.test(String(x.servicio||'')));
+  const dateNow=result?.hoy||new Intl.DateTimeFormat('en-CA',{timeZone:'America/Argentina/Buenos_Aires',year:'numeric',month:'2-digit',day:'2-digit'}).format(new Date());
+  const validServices=servicios.filter(x=>String(x.fecha_pago).startsWith(periodo)).filter(x=>!/(retiro|retirad|reconstrucci[oó]n|nail[ -]?art|decoraci[oó]n)/i.test(String(x.servicio||'')));
   const ranking=Object.entries(validServices.reduce((m,x)=>{const k=String(x.servicio||'').trim();if(k)m[k]=(m[k]||0)+1;return m;},{})).sort((x,y)=>y[1]-x[1]);
   const principal=ranking[0];
-  const currentMonth=periodo===fmtPeriodo(new Date());
-  const currentToday=currentMonth?dateNow:`${periodo}-31`;
-  const localMap=new Map(locales.map(l=>[Number(l.id),l.nombre]));
-  const configModalidad=(result?.modalidades||[]);
-  const thisMonthRows=rows.filter(r=>r.estado==='revisada');
-  const currentByLocal=new Map();
-  for(const s of servicios){
-    const localId=Number(s.local_id);
-    const k=String(localId);
-    if(!currentByLocal.has(k))currentByLocal.set(k,[]);
-    currentByLocal.get(k).push(s);
-  }
-  const currentPeriodFor=(localId)=>{
-    const configs=configModalidad.filter(x=>Number(x.localId??x.local_id)===Number(localId)&&(!x.fechaDesde&&!x.fecha_desde||String(x.fechaDesde||x.fecha_desde)<=dateNow)).sort((x,y)=>String(y.fechaDesde||y.fecha_desde||'').localeCompare(String(x.fechaDesde||x.fecha_desde||'')));
-    const modal=String(configs[0]?.modalidad||'').toLowerCase();
-    const closed=rows.filter(r=>Number(r.local_id)===Number(localId)&&r.desde<=dateNow&&r.hasta>=dateNow);
-    const isQuincenal=modal==='quincenal'||(!modal&&closed.some(r=>r.modalidad==='quincenal')); 
-    if(isQuincenal){const day=Number(dateNow.slice(8));return {desde:`${periodo}-${day<=15?'01':'16'}`,hasta:day<=15?`${periodo}-15`:dateKey(new Date(Number(periodo.slice(0,4)),Number(periodo.slice(5,7)),0)),modalidad:'Quincenal'};}
-    const d=startOfCommissionWeek(dateNow);const w=getCommissionWeekRangeFromStart(d);
-    return {desde:w?.desdeKey||dateNow,hasta:w?.hastaKey||dateNow,modalidad:'Semanal'};
-  };
-  const localesRelevantes=Array.from(currentByLocal.keys()).map(Number).filter(id=>id>0);
-  const openPeriods=currentMonth?localesRelevantes.map(localId=>{const rango=currentPeriodFor(localId);const services=(currentByLocal.get(String(localId))||[]).filter(x=>String(x.fecha_pago)>=rango.desde&&String(x.fecha_pago)<=rango.hasta&&String(x.fecha_pago)<=dateNow);return {...rango,localId,nombre:localMap.get(localId)||`Local ${localId}`,services};}).filter(p=>p.services.length||rows.some(r=>Number(r.local_id)===p.localId&&r.desde===p.desde)):[];
+  const currentMonth=periodo===dateNow.slice(0,7);
+  const periodGroups=useMemo(()=>nikiMisComisionesConAjustes(result,periodo,dateNow,user,localFiltro),[result,periodo,dateNow,user.id,user.localId,localFiltro]);
+  const openPeriods=periodGroups.actuales;
+  const pendingPeriods=periodGroups.pendientes;
   const [expanded,setExpanded]=useState({});
   const [serviceSort,setServiceSort]=useState('fecha_pago');
   const [sortReverse,setSortReverse]=useState(true);
@@ -20309,7 +20521,7 @@ function NikiMisComisiones({ user, data, setData }) {
     });return list;
   };
   const serviceTable=(items,id)=>{const list=getDisplayedServices(items),groups=groupBy?Object.groupBy(list,s=>String(s[groupBy]||'Sin datos')):{'':list};const groupEntries=Object.entries(groups).sort((a,b)=>groupBy==='fecha_pago'?String(a[0]).localeCompare(String(b[0])):0);const commissionTotal=rows=>rows.reduce((sum,r)=>sum+Number(r.comision||0),0);const pendingCount=rows=>rows.filter(r=>r.comision==null).length;return <div style={{minWidth:0}}><div style={{display:'flex',justifyContent:'space-between',alignItems:'center',flexWrap:'wrap',gap:8,margin:'0 0 11px'}}><div style={{fontSize:12,color:ui.muted}}>{items.length} prestaciones · Detalle de ventas</div><div style={{display:'flex',alignItems:'center',gap:6,flexWrap:'wrap'}}><span style={label}>Agrupar</span><select aria-label="Agrupar servicios" value={groupBy} onChange={e=>setGroupBy(e.target.value)} style={{...inputStyle,width:128,padding:6,fontSize:11}}><option value="">Sin agrupar</option><option value="fecha_pago">Fecha</option><option value="servicio">Servicio</option><option value="cliente">Cliente</option></select><button onClick={()=>setSortReverse(x=>!x)} style={{border:0,background:ui.pink,color:ui.ink,borderRadius:8,padding:7,cursor:'pointer'}}>{sortReverse?'↓':'↑'} Orden</button></div></div><div style={{overflowX:'auto',border:`1px solid ${ui.border}`,borderRadius:12}}><table style={{width:'100%',borderCollapse:'collapse',fontSize:11,minWidth:560}}><thead><tr style={{background:ui.pale}}>{[['fecha_pago','Fecha'],['servicio','Servicio'],['cliente','Cliente'],['precio','Precio'],['comision','Comisión']].map(([key,title])=><th key={key} onClick={()=>{setServiceSort(key);setSortReverse(v=>key===serviceSort?!v:true);}} style={{padding:'10px 9px',textAlign:['precio','comision'].includes(key)?'right':'left',cursor:'pointer',color:ui.ink}}>{title}{serviceSort===key?(sortReverse?' ↓':' ↑'):''}</th>)}</tr></thead><tbody>{groupEntries.map(([k,vals])=><React.Fragment key={k}>{groupBy&&<tr><td colSpan={5} style={{background:'#fbf6f8',padding:'8px 9px',color:ui.ink,fontWeight:700}}>{k} · {vals.length} servicios · Comisión: {fmtMoney(commissionTotal(vals))}{pendingCount(vals)?` · ${pendingCount(vals)} pendiente(s)`:''}</td></tr>}{vals.map((s,i)=><tr key={`${s.item_type||''}-${s.source_item_id||i}`} style={{borderTop:`1px solid ${ui.border}`}}><td style={{padding:'8px 9px',whiteSpace:'nowrap'}}>{parseDateLabel(s.fecha_pago)}</td><td style={{padding:'8px 9px'}}>{s.servicio||'—'}</td><td style={{padding:'8px 9px'}}>{s.cliente||'—'}</td><td style={{padding:'8px 9px',textAlign:'right',whiteSpace:'nowrap'}}>{s.precio==null?'Pendiente':fmtMoney(s.precio)}</td><td style={{padding:'8px 9px',textAlign:'right',whiteSpace:'nowrap',fontWeight:700,color:ui.ink}}>{s.comision==null?'Pendiente':fmtMoney(s.comision)}</td></tr>)}</React.Fragment>)}{list.length>0&&<tr style={{background:ui.pink,borderTop:`2px solid ${ui.border}`,fontWeight:800,color:ui.ink}}><td colSpan={4} style={{padding:'10px 9px'}}>TOTAL · {list.length} servicios{pendingCount(list)?` · ${pendingCount(list)} comisión(es) pendiente(s)`:''}</td><td style={{padding:'10px 9px',textAlign:'right',whiteSpace:'nowrap'}}>{fmtMoney(commissionTotal(list))}</td></tr>}</tbody></table></div>{!list.length&&<p style={{fontSize:12,color:ui.muted}}>No hay prestaciones registradas para este período.</p>}</div>};
-  const formula=(x,confirmed=false)=>{const base=Number(x.comision||0),min=Number(x.complemento_minimo||0),gar=Number(x.ajustes_garantia||0),adv=Number(x.adelantos||0);const set=[["Comisión por servicios",base],["Complemento mínimo",min],["Ajustes de garantías",gar],["Adelantos",-adv]];return <div style={{display:'grid',gap:7}}>{set.map(([k,v])=><div key={k} style={{border:`1px solid ${ui.border}`,borderRadius:11,padding:'10px 12px',display:'flex',justifyContent:'space-between',fontSize:12,gap:8}}><span>{k}</span><b style={{color:ui.ink}}>{fmtMoney(v)}</b></div>)}<div style={{padding:'12px',borderRadius:11,display:'flex',justifyContent:'space-between',background:ui.pink,color:ui.ink,fontWeight:800,fontSize:14}}><span>{confirmed?'Total validado':'Comisión de referencia'}</span><span>{fmtMoney(confirmed?x.total:base+min+gar-adv)}</span></div><div style={{padding:11,background:'#eff6e8',borderRadius:10,fontSize:11,color:'#568039'}}>{confirmed?'Este importe corresponde a una liquidación validada. No se vuelve a calcular a partir de las ventas actuales.':'El porcentaje del 40 % es solo una referencia sobre los servicios visibles. El total definitivo depende de asistencia, porcentaje, garantías, adelantos y validación administrativa.'}</div></div>};
+  const formula=(x,confirmed=false)=>{const base=Number(x.comision||0),min=Number(x.complemento_minimo||0),gar=Number(x.ajustes_garantia||0),adv=Number(x.adelantos||0);const set=[["Comisión por servicios",base],["Complemento mínimo",min],["Ajustes de garantías",gar],["Adelantos",-adv]];return <div style={{display:'grid',gap:7}}>{set.map(([k,v])=><div key={k} style={{border:`1px solid ${ui.border}`,borderRadius:11,padding:'10px 12px',display:'flex',justifyContent:'space-between',fontSize:12,gap:8}}><span>{k}</span><b style={{color:ui.ink}}>{fmtMoney(v)}</b></div>)}<div style={{padding:'12px',borderRadius:11,display:'flex',justifyContent:'space-between',background:ui.pink,color:ui.ink,fontWeight:800,fontSize:14}}><span>{confirmed?'Total validado':'Neto estimado'}</span><span>{fmtMoney(confirmed?x.total:base+min+gar-adv)}</span></div><div style={{padding:11,background:'#eff6e8',borderRadius:10,fontSize:11,color:'#568039'}}>{confirmed?'Este importe corresponde a una liquidación validada. No se vuelve a calcular a partir de las ventas actuales.':'El estimado incluye los adelantos y ajustes registrados para este período. Puede cambiar hasta la validación administrativa.'}</div></div>};
   const controlDetalle=(p)=>{
     const aids=(result?.asistencias||[]).filter(x=>Number(x.local_id)===Number(p.localId)&&String(x.fecha)>=p.desde&&String(x.fecha)<=p.hasta);
     const hrs=(result?.horarios||[]).filter(x=>Number(x.local_id)===Number(p.localId)&&String(x.fecha)>=p.desde&&String(x.fecha)<=p.hasta&&x.trabaja!==false);
@@ -20331,28 +20543,55 @@ function NikiMisComisiones({ user, data, setData }) {
     const missing=p.services.filter(x=>x.precio==null||x.comision==null);
     return <div style={{display:'grid',gap:9}}>
       <div style={{background:ui.pale,padding:12,borderRadius:11,fontSize:12}}><strong>① Prestaciones y precios históricos</strong><p style={{margin:'6px 0 0'}}>Servicios: <b>{p.services.length}</b> · Venta computable: <b>{missing.length?'Datos pendientes':fmtMoney(serviceSum)}</b>. El valor proviene de la lista de precios vigente por fecha, no necesariamente de lo cobrado.</p>{missing.length>0&&<div style={{color:'#a45d24',marginTop:6}}>Faltan datos de {missing.length} prestación(es). No corresponde mostrar $0 como importe definitivo.</div>}</div>
-      <div style={{background:ui.pale,padding:12,borderRadius:11,fontSize:12}}><strong>② Porcentaje aplicable</strong><p style={{margin:'6px 0 0'}}>El 40 % es una referencia visual. La validación definitiva establece 35 % o 40 % según horarios, asistencia, recuperaciones y ajustes manuales autorizados.</p></div>
+      <div style={{background:ui.pale,padding:12,borderRadius:11,fontSize:12}}><strong>② Porcentaje aplicable</strong><p style={{margin:'6px 0 0'}}>Porcentaje aplicado: {p.calculo?.pct??'—'} %. Se usan las mismas reglas de asistencia, recuperaciones y ajustes del reporte de liquidaciones.</p></div>
       <div style={{background:ui.pale,padding:12,borderRadius:11,fontSize:12}}><strong>③ Horarios y asistencia</strong><p style={{margin:'6px 0 0'}}>Horas programadas registradas: <b>{horas.toFixed(1)} h</b> · Horas completadas: <b>{reales.toFixed(1)} h</b>{enCurso.length>0&&<> · Jornadas con entrada y sin salida: <b>{enCurso.length}</b> (en curso, horas pendientes de cierre)</>} · Tardanzas detectables: <b>{tardanzas.length}</b> · Ausencias registradas: <b>{ausencias.length}</b>.</p><p style={{fontSize:11,margin:'7px 0 0',color:ui.muted}}>Las recuperaciones y los motivos de ausencia se confirman en el cálculo administrativo, no se infieren automáticamente de estas marcaciones.</p></div>
-      <div style={{background:ui.pale,padding:12,borderRadius:11,fontSize:12}}><strong>④ Mínimo, garantías y adelantos</strong><p style={{margin:'6px 0 0'}}>Se computan al validar la liquidación. El importe estimado no incluye ajustes que todavía no hayan sido confirmados.</p></div>
-      {formula({comision:p.services.reduce((v,x)=>v+Number(x.comision||0),0),complemento_minimo:0,ajustes_garantia:0,adelantos:0},false)}
+      <div style={{background:ui.pale,padding:12,borderRadius:11,fontSize:12}}><strong>④ Mínimo, garantías y adelantos</strong><p style={{margin:'6px 0 0'}}>Se incluyen los movimientos registrados del período. Las cuotas se descuentan por su fecha de descuento y las garantías pueden sumar o restar comisión.</p></div>
+      {p.formula&&formula(p.formula,false)}
+      {movementDetails(p)}
     </div>;
   };
+  const movementDetails=(p)=>{
+    const advances=p.movimientos?.adelantos||[],repairs=p.movimientos?.garantias||[];
+    const movement=(key,date,description,amount)=><div key={key} style={{borderTop:`1px solid ${ui.border}`,padding:'8px 0',display:'flex',justifyContent:'space-between',gap:10,fontSize:11}}><span>{parseDateLabel(date)} · {description}</span><strong style={{whiteSpace:'nowrap',color:ui.ink,textAlign:'right'}}>{fmtMoney(amount)}</strong></div>;
+    return <div style={{background:ui.pale,padding:12,borderRadius:11,fontSize:12}}><strong>Movimientos incluidos</strong><h5 style={{margin:'12px 0 4px'}}>Adelantos y cuotas</h5>{advances.length?advances.map(a=>movement(`a-${a.id}`,a.fechaDescuento,`${a.concepto||'Adelanto'}${Number(a.cuotasTotal)>1?` · Cuota ${a.cuotaNum}/${a.cuotasTotal}`:''}`,-Math.abs(a.importe))):<div style={label}>Sin adelantos para descontar en este período.</div>}<h5 style={{margin:'12px 0 4px'}}>Garantías de servicios</h5>{repairs.length?repairs.map(g=>{const credit=Number(g.manicuraReparacionId)===Number(user.id),debit=Number(g.manicuraOriginalId)===Number(user.id),net=(Number(credit)-Number(debit))*Math.abs(g.importeComision);return movement(`g-${g.id}`,g.fechaReparacion,`${net>0?'A favor':net<0?'Descuento':'Sin ajuste neto'} · ${g.servicio||'Garantía'}${g.cliente?` · ${g.cliente}`:''}`,net);}):<div style={label}>Sin ajustes por garantías en este período.</div>}</div>;
+  };
   const paidFor=(r)=>pagos.filter(p=>p.liquidacion_key===r.key);
-  const renderClosed=(r)=>{const own=paidFor(r),paid=own.reduce((t,p)=>t+Number(p.importe||0),0),total=Number(r.total||0),valid=r.estado==='revisada',done=valid&&paid>=total-.01;const serviceRows=servicios.filter(s=>Number(s.local_id)===Number(r.local_id)&&s.fecha_pago>=r.desde&&s.fecha_pago<=r.hasta);const expandedNow=expanded[r.key],tab=detailTab[r.key]||'services';return <div key={r.key} style={{border:`1px solid ${ui.border}`,borderRadius:13,marginTop:9,overflow:'hidden',background:'#fff'}}><div style={{display:'flex',gap:12,padding:13,alignItems:'center',flexWrap:'wrap'}}><div style={{flex:'1 1 190px'}}><div style={{fontWeight:800,color:ui.ink,fontSize:13}}>{parseDateLabel(r.desde)} – {parseDateLabel(r.hasta)}</div><div style={{...label,marginTop:3}}>{r.local_nombre} · {r.modalidad==='semanal'?'Semanal':'Quincenal'}</div><div style={{fontSize:11,color:ui.muted,marginTop:5}}>📅 Cobro previsto: <strong>{parseDateLabel(nikiFechaPrevistaCobro({modalidad:r.modalidad,desde:r.desde,hasta:r.hasta,userId:user.id,localId:r.local_id,horarios:result?.horarios,asistencias:result?.asistencias}).fecha)}</strong></div></div><div style={{minWidth:125}}><div style={{fontWeight:800,color:ui.ink,fontSize:18}}>{fmtMoney(total)}</div><div style={label}>Monto registrado</div></div><div style={{display:'flex',gap:5,flexWrap:'wrap'}}>{pill(valid?'Validada':'Reabierta',valid?'good':'warn')}{pill(done?'Pagada':paid>0?'Pago parcial':'Pendiente de pago',done?'good':'warn')}</div><div style={{fontSize:11,minWidth:120,color:ui.muted}}>Cobrado: <strong>{fmtMoney(paid)}</strong><div>Saldo: <strong>{fmtMoney(Math.max(0,total-paid))}</strong></div></div><div style={{display:'flex',gap:5,flexWrap:'wrap'}}>{btn(expandedNow?'Cerrar detalle':'Ver detalle',()=>setExpanded(v=>({...v,[r.key]:!v[r.key]})))}</div></div>{expandedNow&&<div style={{borderTop:`1px solid ${ui.border}`,padding:14,background:'#fffbfc'}}><div style={{display:'grid',gridTemplateColumns:'repeat(auto-fit,minmax(340px,1fr))',gap:14}}><div><h4 style={{color:ui.ink,margin:'0 0 9px'}}>Servicios del período</h4>{serviceTable(serviceRows,r.key)}</div><div><h4 style={{color:ui.ink,margin:'0 0 9px'}}>Cómo se calculó</h4>{formula(r,true)}</div></div><div style={{marginTop:12,padding:10,background:ui.pale,borderRadius:10,fontSize:11}}>Pagos: {own.length?own.map(p=>`${parseDateLabel(p.fecha_pago)} · ${p.medio} · ${fmtMoney(p.importe)}`).join(' | '):'Todavía no hay pagos registrados.'}<div style={{marginTop:5}}>Confirmación digital de recepción: próximamente. No se solicita ni registra conformidad todavía.</div></div></div>}</div>};
-  const monthServices=servicios.filter(s=>String(s.fecha_pago).startsWith(periodo));
-  const totalEstimated=openPeriods.reduce((sum,p)=>sum+p.services.reduce((a,s)=>a+Number(s.comision||0),0),0);
-  const closedRows=rows.filter(r=>r.hasta<dateNow || !currentMonth).sort((a,b)=>String(b.desde).localeCompare(String(a.desde)));
+  const renderClosed=(r)=>{const own=paidFor(r),paid=own.reduce((t,p)=>t+Number(p.importe||0),0),total=Number(r.total||0),valid=r.estado==='revisada',done=valid&&paid>=total-.01;const serviceRows=servicios.filter(s=>Number(s.local_id)===Number(r.local_id)&&s.fecha_pago>=r.desde&&s.fecha_pago<=r.hasta);const expandedNow=expanded[r.key];return <div key={r.key} style={{border:`1px solid ${ui.border}`,borderRadius:13,marginTop:9,overflow:'hidden',background:'#fff'}}><div style={{display:'flex',gap:12,padding:13,alignItems:'center',flexWrap:'wrap'}}><div style={{flex:'1 1 190px'}}><div style={{fontWeight:800,color:ui.ink,fontSize:13}}>{parseDateLabel(r.desde)} – {parseDateLabel(r.hasta)}</div><div style={{...label,marginTop:3}}>{r.local_nombre} · {r.modalidad==='semanal'?'Semanal':'Quincenal'}</div><div style={{fontSize:11,color:ui.muted,marginTop:5}}>📅 Cobro previsto: <strong>{parseDateLabel(nikiFechaPrevistaCobro({modalidad:r.modalidad,desde:r.desde,hasta:r.hasta,userId:user.id,localId:r.local_id,horarios:result?.horarios,asistencias:result?.asistencias}).fecha)}</strong></div></div><div style={{minWidth:125}}><div style={{fontWeight:800,color:ui.ink,fontSize:18}}>{fmtMoney(total)}</div><div style={label}>Monto registrado</div></div><div style={{display:'flex',gap:5,flexWrap:'wrap'}}>{pill(valid?'Validada':'Reabierta',valid?'good':'warn')}{pill(done?'Pagada':paid>0?'Pago parcial':'Pendiente de pago',done?'good':'warn')}</div><div style={{fontSize:11,minWidth:120,color:ui.muted}}>Cobrado: <strong>{fmtMoney(paid)}</strong><div>Saldo: <strong>{fmtMoney(Math.max(0,total-paid))}</strong></div></div><div style={{display:'flex',gap:5,flexWrap:'wrap'}}>{btn(expandedNow?'Cerrar detalle':'Ver detalle',()=>setExpanded(v=>({...v,[r.key]:!v[r.key]})))}</div></div>{expandedNow&&<div style={{borderTop:`1px solid ${ui.border}`,padding:14,background:'#fffbfc'}}><div style={{display:'grid',gridTemplateColumns:'repeat(auto-fit,minmax(min(100%,340px),1fr))',gap:14}}><div><h4 style={{color:ui.ink,margin:'0 0 9px'}}>Servicios del período</h4>{serviceTable(serviceRows,r.key)}</div><div><h4 style={{color:ui.ink,margin:'0 0 9px'}}>Cómo se calculó</h4>{formula(r,true)}</div></div><div style={{marginTop:12,padding:10,background:ui.pale,borderRadius:10,fontSize:11}}>Pagos: {own.length?own.map(p=>`${parseDateLabel(p.fecha_pago)} · ${p.medio} · ${fmtMoney(p.importe)}`).join(' | '):'Todavía no hay pagos registrados.'}<div style={{marginTop:5}}>Confirmación digital de recepción: próximamente. No se solicita ni registra conformidad todavía.</div></div></div>}</div>};
+  const pendingAll=[...openPeriods,...pendingPeriods].filter(p=>!p.validada);
+  const totalEstimated=pendingAll.reduce((sum,p)=>sum+Number(p.total||0),0);
+  const closedRows=periodGroups.validados.map(p=>p.liquidacion);
   const periodPaid=pagos.filter(p=>rows.some(r=>r.key===p.liquidacion_key)).reduce((a,p)=>a+Number(p.importe||0),0);
-  const actualLabel=Number.isFinite(totalEstimated)?fmtMoney(totalEstimated):'—';
+  const actualLabel=pendingAll.some(p=>p.incompleto)?'Datos pendientes':fmtMoney(totalEstimated);
+  const renderEstimate=(p)=>{
+    const id=`period-${p.key}`,shown=!!expanded[id],reopened=p.liquidacion?.estado==='reabierta';
+    const price=p.services.reduce((sum,s)=>sum+Number(s.precio||0),0);
+    const own=p.liquidacion?paidFor(p.liquidacion):[],paid=own.reduce((sum,p)=>sum+Number(p.importe||0),0);
+    return <div key={id} style={{marginTop:12,padding:14,border:`1px solid ${ui.border}`,borderRadius:14,background:'#fff'}}>
+      <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',gap:12,flexWrap:'wrap'}}>
+        <div><div style={{fontWeight:800,color:ui.ink,fontSize:15}}>{parseDateLabel(p.desde)} – {parseDateLabel(p.hasta)}</div><div style={{...label,marginTop:4}}>{p.nombre} · {p.modalidad==='quincenal'?'Quincenal':'Semanal'}</div><div style={{fontSize:11,color:ui.muted,marginTop:6}}>Cobro previsto: <strong>{parseDateLabel(nikiFechaPrevistaCobro({modalidad:p.modalidad,desde:p.desde,hasta:p.hasta,userId:user.id,localId:p.localId,horarios:result?.horarios,asistencias:result?.asistencias}).fecha)}</strong> · Sujeto a validación</div></div>
+        <div style={{textAlign:'right'}}><div style={label}>NETO ESTIMADO</div><div style={{...strong,fontSize:24}}>{p.incompleto?'Datos pendientes':fmtMoney(p.total)}</div></div>
+      </div>
+      <div style={{display:'flex',gap:7,flexWrap:'wrap',alignItems:'center',margin:'11px 0'}}>{pill(`${p.services.length} servicios`)}{pill(reopened?'Reabierta · Pendiente de validar':'Pendiente de validar','warn')}<span style={{fontSize:11,color:ui.muted}}>Venta computable: <strong>{p.incompleto?'Datos pendientes':fmtMoney(price)}</strong></span></div>
+      {p.errorCalculo&&<div style={{fontSize:12,color:'#9b641e',margin:'8px 0'}}>{p.errorCalculo}</div>}
+      {p.calculo?.conflictoLocales&&<div style={{fontSize:12,color:'#9b641e',margin:'8px 0'}}>Hay movimientos sin sucursal que requieren revisión. El total está pendiente de confirmar.</div>}
+      {p.formula&&<div style={{display:'grid',gridTemplateColumns:'repeat(auto-fit,minmax(140px,1fr))',gap:8,margin:'10px 0'}}>{[['Comisión',p.formula.comision],['Complemento mínimo',p.formula.complemento_minimo],['Garantías (+/−)',p.formula.ajustes_garantia],['Adelantos',-p.formula.adelantos]].map(([name,value])=><div key={name} style={{background:ui.pale,borderRadius:10,padding:10}}><div style={label}>{name}</div><strong style={{display:'block',fontSize:16,color:ui.ink,textAlign:'right',marginTop:5}}>{fmtMoney(value)}</strong></div>)}</div>}
+      {btn(shown?'Ocultar detalle':'▤ Ver detalle y cálculo',()=>setExpanded(v=>({...v,[id]:!v[id]})),true)}
+      {paid>0&&<div style={{fontSize:11,color:ui.muted,marginTop:9}}>Pagos registrados: <strong>{fmtMoney(paid)}</strong>. El saldo se determina al validar nuevamente.</div>}
+      {shown&&<div style={{display:'grid',gridTemplateColumns:'repeat(auto-fit,minmax(min(100%,340px),1fr))',gap:12,marginTop:14}}><div style={{minWidth:0}}><h4 style={{margin:'0 0 10px',color:ui.ink}}>Servicios del período</h4>{serviceTable(p.services,id)}</div><div style={{minWidth:0}}><h4 style={{margin:'0 0 10px',color:ui.ink}}>Cómo se calcula</h4>{controlDetalle(p)}</div></div>}
+      <div style={{fontSize:11,color:ui.muted,marginTop:10}}>Estimado con los movimientos registrados. El importe definitivo se establece al validar la liquidación.</div>
+    </div>;
+  };
   return <div style={{display:'flex',flexDirection:'column',gap:12,color:'#513341'}}>
+    <AgendaProUltimaActualizacion estado={nikiAgendaProEstadoDe(result)} fuentes={['comisiones']} loading={busy}/>
     <div style={{...card,display:'flex',justifyContent:'space-between',alignItems:'center',gap:12,flexWrap:'wrap'}}><div><h2 style={{margin:0,color:ui.ink,fontSize:27,letterSpacing:'-.025em'}}>Mis comisiones</h2><div style={{fontSize:12,color:ui.muted,marginTop:4}}>Tus ingresos, liquidaciones y pagos, en un solo lugar.</div></div><div style={{display:'flex',gap:8,flexWrap:'wrap'}}><input type="month" value={periodo} onChange={e=>setPeriodo(e.target.value)} style={{...inputStyle,width:160}}/><select value={localFiltro} onChange={e=>setLocalFiltro(e.target.value)} style={{...inputStyle,width:190}}><option value="todos">Todas las sucursales</option>{locales.map(l=><option key={l.id} value={l.id}>{l.nombre}</option>)}</select>{btn(busy?'Actualizando…':'↻ Actualizar',()=>void fetchMine(),true,busy)}</div></div>
     {error&&<div style={{...card,color:COLORS.danger,background:'#fff3f3'}}>{error}</div>}
     {!result&&busy?<div style={card}>Cargando tus comisiones…</div>:<>
       <div style={{display:'grid',gridTemplateColumns:'repeat(auto-fit,minmax(205px,1fr))',gap:11}}>
-        {[["◉","Estimado en curso",actualLabel,'Referencia 40 % · Sin validar'],["◷","Pendiente de cobro",fmtMoney(porCobrar),`${rows.filter(r=>r.estado==='revisada'&&paidFor(r).reduce((a,p)=>a+Number(p.importe||0),0)<Number(r.total||0)).length} liquidación(es) pendiente(s)`],["✓","Cobrado este mes",fmtMoney(periodPaid),'Pagos registrados'],["☆","Servicio principal",principal?principal[0]:'Sin datos',principal?`${Math.round(principal[1]/Math.max(1,validServices.length)*100)} % de los servicios principales`:'Sin prestaciones']].map(([ic,t,val,sub])=><div key={t} style={{...card,padding:15,display:'flex',gap:11,alignItems:'start'}}><div style={{background:ui.pink,borderRadius:13,padding:10,fontSize:19,color:ui.ink}}>{ic}</div><div style={{minWidth:0}}><div style={label}>{t}</div><div style={{...strong,fontSize:t==='Servicio principal'?15:23,margin:'5px 0',overflowWrap:'anywhere'}}>{val}</div><div style={{fontSize:10,color:ui.muted}}>{sub}</div></div></div>)}
+        {[["◉","Comisiones por validar",actualLabel,`${pendingAll.length} período(s) · Neto estimado`],["◷","Pendiente de cobro",fmtMoney(porCobrar),`${rows.filter(r=>r.estado==='revisada'&&paidFor(r).reduce((a,p)=>a+Number(p.importe||0),0)<Number(r.total||0)).length} liquidación(es) pendiente(s)`],["✓","Cobrado este mes",fmtMoney(periodPaid),'Pagos registrados'],["☆","Servicio principal",principal?principal[0]:'Sin datos',principal?`${Math.round(principal[1]/Math.max(1,validServices.length)*100)} % de los servicios principales`:'Sin prestaciones']].map(([ic,t,val,sub])=><div key={t} style={{...card,padding:15,display:'flex',gap:11,alignItems:'start'}}><div style={{background:ui.pink,borderRadius:13,padding:10,fontSize:19,color:ui.ink}}>{ic}</div><div style={{minWidth:0}}><div style={label}>{t}</div><div style={{...strong,fontSize:t==='Servicio principal'?15:23,margin:'5px 0',overflowWrap:'anywhere'}}>{val}</div><div style={{fontSize:10,color:ui.muted}}>{sub}</div></div></div>)}
       </div>
-      {currentMonth&&<section style={{...card,borderColor:'#e8ccd5',background:'linear-gradient(140deg,#fff 76%,#fff7f9)'}}><div style={{display:'flex',justifyContent:'space-between',flexWrap:'wrap',gap:8,alignItems:'center'}}><div><h3 style={{fontSize:20,color:ui.ink,margin:'0 0 5px'}}>▦ Período en curso</h3><div style={label}>Tu desempeño actual. Los montos son estimados hasta su validación.</div></div>{pill('En curso','warn')}</div>{openPeriods.length===0?<div style={{padding:'19px 0',fontSize:12,color:ui.muted}}>Todavía no hay servicios vinculados para el período en curso.</div>:openPeriods.map(p=>{const id=`open-${p.localId}-${p.desde}`,reference=p.services.reduce((v,s)=>v+Number(s.comision||0),0),price=p.services.reduce((v,s)=>v+Number(s.precio||0),0),missingPrices=p.services.some(s=>s.precio==null||s.comision==null),shown=!!expanded[id];const attendance=(result?.asistencias||[]).filter(a=>Number(a.local_id)===p.localId&&a.fecha>=p.desde&&a.fecha<=p.hasta);const abs=attendance.filter(a=>String(a.estado||'').toLowerCase().includes('ausen')).length;const confirmed=rows.find(r=>Number(r.local_id)===p.localId&&r.desde===p.desde&&r.hasta===p.hasta&&r.estado==='revisada');return <div key={id} style={{marginTop:13,padding:'15px 14px',border:`1px solid ${ui.border}`,borderRadius:14,background:'#fff'}}><div style={{display:'flex',justifyContent:'space-between',alignItems:'center',gap:10,flexWrap:'wrap'}}><div><div style={{fontWeight:800,color:ui.ink,fontSize:16}}>{user?.nombre||'Mis servicios'}</div><div style={{fontSize:11,color:ui.muted,marginTop:4}}>{p.nombre} · {p.modalidad} · {parseDateLabel(p.desde)} al {parseDateLabel(p.hasta)} · Cobro previsto: {parseDateLabel(nikiFechaPrevistaCobro({modalidad:p.modalidad,desde:p.desde,hasta:p.hasta,userId:user.id,localId:p.localId,horarios:result?.horarios,asistencias:result?.asistencias}).fecha)}</div></div><div style={{textAlign:'right'}}><div style={label}>REFERENCIA DE COMISIÓN</div><div style={{...strong,fontSize:26}}>{fmtMoney(reference)}</div></div></div><div style={{display:'flex',gap:7,flexWrap:'wrap',margin:'12px 0'}}>{pill(`${p.services.length} servicios`,'good')}{pill(`${abs} ausencias registradas`,abs?'warn':'good')}{pill('40 % de referencia')}{pill(confirmed?'Ya validada':'Pendiente de validar',confirmed?'good':'warn')}</div><div style={{display:'grid',gridTemplateColumns:'repeat(auto-fit,minmax(145px,1fr))',gap:9,marginBottom:11}}>{[['Venta de servicios',missingPrices?'Datos pendientes':fmtMoney(price)],['Comisión de referencia',missingPrices?'Datos pendientes':fmtMoney(reference)],['Complemento mínimo','Al validar'],['Garantías y adelantos','Al validar']].map(([l,v])=><div key={l} style={{background:ui.pale,borderRadius:12,padding:12}}><div style={label}>{l}</div><div style={{fontSize:16,fontWeight:800,color:ui.ink,marginTop:6}}>{v}</div></div>)}</div><div style={{display:'flex',gap:8,flexWrap:'wrap'}}>{btn(shown?'Ocultar detalle':'▤ Ver detalle y cálculo',()=>setExpanded(v=>({...v,[id]:!v[id]})),true)}</div><div style={{background:ui.pink,color:ui.ink,borderRadius:9,padding:'9px 11px',fontSize:11,marginTop:11}}>ⓘ Las ventas visibles son reales. La comisión mostrada utiliza el 40 % de referencia; el porcentaje final, horas, tardanzas, ausencias, recuperaciones y ajustes se determinan al validar.</div>{shown&&<div style={{display:'grid',gridTemplateColumns:'repeat(auto-fit,minmax(340px,1fr))',gap:12,marginTop:13}}><div style={{minWidth:0}}><h4 style={{margin:'4px 0 12px',color:ui.ink}}>Detalle de servicios</h4>{serviceTable(p.services,id)}</div><div><h4 style={{margin:'4px 0 12px',color:ui.ink}}>Cómo se calcula</h4>{controlDetalle(p)}</div></div>}</div>})}</section>}
-      <section style={card}><h3 style={{margin:'0 0 3px',fontSize:20,color:ui.ink}}>▦ Períodos cerrados</h3><div style={label}>Tus liquidaciones anteriores · Semanales y quincenales</div>{closedRows.length?closedRows.map(renderClosed):<div style={{padding:'18px 0',color:ui.muted,fontSize:12}}>No hay liquidaciones cerradas en el mes seleccionado.</div>}</section>
+      {(currentMonth||openPeriods.length>0)&&<section style={{...card,borderColor:'#e8ccd5',background:'linear-gradient(140deg,#fff 76%,#fff7f9)'}} aria-label="Período en curso"><h3 style={{margin:'0 0 5px',fontSize:20,color:ui.ink}}>▦ Período en curso</h3><div style={label}>Semana o quincena actual, según la modalidad de cada sucursal.</div>{openPeriods.length?openPeriods.map(p=>p.validada?renderClosed(p.liquidacion):renderEstimate(p)):<div style={{padding:'18px 0',fontSize:12,color:ui.muted}}>Todavía no hay servicios ni una sucursal asignada para el período actual.</div>}</section>}
+      <section style={card} aria-label="Períodos pendientes de validación"><h3 style={{margin:'0 0 5px',fontSize:20,color:ui.ink}}>◷ Pendientes de validación</h3><div style={label}>Períodos anteriores del mes seleccionado. Se muestran aunque todavía no exista una liquidación guardada.</div>{pendingPeriods.length?pendingPeriods.map(renderEstimate):<div style={{padding:'18px 0',fontSize:12,color:ui.muted}}>No hay períodos anteriores pendientes de validación en el mes seleccionado.</div>}</section>
+      <section style={card} aria-label="Períodos validados"><h3 style={{margin:'0 0 5px',fontSize:20,color:ui.ink}}>✓ Períodos validados</h3><div style={label}>Liquidaciones anteriores validadas · Pagos y saldos</div>{closedRows.length?closedRows.map(renderClosed):<div style={{padding:'18px 0',color:ui.muted,fontSize:12}}>No hay liquidaciones anteriores validadas en el mes seleccionado.</div>}</section>
       <section style={{...card,padding:15,display:'flex',justifyContent:'space-between',gap:11,alignItems:'center',flexWrap:'wrap'}}><div><div style={{fontSize:15,fontWeight:800,color:ui.ink}}>▣ Mis datos para transferencias</div><div style={{fontSize:11,color:ui.muted,marginTop:4}}>Alias o CBU donde recibís tus pagos</div>{!editBank&&<div style={{fontSize:12,marginTop:7,fontWeight:700}}>{result?.dato_bancario||'Sin datos cargados'}</div>}</div>{editBank?<div style={{display:'flex',gap:7,flexWrap:'wrap',flex:1,justifyContent:'end'}}><input style={{...inputStyle,maxWidth:250}} value={bank} onChange={e=>setBank(e.target.value)}/>{btn(savingBank?'Guardando…':'Guardar',()=>void saveBank(),true,savingBank)}{btn('Cancelar',()=>{setEditBank(false);setBank(result?.dato_bancario||'')})}</div>:btn('✎ Editar',()=>setEditBank(true))}</section>
     </>}
   </div>;
@@ -20951,7 +21190,7 @@ const refreshTimer = window.setInterval(check, 10 * 60 * 1000);
         };
         const cur=sumRange(iso(currentStart),cutoffKey);
         const prev=sumRange(iso(previousStart),iso(previousEnd));
-        if (!cancelled) setHomeKpis({ loading:false,error:"",ventas:cur.ventas,ventasAnt:prev.ventas,visitas:cur.visitas,visitasAnt:prev.visitas,ticket:cur.ticket,ticketAnt:prev.ticket,fechaHasta:cutoffKey });
+        if (!cancelled) setHomeKpis({ loading:false,error:"",ventas:cur.ventas,ventasAnt:prev.ventas,visitas:cur.visitas,visitasAnt:prev.visitas,ticket:cur.ticket,ticketAnt:prev.ticket,fechaHasta:cutoffKey,agendaActualizacion:nikiAgendaProEstadoDe(rows) });
       } catch (e) {
         if (!cancelled) setHomeKpis(prev => ({ ...prev, loading:false, error:e?.message || "No se pudo cargar el resumen." }));
       }
@@ -21255,7 +21494,6 @@ const refreshTimer = window.setInterval(check, 10 * 60 * 1000);
           [{ id: "clientes_crm", label: "Clientes", icon: "♡" }, "Cartera y recuperación"],
           [{ id: "horarios", label: "Horarios", icon: "🗓️" }, "Carga del equipo"],
           [{ id: "bloqueo_horarios", label: "Bloqueos", icon: "🔐" }, "Habilitar edición mensual"],
-          [{ id: effectiveRole === "manicura" ? "mis_comisiones" : "reportes_comisiones", label: "Comisiones", icon: "💰" }, "Reporte y cálculo"],
           [{ id: "informes", label: "Informe diario", icon: "📝" }, "Cierre operativo"],
           [{ id: "ayuda", label: "Ayuda", icon: "❔" }, "Manual de uso"],
           [{ id: "roadmap", label: "Roadmap", icon: "🗺️" }, "Evolución de producto"],
@@ -21303,6 +21541,7 @@ const refreshTimer = window.setInterval(check, 10 * 60 * 1000);
                 <button type="button" onClick={()=>goToSection("clientes_crm")} style={{ border:"1px solid rgba(114,36,62,.12)",background:"transparent",color:"var(--color-text-secondary)",borderRadius:10,padding:"6px 9px",fontSize:10.5,fontWeight:700,cursor:"pointer" }}>Clientes →</button>
               </div>
             </div>
+            <AgendaProUltimaActualizacion estado={homeKpis.agendaActualizacion} fuentes={['dashboard']} loading={homeKpis.loading}/>
             {homeKpis.error ? (
               <div style={{ border:"1px solid rgba(176,75,75,.18)",background:COLORS.dangerLight,borderRadius:14,padding:"11px 13px",fontSize:11.5,color:COLORS.danger }}>No se pudo cargar el resumen ahora. Podés seguir usando Inicio normalmente.</div>
             ) : (

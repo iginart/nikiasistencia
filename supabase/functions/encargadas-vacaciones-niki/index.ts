@@ -15,8 +15,8 @@ function dateUtc(key:string){const [y,m,d]=key.split("-").map(Number);return new
 function dateKey(d:Date){return `${d.getUTCFullYear()}-${String(d.getUTCMonth()+1).padStart(2,"0")}-${String(d.getUTCDate()).padStart(2,"0")}`;}
 function eachDay(a:string,b:string){const out:string[]=[];for(let d=dateUtc(a);d<=dateUtc(b);d=new Date(d.getTime()+86400000))out.push(dateKey(d));return out;}
 function daysInclusive(a:string,b:string){return Math.floor((dateUtc(b).getTime()-dateUtc(a).getTime())/86400000)+1;}
-function isDate(v:string){return /^\d{4}-\d{2}-\d{2}$/.test(v);}
-function isPeriodo(v:string){return /^\d{4}-\d{2}$/.test(v);}
+function isDate(v:string){return /^\d{4}-\d{2}-\d{2}$/.test(v)&&Number.isFinite(dateUtc(v).getTime())&&dateKey(dateUtc(v))===v;}
+function isPeriodo(v:string){return /^[0-9]{4}-(0[1-9]|1[0-2])$/.test(v);}
 function minOf(t:string|null|undefined){if(!t)return null;const [h,m]=String(t).slice(0,5).split(":").map(Number);return Number.isFinite(h)&&Number.isFinite(m)?h*60+m:null;}
 function overlap(a1:string,a2:string,b1:string,b2:string){const x1=minOf(a1),x2=minOf(a2),y1=minOf(b1),y2=minOf(b2);return x1!=null&&x2!=null&&y1!=null&&y2!=null&&Math.max(x1,y1)<Math.min(x2,y2);}
 async function sendMail(to:string,name:string,subject:string,htmlContent:string){const apiKey=Deno.env.get("BREVO_API_KEY"),senderEmail=Deno.env.get("BREVO_SENDER_EMAIL"),senderName=Deno.env.get("BREVO_SENDER_NAME")||"Niki Beauty Bar";if(!apiKey||!senderEmail)return {sent:false};const r=await fetch("https://api.brevo.com/v3/smtp/email",{method:"POST",headers:{accept:"application/json","api-key":apiKey,"content-type":"application/json"},body:JSON.stringify({sender:{email:senderEmail,name:senderName},to:[{email:to,name}],subject,htmlContent})});if(!r.ok)throw new Error(`Brevo: ${await r.text()||r.status}`);return {sent:true};}
@@ -80,6 +80,22 @@ Deno.serve(async req=>{
       if(!r)return false;
       const lid=r.local_id_solicitud==null?null:Number(r.local_id_solicitud),within=lid==null?(actor.rol==="admin"||(actor.rol==="casa_matriz"&&(r.perfiles_impactados||[]).includes("casa_matriz"))):(await localScope()).set.has(lid);
       return within&&(Number(r.user_id)===actorId||await canApproveLocal(lid));
+    };
+
+    const editDraft=(r:any)=>{
+      if(body.user_id!=null&&Number(body.user_id)!==Number(r.user_id)||body.local_id_solicitud!=null&&Number(body.local_id_solicitud)!==Number(r.local_id_solicitud))throw Object.assign(new Error("La persona y el local de la solicitud se conservan al editar."),{status:400});
+      const desde=String(body.fecha_inicio??r.fecha_inicio),hasta=String(body.fecha_fin??r.fecha_fin),anio=Number(body.anio_vacaciones??r.anio_vacaciones),periodo=String(body.periodo_liquidacion??r.periodo_liquidacion??desde.slice(0,7));
+      if(!isDate(desde)||!isDate(hasta)||hasta<desde||daysInclusive(desde,hasta)>366||!Number.isInteger(anio)||anio<1900||anio>2200||!isPeriodo(periodo))throw Object.assign(new Error("Revisá las fechas, el año y el mes de liquidación. El rango admite hasta 366 días."),{status:400});
+      return {...r,fecha_inicio:desde,fecha_fin:hasta,anio_vacaciones:anio,periodo_liquidacion:periodo,observacion_resolucion:String(body.observacion??r.observacion_resolucion??'').trim()||null};
+    };
+    const checkEditScope=async(r:any)=>{
+      if(r.estado!=="aprobada")throw Object.assign(new Error("Sólo se pueden editar vacaciones aprobadas."),{status:409});
+      if(!await canApproveLocal(r.local_id_solicitud==null?null:Number(r.local_id_solicitud)))throw Object.assign(new Error("Sin permiso para editar las vacaciones de este local."),{status:403});
+      const scope=await localScope();if((r.impacto_cupos||[]).some((x:any)=>x.local_id!=null&&!scope.set.has(Number(x.local_id))))throw Object.assign(new Error("La solicitud afecta sucursales fuera de tu alcance."),{status:403});
+    };
+    const checkOverlap=async(r:any)=>{
+      const {data,error}=await admin.from("encargada_vacaciones_solicitudes").select("id").eq("user_id",r.user_id).neq("id",r.id).in("estado",["solicitada","aprobada"]).lte("fecha_inicio",r.fecha_fin).gte("fecha_fin",r.fecha_inicio);
+      if(error)throw error;if(data?.length)throw Object.assign(new Error("Las fechas se superponen con otra solicitud de esta persona."),{status:409});
     };
 
     const capacityFor=async(r:any)=>{
@@ -156,17 +172,17 @@ Deno.serve(async req=>{
       const scope=await localScope(),lid=await requestedLocal();
       const raw=await readAll(()=>{let q=admin.from("encargada_vacaciones_solicitudes").select("*").order("fecha_inicio",{ascending:false}).order("id");if(lid)q=q.eq("local_id_solicitud",lid);if(!canConfigure)q=q.eq("user_id",actorId);return q;});
       const rows:any[]=[];
-      for(const r of raw)if(await canRead(r))rows.push({...r,impacto_cupos:(Array.isArray(r.impacto_cupos)?r.impacto_cupos:[]).filter((x:any)=>x.local_id==null?allApprover:scope.set.has(Number(x.local_id))),puede_revisar:await canApproveLocal(r.local_id_solicitud==null?null:Number(r.local_id_solicitud)),puede_eliminar:unresolved(r)&&(Number(r.user_id)===actorId||await canApproveLocal(r.local_id_solicitud==null?null:Number(r.local_id_solicitud)))});
+      for(const r of raw)if(await canRead(r))rows.push({...r,impacto_cupos:(Array.isArray(r.impacto_cupos)?r.impacto_cupos:[]).filter((x:any)=>x.local_id==null?allApprover:scope.set.has(Number(x.local_id))),puede_revisar:await canApproveLocal(r.local_id_solicitud==null?null:Number(r.local_id_solicitud)),puede_editar:r.estado==="aprobada"&&await canApproveLocal(r.local_id_solicitud==null?null:Number(r.local_id_solicitud))&&(r.impacto_cupos||[]).every((x:any)=>x.local_id==null?allApprover:scope.set.has(Number(x.local_id))),puede_eliminar:unresolved(r)&&(Number(r.user_id)===actorId||await canApproveLocal(r.local_id_solicitud==null?null:Number(r.local_id_solicitud)))});
       const ids=[...new Set(rows.map((r:any)=>Number(r.user_id)))];
       const [{data:users,error:ue},{data:respons,error:re}]=await Promise.all([ids.length?admin.from("users").select("id,nombre,rol,activo").in("id",ids):Promise.resolve({data:[],error:null}),scope.ids.length?admin.from("vacaciones_responsables_local").select("local_id,user_id").eq("activo",true).in("local_id",scope.ids):Promise.resolve({data:[],error:null})]);if(ue||re)throw(ue||re);
-      return json({ok:true,vacaciones_version:3,rows,users:users||[],responsibles:respons||[],locales:scope.locals});
+      return json({ok:true,vacaciones_version:4,rows,users:users||[],responsibles:respons||[],locales:scope.locals});
     }
 
     if(action==="gantt"){
       const scope=await localScope(),lid=await requestedLocal(),desde=String(body.desde||""),hasta=String(body.hasta||"");
       if(!isDate(desde)||!isDate(hasta)||dateKey(dateUtc(desde))!==desde||dateKey(dateUtc(hasta))!==hasta||hasta<desde||daysInclusive(desde,hasta)>366)return json({ok:false,error:"Rango inválido; máximo un año"},400);
       const visible=new Set<number>(lid?[lid]:scope.ids);
-      if(!visible.size)return json({ok:true,vacaciones_version:3,rows:[],users:[],locales:scope.locals});
+      if(!visible.size)return json({ok:true,vacaciones_version:4,rows:[],users:[],locales:scope.locals});
       const [raw,hist,enc,legacy]=await Promise.all([
         readAll(()=>admin.from("encargada_vacaciones_solicitudes").select("id,user_id,fecha_inicio,fecha_fin,local_id_solicitud,perfiles_impactados,impacto_cupos,estado").in("estado",["solicitada","aprobada","rechazada","cancelada"]).lte("fecha_inicio",hasta).gte("fecha_fin",desde).order("id")),
         readAll(()=>admin.from("manicura_historial_locales").select("id,user_id,local_id,fecha_inicio,fecha_fin").in("local_id",[...visible]).lte("fecha_inicio",hasta).order("id")),
@@ -192,7 +208,7 @@ Deno.serve(async req=>{
       }).filter(r=>r.puestos.length);
       for(const r of rows)for(const a of r.asignaciones)add(Number(r.user_id),a.local_id,a.puesto);
       const users=people.filter((u:any)=>roster.has(Number(u.id))&&(u.activo!==false||rows.some(r=>Number(r.user_id)===Number(u.id)))).map((u:any)=>({id:u.id,nombre:u.nombre,local_ids:[...roster.get(Number(u.id))!.keys()],asignaciones:[...roster.get(Number(u.id))!].flatMap(([local_id,puestos])=>[...puestos].map(puesto=>({local_id,puesto})))}));
-      return json({ok:true,vacaciones_version:3,rows,users,locales:scope.locals});
+      return json({ok:true,vacaciones_version:4,rows,users,locales:scope.locals});
     }
 
     if(action==="delete"){
@@ -233,8 +249,9 @@ Deno.serve(async req=>{
       return json({ok:true,row:data});
     }
 
-    if(action==="detail"){
-      const id=Number(body.id||0),r=await readRequest(id);if(!r)return json({ok:false,error:"Solicitud inexistente"},404);if(!await canRead(r))return json({ok:false,error:"Sin permiso"},403);
+    if(action==="detail"||action==="edit_preview"){
+      const id=Number(body.id||0),saved=await readRequest(id);if(!saved)return json({ok:false,error:"Solicitud inexistente"},404);if(!await canRead(saved))return json({ok:false,error:"Sin permiso"},403);
+      let r=saved;if(action==="edit_preview"){await checkEditScope(saved);r=editDraft(saved);await checkOverlap(r);}
       const profiles=Array.isArray(r.perfiles_impactados)&&r.perfiles_impactados.length?r.perfiles_impactados:["encargada"],days=eachDay(r.fecha_inicio,r.fecha_fin),manager=profiles.includes("encargada");
       const capacity=await capacityFor(r);
       const scope=await localScope();if(capacity.some((x:any)=>x.local_id!=null&&!scope.set.has(Number(x.local_id))))return json({ok:false,error:"La solicitud afecta sucursales fuera de tu alcance. Debe revisarla un perfil con acceso a todas ellas."},403);
@@ -266,8 +283,12 @@ Deno.serve(async req=>{
       return json({ok:true});
     }
 
-    if(action==="approve"){
-      const id=Number(body.id||0),r=await readRequest(id);if(!r)return json({ok:false,error:"Solicitud inexistente"},404);if(!await canApproveLocal(r.local_id_solicitud==null?null:Number(r.local_id_solicitud)))return json({ok:false,error:"Sin permiso para aprobar este local."},403);if(r.estado!=="solicitada")return json({ok:false,error:"La solicitud ya fue resuelta."},409);
+    if(action==="approve"||action==="update_approved"){
+      const editing=action==="update_approved",id=Number(body.id||0),original=await readRequest(id);if(!original)return json({ok:false,error:"Solicitud inexistente"},404);
+      if(!await canApproveLocal(original.local_id_solicitud==null?null:Number(original.local_id_solicitud)))return json({ok:false,error:"Sin permiso para aprobar este local."},403);
+      let r=original;if(editing){await checkEditScope(original);if(!Object.prototype.hasOwnProperty.call(body,"expected_updated_at")||(body.expected_updated_at!==null&&!Number.isFinite(Date.parse(String(body.expected_updated_at)))))return json({ok:false,error:"Actualizá la solicitud antes de editar."},409);r=editDraft(original);}
+      else if(r.estado!=="solicitada")return json({ok:false,error:"La solicitud ya fue resuelta."},409);
+      await checkOverlap(r);
       const capacity=await capacityFor(r),scope=await localScope();if(capacity.some((x:any)=>x.local_id!=null&&!scope.set.has(Number(x.local_id))))return json({ok:false,error:"La solicitud afecta sucursales fuera de tu alcance"},403);const exceeded=capacity.find((x:any)=>x.excede);if(exceeded)return json({ok:false,error:`No hay cupo de vacaciones el ${exceeded.fecha} para ${exceeded.perfil}. Cupo ${exceeded.cupo}, proyectado ${exceeded.proyectado}.`,capacity},409);
       const profiles=Array.isArray(r.perfiles_impactados)&&r.perfiles_impactados.length?r.perfiles_impactados:["encargada"],manager=profiles.includes("encargada"),segments=Array.isArray(body.segments)?body.segments:[],periodo=String(body.periodo_liquidacion||r.fecha_inicio.slice(0,7));if(!isPeriodo(periodo))return json({ok:false,error:"Periodo de liquidacion invalido."},400);
       let planRows:any[]=[];
@@ -276,19 +297,21 @@ Deno.serve(async req=>{
         const {data:marks,error:me}=await admin.from("encargada_planificacion_confirmaciones").select("local_id,fecha").gte("fecha",r.fecha_inicio).lte("fecha",r.fecha_fin);if(me)throw me;const markSet=new Set((marks||[]).map((x:any)=>`${x.local_id}|${x.fecha}`));const missing=planRows.find((p:any)=>!markSet.has(`${p.local_id}|${p.fecha}`));if(missing)return json({ok:false,error:`No se puede aprobar: la planificacion del ${missing.fecha} no esta confirmada.`},409);
         if(planRows.length!==segments.length)return json({ok:false,error:"Debe definirse un reemplazo para cada turno confirmado comprendido por las vacaciones."},400);
         for(const p of planRows){const s=segments.find((x:any)=>Number(x.local_id)===Number(p.local_id)&&String(x.fecha)===String(p.fecha)&&String(x.hora_desde).slice(0,5)===String(p.hora_desde).slice(0,5)&&String(x.hora_hasta).slice(0,5)===String(p.hora_hasta).slice(0,5));if(!s||!Number(s.reemplazo_user_id)||Number(s.reemplazo_user_id)===Number(r.user_id))return json({ok:false,error:`Falta reemplazo valido para ${p.fecha} ${String(p.hora_desde).slice(0,5)}-${String(p.hora_hasta).slice(0,5)}.`},400);}
-        for(const s of segments){const uid=Number(s.reemplazo_user_id),lid=Number(s.local_id),fecha=String(s.fecha);const [{data:rp,error:rpe},{data:cs,error:cse}]=await Promise.all([admin.from("encargada_planificacion").select("local_id,hora_desde,hora_hasta").eq("user_id",uid).eq("fecha",fecha),admin.from("encargada_coberturas_segmentos").select("local_id,hora_desde,hora_hasta,estado").eq("reemplazo_user_id",uid).eq("fecha",fecha).neq("estado","cancelada")]);if(rpe||cse)throw(rpe||cse);const conflict=[...(rp||[]),...(cs||[])].find((x:any)=>Number(x.local_id)!==lid&&overlap(String(s.hora_desde),String(s.hora_hasta),String(x.hora_desde),String(x.hora_hasta)));if(conflict)return json({ok:false,error:`El reemplazo seleccionado tiene un horario superpuesto en otra sucursal el ${fecha}.`},409);}
+        for(const s of segments){const uid=Number(s.reemplazo_user_id),lid=Number(s.local_id),fecha=String(s.fecha);const [{data:rp,error:rpe},{data:cs,error:cse}]=await Promise.all([admin.from("encargada_planificacion").select("local_id,hora_desde,hora_hasta").eq("user_id",uid).eq("fecha",fecha),admin.from("encargada_coberturas_segmentos").select("local_id,hora_desde,hora_hasta,estado,solicitud_vacaciones_id").eq("reemplazo_user_id",uid).eq("fecha",fecha).neq("estado","cancelada")]);if(rpe||cse)throw(rpe||cse);const conflict=[...(rp||[]),...(cs||[]).filter((c:any)=>Number(c.solicitud_vacaciones_id)!==id)].find((x:any)=>Number(x.local_id)!==lid&&overlap(String(s.hora_desde),String(s.hora_hasta),String(x.hora_desde),String(x.hora_hasta)));if(conflict)return json({ok:false,error:`El reemplazo seleccionado tiene un horario superpuesto en otra sucursal el ${fecha}.`},409);}
       }
-      const now=new Date().toISOString(),base=body.remuneracion_base_vacaciones==null?null:Number(body.remuneracion_base_vacaciones);const {data:changed,error:ue}=await admin.from("encargada_vacaciones_solicitudes").update({estado:"aprobada",periodo_liquidacion:periodo,remuneracion_base_vacaciones:Number.isFinite(base)?base:null,observacion_resolucion:String(body.observacion||"").trim()||null,resuelto_por_user_id:actorId,resuelto_en:now,impacto_cupos:capacity,actualizado_en:now}).eq("id",id).eq("estado","solicitada").is("resuelto_en",null).is("resuelto_por_user_id",null).select("id");if(ue)throw ue;if(!changed?.length)return json({ok:false,error:"La solicitud cambió. Actualizá el listado."},409);
-      if(manager){
-        await admin.from("encargada_coberturas_segmentos").delete().eq("solicitud_vacaciones_id",id);
-        if(segments.length){const cov=segments.map((s:any)=>({origen:"vacaciones",solicitud_vacaciones_id:id,local_id:Number(s.local_id),fecha:String(s.fecha),reemplazado_user_id:Number(r.user_id),reemplazo_user_id:Number(s.reemplazo_user_id),hora_desde:String(s.hora_desde).slice(0,5),hora_hasta:String(s.hora_hasta).slice(0,5),estado:"planificada",motivo:"Vacaciones",creado_por_user_id:actorId,actualizado_por_user_id:actorId,actualizado_en:now}));const {error:ce}=await admin.from("encargada_coberturas_segmentos").insert(cov);if(ce)throw ce;}
-        if(planRows.length){const vacRows=planRows.map((p:any)=>({fecha:p.fecha,local_id:Number(p.local_id),user_id:Number(r.user_id),hora_plan_desde:p.hora_desde,hora_plan_hasta:p.hora_hasta,hora_real_desde:null,hora_real_hasta:null,estado:"vacaciones",reemplaza_user_id:null,comentario:"Vacaciones aprobadas",motivo_ausencia:"Vacaciones",origen:"vacaciones",solicitud_vacaciones_id:id,creado_por_user_id:actorId,actualizado_por_user_id:actorId,actualizado_en:now}));const {error:ve}=await admin.from("encargada_jornada_real").upsert(vacRows,{onConflict:"local_id,user_id,fecha"});if(ve)throw ve;}
-      }
-      const {data:u}=await admin.from("users").select("nombre,email").eq("id",r.user_id).single();if(u?.email)await sendMail(u.email,u.nombre||"Equipo Niki","Vacaciones aprobadas",`<div style="font-family:Montserrat,Arial,sans-serif"><h2 style="color:#72243e">Vacaciones aprobadas</h2><p>Hola ${esc(u.nombre)},</p><p>Tu solicitud del <strong>${esc(r.fecha_inicio)}</strong> al <strong>${esc(r.fecha_fin)}</strong> fue aprobada.</p></div>`).catch(()=>null);
-      return json({ok:true,dias:daysInclusive(r.fecha_inicio,r.fecha_fin),capacity});
+      const changes:any={fecha_inicio:r.fecha_inicio,fecha_fin:r.fecha_fin,anio_vacaciones:r.anio_vacaciones,
+        periodo_liquidacion:periodo,observacion_resolucion:String(body.observacion??r.observacion_resolucion??'').trim()||null};
+      if(body.remuneracion_base_vacaciones!=null){const base=Number(body.remuneracion_base_vacaciones);if(!Number.isFinite(base)||base<0)return json({ok:false,error:"Remuneración base inválida."},400);changes.remuneracion_base_vacaciones=base;}
+      const {data:written,error:we}=await admin.rpc("niki_guardar_vacaciones_aprobadas",{p_id:id,p_actor_id:actorId,
+        p_version:editing?(body.expected_updated_at==null?null:String(body.expected_updated_at)):original.actualizado_en,p_estado:original.estado,
+        p_cambios:changes,p_segmentos:manager?segments:[],p_impacto:capacity});
+      if(we){if(we.code==="PGRST202")throw new Error("Falta aplicar la actualización SQL de edición de vacaciones.");throw we;}
+      if(!written?.ok)throw new Error("No se pudo guardar la solicitud de vacaciones.");
+      const {data:u}=await admin.from("users").select("nombre,email").eq("id",r.user_id).single();if(u?.email)await sendMail(u.email,u.nombre||"Equipo Niki",editing?"Vacaciones actualizadas":"Vacaciones aprobadas",`<div style="font-family:Montserrat,Arial,sans-serif"><h2 style="color:#72243e">${editing?"Vacaciones actualizadas":"Vacaciones aprobadas"}</h2><p>Hola ${esc(u.nombre)},</p><p>Tu solicitud del <strong>${esc(r.fecha_inicio)}</strong> al <strong>${esc(r.fecha_fin)}</strong> ${editing?"fue actualizada y conserva su aprobación":"fue aprobada"}.</p></div>`).catch(()=>null);
+      return json({ok:true,row:written.row,dias:daysInclusive(r.fecha_inicio,r.fecha_fin),capacity:written.capacity});
     }
 
     return json({ok:false,error:"Accion invalida"},400);
-  }catch(e){console.error(e);return json({ok:false,error:errorText(e)},Number((e as any)?.status)===403?403:500);}
+  }catch(e){const code=(e as any)?.code,status=Number((e as any)?.status);return json({ok:false,error:errorText(e)},[400,403,409].includes(status)?status:["40001","P0001"].includes(code)?409:code==="42501"?403:["22023","23514"].includes(code)?400:500);}
 });
 
