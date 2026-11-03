@@ -5,6 +5,30 @@ const b64url=(input:ArrayBuffer)=>btoa(String.fromCharCode(...new Uint8Array(inp
 async function hmac(msg:string,secret:string){const k=await crypto.subtle.importKey('raw',new TextEncoder().encode(secret),{name:'HMAC',hash:'SHA-256'},false,['sign']);return b64url(await crypto.subtle.sign('HMAC',k,new TextEncoder().encode(msg)));}
 async function session(token:string,secret:string){const [body,sig]=String(token||'').split('.');if(!body||!sig||await hmac(body,secret)!==sig)return null;try{const raw=body.replace(/-/g,'+').replace(/_/g,'/');const obj=JSON.parse(atob(raw+'='.repeat((4-raw.length%4)%4)));return Number(obj.exp)>Date.now()/1000?obj:null;}catch{return null;}}
 const safeMoney=(n:unknown)=>Number(n||0);
+function errorMessage(error:unknown):string {
+ if(typeof error==='string'&&error.trim())return error;
+ if(error&&typeof error==='object'){
+  const e=error as Record<string,unknown>;
+  for(const key of ['message','error','details'])if(typeof e[key]==='string'&&String(e[key]).trim())return String(e[key]);
+ }
+ return 'No se pudo completar la consulta.';
+}
+function queryFailure(source:string,error:unknown){
+ const code=error&&typeof error==='object'&&typeof (error as any).code==='string'?(error as any).code:null;
+ return Object.assign(new Error(`${source}: ${errorMessage(error)}`),{consulta:source,code});
+}
+// Una sola carga por mes, paginada para no truncar servicios al límite de la Data API.
+async function allRows(query:any){
+ const rows:any[]=[];
+ for(let offset=0;;offset+=1000){
+  const {data,error}=await query.range(offset,offset+999);
+  if(error)return {data:null,error};
+  rows.push(...(data||[]));
+  if((data||[]).length<1000)return {data:rows,error:null};
+ }
+}
+const shiftDay=(key:string,n:number)=>{const d=new Date(`${key}T12:00:00Z`);d.setUTCDate(d.getUTCDate()+n);return d.toISOString().slice(0,10);};
+const weekStart=(key:string)=>{const d=new Date(`${key}T12:00:00Z`),dow=d.getUTCDay();return shiftDay(key,dow===0?-6:1-dow);};
 Deno.serve(async req=>{
  if(req.method==='OPTIONS')return new Response('ok',{headers});
  if(req.method!=='POST')return json({ok:false,error:'Método no permitido'},405);
@@ -15,14 +39,14 @@ Deno.serve(async req=>{
   const auth=await session(String(body.session_token||''),secret);const actorId=Number(body.actor_id);
   if(!auth||Number(auth.uid)!==actorId)return json({ok:false,error:'Sesión inválida'},401);
   const admin=createClient(Deno.env.get('SUPABASE_URL')!,Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!,{auth:{persistSession:false}});
-  const {data:user,error:userError}=await admin.from('users').select('id,rol,activo,dato_bancario').eq('id',actorId).maybeSingle();
-  if(userError)throw userError;
+  const {data:user,error:userError}=await admin.from('users').select('id,rol,activo,dato_bancario,local_id,nombre,solo_fin_de_semana').eq('id',actorId).maybeSingle();
+  if(userError)throw queryFailure('users',userError);
   if(!user||user.activo===false||user.rol!=='manicura')return json({ok:false,error:'Solo disponible para manicuras'},403);
   const action=String(body.action||'load');
   if(action==='bank'){
     const dato=String(body.dato_bancario||'').trim();
     if(dato&&!(/^\d{22}$/.test(dato)||/^[A-Za-z0-9._-]{6,20}$/.test(dato)))return json({ok:false,error:'CBU o alias inválido'},400);
-    const {error}=await admin.from('users').update({dato_bancario:dato||null}).eq('id',actorId);if(error)throw error;
+    const {error}=await admin.from('users').update({dato_bancario:dato||null}).eq('id',actorId);if(error)throw queryFailure('users.dato_bancario',error);
   return json({ok:true,dato_bancario:dato});
   }
   if(action!=='load')return json({ok:false,error:'Acción no válida'},400);
@@ -30,20 +54,48 @@ Deno.serve(async req=>{
   const first=`${periodo}-01`;
   const last=new Date(Date.UTC(Number(periodo.slice(0,4)),Number(periodo.slice(5,7)),0)).toISOString().slice(0,10);
   const six=new Date(Date.UTC(Number(periodo.slice(0,4)),Number(periodo.slice(5,7))-6,1)).toISOString().slice(0,7);
+  const desdeDatos=weekStart(first),hastaDatos=[last,shiftDay(weekStart(last),5)].sort().at(-1)!;
+  const hoy=new Intl.DateTimeFormat('en-CA',{timeZone:'America/Argentina/Buenos_Aires',year:'numeric',month:'2-digit',day:'2-digit'}).format(new Date());
   // Cada consulta está restringida a user_id del token autenticado, nunca se admite un ID del navegador.
-  const [weekly,fortnight,sales,compat,base,historyWeek,historyFortnight,modalidades,asistencias,horarios]=await Promise.all([
-    admin.from('niki_liquidaciones_semanales').select('*').eq('user_id',actorId).lte('desde',last).gte('hasta',first).order('version',{ascending:false}),
-    admin.from('niki_liquidaciones_quincenales').select('*').eq('user_id',actorId).eq('periodo',periodo).order('version',{ascending:false}),
-    admin.from('comisiones_agendapro_shadow').select('local_id,fecha_pago,servicio,cliente,precio,comision,sale_id,source_item_id,item_type').eq('user_id',actorId).gte('fecha_pago',first).lte('fecha_pago',last).limit(5000),
-    admin.from('vw_comisiones_agendapro_compat').select('local_id,fecha_pago,servicio,cliente,precio,comision,source_item_id,item_type').eq('user_id',actorId).gte('fecha_pago',first).lte('fecha_pago',last).limit(5000),
-    admin.from('vw_comisiones_agendapro_base').select('local_id,fecha_pago,servicio,servicio_agendapro,cliente,precio_efectivo,precio_cobrado_agendapro,source_item_id,item_type,sale_id,estado').eq('user_id',actorId).gte('fecha_pago',first).lte('fecha_pago',last).limit(5000),
-    admin.from('niki_liquidaciones_semanales').select('desde,local_id,estado,total,version').eq('user_id',actorId).gte('desde',`${six}-01`).lte('desde',last).order('version',{ascending:false}),
-    admin.from('niki_liquidaciones_quincenales').select('periodo,quincena,local_id,estado,total,version').eq('user_id',actorId).gte('periodo',six).lte('periodo',periodo).order('version',{ascending:false}),
-    admin.from('comisiones_quincenales_locales').select('local_id,modalidad,fecha_desde').lte('fecha_desde',last),
-    admin.from('asistencias').select('local_id,fecha,estado,entrada_real,salida_real').eq('user_id',actorId).gte('fecha',first).lte('fecha',last),
-    admin.from('horarios').select('local_id,fecha,entrada,salida,trabaja').eq('user_id',actorId).gte('fecha',first).lte('fecha',last)
+  const [weekly,fortnight,sales,compat,base,historyWeek,historyFortnight,modalidades,asistencias,horarios,asignaciones]=await Promise.all([
+    allRows(admin.from('niki_liquidaciones_semanales').select('*').eq('user_id',actorId).lte('desde',last).gte('hasta',first).order('version',{ascending:false}).order('id',{ascending:false})),
+    allRows(admin.from('niki_liquidaciones_quincenales').select('*').eq('user_id',actorId).eq('periodo',periodo).order('version',{ascending:false}).order('id',{ascending:false})),
+    allRows(admin.from('comisiones_agendapro_shadow').select('id,local_id,fecha_pago,servicio,cliente,precio,comision,sale_id,source_item_id,item_type').eq('user_id',actorId).gte('fecha_pago',desdeDatos).lte('fecha_pago',hastaDatos).order('fecha_pago').order('item_type').order('source_item_id')),
+    allRows(admin.from('vw_comisiones_agendapro_compat').select('local_id,fecha_pago,servicio,cliente,precio,comision,source_item_id,item_type').eq('user_id',actorId).gte('fecha_pago',desdeDatos).lte('fecha_pago',hastaDatos).order('fecha_pago').order('item_type').order('source_item_id')),
+    allRows(admin.from('vw_comisiones_agendapro_base').select('local_id,fecha_pago,servicio,servicio_agendapro,cliente,precio_efectivo,precio_cobrado_agendapro,source_item_id,item_type,sale_id,estado').eq('user_id',actorId).gte('fecha_pago',desdeDatos).lte('fecha_pago',hastaDatos).order('fecha_pago').order('item_type').order('source_item_id')),
+    allRows(admin.from('niki_liquidaciones_semanales').select('desde,local_id,estado,total,version').eq('user_id',actorId).gte('desde',`${six}-01`).lte('desde',last).order('version',{ascending:false}).order('id',{ascending:false})),
+    allRows(admin.from('niki_liquidaciones_quincenales').select('periodo,quincena,local_id,estado,total,version').eq('user_id',actorId).gte('periodo',six).lte('periodo',periodo).order('version',{ascending:false}).order('id',{ascending:false})),
+    allRows(admin.from('comisiones_quincenales_locales').select('local_id,modalidad,fecha_desde').lte('fecha_desde',hastaDatos).order('local_id').order('fecha_desde')),
+    allRows(admin.from('asistencias').select('local_id,fecha,estado,entrada_real,salida_real,certificado').eq('user_id',actorId).gte('fecha',desdeDatos).lte('fecha',hastaDatos).order('id')),
+    allRows(admin.from('horarios').select('local_id,fecha,entrada,salida,trabaja').eq('user_id',actorId).gte('fecha',desdeDatos).lte('fecha',hastaDatos).order('id')),
+    allRows(admin.from('manicura_historial_locales').select('local_id,fecha_inicio,fecha_fin').eq('user_id',actorId).order('id'))
   ]);
-  for(const r of [weekly,fortnight,sales,compat,base,historyWeek,historyFortnight,modalidades,asistencias,horarios])if(r.error)throw r.error;
+  for(const [name,r] of Object.entries({niki_liquidaciones_semanales:weekly,niki_liquidaciones_quincenales:fortnight,comisiones_agendapro_shadow:sales,vw_comisiones_agendapro_compat:compat,vw_comisiones_agendapro_base:base,historial_semanal:historyWeek,historial_quincenal:historyFortnight,comisiones_quincenales_locales:modalidades,asistencias,horarios,manicura_historial_locales:asignaciones}))if(r.error)throw queryFailure(name,r.error);
+  // Datos del actor en un único rango mensual; no se consulta una vez por corte.
+  const [advances,repairs,weekConfig,fortnightConfig,weekExceptions,fortnightExceptions,weekPct,weekRecovery,fortnightPct,fortnightRecovery,employment]=await Promise.all([
+    allRows(admin.from('adelantos_manicuras').select('id,user_id,local_id,fecha,fecha_descuento,importe,concepto,cuota_num,cuotas_total')
+      .eq('user_id',actorId).or(`and(fecha_descuento.gte.${desdeDatos},fecha_descuento.lte.${hastaDatos}),and(fecha_descuento.is.null,fecha.gte.${desdeDatos},fecha.lte.${hastaDatos})`).order('id')),
+    allRows(admin.from('garantias_servicios').select('id,local_id,fecha_reparacion,importe_comision,manicura_original_id,manicura_reparacion_id,servicio,cliente')
+      .or(`manicura_original_id.eq.${actorId},manicura_reparacion_id.eq.${actorId}`).gte('fecha_reparacion',desdeDatos).lte('fecha_reparacion',hastaDatos).order('id')),
+    admin.from('comisiones_configuracion').select('*').eq('activo',true).order('id').limit(1),
+    admin.from('comisiones_quincenales_config').select('*').eq('id',1).limit(1),
+    allRows(admin.from('comisiones_manicura_config').select('*').eq('user_id',actorId).order('local_id')),
+    allRows(admin.from('comisiones_quincenales_manicura_config').select('*').eq('user_id',actorId).order('local_id')),
+    allRows(admin.from('niki_porcentajes_semanales').select('user_id,local_id,desde,hasta,porcentaje').eq('user_id',actorId).lte('desde',hastaDatos).gte('hasta',desdeDatos).order('desde').order('hasta').order('local_id').order('user_id')),
+    allRows(admin.from('niki_recuperaciones_semanales').select('user_id,local_id,desde,hasta,fecha_ausencia,recuperada,horas_recuperadas').eq('user_id',actorId).lte('desde',hastaDatos).gte('hasta',desdeDatos).order('desde').order('hasta').order('local_id').order('user_id').order('fecha_ausencia')),
+    allRows(admin.from('comisiones_quincenales_porcentajes').select('user_id,periodo,porcentaje').eq('user_id',actorId).gte('periodo',`${periodo}-1`).lte('periodo',`${periodo}-2`).order('user_id')),
+    allRows(admin.from('comisiones_quincenales_recuperaciones').select('user_id,periodo,fecha_ausencia,recuperada,horas_recuperadas').eq('user_id',actorId).gte('periodo',`${periodo}-1`).lte('periodo',`${periodo}-2`).order('user_id').order('fecha_ausencia')),
+    allRows(admin.from('usuario_historial_laboral').select('fecha_inicio,fecha_fin').eq('user_id',actorId).order('id'))
+  ]);
+  for(const [name,r] of Object.entries({adelantos_manicuras:advances,garantias_servicios:repairs,comisiones_configuracion:weekConfig,comisiones_quincenales_config:fortnightConfig,comisiones_manicura_config:weekExceptions,comisiones_quincenales_manicura_config:fortnightExceptions,niki_porcentajes_semanales:weekPct,niki_recuperaciones_semanales:weekRecovery,comisiones_quincenales_porcentajes:fortnightPct,comisiones_quincenales_recuperaciones:fortnightRecovery,usuario_historial_laboral:employment}))if(r.error)throw queryFailure(name,r.error);
+  // No devolver identidades, observaciones o fotos de otras personas involucradas.
+  const ownRepairs=(repairs.data||[]).map((r:any)=>({...r,
+    manicura_original_id:Number(r.manicura_original_id)===actorId?actorId:null,
+    manicura_reparacion_id:Number(r.manicura_reparacion_id)===actorId?actorId:null}));
+  const calculo={persona:{id:actorId,nombre:user.nombre,solo_fin_de_semana:user.solo_fin_de_semana===true,local_id:user.local_id},
+    adelantos:advances.data||[],garantias:ownRepairs,historial_laboral:employment.data||[],
+    semanal:{general:weekConfig.data?.[0]||null,excepciones:weekExceptions.data||[],porcentajes:weekPct.data||[],recuperaciones:weekRecovery.data||[]},
+    quincenal:{general:fortnightConfig.data?.[0]||null,excepciones:fortnightExceptions.data||[],porcentajes:fortnightPct.data||[],recuperaciones:fortnightRecovery.data||[]}};
   const ws=new Map<string,any>();for(const r of weekly.data||[]){const key=`${r.local_id}|${r.desde}|${r.hasta}`;if(!ws.has(key))ws.set(key,r);}
   const qs=new Map<string,any>();for(const r of fortnight.data||[]){const key=`${r.local_id}|${r.periodo}|${r.quincena}`;if(!qs.has(key))qs.set(key,r);}
   const liqs:any[]=[];
@@ -54,12 +106,17 @@ Deno.serve(async req=>{
   }
   const weeklyIds=liqs.filter(x=>x.modalidad==='semanal').map(x=>x.id);
   const fortnightIds=liqs.filter(x=>x.modalidad==='quincenal').map(x=>x.id);
+  const localIds=[...new Set([
+    ...liqs,...(advances.data||[]),...ownRepairs,...(sales.data||[]),...(compat.data||[]),...(base.data||[]),...(asistencias.data||[]),...(horarios.data||[]),
+    ...(asignaciones.data||[]).filter((a:any)=>a.fecha_inicio<=hastaDatos&&(!a.fecha_fin||a.fecha_fin>=desdeDatos)),
+    ...(!(asignaciones.data||[]).length&&user.local_id?[{local_id:user.local_id}]:[])
+  ].map((x:any)=>Number(x.local_id)).filter(x=>x>0))];
   const [wp,qp,loc]=await Promise.all([
-    weeklyIds.length?admin.from('niki_pagos_semanales').select('id,liquidacion_id,importe,medio,fecha_pago,referencia,anulado_en').in('liquidacion_id',weeklyIds):Promise.resolve({data:[],error:null}),
-    fortnightIds.length?admin.from('niki_pagos_comisiones').select('id,liquidacion_id,importe,medio,fecha_pago,referencia,anulado_en').in('liquidacion_id',fortnightIds):Promise.resolve({data:[],error:null}),
-    admin.from('locales').select('id,nombre')
+    weeklyIds.length?allRows(admin.from('niki_pagos_semanales').select('id,liquidacion_id,importe,medio,fecha_pago,referencia,anulado_en').in('liquidacion_id',weeklyIds).order('id')):Promise.resolve({data:[],error:null}),
+    fortnightIds.length?allRows(admin.from('niki_pagos_comisiones').select('id,liquidacion_id,importe,medio,fecha_pago,referencia,anulado_en').in('liquidacion_id',fortnightIds).order('id')):Promise.resolve({data:[],error:null}),
+    localIds.length?allRows(admin.from('locales').select('id,nombre,zona').in('id',localIds).order('id')):Promise.resolve({data:[],error:null})
   ]);
-  if(wp.error||qp.error||loc.error)throw(wp.error||qp.error||loc.error);
+  for(const [name,r] of Object.entries({niki_pagos_semanales:wp,niki_pagos_comisiones:qp,locales:loc}))if(r.error)throw queryFailure(name,r.error);
   const nameById=new Map((loc.data||[]).map((x:any)=>[Number(x.id),x.nombre]));
   const payments=[...(wp.data||[]).filter((p:any)=>!p.anulado_en).map((p:any)=>({...p,liquidacion_key:`semanal:${p.liquidacion_id}`})),...(qp.data||[]).filter((p:any)=>!p.anulado_en).map((p:any)=>({...p,liquidacion_key:`quincenal:${p.liquidacion_id}`}))];
   const tend=new Map<string,number>();
@@ -86,7 +143,7 @@ Deno.serve(async req=>{
     for(let offset=0;offset<saleIds.length;offset+=200){
       const {data:raw,error:rawErr}=await admin.from('agenda_sales')
         .select('sale_id,client_first_name,client_last_name').in('sale_id',saleIds.slice(offset,offset+200));
-      if(rawErr)throw rawErr;
+      if(rawErr)throw queryFailure('agenda_sales',rawErr);
       for(const r of raw||[]){const name=[r.client_first_name,r.client_last_name].filter(Boolean).join(' ').trim();if(name)saleClients.set(Number(r.sale_id),name);}
     }
   }
@@ -97,7 +154,7 @@ Deno.serve(async req=>{
     const precioHistorico=c.precio??b.precio_efectivo??x.precio??null;
     const comisionHistorica=c.comision??(precioHistorico!=null?Math.round(Number(precioHistorico)*40)/100:null);
     const nombre=(c.cliente||b.cliente||saleClients.get(Number(b.sale_id||x.sale_id))||x.cliente||'').trim();
-    mergedSales.push({local_id:c.local_id??b.local_id??x.local_id,fecha_pago:c.fecha_pago??b.fecha_pago??x.fecha_pago,
+    mergedSales.push({id:x.id,local_id:c.local_id??b.local_id??x.local_id,fecha_pago:c.fecha_pago??b.fecha_pago??x.fecha_pago,
       servicio:c.servicio||b.servicio||b.servicio_agendapro||x.servicio,
       cliente:nombre||null,precio:precioHistorico,comision:comisionHistorica,
       precio_cobrado:b.precio_cobrado_agendapro??null,
@@ -105,6 +162,7 @@ Deno.serve(async req=>{
       fuente_importe:c.precio!=null?'vista_compat':b.precio_efectivo!=null?'vista_base':x.precio!=null?'shadow':'sin_precio',
       source_item_id:c.source_item_id??b.source_item_id??x.source_item_id,item_type:c.item_type??b.item_type??x.item_type});
   }
-  return json({ok:true,dato_bancario:user.dato_bancario||'',liquidaciones:liqs.map(x=>({key:x.key,modalidad:x.modalidad,desde:x.desde,hasta:x.hasta,local_id:x.local_id,local_nombre:nameById.get(Number(x.local_id))||`Local ${x.local_id}`,estado:x.estado,version:x.version,total:x.total,comision:x.comision,complemento_minimo:x.complemento_minimo,ajustes_garantia:x.ajustes_garantia,adelantos:x.adelantos,porcentaje:x.porcentaje})),pagos:payments,servicios:mergedSales.map((x:any)=>({local_id:x.local_id,fecha_pago:x.fecha_pago,servicio:x.servicio,cliente:x.cliente,precio:x.precio,comision:x.comision,precio_cobrado:x.precio_cobrado,estado_origen:x.estado_origen,fuente_importe:x.fuente_importe,source_item_id:x.source_item_id,item_type:x.item_type})),tendencia,modalidades:modalidades.data||[],asistencias:asistencias.data||[],horarios:horarios.data||[],locales:(loc.data||[]).filter((l:any)=>liqs.some(x=>Number(x.local_id)===Number(l.id))||(sales.data||[]).some((x:any)=>Number(x.local_id)===Number(l.id)))});
- }catch(e){return json({ok:false,error:e instanceof Error?e.message:String(e)},400);}
+  return json({ok:true,version:4,periodo,hoy,calculo,rango_servicios:{desde:desdeDatos,hasta:hastaDatos},asignaciones:asignaciones.data||[],local_id:!(asignaciones.data||[]).length?user.local_id:null,dato_bancario:user.dato_bancario||'',liquidaciones:liqs.map(x=>{const snap=x.snapshot&&typeof x.snapshot==='object'?x.snapshot:{};const frozen=(...v:any[])=>v.find(n=>n!==null&&n!==undefined&&n!==''&&Number.isFinite(Number(n)));return {key:x.key,modalidad:x.modalidad,desde:x.desde,hasta:x.hasta,local_id:x.local_id,local_nombre:nameById.get(Number(x.local_id))||`Local ${x.local_id}`,estado:x.estado,version:x.version,total:frozen(snap.total,x.total),comision:frozen(snap.comision,x.comision),complemento_minimo:frozen(snap.complemento,snap.complemento_minimo,x.complemento_minimo),ajustes_garantia:frozen(snap.ajustesGarantia,snap.ajustes_garantia,x.ajustes_garantia),adelantos:frozen(snap.adelantos,x.adelantos),porcentaje:frozen(snap.pct,snap.porcentaje,x.porcentaje)};}),pagos:payments,servicios:mergedSales.map((x:any)=>({id:x.id,local_id:x.local_id,fecha_pago:x.fecha_pago,servicio:x.servicio,cliente:x.cliente,precio:x.precio,comision:x.comision,precio_cobrado:x.precio_cobrado,estado_origen:x.estado_origen,fuente_importe:x.fuente_importe,source_item_id:x.source_item_id,item_type:x.item_type})),tendencia,modalidades:(modalidades.data||[]).filter((m:any)=>localIds.includes(Number(m.local_id))),asistencias:asistencias.data||[],horarios:horarios.data||[],locales:loc.data||[]});
+ }catch(e){return json({ok:false,version:4,error:errorMessage(e),codigo:e&&typeof e==='object'?(e as any).code??null:null,consulta:e&&typeof e==='object'?(e as any).consulta??null:null},400);}
 });
+
